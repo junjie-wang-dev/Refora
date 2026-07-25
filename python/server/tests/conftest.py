@@ -178,6 +178,90 @@ def make_chat_repo(db: sqlite3.Connection):
     return createChatRepository(db)
 
 
+def make_agent_runs_repo(db: sqlite3.Connection):
+    from refora_server.repositories.agent_runs import createAgentRunsRepository
+
+    return createAgentRunsRepository(db)
+
+
+def make_agent_traces_repo(db: sqlite3.Connection):
+    from refora_server.repositories.agent_traces import createAgentTracesRepository
+
+    return createAgentTracesRepository(db)
+
+
+def make_agent_interrupts_repo(db: sqlite3.Connection):
+    from refora_server.repositories.agent_interrupts import createAgentInterruptsRepository
+
+    return createAgentInterruptsRepository(db)
+
+
+def make_agent_tool_effects_repo(db: sqlite3.Connection):
+    from refora_server.repositories.agent_tool_effects import (
+        createAgentToolEffectsRepository,
+    )
+
+    return createAgentToolEffectsRepository(db)
+
+
+def make_agent_memories_repo(db: sqlite3.Connection):
+    from refora_server.repositories.agent_memories import createAgentMemoriesRepository
+
+    return createAgentMemoriesRepository(db)
+
+
+def insert_thread(
+    db: sqlite3.Connection,
+    *,
+    id: str = "thread-1",
+    workspaceId: str | None = None,
+    providerId: str = "provider-1",
+    createdAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO chat_threads (id, workspaceId, providerId, createdAt) "
+        "VALUES (?, ?, ?, ?)",
+        [id, workspaceId, providerId, createdAt],
+    )
+    return id
+
+
+def insert_message(
+    db: sqlite3.Connection,
+    *,
+    threadId: str,
+    id: str = "msg-1",
+    role: str = "user",
+    content: str = "hi",
+    createdAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO chat_messages (id, threadId, role, content, createdAt) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [id, threadId, role, content, createdAt],
+    )
+    return id
+
+
+def insert_run(
+    db: sqlite3.Connection,
+    *,
+    id: str = "run-1",
+    threadId: str,
+    providerId: str = "provider-1",
+    modelId: str = "model-1",
+    status: str = "running",
+    startedAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO agent_runs "
+        "(id, threadId, providerId, modelId, status, startedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [id, threadId, providerId, modelId, status, startedAt],
+    )
+    return id
+
+
 def insert_report(
     db: sqlite3.Connection,
     *,

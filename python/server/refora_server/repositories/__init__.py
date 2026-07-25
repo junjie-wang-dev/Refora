@@ -1,5 +1,10 @@
 from typing import Any, Callable
 
+from refora_server.repositories.agent_interrupts import createAgentInterruptsRepository
+from refora_server.repositories.agent_memories import createAgentMemoriesRepository
+from refora_server.repositories.agent_runs import createAgentRunsRepository
+from refora_server.repositories.agent_tool_effects import createAgentToolEffectsRepository
+from refora_server.repositories.agent_traces import createAgentTracesRepository
 from refora_server.repositories.ai_providers import createAiProvidersRepository
 from refora_server.repositories.ai_reports import createAiReportsRepository
 from refora_server.repositories.ai_summaries import createAiSummariesRepository
@@ -53,6 +58,11 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     workspaceItems = createWorkspaceItemsRepository(db)
     workspaceConnections = createWorkspaceConnectionsRepository(db)
     chat = createChatRepository(db)
+    agentRuns = createAgentRunsRepository(db)
+    agentTraces = createAgentTracesRepository(db)
+    agentInterrupts = createAgentInterruptsRepository(db)
+    agentToolEffects = createAgentToolEffectsRepository(db)
+    agentMemories = createAgentMemoriesRepository(db)
     return {
         "documents": documents,
         "categories": categories,
@@ -70,4 +80,9 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
         "workspaceItems": workspaceItems,
         "workspaceConnections": workspaceConnections,
         "chat": chat,
+        "agentRuns": agentRuns,
+        "agentTraces": agentTraces,
+        "agentInterrupts": agentInterrupts,
+        "agentToolEffects": agentToolEffects,
+        "agentMemories": agentMemories,
     }
