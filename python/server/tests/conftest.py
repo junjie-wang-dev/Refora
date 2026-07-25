@@ -59,6 +59,12 @@ def make_workspaces_repo(db: sqlite3.Connection):
     return createWorkspacesRepository(db)
 
 
+def make_watch_folders_repo(db: sqlite3.Connection):
+    from refora_server.repositories.watch_folders import createWatchFoldersRepository
+
+    return createWatchFoldersRepository(db)
+
+
 def make_doc(
     *,
     id: str = "doc-1",
