@@ -99,12 +99,6 @@ def _make_app(
     return app
 
 
-def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
-    error = RuntimeError("Service is unavailable")
-    error.code = "unavailable"
-    raise error
-
-
 def configure_app(app: FastAPI) -> None:
     if getattr(app.state, "routes_configured", False):
         return
@@ -137,23 +131,11 @@ def configure_app(app: FastAPI) -> None:
         "connector": connector,
         "metadata": {},
     }
-    unavailable_mineru = {
-        "getStatus": _unavailable,
-        "install": _unavailable,
-        "cancelInstall": _unavailable,
-        "uninstall": _unavailable,
-    }
-    unavailable_ocr = {
-        "startOcr": _unavailable,
-        "cancelOcr": _unavailable,
-        "getOcrState": _unavailable,
-        "getMarkdown": _unavailable,
-    }
     workspace_deps = {
         "require_token": require_token,
         "workspaces": services["workspaces"],
-        "mineru": services.get("mineru", unavailable_mineru),
-        "ocr": services.get("ocr", unavailable_ocr),
+        "mineru": services["mineru"],
+        "ocr": services["ocr"],
     }
     ai_deps = {
         "require_token": require_token,

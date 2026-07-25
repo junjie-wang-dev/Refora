@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -16,11 +19,114 @@ from refora_server.services.ai_summary import createAiSummaryService
 from refora_server.services.chat_history import createChatHistoryService
 from refora_server.services.export import createExportService
 from refora_server.services.library import createLibraryService
+from refora_server.services.mineru import (
+    MineruEngineManagerDeps,
+    MineruWorkerProcessDeps,
+    create_mineru_engine_manager,
+    create_mineru_worker_process,
+)
+from refora_server.services.ocr import OcrServiceDeps, create_ocr_service
 from refora_server.services.thread_title import createThreadTitleService
 from refora_server.services.watcher import createWatcherService
 from refora_server.services.web_search import createWebSearchService
 from refora_server.services.workspaces import createWorkspacesService
 from refora_server.library.importer import createImporter
+
+
+def _mineru_worker_path() -> str:
+    configured = os.environ.get("REFORA_MINERU_WORKER_PATH")
+    if configured:
+        return configured
+    package_root = Path(__file__).resolve().parents[2]
+    candidates = (
+        package_root.parent / "mineru" / "mineru_worker.py",
+        package_root.parents[1] / "resources" / "mineru_worker.py",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return str(candidates[0])
+
+
+async def _download_mineru_file(
+    url: str,
+    destination: str,
+    cancel_event: asyncio.Event,
+    on_progress: Any,
+) -> None:
+    try:
+        import httpx
+    except ImportError as error:
+        raise RuntimeError("MinerU download support is unavailable") from error
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    received = 0
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                raw_total = response.headers.get("content-length")
+                total = int(raw_total) if raw_total and raw_total.isdigit() else None
+                with open(destination, "wb") as output:
+                    os.chmod(destination, 0o600)
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if cancel_event.is_set():
+                            raise RuntimeError("MinerU installation was cancelled")
+                        output.write(chunk)
+                        received += len(chunk)
+                        on_progress(received, total)
+        if cancel_event.is_set():
+            raise RuntimeError("MinerU installation was cancelled")
+    except BaseException:
+        try:
+            os.unlink(destination)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+async def _trash_mineru_path(connector: Any, path: str) -> None:
+    result = await connector.trash_item(path)
+    if isinstance(result, dict) and result.get("ok"):
+        return
+    error = result.get("error") if isinstance(result, dict) else None
+    message = error.get("message") if isinstance(error, dict) else "No response from the native connector"
+    raise RuntimeError(f"Native Trash connector is unavailable: {message}")
+
+
+def _schedule_event(events: Any, name: str, data: Any) -> None:
+    task = asyncio.create_task(events.broadcast(name, data))
+
+    def consume_result(completed: asyncio.Task[Any]) -> None:
+        try:
+            completed.result()
+        except Exception:
+            pass
+
+    task.add_done_callback(consume_result)
+
+
+def _unavailable_ocr_service(reason: str) -> dict[str, Any]:
+    async def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(f"OCR service is unavailable: {reason}")
+
+    async def stop_worker() -> None:
+        return None
+
+    def destroy() -> None:
+        return None
+
+    return {
+        "initialize": unavailable,
+        "getState": unavailable,
+        "startOcr": unavailable,
+        "cancelOcr": unavailable,
+        "getOcrState": unavailable,
+        "getMarkdown": unavailable,
+        "readMarkdown": unavailable,
+        "prepareDocumentDelete": unavailable,
+        "stopWorker": stop_worker,
+        "destroy": destroy,
+    }
 
 
 def create_lifespan(
@@ -47,7 +153,18 @@ def create_lifespan(
         events = create_event_bus()
         connector = create_connector_broker(events)
         emit = events.broadcast
+        mineru = create_mineru_engine_manager(
+            MineruEngineManagerDeps(
+                userDataDir=os.path.dirname(os.path.abspath(db_path)),
+                downloadFile=_download_mineru_file,
+                trashItem=lambda path: _trash_mineru_path(connector, path),
+                emitProgress=lambda progress: _schedule_event(
+                    events, "mineru.install-progress", progress.to_dict()
+                ),
+            )
+        )
         complete_repos = {"documents", "settings", "watchFolders", "categories", "webSearchConfig"}.issubset(repos)
+        ocr_repos_ready = {"documents", "documentOcr"}.issubset(repos)
         importer = {}
         watcher = {}
         exporter = {}
@@ -70,12 +187,35 @@ def create_lifespan(
             )
             exporter = createExportService(repos)
             web_search = createWebSearchService(repos, {})
+        worker_path = _mineru_worker_path()
+        if ocr_repos_ready and os.path.isfile(worker_path):
+            worker = create_mineru_worker_process(
+                MineruWorkerProcessDeps(engineManager=mineru, workerScriptPath=worker_path)
+            )
+            ocr = create_ocr_service(
+                repos,
+                OcrServiceDeps(
+                    engineManager=mineru,
+                    worker=worker,
+                    getLibraryFolder=lambda: app.state.library_folder,
+                    emitProgress=lambda data: _schedule_event(events, "ocr.progress", data),
+                    emitCompleted=lambda data: _schedule_event(events, "ocr.completed", data),
+                    emitError=lambda data: _schedule_event(events, "ocr.error", data),
+                ),
+            )
+            await ocr["initialize"]()
+        elif not ocr_repos_ready:
+            ocr = _unavailable_ocr_service("OCR repositories are not available")
+        else:
+            ocr = _unavailable_ocr_service("MinerU worker script is missing")
         services = {
             "library": library,
             "importer": importer,
             "watcher": watcher,
             "export": exporter,
             "webSearch": web_search,
+            "mineru": mineru,
+            "ocr": ocr,
             "aiProviders": createAiProvidersService(repos),
             "aiSummary": createAiSummaryService(repos),
             "chatHistory": createChatHistoryService(repos),
@@ -101,6 +241,9 @@ def create_lifespan(
         try:
             yield
         finally:
+            await ocr["stopWorker"]()
+            ocr["destroy"]()
+            mineru["destroy"]()
             await connector.cancel_pending()
             await events.flush()
             if owns_database:
