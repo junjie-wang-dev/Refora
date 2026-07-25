@@ -24,3 +24,8 @@ __pycache__/
 .cache/
 .tmp/
 .DS_Store
+
+# Python server
+python/server/.venv/
+python/server/.pytest_cache/
+python/server/.ruff_cache/
