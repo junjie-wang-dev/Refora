@@ -24,6 +24,17 @@ def open_schema_db() -> sqlite3.Connection:
     return db
 
 
+def open_migrated_db() -> sqlite3.Connection:
+    from refora_server.db.connection import _SqliteAdapter
+    from refora_server.db.migrations import run_migrations
+
+    db = sqlite3.connect(":memory:", isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
+    run_migrations(_SqliteAdapter(db))
+    return db
+
+
 def make_docs_repo(db: sqlite3.Connection, library_folder: str = "", search_mode: str = "trigram"):
     from refora_server.repositories.documents import createDocumentsRepository
 
@@ -40,6 +51,12 @@ def make_cats_repo(db: sqlite3.Connection):
     from refora_server.repositories.categories import createCategoriesRepository
 
     return createCategoriesRepository(db)
+
+
+def make_workspaces_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspaces import createWorkspacesRepository
+
+    return createWorkspacesRepository(db)
 
 
 def make_doc(
@@ -107,3 +124,19 @@ def make_doc(
         "remoteValues": remote_values,
         "fileMissing": file_missing,
     }
+
+
+OCR_MIGRATION = "0021_document_ocr.sql"
+
+
+def open_ocr_db() -> sqlite3.Connection:
+    db = open_schema_db()
+    ocr_path = MIGRATIONS_DIR / OCR_MIGRATION
+    db.executescript(ocr_path.read_text(encoding="utf-8"))
+    return db
+
+
+def make_ocr_repo(db: sqlite3.Connection):
+    from refora_server.repositories.document_ocr import createDocumentOcrRepository
+
+    return createDocumentOcrRepository(db)

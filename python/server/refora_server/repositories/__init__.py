@@ -1,8 +1,14 @@
 from typing import Any, Callable
 
+from refora_server.repositories.ai_providers import createAiProvidersRepository
+from refora_server.repositories.ai_summaries import createAiSummariesRepository
 from refora_server.repositories.categories import createCategoriesRepository
+from refora_server.repositories.document_ocr import createDocumentOcrRepository
 from refora_server.repositories.documents import createDocumentsRepository
 from refora_server.repositories.settings import create_settings_repository
+from refora_server.repositories.watch_folders import createWatchFoldersRepository
+from refora_server.repositories.web_search_config import createWebSearchConfigRepository
+from refora_server.repositories.workspaces import createWorkspacesRepository
 
 
 class RepositoryDeps:
@@ -27,8 +33,20 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     )
     categories = createCategoriesRepository(db)
     settings = create_settings_repository(db)
+    watchFolders = createWatchFoldersRepository(db)
+    aiProviders = createAiProvidersRepository(db)
+    workspaces = createWorkspacesRepository(db)
+    documentOcr = createDocumentOcrRepository(db)
+    webSearchConfig = createWebSearchConfigRepository(db)
+    aiSummaries = createAiSummariesRepository(db)
     return {
         "documents": documents,
         "categories": categories,
         "settings": settings,
+        "watchFolders": watchFolders,
+        "aiProviders": aiProviders,
+        "workspaces": workspaces,
+        "documentOcr": documentOcr,
+        "webSearchConfig": webSearchConfig,
+        "aiSummaries": aiSummaries,
     }
