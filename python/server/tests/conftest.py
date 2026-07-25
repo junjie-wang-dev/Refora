@@ -140,3 +140,124 @@ def make_ocr_repo(db: sqlite3.Connection):
     from refora_server.repositories.document_ocr import createDocumentOcrRepository
 
     return createDocumentOcrRepository(db)
+
+
+def make_workspace_notes_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspace_notes import createWorkspaceNotesRepository
+
+    return createWorkspaceNotesRepository(db)
+
+
+def make_workspace_assets_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspace_assets import createWorkspaceAssetsRepository
+
+    return createWorkspaceAssetsRepository(db)
+
+
+def make_workspace_canvas_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspace_canvas import createWorkspaceCanvasRepository
+
+    return createWorkspaceCanvasRepository(db)
+
+
+def make_workspace_items_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspace_items import createWorkspaceItemsRepository
+
+    return createWorkspaceItemsRepository(db)
+
+
+def make_workspace_connections_repo(db: sqlite3.Connection):
+    from refora_server.repositories.workspace_connections import createWorkspaceConnectionsRepository
+
+    return createWorkspaceConnectionsRepository(db)
+
+
+def make_chat_repo(db: sqlite3.Connection):
+    from refora_server.repositories.chat import createChatRepository
+
+    return createChatRepository(db)
+
+
+def insert_report(
+    db: sqlite3.Connection,
+    *,
+    id: str = "report-1",
+    workspaceId: str,
+    title: str = "Report",
+    contentMd: str = "# Report",
+    sourceDocIds: str = "[]",
+    model: str | None = None,
+    createdAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO ai_reports (id, workspaceId, title, contentMd, sourceDocIds, model, createdAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, workspaceId, title, contentMd, sourceDocIds, model, createdAt],
+    )
+    return id
+
+
+def insert_note(
+    db: sqlite3.Connection,
+    *,
+    id: str = "note-1",
+    workspaceId: str,
+    title: str = "Note",
+    contentMd: str = "",
+    createdAt: int = 1_000_000,
+    updatedAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO workspace_notes (id, workspaceId, title, contentMd, createdAt, updatedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [id, workspaceId, title, contentMd, createdAt, updatedAt],
+    )
+    return id
+
+
+def insert_asset(
+    db: sqlite3.Connection,
+    *,
+    id: str = "asset-1",
+    workspaceId: str,
+    fileName: str = "file.png",
+    filePath: str | None = None,
+    sourcePath: str = "/lib/source.png",
+    mimeType: str = "image/png",
+    previewKind: str = "image",
+    fileSize: int = 100,
+    fileHash: str = "hash-asset",
+    fileMissing: int = 0,
+    createdAt: int = 1_000_000,
+    updatedAt: int = 1_000_000,
+) -> str:
+    db.execute(
+        "INSERT INTO workspace_assets "
+        "(id, workspaceId, fileName, filePath, sourcePath, mimeType, previewKind, fileSize, fileHash, fileMissing, createdAt, updatedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            id,
+            workspaceId,
+            fileName,
+            filePath if filePath is not None else f"/lib/assets/{id}/{fileName}",
+            sourcePath,
+            mimeType,
+            previewKind,
+            fileSize,
+            fileHash,
+            fileMissing,
+            createdAt,
+            updatedAt,
+        ],
+    )
+    return id
+
+
+def insert_doc(db: sqlite3.Connection, *, id: str = "doc-1", added_at: int = 1_000_000) -> str:
+    db.execute(
+        "INSERT INTO documents "
+        "(id, filePath, originalFolderPath, fileName, fileSize, fileHash, addedAt, updatedAt, metadataStatus) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [id, f"/lib/{id}.pdf", "/lib", f"{id}.pdf", 1234, f"hash-{id}", added_at, added_at, "pending"],
+    )
+    return id

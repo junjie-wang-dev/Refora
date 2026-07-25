@@ -1,14 +1,21 @@
 from typing import Any, Callable
 
 from refora_server.repositories.ai_providers import createAiProvidersRepository
+from refora_server.repositories.ai_reports import createAiReportsRepository
 from refora_server.repositories.ai_summaries import createAiSummariesRepository
 from refora_server.repositories.categories import createCategoriesRepository
+from refora_server.repositories.chat import createChatRepository
 from refora_server.repositories.document_ocr import createDocumentOcrRepository
 from refora_server.repositories.documents import createDocumentsRepository
 from refora_server.repositories.settings import create_settings_repository
 from refora_server.repositories.watch_folders import createWatchFoldersRepository
 from refora_server.repositories.web_search_config import createWebSearchConfigRepository
 from refora_server.repositories.workspaces import createWorkspacesRepository
+from refora_server.repositories.workspace_assets import createWorkspaceAssetsRepository
+from refora_server.repositories.workspace_canvas import createWorkspaceCanvasRepository
+from refora_server.repositories.workspace_connections import createWorkspaceConnectionsRepository
+from refora_server.repositories.workspace_items import createWorkspaceItemsRepository
+from refora_server.repositories.workspace_notes import createWorkspaceNotesRepository
 
 
 class RepositoryDeps:
@@ -39,6 +46,13 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     documentOcr = createDocumentOcrRepository(db)
     webSearchConfig = createWebSearchConfigRepository(db)
     aiSummaries = createAiSummariesRepository(db)
+    aiReports = createAiReportsRepository(db)
+    workspaceNotes = createWorkspaceNotesRepository(db)
+    workspaceAssets = createWorkspaceAssetsRepository(db)
+    workspaceCanvas = createWorkspaceCanvasRepository(db)
+    workspaceItems = createWorkspaceItemsRepository(db)
+    workspaceConnections = createWorkspaceConnectionsRepository(db)
+    chat = createChatRepository(db)
     return {
         "documents": documents,
         "categories": categories,
@@ -49,4 +63,11 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
         "documentOcr": documentOcr,
         "webSearchConfig": webSearchConfig,
         "aiSummaries": aiSummaries,
+        "aiReports": aiReports,
+        "workspaceNotes": workspaceNotes,
+        "workspaceAssets": workspaceAssets,
+        "workspaceCanvas": workspaceCanvas,
+        "workspaceItems": workspaceItems,
+        "workspaceConnections": workspaceConnections,
+        "chat": chat,
     }
