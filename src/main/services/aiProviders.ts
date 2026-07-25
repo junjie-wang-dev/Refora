@@ -23,7 +23,7 @@ import { logger } from './logger'
 
 const TEST_TIMEOUT_MS = 8_000
 
-function encryptKey(apiKey: string | undefined): Buffer | null {
+export function encryptKey(apiKey: string | undefined): Buffer | null {
   if (!apiKey) return null
   if (!safeStorage.isEncryptionAvailable()) {
     throw new RepoError(
@@ -34,7 +34,7 @@ function encryptKey(apiKey: string | undefined): Buffer | null {
   return safeStorage.encryptString(apiKey)
 }
 
-function decryptKey(enc: Buffer | null, allowEmpty = false): string {
+export function decryptKey(enc: Buffer | null, allowEmpty = false): string {
   if (!enc) {
     if (allowEmpty) return ''
     throw new RepoError('no_api_key', 'Provider has no API key')
