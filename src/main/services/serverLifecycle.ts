@@ -22,6 +22,8 @@ export interface ServerLifecycleDeps {
   pythonPath: string
   serverModule: string
   stateDir: string
+  dbPath: string
+  libraryFolder: string
   maxRestarts?: number
   startupTimeoutMs?: number
   healthIntervalMs?: number
@@ -86,8 +88,14 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       deps.serverModule,
       '--port',
       '0',
+      '--host',
+      '127.0.0.1',
       '--state-dir',
-      deps.stateDir
+      deps.stateDir,
+      '--db-path',
+      deps.dbPath,
+      '--library-folder',
+      deps.libraryFolder
     ]
     const spawned = spawnChild(deps.pythonPath, args, {
       cwd: deps.stateDir,

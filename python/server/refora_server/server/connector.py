@@ -97,6 +97,13 @@ class ConnectorBroker:
             return self.handle_error(data)
         return False
 
+    async def cancel_pending(self) -> None:
+        pending = tuple(self._pending.values())
+        for future in pending:
+            if not future.done():
+                future.set_result(self._error("connector_shutdown", "Server is shutting down"))
+        await asyncio.sleep(0)
+
     @staticmethod
     def _error(code: str, message: str) -> Result:
         return {"ok": False, "error": {"code": code, "message": message}}

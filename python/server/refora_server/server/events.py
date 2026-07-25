@@ -68,6 +68,9 @@ class EventBus:
     async def publish(self, event: str, data: Any) -> None:
         await self.broadcast(event, data)
 
+    async def flush(self) -> None:
+        await asyncio.sleep(0)
+
     @staticmethod
     def _normalize_topics(topics: Iterable[str]) -> list[str]:
         seen: set[str] = set()

@@ -8,7 +8,10 @@ from pathlib import Path
 
 import uvicorn
 
+from refora_server.db.connection import close_database, open_database
+
 from .app import create_app, generate_token
+from .lifespan import create_lifespan
 
 
 def _bind_port(host: str, port: int) -> int:
@@ -40,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     port = 0
     host = "127.0.0.1"
     state_dir: str | None = None
+    db_path: str | None = None
+    library_folder = ""
     i = 0
     while i < len(args):
         arg = args[i]
@@ -49,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
             host = args[i + 1]; i += 2
         elif arg == "--state-dir":
             state_dir = args[i + 1]; i += 2
+        elif arg == "--db-path":
+            db_path = args[i + 1]; i += 2
+        elif arg == "--library-folder":
+            library_folder = args[i + 1]; i += 2
         else:
             i += 1
 
@@ -59,13 +68,22 @@ def main(argv: list[str] | None = None) -> int:
     if state_dir is None:
         print("ERROR --state-dir is required", file=sys.stderr)
         return 2
+    if db_path is None:
+        print("ERROR --db-path is required", file=sys.stderr)
+        return 2
 
     chosen_port = _bind_port(host, port)
     token = generate_token()
     _write_state_file(Path(state_dir), chosen_port, token)
 
     os.environ["REFORA_SERVER_TOKEN"] = token
-    app = create_app()
+    db, _ = open_database(db_path)
+    try:
+        app = create_app(db=db, library_folder=library_folder)
+    except Exception:
+        close_database(db)
+        raise
+    app.router.lifespan_context = create_lifespan(db_path, library_folder, db)
     app.state.state_dir = state_dir
     app.state.host = host
     app.state.port = chosen_port
@@ -73,7 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.write(f"LISTENING {chosen_port}\n")
     sys.stdout.flush()
 
-    uvicorn.run(app, host=host, port=chosen_port, log_config=None)
+    config = uvicorn.Config(app, host=host, port=chosen_port, log_config=None)
+    server = uvicorn.Server(config)
+    app.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    server.run()
     return 0
 
 

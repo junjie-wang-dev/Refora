@@ -1,14 +1,14 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, nativeImage, net, protocol } from 'electron'
 import { join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { createWriteStream, existsSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
 import { openDatabase, seedSettings, closeDatabase, getSetting, getSearchMode } from './db/connection'
 import { createRepositories } from './db/repositories'
 import { RepoError } from './db/repositories/errors'
-import { registerIpcHandlers, validateProxyUrl, type RuntimeRef } from './ipc/handlers'
+import { validateProxyUrl, type RuntimeRef } from './ipc/handlers'
 import { createImporter } from './services/importer'
 import { createMetadataService } from './services/metadata'
 import { createWatcher } from './services/watcher'
@@ -71,6 +71,8 @@ import {
   sameDuplicateFingerprint,
   type LibraryDuplicateFileCache
 } from './services/libraryDuplicateCache'
+import { createServerLifecycle } from './services/serverLifecycle'
+import { createServerAssembly, type ServerAssembly } from './serverAssembly'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -86,6 +88,7 @@ protocol.registerSchemesAsPrivileged([
 let isDev = false
 const IS_MAC = process.platform === 'darwin'
 const LIBRARY_DUPLICATE_CACHE_KEY = 'libraryDuplicateFileCache'
+let serverAssembly: ServerAssembly | null = null
 
 type DbConnection = ReturnType<typeof openDatabase>
 interface Runtime extends RuntimeRef {
@@ -908,12 +911,12 @@ async function performLibrarySwitch(folder: string): Promise<LibrarySwitchResult
   return result
 }
 
-const switchLibraryFolder = createExclusiveTask(
+const _switchLibraryFolder = createExclusiveTask(
   performLibrarySwitch,
   () => new RepoError('busy', 'Library switch already in progress')
 )
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   isDev = !app.isPackaged
   initLogger()
   logger.info(`app:ready (dev=${isDev})`)
@@ -978,13 +981,23 @@ void app.whenReady().then(() => {
   win = createWindow(savedBounds)
   activateRuntime(runtime)
 
-  Menu.setApplicationMenu(buildMenu())
-  registerIpcHandlers({
-    getWin: () => win,
-    getRuntime: () => runtime,
-    mineruEngineManager,
-    switchLibraryFolder
+  const serverStateDir = join(app.getPath('userData'), 'server')
+  mkdirSync(serverStateDir, { recursive: true })
+  const libraryFolder = runtime.repos.settings.get<string>('libraryFolderPath', '') || app.getPath('userData')
+  serverAssembly = createServerAssembly({
+    lifecycle: createServerLifecycle({
+      pythonPath: 'python',
+      serverModule: 'refora_server.server.run',
+      stateDir: serverStateDir,
+      dbPath,
+      libraryFolder
+    }),
+    repos: runtime.repos,
+    getWin: () => win
   })
+  await serverAssembly.start()
+
+  Menu.setApplicationMenu(buildMenu())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -998,6 +1011,9 @@ void app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  const assembly = serverAssembly
+  serverAssembly = null
+  void assembly?.stop()
   teardownRuntime()
   mineruEngineManager?.destroy()
   if (win) {
