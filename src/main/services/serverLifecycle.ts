@@ -24,6 +24,7 @@ export interface ServerLifecycleDeps {
   stateDir: string
   dbPath: string
   libraryFolder: string
+  environment?: NodeJS.ProcessEnv
   maxRestarts?: number
   startupTimeoutMs?: number
   healthIntervalMs?: number
@@ -99,6 +100,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     ]
     const spawned = spawnChild(deps.pythonPath, args, {
       cwd: deps.stateDir,
+      env: deps.environment,
       stdio: ['ignore', 'pipe', 'pipe']
     })
 

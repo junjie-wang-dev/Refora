@@ -22,6 +22,10 @@ extraResources:
     filter:
       - pyproject.toml
       - uv.lock
+  - from: python/server/refora_server
+    to: python-server/refora_server
+    filter:
+      - '**/*.py'
 asar: true
 asarUnpack:
   - '**/*.node'
