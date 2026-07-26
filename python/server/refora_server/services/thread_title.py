@@ -7,6 +7,25 @@ from refora_server.providers.catalog import inferModelCapabilities
 from refora_server.services.ai_summary import build_provider_config
 
 
+def derive_thread_title(text: str) -> str:
+    one_line = re.sub(r"\s+", " ", text).strip()
+    if not one_line:
+        return "New chat"
+    if len(one_line) <= 50:
+        return one_line
+
+    first_50 = one_line[:50]
+    sentence_match = re.search(r"[.!?。！？]", first_50)
+    if sentence_match is not None and sentence_match.start() > 10:
+        return one_line[: sentence_match.start() + 1].strip()
+
+    last_space = first_50.rfind(" ")
+    if last_space > 10:
+        return one_line[:last_space].strip() + "…"
+
+    return first_50 + "…"
+
+
 def _clean_title(title: str) -> str:
     cleaned = re.sub(r"^[\'\"]+|[\'\"]+$", "", title.strip())
     cleaned = re.sub(r"\.$", "", cleaned).strip()
