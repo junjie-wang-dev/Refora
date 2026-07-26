@@ -189,7 +189,15 @@ def unescapeLatex(value: str) -> str:
 
 def normalizeAuthors(value: str) -> str:
     authors = [author.strip() for author in re.split(r"\band\b", value, flags=re.IGNORECASE) if author.strip()]
-    return "; ".join(authors)
+    normalized: list[str] = []
+    for author in authors:
+        if "," in author:
+            last, *rest = author.split(",")
+            first = ",".join(rest).strip()
+            normalized.append(f"{last.strip()}, {first}" if first else last.strip())
+        else:
+            normalized.append(author)
+    return "; ".join(normalized)
 
 
 def normalizePages(value: str) -> str:

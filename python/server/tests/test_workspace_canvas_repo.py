@@ -21,9 +21,16 @@ def _seed_workspace(db, name="Research"):
     return ws["create"](name)
 
 
-def test_get_missing_returns_none_when_no_row(db, repo):
+def test_get_missing_returns_default_viewport_when_no_row(db, repo):
     workspace = _seed_workspace(db)
-    assert repo["get"](workspace["id"]) is None
+    canvas = repo["get"](workspace["id"])
+    assert canvas == {
+        "workspaceId": workspace["id"],
+        "panX": 0.0,
+        "panY": 0.0,
+        "zoom": 1.0,
+        "updatedAt": 0,
+    }
 
 
 def test_get_missing_workspace_raises_not_found(db, repo):
@@ -96,7 +103,13 @@ def test_update_zoom_below_min_rejected(db, repo):
     with pytest.raises(RepoError) as exc:
         repo["update"](workspace["id"], 0.0, 0.0, 0.24)
     assert exc.value.code == "invalid_viewport"
-    assert repo["get"](workspace["id"]) is None
+    assert repo["get"](workspace["id"]) == {
+        "workspaceId": workspace["id"],
+        "panX": 0.0,
+        "panY": 0.0,
+        "zoom": 1.0,
+        "updatedAt": 0,
+    }
 
 
 def test_update_zoom_above_max_rejected(db, repo):
@@ -104,7 +117,13 @@ def test_update_zoom_above_max_rejected(db, repo):
     with pytest.raises(RepoError) as exc:
         repo["update"](workspace["id"], 0.0, 0.0, 2.51)
     assert exc.value.code == "invalid_viewport"
-    assert repo["get"](workspace["id"]) is None
+    assert repo["get"](workspace["id"]) == {
+        "workspaceId": workspace["id"],
+        "panX": 0.0,
+        "panY": 0.0,
+        "zoom": 1.0,
+        "updatedAt": 0,
+    }
 
 
 def test_update_missing_workspace_raises_not_found(db, repo):

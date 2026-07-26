@@ -504,7 +504,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             if logger is not None:
                 logger.warn(f"workspaceAsset:trash-failed {path}: {exc}")
 
-    def get_canvas(workspace_id: str) -> dict[str, Any] | None:
+    def get_canvas(workspace_id: str) -> dict[str, Any]:
         _require_workspace(workspace_id)
         return repos["workspaceCanvas"]["get"](workspace_id)
 
