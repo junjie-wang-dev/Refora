@@ -329,6 +329,32 @@ async def test_get_markdown_unknown_job_raises(repos, library_folder):
         await service["getMarkdown"]("nope")
     assert exc.value.code == "not_found"
 
+@pytest.mark.asyncio
+async def test_read_markdown_requires_matching_document_and_current_source(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    service = create_ocr_service(repos, _make_deps(library_folder, _FakeWorker()))
+    job_id = await service["startOcr"]("doc-1", "balanced")
+    await asyncio.sleep(0.05)
+    job = repos["documentOcr"]["getJob"](job_id)
+    markdown = await service["readMarkdown"]("doc-1", job["resultKey"])
+    assert markdown.startswith("# Title")
+
+    document = repos["documents"]["get"]("doc-1")
+    repos["documents"]["updateFileIdentity"](
+        "doc-1",
+        document["filePath"],
+        document["fileName"],
+        document["fileSize"],
+        "new-source-hash",
+    )
+    state = await service["getState"]("doc-1")
+    assert state["result"]["stale"] is True
+    with pytest.raises(RepoError) as exc:
+        await service["readMarkdown"]("doc-1", job["resultKey"])
+    assert exc.value.code == "stale"
+
 
 @pytest.mark.asyncio
 async def test_initialize_marks_running_interrupted(repos, library_folder, pdf_path):

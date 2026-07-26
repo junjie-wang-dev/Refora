@@ -8,6 +8,7 @@ from refora_server.services.chat_history import (
     historyToMessages,
     parseToolPayload,
     sanitizeToolCallPairs,
+    truncateHistoryByTokens,
     truncateOutput,
 )
 
@@ -155,3 +156,27 @@ def test_legacy_tool_call_id_uses_message_id(chat_repo, db):
     insert_message(db, threadId=thread, id="msg-9", role="tool", content=payload)
     msgs = _svc(chat_repo)["buildHistoryMessages"](thread)
     assert msgs[0]["tool_calls"][0]["id"] == "legacy_msg-9"
+
+
+def test_token_truncation_preserves_tool_call_pairs_and_cjk_budget():
+    messages = [
+        {"role": "user", "content": "旧" * 9000},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "search", "args": {"query": "x"}}],
+        },
+        {
+            "role": "tool",
+            "content": "result",
+            "tool_call_id": "call-1",
+            "name": "search",
+        },
+        {"role": "assistant", "content": "latest"},
+    ]
+
+    result = truncateHistoryByTokens(messages)
+
+    assert result[0]["role"] == "assistant"
+    assert [message["role"] for message in result] == ["assistant", "tool", "assistant"]
+    assert result[0]["tool_calls"][0]["id"] == result[1]["tool_call_id"]

@@ -181,6 +181,25 @@ def test_list_models_required_key_absent(db):
     assert "api key" in result["error"].lower()
 
 
+def test_build_provider_config_uses_request_key_without_persisting_it(db):
+    provider = _make_provider(db)
+    repo = _make_provider_repo(db)
+    svc = createAiProvidersService({"aiProviders": repo})
+
+    config = svc["buildProviderConfig"](
+        provider["id"],
+        "request-only-secret",
+        model_id="gpt-5.6-terra",
+        features={"deepThinking": True, "reasoningEffort": "high"},
+    )
+
+    assert config["apiKey"] == "request-only-secret"
+    assert config["model"] == "gpt-5.6-terra"
+    assert config["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert repo["getRaw"](provider["id"])["apiKeyEnc"] == b"enc"
+    assert "request-only-secret" not in repr(repo["getRaw"](provider["id"]))
+
+
 def test_list_models_http_error_returns_error(db):
     provider = _make_provider(db)
     responder = _FakeClient()

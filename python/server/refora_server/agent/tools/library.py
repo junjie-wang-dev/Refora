@@ -39,7 +39,18 @@ def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, 
         entry = call(repo(executor.repos, "aiSummaries"), "getFullText", args["docId"])
         text = entry.get("text", "") if entry else ""
     offset, limit = max(0, int(args.get("offset", 0))), min(12_000, max(500, int(args.get("limit", 8_000))))
-    return {"docId": args["docId"], "title": doc.get("title") or doc.get("fileName"), "offset": offset, "limit": limit, "totalChars": len(text), "nextOffset": offset + limit if offset + limit < len(text) else None, "text": text[offset:offset + limit]}
+    chunk_count = max(1, (len(text) + limit - 1) // limit)
+    return {
+        "docId": args["docId"],
+        "title": doc.get("title") or doc.get("fileName"),
+        "offset": offset,
+        "limit": limit,
+        "totalChars": len(text),
+        "nextOffset": offset + limit if offset + limit < len(text) else None,
+        "chunkIndex": offset // limit,
+        "chunkCount": chunk_count,
+        "text": text[offset:offset + limit],
+    }
 
 
 def get_paper_summary(executor: Any, args: dict[str, Any]) -> Any:
@@ -48,11 +59,18 @@ def get_paper_summary(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def request_summary(executor: Any, args: dict[str, Any]) -> Any:
+    document_id = args["docId"].strip()
+    document = call(repo(executor.repos, "documents"), "get", document_id)
+    if document is None:
+        return {"status": "error", "message": "Document not found."}
+    summary = call(repo(executor.repos, "aiSummaries"), "getSummary", document_id)
+    if summary and summary.get("content"):
+        return {"status": "ready", "summary": summary["content"]}
     service = value(executor.deps, "ai_summary")
     if callable(service):
-        call(executor.deps, "ai_summary", args["docId"])
-        return {"status": "queued", "docId": args["docId"]}
-    return {"status": "unavailable", "docId": args["docId"]}
+        call(executor.deps, "ai_summary", document_id)
+        return {"status": "queued", "docId": document_id}
+    return {"status": "unavailable", "docId": document_id}
 
 
 def open_paper(executor: Any, args: dict[str, Any]) -> Any:

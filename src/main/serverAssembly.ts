@@ -1,6 +1,7 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Repositories } from './db/repositories'
 import type { LibrarySwitchResult } from '../shared/ipc-types'
+import { createServerAppHandlers } from './ipc/serverAppHandlers'
 import { createServerAiHandlers } from './ipc/serverAiHandlers'
 import { createServerEventBridge, type ServerEventBridge } from './ipc/serverEventBridge'
 import { createServerLibraryHandlers } from './ipc/serverLibraryHandlers'
@@ -41,6 +42,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     eventBridge.start()
 
     const handlers = {
+      ...createServerAppHandlers(serverClient),
       ...createServerLibraryHandlers({ serverClient, switchLibraryFolder: deps.switchLibraryFolder }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient })

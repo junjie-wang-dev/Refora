@@ -41,8 +41,9 @@ class _SqliteAdapter:
 
 def open_database(db_path: str) -> tuple[sqlite3.Connection, MigrationResult]:
     global _active_search_mode
-    db = sqlite3.connect(db_path, isolation_level=None)
+    db = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     try:
+        db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")
         db.execute("PRAGMA journal_mode = WAL")
         result = run_migrations(_SqliteAdapter(db))

@@ -6,6 +6,7 @@ from conftest import make_agent_memories_repo, make_workspaces_repo, open_migrat
 from refora_server.services.agent_memory import (
     MAX_MEMORY_FILE_CHARS,
     ReadonlyMemoryBackend,
+    curated_memory_context,
     ensure_memory_files,
     read_memories,
     update_memory,
@@ -44,3 +45,19 @@ def test_readonly_memory_backend_line_numbers_and_rejects_writes():
     assert backend.read("/brief.md", offset=1)["content"] == "2: two"
     assert backend.write("/brief.md", "changed")["error"]
     assert backend.upload_files([("/new.md", b"x")])[0]["error"] == "permission_denied"
+
+
+def test_curated_memory_context_is_readonly_and_research_is_workspace_only():
+    memories = {
+        "/brief.md": "Compare the selected papers.",
+        "/preferences.md": "",
+        "/research.md": "Open question: robustness.",
+    }
+
+    global_context = curated_memory_context(memories, include_research=False)
+    workspace_context = curated_memory_context(memories, include_research=True)
+
+    assert "Compare the selected papers." in global_context
+    assert "/research.md" not in global_context
+    assert "read-only context" in workspace_context
+    assert "Open question: robustness." in workspace_context

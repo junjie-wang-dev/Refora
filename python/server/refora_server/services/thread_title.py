@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from refora_server.providers.catalog import inferModelCapabilities
 from refora_server.services.ai_summary import build_provider_config
 
 
@@ -37,7 +38,12 @@ def createThreadTitleService(repos: Any, deps: Any | None = None):
             model_id = (provider.get("model") or "").strip()
             provider_config = build_provider_config(provider, deep_thinking=False)
             provider_config["streaming"] = False
-            is_reasoning_model = bool(provider.get("supportsReasoning"))
+            is_reasoning_model = (
+                inferModelCapabilities(provider.get("presetId") or "custom", model_id).get(
+                    "supportsReasoning"
+                )
+                is True
+            )
             max_tokens = 512 if is_reasoning_model else 30
             provider_config["maxTokens"] = max_tokens
             provider_config["temperature"] = 0.3

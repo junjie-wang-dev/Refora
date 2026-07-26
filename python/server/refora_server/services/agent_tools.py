@@ -17,7 +17,11 @@ from refora_server.agent.risk import RiskClass, classify
 from refora_server.agent.tools.academic import AcademicTools
 from refora_server.agent.tools.common import value
 from refora_server.agent.tools.library import LibraryTools
-from refora_server.agent.tools.ocr_memory import OcrMemoryTools
+from refora_server.agent.tools.ocr_memory import (
+    OcrMemoryTools,
+    memory_update_description,
+    memory_update_schema,
+)
 from refora_server.agent.tools.registry import collect_registry
 from refora_server.agent.tools.sandbox import SandboxTools
 from refora_server.agent.tools.todo import TodoTools
@@ -81,6 +85,10 @@ _REGISTRY = collect_registry(
 )
 
 
+def agent_tool_names() -> tuple[str, ...]:
+    return tuple(_REGISTRY)
+
+
 class AgentToolExecutor:
     def __init__(self, context: AgentToolContext, deps: Any) -> None:
         self.context = context
@@ -92,13 +100,6 @@ class AgentToolExecutor:
         arguments = dict(arguments or {})
         try:
             risk = classify(name)
-            if risk is RiskClass.EXTERNAL:
-                approval = value(self.deps, "interrupt")
-                if not callable(approval):
-                    raise ValueError(f"Approval handler is unavailable for {name}")
-                result = self._call_dep("interrupt", name, arguments)
-                if result is not None:
-                    return _json(result)
             if risk is not RiskClass.READ:
                 return self._effect(name, arguments, tool_call_id)
             return _json(self._dispatch(name, arguments))
@@ -155,6 +156,10 @@ def create_agent_tools(context: AgentToolContext, deps: Any) -> list[StructuredT
     executor = AgentToolExecutor(context, deps)
     tools: list[StructuredTool] = []
     for name, (_handler, schema, description) in _REGISTRY.items():
+        if name == "propose_workspace_memory_update":
+            schema = memory_update_schema(context.workspace_id)
+            description = memory_update_description(context.workspace_id)
+
         def make_tool(n: str = name) -> Any:
             def invoke(config: RunnableConfig, **arguments: Any) -> str:
                 tool_call_id = _tool_call_id_from(arguments, config)

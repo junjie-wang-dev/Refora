@@ -20,6 +20,12 @@ def _dependency(deps: Any, name: str) -> Any:
     return getattr(deps, name)
 
 
+def _optional_dependency(deps: Any, name: str) -> Any:
+    if isinstance(deps, dict):
+        return deps.get(name)
+    return getattr(deps, name, None)
+
+
 def _result(data: Any) -> JSONResponse:
     return JSONResponse({"ok": True, "data": data})
 
@@ -34,7 +40,7 @@ def _failure(status_code: int, code: str, message: str) -> JSONResponse:
 def _repo_status(code: str) -> int:
     if code in {"not_found", "file_missing"}:
         return 404
-    if code in {"busy", "conflict", "duplicate", "invalid_order"}:
+    if code in {"busy", "conflict", "duplicate", "invalid_order", "stale"}:
         return 409
     if code in {"not_ready", "unavailable", "engine_unavailable"}:
         return 503
@@ -110,7 +116,21 @@ def _placement(value: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(placement, dict):
         raise RequestError("placement must be an object")
-    return placement
+    return {"x": _number(placement, "x"), "y": _number(placement, "y")}
+
+
+def _item_ids(value: dict[str, Any], kind: str) -> tuple[list[str], bool]:
+    if "ids" in value:
+        return _string_list(value, "ids"), False
+    field = {
+        "document": "docId",
+        "report": "reportId",
+        "note": "noteId",
+        "asset": "assetId",
+    }.get(kind)
+    if field is None:
+        raise RequestError("kind must be document, report, note, or asset")
+    return [_string(value, field)], True
 
 
 def _status(value: Any) -> Any:
@@ -133,6 +153,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     workspaces = _dependency(deps, "workspaces")
     mineru = _dependency(deps, "mineru")
     ocr = _dependency(deps, "ocr")
+    connector = _optional_dependency(deps, "connector")
     require_token = _dependency(deps, "require_token")
     router = APIRouter(dependencies=[Depends(require_token)])
 
@@ -176,18 +197,28 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     async def list_items(workspace_id: str) -> JSONResponse:
         return await _invoke(lambda: workspaces["listItems"](workspace_id))
 
+    @router.get("/workspace-items/{item_id}")
+    async def get_item(item_id: str) -> JSONResponse:
+        return await _invoke(lambda: workspaces["getItem"](item_id))
+
     @router.post("/workspaces/{workspace_id}/items")
     async def add_items(
         workspace_id: str, body: dict[str, Any] | None = Body(default=None)
     ) -> JSONResponse:
-        return await _invoke(
-            lambda: workspaces["addItems"](
-                workspace_id,
-                _string(_body(body), "kind"),
-                _string_list(_body(body), "ids"),
-                _placement(_body(body)),
+        def operation() -> Any:
+            payload = _body(body)
+            kind = _string(payload, "kind")
+            ids, singular = _item_ids(payload, kind)
+            result = workspaces["addItems"](
+                workspace_id, kind, ids, _placement(payload)
             )
-        )
+            if not singular:
+                return result
+            if not isinstance(result, list) or len(result) != 1:
+                raise RuntimeError("Workspace item creation returned an invalid result")
+            return result[0]
+
+        return await _invoke(operation)
 
     @router.post("/workspaces/{workspace_id}/items/reorder")
     async def reorder_items(
@@ -207,6 +238,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     ) -> JSONResponse:
         return await _invoke(
             lambda: workspaces["resizeItem"](
+                workspace_id,
                 item_id,
                 _integer(_body(body), "width"),
                 _integer(_body(body), "height"),
@@ -219,6 +251,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     ) -> JSONResponse:
         return await _invoke(
             lambda: workspaces["moveItem"](
+                workspace_id,
                 _string(_body(body), "itemId"),
                 _number(_body(body), "x"),
                 _number(_body(body), "y"),
@@ -229,7 +262,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.delete("/workspaces/{workspace_id}/items/{item_id}")
     async def delete_item(workspace_id: str, item_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["deleteItem"](item_id)
+            value = workspaces["deleteItem"](workspace_id, item_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -239,6 +272,10 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.get("/workspaces/{workspace_id}/assets")
     async def list_assets(workspace_id: str) -> JSONResponse:
         return await _invoke(lambda: workspaces["listAssets"](workspace_id))
+
+    @router.get("/workspace-assets/{asset_id}")
+    async def get_asset(asset_id: str) -> JSONResponse:
+        return await _invoke(lambda: workspaces["getAsset"](asset_id))
 
     @router.post("/workspaces/{workspace_id}/assets/files")
     async def import_assets(
@@ -252,18 +289,14 @@ def create_workspaces_router(deps: Any) -> APIRouter:
 
     @router.get("/workspaces/{workspace_id}/assets/{asset_id}/preview")
     async def preview_asset(workspace_id: str, asset_id: str) -> JSONResponse:
-        async def operation() -> dict[str, Any]:
-            value = workspaces["previewAsset"](asset_id)
-            if inspect.isawaitable(value):
-                value = await value
-            return {"text": value["content"]}
-
-        return await _invoke(operation)
+        return await _invoke(
+            lambda: workspaces["previewAsset"](workspace_id, asset_id)
+        )
 
     @router.post("/workspaces/{workspace_id}/assets/{asset_id}/open")
     async def open_asset(workspace_id: str, asset_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["openAsset"](asset_id)
+            value = workspaces["openAsset"](workspace_id, asset_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -273,7 +306,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.post("/workspaces/{workspace_id}/assets/{asset_id}/reveal")
     async def reveal_asset(workspace_id: str, asset_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["revealAsset"](asset_id)
+            value = workspaces["revealAsset"](workspace_id, asset_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -283,7 +316,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.delete("/workspaces/{workspace_id}/assets/{asset_id}")
     async def delete_asset(workspace_id: str, asset_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["deleteAsset"](asset_id)
+            value = workspaces["deleteAsset"](workspace_id, asset_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -311,6 +344,10 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     async def list_connections(workspace_id: str) -> JSONResponse:
         return await _invoke(lambda: workspaces["listConnections"](workspace_id))
 
+    @router.get("/workspace-connections/{connection_id}")
+    async def get_connection(connection_id: str) -> JSONResponse:
+        return await _invoke(lambda: workspaces["getConnection"](connection_id))
+
     @router.post("/workspaces/{workspace_id}/connections")
     async def create_connection(
         workspace_id: str, body: dict[str, Any] | None = Body(default=None)
@@ -328,7 +365,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.delete("/workspaces/{workspace_id}/connections/{connection_id}")
     async def delete_connection(workspace_id: str, connection_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["deleteConnection"](connection_id)
+            value = workspaces["deleteConnection"](workspace_id, connection_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -338,6 +375,10 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.get("/workspaces/{workspace_id}/notes")
     async def list_notes(workspace_id: str) -> JSONResponse:
         return await _invoke(lambda: workspaces["listNotes"](workspace_id))
+
+    @router.get("/workspace-notes/{note_id}")
+    async def get_note(note_id: str) -> JSONResponse:
+        return await _invoke(lambda: workspaces["getNote"](note_id))
 
     @router.post("/workspaces/{workspace_id}/notes")
     async def create_note(
@@ -357,12 +398,14 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     async def update_note(
         workspace_id: str, note_id: str, body: dict[str, Any] | None = Body(default=None)
     ) -> JSONResponse:
-        return await _invoke(lambda: workspaces["updateNote"](note_id, _body(body)))
+        return await _invoke(
+            lambda: workspaces["updateNote"](workspace_id, note_id, _body(body))
+        )
 
     @router.delete("/workspaces/{workspace_id}/notes/{note_id}")
     async def delete_note(workspace_id: str, note_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
-            value = workspaces["deleteNote"](note_id)
+            value = workspaces["deleteNote"](workspace_id, note_id)
             if inspect.isawaitable(value):
                 await value
             return {"ack": True}
@@ -373,6 +416,37 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     async def mineru_status() -> JSONResponse:
         async def operation() -> Any:
             value = mineru["getStatus"]()
+            if inspect.isawaitable(value):
+                value = await value
+            return _status(value)
+
+        return await _invoke(operation)
+
+    @router.post("/mineru/choose-install-root")
+    async def choose_mineru_install_root() -> JSONResponse:
+        async def operation() -> Any:
+            if connector is None:
+                raise RuntimeError("Native directory picker is unavailable")
+            chooser = getattr(connector, "dialog_open_directory", None)
+            if not callable(chooser):
+                raise RuntimeError("Native directory picker is unavailable")
+            selection = chooser("Select MinerU Install Location")
+            if inspect.isawaitable(selection):
+                selection = await selection
+            if not isinstance(selection, dict) or selection.get("ok") is not True:
+                error = selection.get("error") if isinstance(selection, dict) else None
+                message = error.get("message") if isinstance(error, dict) else None
+                raise RuntimeError(message or "Native directory picker failed")
+            data = selection.get("data")
+            if not isinstance(data, dict):
+                raise RuntimeError("Native directory picker returned an invalid result")
+            if data.get("canceled") is True or data.get("path") is None:
+                value = mineru["getStatus"]()
+            else:
+                path = data.get("path")
+                if not isinstance(path, str) or not path:
+                    raise RuntimeError("Native directory picker returned an invalid path")
+                value = mineru["setInstallRoot"](path)
             if inspect.isawaitable(value):
                 value = await value
             return _status(value)
@@ -390,6 +464,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
             if not inspect.isawaitable(value):
                 raise RequestError("MinerU install operation must be awaitable")
             _detach(value)
+            await asyncio.sleep(0)
             return {"ack": True}
 
         return await _invoke(operation)
@@ -407,6 +482,15 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.post("/mineru/uninstall")
     async def uninstall_mineru() -> JSONResponse:
         async def operation() -> dict[str, bool]:
+            stop_worker = (
+                ocr.get("stopWorker")
+                if isinstance(ocr, dict)
+                else getattr(ocr, "stopWorker", None)
+            )
+            if callable(stop_worker):
+                stopped = stop_worker()
+                if inspect.isawaitable(stopped):
+                    await stopped
             value = mineru["uninstall"]()
             if inspect.isawaitable(value):
                 await value
@@ -430,22 +514,28 @@ def create_workspaces_router(deps: Any) -> APIRouter:
 
     @router.post("/ocr/cancel")
     async def cancel_ocr(body: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
-        async def operation() -> dict[str, bool]:
+        async def operation() -> Any:
             value = ocr["cancelOcr"](_string(_body(body), "jobId"))
             if inspect.isawaitable(value):
-                await value
-            return {"ack": True}
+                value = await value
+            return value
 
         return await _invoke(operation)
 
     @router.get("/ocr/state")
-    async def ocr_state() -> JSONResponse:
-        return await _invoke(lambda: ocr["getOcrState"]())
+    async def ocr_state(documentId: str | None = None) -> JSONResponse:
+        if documentId is None:
+            return await _invoke(lambda: ocr["getOcrState"]())
+        if not isinstance(documentId, str) or not documentId:
+            return _failure(
+                400, "validation", "documentId must be a non-empty string"
+            )
+        return await _invoke(lambda: ocr["getState"](documentId))
 
-    @router.get("/ocr/{job_id}/markdown")
-    async def ocr_markdown(job_id: str) -> JSONResponse:
+    @router.get("/ocr/documents/{document_id}/results/{result_key}/markdown")
+    async def ocr_markdown(document_id: str, result_key: str) -> JSONResponse:
         async def operation() -> dict[str, str]:
-            value = ocr["getMarkdown"](job_id)
+            value = ocr["readMarkdown"](document_id, result_key)
             if inspect.isawaitable(value):
                 value = await value
             return {"markdown": value}

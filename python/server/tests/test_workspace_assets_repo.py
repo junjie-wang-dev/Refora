@@ -95,6 +95,34 @@ def test_list_raises_when_workspace_missing(db):
     assert exc.value.code == "not_found"
 
 
+def test_search_matches_literal_wildcards_and_returns_workspace_name(db):
+    ws_id = _make_workspace(db, "Research")
+    repo = _repo(db)
+    asset = repo["create"](
+        _asset_input(
+            workspace_id=ws_id,
+            file_name="result_100%.png",
+            source_path="/orig/result_100%.png",
+        )
+    )
+
+    results = repo["search"]("100%")
+
+    assert results == [
+        {
+            "id": asset["id"],
+            "workspaceId": ws_id,
+            "workspaceName": "Research",
+            "fileName": "result_100%.png",
+            "mimeType": "image/png",
+            "previewKind": "image",
+            "fileMissing": 0,
+            "updatedAt": asset["updatedAt"],
+        }
+    ]
+    assert repo["search"]("   ") == []
+
+
 def test_create_raises_when_workspace_missing(db):
     repo = _repo(db)
     with pytest.raises(RepoError) as exc:

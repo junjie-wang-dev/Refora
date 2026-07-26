@@ -81,7 +81,7 @@ export function useChatStream({
   const streamingStartTimeRef = useRef<number | null>(null)
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const cancelledRef = useRef(false)
-  const cancelledThreadRef = useRef<string | null>(null)
+  const cancelledRunRef = useRef<string | null>(null)
   const rafIdRef = useRef<number | null>(null)
   const isSendingRef = useRef(false)
   const retrySendRef = useRef<ChatSendContext | null>(null)
@@ -107,7 +107,7 @@ export function useChatStream({
       retrySendRef.current = null
       latestSendRef.current = null
       cancelledRef.current = false
-      cancelledThreadRef.current = null
+      cancelledRunRef.current = null
       setCanRetry(false)
       streamingTextRef.current = ''
       streamingReasoningRef.current = ''
@@ -274,7 +274,7 @@ export function useChatStream({
         activeRunIdRef.current = null
         setActiveRunId(null)
         retrySendRef.current = null
-        cancelledThreadRef.current = null
+        cancelledRunRef.current = null
         setCanRetry(false)
         resumeRetryRef.current = null
         setMessages((prev) => [
@@ -304,7 +304,7 @@ export function useChatStream({
         activeRunIdRef.current = failedResume?.interrupt.runId ?? null
         setActiveRunId(failedResume?.interrupt.runId ?? null)
         cancelledRef.current = false
-        cancelledThreadRef.current = null
+        cancelledRunRef.current = null
         if (failedResume) {
           pendingInterruptRef.current = failedResume.interrupt
           setPendingInterrupt(failedResume.interrupt)
@@ -393,8 +393,8 @@ export function useChatStream({
       for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
       deferredTraceTimersRef.current.clear()
       liveActivityStartedAtRef.current.clear()
-      if (isSendingRef.current && threadIdRef.current) {
-        void api.ai.chatCancel(threadIdRef.current).catch(() => undefined)
+      if (isSendingRef.current && activeRunIdRef.current) {
+        void api.ai.chatCancel(activeRunIdRef.current).catch(() => undefined)
       }
       isSendingRef.current = false
       setChatStreaming(false)
@@ -429,12 +429,12 @@ export function useChatStream({
     }
   }, [streaming])
 
-  const cancelThread = useCallback((threadId: string) => {
-    if (cancelledThreadRef.current === threadId) return
-    cancelledThreadRef.current = threadId
-    void api.ai.chatCancel(threadId).catch((e) => {
+  const cancelRun = useCallback((runId: string) => {
+    if (cancelledRunRef.current === runId) return
+    cancelledRunRef.current = runId
+    void api.ai.chatCancel(runId).catch((e) => {
       cancelledRef.current = false
-      cancelledThreadRef.current = null
+      cancelledRunRef.current = null
       setCanRetry(false)
       setError(errorMessage(e, 'Failed to stop response'))
     })
@@ -482,7 +482,7 @@ export function useChatStream({
     }
     retrySendRef.current = sendContext
     latestSendRef.current = sendContext
-    cancelledThreadRef.current = null
+    cancelledRunRef.current = null
     try {
       const model = requestModel || undefined
       if (model) void pushRecentModel(model, activeProviderId)
@@ -504,7 +504,7 @@ export function useChatStream({
           : undefined
       })
       if (disposedRef.current) {
-        void api.ai.chatCancel(threadId).catch(() => undefined)
+        void api.ai.chatCancel(runId).catch(() => undefined)
         return
       }
       if (activeRunIdRef.current === requestedRunId) {
@@ -518,12 +518,12 @@ export function useChatStream({
         setActiveThreadId(threadId)
         threadIdRef.current = threadId
       }
-      if (cancelledRef.current) cancelThread(threadId)
+      if (cancelledRef.current) cancelRun(runId)
       void fetchThreads()
     } catch (e) {
       if (disposedRef.current) return
       cancelledRef.current = false
-      cancelledThreadRef.current = null
+      cancelledRunRef.current = null
       activeRunIdRef.current = null
       setActiveRunId(null)
       setCanRetry(true)
@@ -543,7 +543,7 @@ export function useChatStream({
     deepThinking,
     reasoningEffort,
     fetchThreads,
-    cancelThread,
+    cancelRun,
     t
   ])
 
@@ -615,14 +615,14 @@ export function useChatStream({
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true
-    if (threadIdRef.current) cancelThread(threadIdRef.current)
+    if (activeRunIdRef.current) cancelRun(activeRunIdRef.current)
     if (rafIdRef.current != null) {
       cancelAnimationFrame(rafIdRef.current)
       rafIdRef.current = null
     }
     setStreamingText(streamingTextRef.current)
     setStreamingReasoning(streamingReasoningRef.current)
-  }, [cancelThread])
+  }, [cancelRun])
 
   const handleRegenerate = useCallback(() => {
     let text = ''

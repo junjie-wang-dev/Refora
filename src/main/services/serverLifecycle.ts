@@ -19,8 +19,9 @@ export interface ServerConnection {
 }
 
 export interface ServerLifecycleDeps {
-  pythonPath: string
-  serverModule: string
+  pythonPath?: string
+  serverModule?: string
+  executablePath?: string
   stateDir: string
   dbPath: string
   libraryFolder: string
@@ -111,10 +112,13 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   }
 
   function spawnServer(): SpawnResult {
+    const command = deps.executablePath ?? deps.pythonPath
+    if (!command) throw new Error('Server executable is not configured')
+    if (!deps.executablePath && !deps.serverModule) {
+      throw new Error('Server Python module is not configured')
+    }
     const args = [
-      '-u',
-      '-m',
-      deps.serverModule,
+      ...(deps.executablePath ? [] : ['-u', '-m', deps.serverModule as string]),
       '--port',
       '0',
       '--host',
@@ -126,7 +130,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       '--library-folder',
       deps.libraryFolder
     ]
-    const spawned = spawnChild(deps.pythonPath, args, {
+    const spawned = spawnChild(command, args, {
       cwd: deps.stateDir,
       env: deps.environment,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -195,6 +199,18 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     }
   }
 
+  async function waitUntilHealthy(candidate: ServerConnection): Promise<void> {
+    const deadline = Date.now() + startupTimeoutMs
+    while (!stopping) {
+      if (await fetchHealth(`${candidate.baseUrl}/health`, healthTimeoutMs)) return
+      if (Date.now() >= deadline) {
+        throw new Error(`Server did not become healthy within ${startupTimeoutMs}ms`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    throw new Error('Server startup was cancelled')
+  }
+
   function attachCrashHandler(spawned: ChildProcess): void {
     spawned.once('close', (code, signal) => {
       if (stopping) return
@@ -252,8 +268,10 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     try {
       port = await portPromise
       connection = await buildConnection(port)
+      await waitUntilHealthy(connection)
     } catch (error) {
       terminate(spawned, 'SIGTERM')
+      connection = null
       child = null
       throw error
     }

@@ -5,8 +5,11 @@ import type {
   DocumentPatch,
   LibrarySwitchResult,
   ListFilter,
+  ListModelsRequest,
+  ListModelsResult,
   Result
 } from '../../shared/ipc-types'
+import { normalizeModelList } from '../../shared/modelVariant'
 import type { WebSearchConfigPatch } from '../../shared/webSearch'
 import type {
   ImportBibPayload,
@@ -40,8 +43,16 @@ export function createServerLibraryHandlers({ serverClient, switchLibraryFolder 
 
   return {
     [IpcChannel.DocumentsList]: (filter: ListFilter) =>
-      forward(() => http.documentsList(filter as never)),
-    [IpcChannel.DocumentsCount]: () => forward(() => http.documentsCount({})),
+      forward(() => http.documentsList({
+        mode: filter.mode,
+        ...(filter.mode === 'category' && filter.categoryId
+          ? { categoryId: filter.categoryId }
+          : {}),
+        ...(filter.sort
+          ? { sortField: filter.sort.field, sortDir: filter.sort.dir }
+          : {})
+      })),
+    [IpcChannel.DocumentsCount]: () => forward(() => http.documentsCount()),
     [IpcChannel.DocumentsSearch]: (query: string) => forward(() => http.documentsSearch(query)),
     [IpcChannel.DocumentsGet]: (documentId: string) => forward(() => http.documentsGet(documentId)),
     [IpcChannel.DocumentsUpdate]: (documentId: string, patch: DocumentPatch) =>
@@ -69,13 +80,17 @@ export function createServerLibraryHandlers({ serverClient, switchLibraryFolder 
 
     [IpcChannel.ImportAddFiles]: (paths: string[]) => forward(() => http.importFiles({ paths })),
     [IpcChannel.ImportAddFolder]: (path: string) => forward(() => http.importFolder({ path })),
-    [IpcChannel.ImportFromJson]: (file: string) => forward(() => http.importJson(file)),
+    [IpcChannel.ImportFromJson]: (file: string) =>
+      forward(async () => (await http.importJson(file)).imported),
     [IpcChannel.ImportFromZotero]: (payload: ImportBibPayload = { paths: [] }) =>
       forward(() => http.importZotero(payload)),
     [IpcChannel.ImportFromMendeley]: (payload: ImportBibPayload = { paths: [] }) =>
       forward(() => http.importMendeley(payload)),
     [IpcChannel.ImportFromIdentifier]: (identifier: string) =>
-      forward(() => http.importIdentifier({ identifier })),
+      forward(async () => {
+        const result = await http.importIdentifier({ identifier })
+        return { added: [result.documentId] }
+      }),
 
     [IpcChannel.CategoriesList]: () => forward(() => http.categoriesList()),
     [IpcChannel.CategoriesCreate]: (name: string, color?: string) =>
@@ -118,22 +133,35 @@ export function createServerLibraryHandlers({ serverClient, switchLibraryFolder 
       forward(() => http.aiProvidersUpdate(providerId, input as AiProviderInput)),
     [IpcChannel.AiProvidersDelete]: (providerId: string) =>
       forward(() => http.aiProvidersDelete(providerId)),
-    [IpcChannel.AiProvidersTest]: (providerId: string, apiKey = '') =>
-      forward(() => http.aiProvidersTest(providerId, { apiKey })),
-    [IpcChannel.AiProvidersListModels]: (providerId: string, apiKey = '') =>
-      forward(() => http.aiProvidersModels(providerId, { apiKey })),
+    [IpcChannel.AiProvidersTest]: (providerId: string) =>
+      forward(() => http.aiProvidersTest(providerId)),
+    [IpcChannel.AiProvidersListModels]: (request: ListModelsRequest | string) =>
+      forward<ListModelsResult>(async () => {
+        const parsed = typeof request === 'string' ? { providerId: request } : request
+        const result = await http.aiProvidersModels(parsed)
+        if (result.ok === false) {
+          return { ok: false, models: [], error: result.error ?? 'Failed to list provider models' }
+        }
+        return {
+          ok: true,
+          models: normalizeModelList(result.models, undefined, parsed.presetId ?? 'custom')
+        }
+      }),
 
     [IpcChannel.ExportToJson]: (payload: { documentIds?: string[]; workspaceId?: string } = {}) =>
-      forward(() => http.exportJson(payload)),
+      forward(async () => JSON.stringify(await http.exportJson(payload), null, 2)),
     [IpcChannel.ExportToBibtex]: (documentIds: string[]) =>
-      forward(() => http.exportBibtex({ documentIds })),
+      forward(async () => {
+        const result = await http.exportBibtex({ documentIds })
+        return result.bibtex
+      }),
     [IpcChannel.ExportBibtexString]: (documentIds: string[]) =>
-      forward(() => http.exportBibtexString(documentIds)),
+      forward(async () => (await http.exportBibtexString(documentIds)).bibtex),
 
     [IpcChannel.ClipboardWriteText]: (text: string) =>
       forward(() => http.clipboardWriteText({ text })),
-    [IpcChannel.ClipboardCopyMarkdown]: (markdown: string) =>
-      forward(() => http.clipboardCopyMarkdown({ markdown })),
+    [IpcChannel.ClipboardCopyMarkdown]: (title: string, content: string) =>
+      forward(() => http.clipboardCopyMarkdown({ title, markdown: content })),
     [IpcChannel.ClipboardCopyWorkspaceAsset]: (assetId: string) =>
       forward(() => http.clipboardCopyWorkspaceAsset({ assetId }))
   }

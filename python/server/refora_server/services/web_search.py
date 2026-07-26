@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import re
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -157,11 +159,19 @@ def _parse_ddg_html(html: str) -> list[dict[str, str]]:
 
 def _api_key(config: Mapping[str, Any], provider: str, decrypt_key: Callable[..., Any] | None) -> str:
     field = f"{provider}ApiKey"
-    value = config.get(field, config.get(f"{field}Enc"))
+    value = config.get(field)
+    encrypted = value is None
+    if value is None:
+        value = config.get(f"{field}Enc")
+        if value is not None and decrypt_key is None:
+            raise RepoError(
+                "key_decryption_unavailable",
+                "Native key decryption is unavailable",
+            )
     if value is None:
         label = "Tavily" if provider == "tavily" else "Brave"
         raise RepoError("no_api_key", f"{label} API key is not configured")
-    if decrypt_key is not None:
+    if encrypted and decrypt_key is not None:
         try:
             value = decrypt_key(value, provider)
         except TypeError:
@@ -201,6 +211,25 @@ def _request(
         raise RepoError("search_failed", str(error) or "Web search request failed") from error
 
 
+async def _await_or_cancel(
+    awaitable: Any, cancel_event: asyncio.Event | None
+) -> Any:
+    task = asyncio.ensure_future(awaitable)
+    if cancel_event is None:
+        return await task
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    done, _ = await asyncio.wait(
+        {task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if cancel_task in done and cancel_event.is_set():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise asyncio.CancelledError()
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)
+    return await task
+
+
 def createWebSearchService(repos: Any, deps: Any):
     get_config = _dependency(deps, "getConfig")
     if get_config is None:
@@ -216,6 +245,11 @@ def createWebSearchService(repos: Any, deps: Any):
     decrypt_key = _dependency(deps, "decryptKey", _dependency(deps, "decrypt_key"))
     if decrypt_key is not None and not callable(decrypt_key):
         raise TypeError("deps.decryptKey must be callable")
+    decrypt_key_async = _dependency(
+        deps, "decryptKeyAsync", _dependency(deps, "decrypt_key_async")
+    )
+    if decrypt_key_async is not None and not callable(decrypt_key_async):
+        raise TypeError("deps.decryptKeyAsync must be callable")
     get_proxy = _dependency(deps, "getProxy", _dependency(deps, "get_proxy"))
 
     def current_config() -> Mapping[str, Any]:
@@ -351,8 +385,257 @@ def createWebSearchService(repos: Any, deps: Any):
             ]
         return _normalize_items(items, allowed_domains)[:max_results]
 
-    def test(query: str = "Refora literature manager") -> list[dict[str, str]]:
-        return search({"query": query, "maxResults": 1})
+    async def search_async(
+        request: str | Mapping[str, Any],
+        cancel_event: asyncio.Event | None = None,
+    ) -> list[dict[str, str]]:
+        data: Mapping[str, Any] = (
+            {"query": request} if isinstance(request, str) else request
+        )
+        if not isinstance(data, Mapping):
+            raise RepoError("invalid_input", "Search request is invalid")
+        query = _text(data.get("query"), MAX_QUERY_LENGTH + 1)
+        if not query or len(query) > MAX_QUERY_LENGTH:
+            raise RepoError(
+                "invalid_input",
+                f"Search query must be between 1 and {MAX_QUERY_LENGTH} characters",
+            )
+        try:
+            max_results = max(
+                1, min(MAX_RESULTS, int(data.get("maxResults", 8)))
+            )
+        except (TypeError, ValueError, OverflowError) as error:
+            raise RepoError("invalid_input", "maxResults must be a number") from error
+        allowed_domains = _normalize_domains(data.get("allowedDomains"))
+        config = current_config()
+        provider = config.get("provider")
+        if provider == "disabled":
+            raise RepoError(
+                "web_search_disabled", "Web search is disabled in Settings"
+            )
+        if provider not in WEB_SEARCH_PROVIDERS:
+            raise RepoError("invalid_input", "Unknown web search provider")
+        time_range = data.get("timeRange")
+        if time_range not in {None, "day", "week", "month", "year"}:
+            raise RepoError("invalid_input", "Invalid search time range")
+        region = _text(data.get("region"), 20)
+        proxy = _text(get_proxy(), 2048) if callable(get_proxy) else ""
+        async_client = _dependency(
+            deps, "asyncHttpClient", _dependency(deps, "async_http_client")
+        )
+        owns_client = async_client is None
+        if async_client is not None and not isinstance(
+            async_client, httpx.AsyncClient
+        ):
+            raise TypeError("deps.asyncHttpClient must be an httpx.AsyncClient")
+        client_async = async_client or httpx.AsyncClient(
+            timeout=SEARCH_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            **({"proxy": proxy} if proxy else {}),
+        )
+
+        async def api_key() -> str:
+            field = f"{provider}ApiKey"
+            plain = config.get(field)
+            if plain is not None:
+                return _text(plain, 2048)
+            encrypted = config.get(f"{field}Enc")
+            if encrypted is None:
+                label = "Tavily" if provider == "tavily" else "Brave"
+                raise RepoError(
+                    "no_api_key", f"{label} API key is not configured"
+                )
+            if decrypt_key_async is None:
+                raise RepoError(
+                    "key_decryption_unavailable",
+                    "Native key decryption is unavailable",
+                )
+            decrypted = decrypt_key_async(encrypted, provider)
+            if inspect.isawaitable(decrypted):
+                decrypted = await decrypted
+            key = _text(decrypted, 2048)
+            if not key:
+                raise RepoError("invalid_api_key", "Search API key is empty")
+            return key
+
+        try:
+            if provider == "ddgs":
+                params = {
+                    "q": _effective_query(query, allowed_domains),
+                    "kl": region or "wt-wt",
+                    "kp": "-1",
+                }
+                if time_range:
+                    params["df"] = {
+                        "day": "d",
+                        "week": "w",
+                        "month": "m",
+                        "year": "y",
+                    }[time_range]
+                response = await _await_or_cancel(
+                    client_async.get(
+                        DDG_HTML_ENDPOINT,
+                        params=params,
+                        headers={
+                            "Accept": "text/html",
+                            "User-Agent": "Refora/0.1 web_search",
+                        },
+                    ),
+                    cancel_event,
+                )
+                if response.is_error:
+                    _response_error(response, "DuckDuckGo")
+                items = _parse_ddg_html(response.text)
+            elif provider == "tavily":
+                response = await _await_or_cancel(
+                    client_async.post(
+                        TAVILY_ENDPOINT,
+                        headers={"Authorization": f"Bearer {await api_key()}"},
+                        json={
+                            "query": query,
+                            "search_depth": "basic",
+                            "max_results": max_results,
+                            "include_answer": False,
+                            "include_raw_content": False,
+                            "include_images": False,
+                            **(
+                                {"time_range": time_range}
+                                if time_range
+                                else {}
+                            ),
+                            **(
+                                {"include_domains": allowed_domains}
+                                if allowed_domains
+                                else {}
+                            ),
+                        },
+                    ),
+                    cancel_event,
+                )
+                if response.is_error:
+                    _response_error(response, "Tavily")
+                try:
+                    body = response.json()
+                except ValueError as error:
+                    raise RepoError(
+                        "search_failed", "Tavily returned invalid JSON"
+                    ) from error
+                raw_items = (
+                    body.get("results", []) if isinstance(body, Mapping) else []
+                )
+                items = [
+                    {
+                        "title": item.get("title"),
+                        "url": item.get("url"),
+                        "snippet": item.get("content"),
+                        "publishedAt": item.get("published_date"),
+                    }
+                    for item in raw_items
+                    if isinstance(item, Mapping)
+                ]
+            else:
+                params = {
+                    "q": _effective_query(query, allowed_domains),
+                    "count": str(max_results),
+                    "safesearch": "moderate",
+                }
+                if time_range:
+                    params["freshness"] = {
+                        "day": "pd",
+                        "week": "pw",
+                        "month": "pm",
+                        "year": "py",
+                    }[time_range]
+                if re.fullmatch(r"[a-z]{2}-[a-z]{2}", region, re.IGNORECASE):
+                    language, country = region.split("-")
+                    params.update(
+                        {
+                            "country": country.upper(),
+                            "search_lang": language.lower(),
+                            "ui_lang": f"{language.lower()}-{country.upper()}",
+                        }
+                    )
+                response = await _await_or_cancel(
+                    client_async.get(
+                        BRAVE_ENDPOINT,
+                        params=params,
+                        headers={
+                            "Accept": "application/json",
+                            "X-Subscription-Token": await api_key(),
+                            "Api-Version": "2023-01-01",
+                        },
+                    ),
+                    cancel_event,
+                )
+                if response.is_error:
+                    _response_error(response, "Brave")
+                try:
+                    body = response.json()
+                except ValueError as error:
+                    raise RepoError(
+                        "search_failed", "Brave returned invalid JSON"
+                    ) from error
+                web = body.get("web", {}) if isinstance(body, Mapping) else {}
+                raw_items = (
+                    web.get("results", []) if isinstance(web, Mapping) else []
+                )
+                items = [
+                    {
+                        "title": item.get("title"),
+                        "url": item.get("url"),
+                        "snippet": item.get("description"),
+                        "publishedAt": item.get(
+                            "page_age", item.get("age")
+                        ),
+                    }
+                    for item in raw_items
+                    if isinstance(item, Mapping)
+                ]
+            return _normalize_items(items, allowed_domains)[:max_results]
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPError as error:
+            raise RepoError(
+                "search_failed", str(error) or "Web search request failed"
+            ) from error
+        finally:
+            if owns_client:
+                await client_async.aclose()
+
+    def test(query: str = "Refora literature manager") -> dict[str, Any]:
+        config = current_config()
+        provider = config.get("provider")
+        if provider == "disabled":
+            return {
+                "ok": False,
+                "provider": provider,
+                "resultCount": 0,
+                "error": "Web search is disabled",
+            }
+        try:
+            results = search(
+                {
+                    "query": query.strip() or "Refora literature manager",
+                    "maxResults": 1,
+                }
+            )
+            return {
+                "ok": bool(results),
+                "provider": provider,
+                "resultCount": len(results),
+                **(
+                    {}
+                    if results
+                    else {"error": "The provider returned no results"}
+                ),
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "provider": provider,
+                "resultCount": 0,
+                "error": str(error),
+            }
 
     def getConfig() -> dict[str, Any]:
         config = current_config()
@@ -367,4 +650,10 @@ def createWebSearchService(repos: Any, deps: Any):
     def isEnabled() -> bool:
         return current_config().get("provider") != "disabled"
 
-    return {"getConfig": getConfig, "isEnabled": isEnabled, "search": search, "test": test}
+    return {
+        "getConfig": getConfig,
+        "isEnabled": isEnabled,
+        "search": search,
+        "searchAsync": search_async,
+        "test": test,
+    }

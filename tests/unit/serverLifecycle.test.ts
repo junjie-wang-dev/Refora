@@ -97,6 +97,26 @@ describe('serverLifecycle', () => {
     )
   })
 
+  it('launches a packaged executable without Python module arguments', async () => {
+    const spawn = makeSpawn((child) => announce(child, port))
+    const lifecycle = createServerLifecycle(
+      makeDeps({
+        pythonPath: undefined,
+        serverModule: undefined,
+        executablePath: '/Applications/Refora.app/Contents/Resources/python-server/refora-server',
+        spawnChild: spawn
+      })
+    )
+
+    await lifecycle.start()
+
+    expect(spawn).toHaveBeenCalledWith(
+      '/Applications/Refora.app/Contents/Resources/python-server/refora-server',
+      expect.not.arrayContaining(['-m', 'refora_server.server.run']),
+      expect.objectContaining({ cwd: '/tmp/refora-server' })
+    )
+  })
+
   it('returns cached connection without re-spawning on subsequent start calls', async () => {
     const deps = makeDeps()
     const lifecycle = createServerLifecycle(deps)
@@ -113,6 +133,22 @@ describe('serverLifecycle', () => {
 
     expect(connection.port).toBe(8321)
     expect(connection.token).toBe(token)
+  })
+
+  it('waits for the server health endpoint before resolving start', async () => {
+    mockFetchHealth.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const lifecycle = createServerLifecycle(makeDeps())
+    const started = lifecycle.start()
+    let resolved = false
+    void started.then(() => {
+      resolved = true
+    })
+
+    await vi.advanceTimersByTimeAsync(50)
+    expect(resolved).toBe(false)
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(started).resolves.toMatchObject({ port })
+    expect(mockFetchHealth).toHaveBeenCalledTimes(2)
   })
 
   it('rejects when stdout does not report a listening port in time', async () => {
@@ -242,9 +278,10 @@ describe('serverLifecycle', () => {
       })
     )
     await lifecycle.start()
-    expect(mockFetchHealth).not.toHaveBeenCalled()
+    expect(mockFetchHealth).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(1000)
-    expect(mockFetchHealth).toHaveBeenCalledWith('http://127.0.0.1:5555/health', 100)
+    expect(mockFetchHealth).toHaveBeenCalledTimes(2)
+    expect(mockFetchHealth).toHaveBeenLastCalledWith('http://127.0.0.1:5555/health', 100)
   })
 })

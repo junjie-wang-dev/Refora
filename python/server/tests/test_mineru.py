@@ -280,6 +280,7 @@ async def test_cancel_install_aborts_in_progress_download(tmp_path, monkeypatch)
     with pytest.raises(Exception):
         await install_task
     assert status.state in ("notInstalled", "invalid")
+    assert status.error is None
 
 
 @pytest.mark.asyncio
@@ -426,6 +427,10 @@ async def test_install_checksum_failure_raises(tmp_path, monkeypatch):
     mgr = create_mineru_engine_manager(deps)
     with pytest.raises(RuntimeError, match="checksum"):
         await mgr["install"]()
+    status = await mgr["getStatus"]()
+    assert status.state == "notInstalled"
+    assert status.error is not None
+    assert "checksum" in status.error
 
 
 async def _impl_noop(command, args, *, cwd, env, cancel_event, on_child):

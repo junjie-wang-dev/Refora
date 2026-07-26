@@ -16,8 +16,8 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify and package
-    runs-on: macos-26
+    name: Verify
+    runs-on: macos-15
     timeout-minutes: 30
 
     steps:
@@ -29,6 +29,12 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.11.32'
+          enable-cache: true
 
       - name: Install dependencies
         run: npm ci
@@ -42,6 +48,9 @@ jobs:
       - name: Unit & Component Tests
         run: npm run test
 
+      - name: Python Server Tests
+        run: uv run --project python/server --locked pytest
+
       - name: Workspace Card Interaction E2E
         run: npm run test:e2e:workspace-card
 
@@ -54,15 +63,49 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  package:
+    name: Package ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.11.32'
+          enable-cache: true
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Package macOS application
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          REFORA_TARGET_ARCH: ${{ matrix.arch }}
         run: npm run package -- --publish never
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
-          name: Refora-macOS-${{ github.sha }}
+          name: Refora-macOS-${{ matrix.arch }}-${{ github.sha }}
           path: dist/*.dmg
           if-no-files-found: error
           retention-days: 14

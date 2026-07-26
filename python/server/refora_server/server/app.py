@@ -136,6 +136,7 @@ def configure_app(app: FastAPI) -> None:
         "workspaces": services["workspaces"],
         "mineru": services["mineru"],
         "ocr": services["ocr"],
+        "connector": connector,
     }
     ai_deps = {
         "require_token": require_token,

@@ -6,9 +6,16 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from typing import Any
 
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.serde.base import SerializerProtocol
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+from refora_server.academic.types import ACADEMIC_RESEARCH_TOOL_NAMES
 from refora_server.agent.engine import RunStateMachine
 from refora_server.agent.engine_schema import (
     RUN_STATUS_CANCELLED,
@@ -20,14 +27,20 @@ from refora_server.agent.engine_schema import (
     TRACE_STATUS_CANCELLED,
     TRACE_STATUS_DONE,
     TRACE_STATUS_ERROR,
+    TRACE_STATUS_INTERRUPTED,
     TRACE_STATUS_RUNNING,
     is_terminal_run,
     protocol_status,
 )
-from langgraph.checkpoint.sqlite import SqliteSaver
+from refora_server.services.agent_memory import MAX_MEMORY_FILE_CHARS, normalize_memory_path
+from refora_server.services.chat_history import parseToolPayload
 
 
 _SECRET_KEYS = {"apiKey", "api_key", "authorization", "Authorization"}
+_ACADEMIC_TOOL_NAMES = frozenset(ACADEMIC_RESEARCH_TOOL_NAMES)
+ACADEMIC_PERSISTENCE_REDACTION = (
+    "[Academic research data omitted from persistent agent state]"
+)
 
 
 def _now_ms() -> int:
@@ -71,6 +84,118 @@ def _without_secrets(value: Any) -> Any:
     return value
 
 
+def _academic_call_name(value: Any) -> str | None:
+    mapping = value if isinstance(value, dict) else _as_mapping(value)
+    name = mapping.get("name")
+    if isinstance(name, str) and name in _ACADEMIC_TOOL_NAMES:
+        return name
+    function = mapping.get("function")
+    if isinstance(function, dict):
+        name = function.get("name")
+        if isinstance(name, str) and name in _ACADEMIC_TOOL_NAMES:
+            return name
+    return None
+
+
+def _collect_academic_tool_call_ids(value: Any, result: set[str], seen: set[int]) -> None:
+    if value is None or isinstance(value, (str, int, float, bool, bytes)):
+        return
+    identity = id(value)
+    if identity in seen:
+        return
+    seen.add(identity)
+    mapping = value if isinstance(value, dict) else _as_mapping(value)
+    if _academic_call_name(mapping):
+        call_id = mapping.get("id") or mapping.get("tool_call_id")
+        if isinstance(call_id, str):
+            result.add(call_id)
+    if isinstance(value, dict):
+        values = value.values()
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = (
+            getattr(value, name, None)
+            for name in (
+                "content",
+                "tool_calls",
+                "invalid_tool_calls",
+                "additional_kwargs",
+                "response_metadata",
+            )
+        )
+    for item in values:
+        _collect_academic_tool_call_ids(item, result, seen)
+
+
+def _sanitize_academic_checkpoint_value(value: Any) -> Any:
+    academic_ids: set[str] = set()
+    _collect_academic_tool_call_ids(value, academic_ids, set())
+
+    def sanitize(current: Any) -> Any:
+        if isinstance(current, ToolMessage):
+            if (
+                current.name in _ACADEMIC_TOOL_NAMES
+                or current.tool_call_id in academic_ids
+            ):
+                return current.model_copy(
+                    update={
+                        "content": ACADEMIC_PERSISTENCE_REDACTION,
+                        "artifact": None,
+                    }
+                )
+            return current
+        if isinstance(current, AIMessage):
+            return current.model_copy(
+                update={
+                    "content": sanitize(current.content),
+                    "tool_calls": sanitize(current.tool_calls),
+                    "invalid_tool_calls": sanitize(current.invalid_tool_calls),
+                    "additional_kwargs": sanitize(current.additional_kwargs),
+                    "response_metadata": sanitize(current.response_metadata),
+                }
+            )
+        if isinstance(current, list):
+            return [sanitize(item) for item in current]
+        if isinstance(current, tuple):
+            return tuple(sanitize(item) for item in current)
+        if not isinstance(current, dict):
+            return current
+        if _academic_call_name(current):
+            redacted = {key: sanitize(item) for key, item in current.items()}
+            if "args" in redacted:
+                redacted["args"] = {"omitted": True}
+            if "input" in redacted:
+                redacted["input"] = {"omitted": True}
+            if "arguments" in redacted:
+                redacted["arguments"] = json.dumps({"omitted": True})
+            if "output" in redacted:
+                redacted["output"] = ACADEMIC_PERSISTENCE_REDACTION
+            if "result" in redacted:
+                redacted["result"] = ACADEMIC_PERSISTENCE_REDACTION
+            function = redacted.get("function")
+            if isinstance(function, dict):
+                redacted["function"] = {
+                    **function,
+                    "arguments": json.dumps({"omitted": True}),
+                }
+            return redacted
+        return {key: sanitize(item) for key, item in current.items()}
+
+    return sanitize(value)
+
+
+class AcademicRedactingSerializer(SerializerProtocol):
+    def __init__(self) -> None:
+        self._delegate = JsonPlusSerializer()
+
+    def dumps_typed(self, obj: Any) -> tuple[str, bytes]:
+        return self._delegate.dumps_typed(_sanitize_academic_checkpoint_value(obj))
+
+    def loads_typed(self, data: tuple[str, bytes]) -> Any:
+        return self._delegate.loads_typed(data)
+
+
 def _checkpoint_id(value: Any) -> str | None:
     if not isinstance(value, dict):
         return None
@@ -111,32 +236,164 @@ def _result_text(result: Any) -> str:
     return _message_text(result)
 
 
-def _tool_message_texts(result: Any, state: dict[str, Any]) -> list[str]:
+def _tool_history_records(result: Any, state: dict[str, Any]) -> list[dict[str, str | None]]:
     sources = [result]
     values = state.get("values") if isinstance(state, dict) else None
     if isinstance(values, dict):
         sources.append(values)
-    texts: list[str] = []
+    calls: dict[str, dict[str, str | None]] = {}
+    records: list[dict[str, str | None]] = []
     for source in sources:
         messages = source.get("messages") if isinstance(source, dict) else None
         if not isinstance(messages, list):
             continue
         for message in messages:
+            mapping = message if isinstance(message, dict) else _as_mapping(message)
             role = (
-                message.get("role") or message.get("type")
-                if isinstance(message, dict)
+                mapping.get("role") or mapping.get("type")
+                if mapping
                 else getattr(message, "role", None) or getattr(message, "type", None)
             )
+            if role in {"assistant", "ai", "AIMessage"}:
+                tool_calls = mapping.get("tool_calls") or getattr(message, "tool_calls", None)
+                if isinstance(tool_calls, list):
+                    for tool_call in tool_calls:
+                        call = tool_call if isinstance(tool_call, dict) else _as_mapping(tool_call)
+                        call_id = call.get("id")
+                        name = call.get("name")
+                        if not isinstance(call_id, str) or not isinstance(name, str):
+                            continue
+                        calls[call_id] = {
+                            "name": name,
+                            "toolCallId": call_id,
+                            "input": _as_text(call.get("args")),
+                            "output": None,
+                        }
+                continue
             if role not in {"tool", "ToolMessage"}:
                 continue
-            text = _message_text(
-                message.get("content")
-                if isinstance(message, dict)
+            call_id = (
+                mapping.get("tool_call_id")
+                or mapping.get("toolCallId")
+                or getattr(message, "tool_call_id", None)
+            )
+            name = mapping.get("name") or getattr(message, "name", None)
+            if not isinstance(call_id, str) or not call_id:
+                continue
+            record = dict(calls.get(call_id) or {})
+            if isinstance(name, str):
+                record["name"] = name
+            if record.get("name") in _ACADEMIC_TOOL_NAMES:
+                continue
+            record["toolCallId"] = call_id
+            record["output"] = _message_text(
+                mapping.get("content")
+                if mapping
                 else getattr(message, "content", None)
             )
-            if text and text not in texts:
-                texts.append(text)
-    return texts
+            if isinstance(record.get("name"), str):
+                records.append(record)
+    return records
+
+
+def _tool_event_name(event: dict[str, Any]) -> str | None:
+    data = event.get("data")
+    data = data if isinstance(data, dict) else {}
+    name = event.get("name") or data.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _tool_event_key(event: dict[str, Any], name: str | None) -> str:
+    run_id = event.get("run_id")
+    if isinstance(run_id, str) and run_id:
+        return run_id
+    return f"tool-name:{name or 'unknown'}"
+
+
+def _tool_event_values(event: dict[str, Any]) -> tuple[Any, Any]:
+    data = event.get("data")
+    data = data if isinstance(data, dict) else {}
+    raw_input = data.get("input", data.get("inputs"))
+    if isinstance(raw_input, dict) and set(raw_input).issubset(
+        {"input", "tool_call_id", "id", "name"}
+    ):
+        raw_input = raw_input.get("input")
+    raw_output = data.get("output", data.get("outputs", data.get("error")))
+    return raw_input, raw_output
+
+
+def _tool_event_record(event: dict[str, Any]) -> dict[str, str | None] | None:
+    data = event.get("data")
+    data = data if isinstance(data, dict) else {}
+    name = _tool_event_name(event)
+    if name is None or name in _ACADEMIC_TOOL_NAMES:
+        return None
+    raw_input, raw_output = _tool_event_values(event)
+    raw_input = _without_secrets(raw_input)
+    raw_output = _without_secrets(raw_output)
+    output_mapping = raw_output if isinstance(raw_output, dict) else _as_mapping(raw_output)
+    call_id = data.get("tool_call_id")
+    if not isinstance(call_id, str) and isinstance(data.get("input"), dict):
+        call_id = data["input"].get("tool_call_id")
+    if not isinstance(call_id, str) and output_mapping:
+        call_id = output_mapping.get("tool_call_id") or output_mapping.get("toolCallId")
+    if not isinstance(call_id, str):
+        call_id = data.get("id")
+    if not isinstance(call_id, str):
+        call_id = event.get("run_id")
+    if not isinstance(call_id, str) or not call_id:
+        call_id = str(uuid.uuid4())
+    output = (
+        _message_text(output_mapping.get("content"))
+        if output_mapping and "content" in output_mapping
+        else _as_text(raw_output)
+    )
+    return {
+        "name": name,
+        "toolCallId": call_id,
+        "input": _as_text(raw_input) if raw_input is not None else None,
+        "output": output,
+    }
+
+
+def _persist_tool_history(
+    repos: dict[str, Any],
+    thread_id: str,
+    records: list[dict[str, str | None]],
+) -> None:
+    persisted_ids = {
+        parsed["toolCallId"]
+        for row in repos["chat"]["listMessages"](thread_id)
+        if row.get("role") == "tool"
+        for parsed in [parseToolPayload(row.get("content") or "")]
+        if isinstance(parsed.get("toolCallId"), str)
+    }
+    for record in records:
+        tool_call_id = record.get("toolCallId")
+        name = record.get("name")
+        if (
+            not isinstance(tool_call_id, str)
+            or not isinstance(name, str)
+            or name in _ACADEMIC_TOOL_NAMES
+            or tool_call_id in persisted_ids
+        ):
+            continue
+        repos["chat"]["addMessage"](
+            thread_id,
+            "tool",
+            json.dumps(
+                {
+                    "v": 2,
+                    "name": name,
+                    "toolCallId": tool_call_id,
+                    "input": record.get("input"),
+                    "output": record.get("output"),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        persisted_ids.add(tool_call_id)
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -235,6 +492,49 @@ def _interrupt_actions(state: Any) -> list[dict[str, Any]]:
     return actions
 
 
+def _resume_decision(
+    decision: Any,
+    action: dict[str, Any],
+    workspace_id: str | None,
+) -> dict[str, Any]:
+    if not isinstance(decision, dict):
+        raise ValueError("Interrupt decision must be an object")
+    decision_type = decision.get("type")
+    if decision_type not in action.get("allowedDecisions", []):
+        raise ValueError("Interrupt decision is not allowed")
+    if decision_type != "edit":
+        return {"type": decision_type}
+    edited_action = decision.get("editedAction") or decision.get("edited_action")
+    if not isinstance(edited_action, dict):
+        raise ValueError("Edited approval requires an edited action")
+    if edited_action.get("name") != action.get("name"):
+        raise ValueError("Edited approval cannot change the action name")
+    args = edited_action.get("args")
+    if not isinstance(args, dict):
+        raise ValueError("Edited approval arguments must be an object")
+    if edited_action["name"] == "propose_workspace_memory_update":
+        if set(args) != {"path", "content", "rationale"}:
+            raise ValueError("Edited memory proposal arguments are invalid")
+        normalize_memory_path(args.get("path"), workspace_id)
+        content = args.get("content")
+        rationale = args.get("rationale")
+        if not isinstance(content, str) or len(content) > MAX_MEMORY_FILE_CHARS:
+            raise ValueError("Edited memory proposal content is invalid")
+        if (
+            not isinstance(rationale, str)
+            or not rationale.strip()
+            or len(rationale) > 1000
+        ):
+            raise ValueError("Edited memory proposal rationale is invalid")
+    return {
+        "type": "edit",
+        "edited_action": {
+            "name": edited_action["name"],
+            "args": dict(args),
+        },
+    }
+
+
 def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
     keys = ("reasoning", "reasoning_content", "thinking", "delta") if reasoning else ("delta", "token", "content", "text")
     for key in keys:
@@ -268,6 +568,7 @@ def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
 def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None):
     deps = deps or {}
     active: dict[str, dict[str, Any]] = {}
+    background_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
     resume_contexts: dict[str, dict[str, Any]] = {}
     clock: Callable[[], int] = deps.get("clock") or _now_ms
     create_tools = deps.get("createTools") or deps.get("create_tools")
@@ -276,6 +577,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     stream_factory = deps.get("stream")
     emit = deps.get("emit")
     logger = deps.get("logger")
+    cancel_run = deps.get("cancelRun") or deps.get("cancel_run")
+    finish_run = deps.get("finishRun") or deps.get("finish_run")
     state_machine = RunStateMachine(repos["agentRuns"], repos["agentTraces"], clock)
 
     async def emit_event(name: str, payload: dict[str, Any]) -> None:
@@ -297,30 +600,50 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 return
 
     async def emit_status(run_id: str, status: str) -> None:
-        await emit_event("ai.chat.run-status", {"runId": run_id, "status": protocol_status(status)})
+        run = repos["agentRuns"]["get"](run_id)
+        payload = {"runId": run_id, "status": protocol_status(status)}
+        if run is not None:
+            payload["threadId"] = run["threadId"]
+        await emit_event("ai.chat.run-status", payload)
 
-    async def emit_trace(request: dict[str, Any], event: dict[str, Any]) -> None:
+    async def emit_trace(request: dict[str, Any], step: dict[str, Any]) -> None:
         await emit_event(
             "ai.chat.trace",
             {
+                "threadId": request["threadId"],
                 "runId": request["runId"],
-                "name": event.get("name") if isinstance(event.get("name"), str) else "agent",
-                "parentIds": [value for value in event.get("parent_ids", event.get("parentIds", [])) if isinstance(value, str)],
-                "data": _without_secrets(event.get("data") if isinstance(event.get("data"), dict) else {}),
-                "tags": [value for value in event.get("tags", []) if isinstance(value, str)],
-                "metadata": _without_secrets(event.get("metadata") if isinstance(event.get("metadata"), dict) else {}),
+                "step": _without_secrets(step),
             },
         )
 
-    def add_trace(request: dict[str, Any], seq: int, kind: str, name: str | None, status: str, data: Any = None, checkpoint: str | None = None) -> dict[str, Any]:
+    def add_trace(
+        request: dict[str, Any],
+        seq: int,
+        kind: str,
+        name: str | None,
+        status: str,
+        data: Any = None,
+        checkpoint: str | None = None,
+        input_data: Any = None,
+    ) -> dict[str, Any]:
+        safe_data = (
+            ACADEMIC_PERSISTENCE_REDACTION
+            if name in _ACADEMIC_TOOL_NAMES
+            else _without_secrets(data)
+        )
+        safe_input = (
+            None
+            if name in _ACADEMIC_TOOL_NAMES
+            else _without_secrets(input_data)
+        )
         return repos["agentTraces"]["addStep"](
             {
                 "threadId": request["threadId"],
                 "runId": request["runId"],
                 "kind": kind,
                 "name": name,
-                "input": None,
-                "output": _truncate(_without_secrets(data)),
+                "input": _truncate(safe_input),
+                "output": _truncate(safe_data),
                 "status": status,
                 "startedAt": clock(),
                 "endedAt": clock() if status != TRACE_STATUS_RUNNING else None,
@@ -366,7 +689,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             parent = os.path.dirname(os.path.abspath(checkpoint_path))
             os.makedirs(parent, mode=0o700, exist_ok=True)
             connection = sqlite3.connect(checkpoint_path, check_same_thread=False)
-            agent.checkpointer = SqliteSaver(connection)
+            agent.checkpointer = SqliteSaver(
+                connection,
+                serde=AcademicRedactingSerializer(),
+            )
             return connection
         except (AttributeError, OSError, sqlite3.Error):
             return None
@@ -400,6 +726,39 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         run_id = request["runId"]
         checkpoint = _checkpoint_id(state) or request.get("checkpointBefore")
         actions = _interrupt_actions(state)
+        trace_steps = repos["agentTraces"]["listByRun"](run_id)
+        matched_actions: set[str] = set()
+        for step in trace_steps:
+            if step.get("kind") != "tool" or step.get("status") != TRACE_STATUS_RUNNING:
+                continue
+            updated = repos["agentTraces"]["updateStep"](
+                step["id"],
+                {
+                    "status": TRACE_STATUS_INTERRUPTED,
+                    "output": "Awaiting user approval",
+                    "endedAt": clock(),
+                },
+            )
+            if updated is not None:
+                if isinstance(updated.get("name"), str):
+                    matched_actions.add(updated["name"])
+                await emit_trace(request, updated)
+        next_seq = max((int(step.get("seq") or 0) for step in trace_steps), default=0) + 1
+        for action in actions:
+            if action["name"] in matched_actions:
+                continue
+            step = add_trace(
+                request,
+                next_seq,
+                "tool",
+                action["name"],
+                TRACE_STATUS_INTERRUPTED,
+                "Awaiting user approval",
+                checkpoint,
+                action.get("args"),
+            )
+            await emit_trace(request, step)
+            next_seq += 1
         repos["chat"]["updateAgentState"](request["threadId"], checkpoint, int(deps.get("agentStateVersion", 1)))
         state_machine.transition(
             run_id,
@@ -412,15 +771,31 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         interrupt = repos["agentInterrupts"]["create"](
             {"runId": run_id, "threadId": request["threadId"], "checkpointId": checkpoint, "actions": actions}
         )
-        await emit_event("ai.chat.interrupted", {"runId": run_id, "threadId": request["threadId"]})
+        await emit_event(
+            "ai.chat.interrupted",
+            {
+                "runId": run_id,
+                "threadId": request["threadId"],
+                "interrupt": interrupt,
+            },
+        )
         await emit_status(run_id, RUN_STATUS_INTERRUPTED)
         return {"runId": run_id, "status": RUN_STATUS_INTERRUPTED, "interrupt": interrupt, "state": state}
 
-    async def finish_completed(request: dict[str, Any], result: Any, state: dict[str, Any], run_trace: dict[str, Any]) -> dict[str, Any]:
+    async def finish_completed(
+        request: dict[str, Any],
+        result: Any,
+        state: dict[str, Any],
+        run_trace: dict[str, Any],
+        tool_history: list[dict[str, str | None]],
+    ) -> dict[str, Any]:
         run_id = request["runId"]
         text = _result_text(result)
-        for tool_text in _tool_message_texts(result, state):
-            repos["chat"]["addMessage"](request["threadId"], "tool", tool_text)
+        _persist_tool_history(
+            repos,
+            request["threadId"],
+            [*tool_history, *_tool_history_records(result, state)],
+        )
         message = repos["chat"]["addMessage"](request["threadId"], "assistant", text)
         checkpoint = _checkpoint_id(state) or request.get("checkpointBefore")
         repos["chat"]["updateAgentState"](request["threadId"], checkpoint, int(deps.get("agentStateVersion", 1)))
@@ -445,7 +820,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 title = candidate.strip()[:100]
                 repos["chat"]["updateTitle"](request["threadId"], title)
                 await emit_event("ai.chat.title-updated", {"threadId": request["threadId"], "title": title})
-        await emit_event("ai.chat.done", {"runId": run_id, "threadId": request["threadId"], "result": _without_secrets(result), "state": _without_secrets(state)})
+        await emit_event(
+            "ai.chat.done",
+            {"runId": run_id, "threadId": request["threadId"], "finalText": text},
+        )
         await emit_status(run_id, RUN_STATUS_COMPLETED)
         return {"runId": run_id, "status": RUN_STATUS_COMPLETED, "run": run, "result": result, "state": state, "title": title}
 
@@ -465,9 +843,48 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             trace_output=_truncate(error),
         )
         if status == RUN_STATUS_FAILED:
-            await emit_event("ai.chat.error", {"runId": run_id, "threadId": request["threadId"], "error": {"code": "agent_failed", "message": error}})
+            await emit_event(
+                "ai.chat.error",
+                {"runId": run_id, "threadId": request["threadId"], "message": error},
+            )
+        if status == RUN_STATUS_CANCELLED:
+            await emit_event(
+                "ai.chat.done",
+                {
+                    "runId": run_id,
+                    "threadId": request["threadId"],
+                    "finalText": "[Response cancelled by user]",
+                },
+            )
         await emit_status(run_id, status)
         return {"runId": run_id, "status": status, "run": run, "error": error}
+
+    async def restore_interrupted(
+        request: dict[str, Any],
+        error: str,
+        run_trace: dict[str, Any],
+    ) -> dict[str, Any]:
+        run_id = request["runId"]
+        close_open_traces(run_id, TRACE_STATUS_ERROR, error)
+        run, _trace = state_machine.transition(
+            run_id,
+            RUN_STATUS_RUNNING,
+            RUN_STATUS_INTERRUPTED,
+            {"endedAt": None, "error": error},
+            run_trace,
+            trace_output=_truncate(error),
+        )
+        await emit_event(
+            "ai.chat.error",
+            {"runId": run_id, "threadId": request["threadId"], "message": error},
+        )
+        await emit_status(run_id, RUN_STATUS_INTERRUPTED)
+        return {
+            "runId": run_id,
+            "status": RUN_STATUS_INTERRUPTED,
+            "run": run,
+            "error": error,
+        }
 
     async def run(request: dict[str, Any], mode: str = "send", existing_run: bool = False) -> dict[str, Any]:
         request = dict(request)
@@ -485,6 +902,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         user_message = None
         run_trace: dict[str, Any] | None = None
         checkpoint_connection: sqlite3.Connection | None = None
+        tool_history: list[dict[str, str | None]] = []
+        open_tool_traces: dict[str, str] = {}
         try:
             if not existing_run:
                 resume_contexts[run_id] = {
@@ -506,6 +925,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         "modelId": model,
                         "status": RUN_STATUS_QUEUED,
                         "checkpointBefore": request.get("checkpointBefore"),
+                        "replacesRunId": request.get("replaceRunId"),
                         "userMessageId": user_message["id"] if user_message else None,
                         "startedAt": clock(),
                     }
@@ -538,12 +958,18 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 if event_name in {"token", "on_chat_model_stream"}:
                     delta = _event_delta(event, False)
                     if delta:
-                        await emit_event("ai.chat.token", {"runId": run_id, "threadId": thread_id, "delta": delta})
+                        await emit_event(
+                            "ai.chat.token",
+                            {"runId": run_id, "threadId": thread_id, "token": delta},
+                        )
                     continue
                 if event_name in {"reasoning", "thinking"}:
                     delta = _event_delta(event, True)
                     if delta:
-                        await emit_event("ai.chat.reasoning", {"runId": run_id, "threadId": thread_id, "delta": delta})
+                        await emit_event(
+                            "ai.chat.reasoning",
+                            {"runId": run_id, "threadId": thread_id, "token": delta},
+                        )
                     continue
                 if event_name in {"done", "complete", "result"}:
                     result = event.get("result", event.get("data"))
@@ -555,7 +981,100 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     data = event.get("data")
                     if isinstance(data, dict) and data.get("output") is not None:
                         result = data["output"]
-                if event_name in {"error", "on_chain_error", "on_tool_error"}:
+                if event_name == "on_tool_start":
+                    name = _tool_event_name(event)
+                    trace_input, _ = _tool_event_values(event)
+                    step = add_trace(
+                        request,
+                        seq,
+                        "tool",
+                        name,
+                        TRACE_STATUS_RUNNING,
+                        checkpoint=_checkpoint_id(event),
+                        input_data=trace_input,
+                    )
+                    open_tool_traces[_tool_event_key(event, name)] = step["id"]
+                    await emit_trace(request, step)
+                    seq += 1
+                    continue
+                if event_name == "on_tool_end":
+                    record = _tool_event_record(event)
+                    if record is not None:
+                        tool_history.append(record)
+                    name = _tool_event_name(event)
+                    _, trace_output = _tool_event_values(event)
+                    safe_output = (
+                        ACADEMIC_PERSISTENCE_REDACTION
+                        if name in _ACADEMIC_TOOL_NAMES
+                        else _without_secrets(trace_output)
+                    )
+                    trace_id = open_tool_traces.pop(
+                        _tool_event_key(event, name),
+                        None,
+                    )
+                    if trace_id is not None:
+                        step = repos["agentTraces"]["updateStep"](
+                            trace_id,
+                            {
+                                "status": TRACE_STATUS_DONE,
+                                "output": _truncate(safe_output),
+                                "endedAt": clock(),
+                            },
+                        )
+                    else:
+                        step = add_trace(
+                            request,
+                            seq,
+                            "tool",
+                            name,
+                            TRACE_STATUS_DONE,
+                            trace_output,
+                            _checkpoint_id(event),
+                        )
+                        seq += 1
+                    if step is not None:
+                        await emit_trace(request, step)
+                    continue
+                if event_name == "on_tool_error":
+                    record = _tool_event_record(event)
+                    if record is not None:
+                        tool_history.append(record)
+                    name = _tool_event_name(event)
+                    _, trace_output = _tool_event_values(event)
+                    detail = event.get("error") or trace_output or event.get("data") or "Agent execution failed"
+                    safe_output = (
+                        ACADEMIC_PERSISTENCE_REDACTION
+                        if name in _ACADEMIC_TOOL_NAMES
+                        else _without_secrets(detail)
+                    )
+                    trace_id = open_tool_traces.pop(
+                        _tool_event_key(event, name),
+                        None,
+                    )
+                    if trace_id is not None:
+                        step = repos["agentTraces"]["updateStep"](
+                            trace_id,
+                            {
+                                "status": TRACE_STATUS_ERROR,
+                                "output": _truncate(safe_output),
+                                "endedAt": clock(),
+                            },
+                        )
+                    else:
+                        step = add_trace(
+                            request,
+                            seq,
+                            "tool",
+                            name,
+                            TRACE_STATUS_ERROR,
+                            detail,
+                            _checkpoint_id(event),
+                        )
+                        seq += 1
+                    if step is not None:
+                        await emit_trace(request, step)
+                    raise RuntimeError(_as_text(detail))
+                if event_name in {"error", "on_chain_error"}:
                     detail = event.get("error") or event.get("data") or "Agent execution failed"
                     raise RuntimeError(_as_text(detail))
                 if event_name in {"interrupted", "interrupt"}:
@@ -572,9 +1091,19 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         repos["chat"]["updateTitle"](thread_id, title.strip()[:100])
                         await emit_event("ai.chat.title-updated", {"threadId": thread_id, "title": title.strip()[:100]})
                     continue
-                await emit_trace(request, event)
                 checkpoint = _checkpoint_id(event)
-                add_trace(request, seq, "tool" if "tool" in event_name else "model", event.get("name") if isinstance(event.get("name"), str) else event_name or "agent", TRACE_STATUS_DONE, event.get("data"), checkpoint)
+                step = add_trace(
+                    request,
+                    seq,
+                    "tool" if "tool" in event_name else "llm",
+                    event.get("name")
+                    if isinstance(event.get("name"), str)
+                    else event_name or "agent",
+                    TRACE_STATUS_DONE,
+                    event.get("data"),
+                    checkpoint,
+                )
+                await emit_trace(request, step)
                 seq += 1
             if control["cancelled"]:
                 return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
@@ -584,9 +1113,15 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 values = snapshot.get("values")
                 if isinstance(values, dict) and values.get("messages"):
                     result = values
+            interrupt_id = request.get("resolveInterruptId")
+            if isinstance(interrupt_id, str) and interrupt_id:
+                repos["agentInterrupts"]["resolve"](
+                    interrupt_id,
+                    request.get("resolveInterruptDecisions") or [],
+                )
             if interrupted or _interrupt_actions(state):
                 return await finish_interrupted(request, state, run_trace)
-            return await finish_completed(request, result, state, run_trace)
+            return await finish_completed(request, result, state, run_trace, tool_history)
         except asyncio.CancelledError:
             return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
         except Exception as error:
@@ -595,9 +1130,25 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             if isinstance(api_key, str) and api_key:
                 message = message.replace(api_key, "[redacted]")
             warn(f"agent runtime failed run={run_id}")
+            if (
+                mode == "resume"
+                and isinstance(request.get("resolveInterruptId"), str)
+                and run_trace is not None
+                and not control["cancelled"]
+            ):
+                return await restore_interrupted(
+                    request,
+                    message or "Agent resume failed",
+                    run_trace,
+                )
             return await terminalize(request, RUN_STATUS_CANCELLED if control["cancelled"] else RUN_STATUS_FAILED, message or "Agent execution failed", run_trace)
         finally:
             active.pop(run_id, None)
+            if finish_run is not None:
+                try:
+                    await _await(finish_run(run_id))
+                except Exception:
+                    pass
             if checkpoint_connection is not None:
                 checkpoint_connection.close()
             persisted = repos["agentRuns"]["get"](run_id)
@@ -606,6 +1157,16 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
 
     async def send(request: dict[str, Any]) -> dict[str, Any]:
         return await run(request, "send")
+
+    async def start(request: dict[str, Any]) -> dict[str, Any]:
+        run_id = request["runId"]
+        if run_id in background_tasks and not background_tasks[run_id].done():
+            raise ValueError("Run is already active")
+        task = asyncio.create_task(send(request))
+        background_tasks[run_id] = task
+        task.add_done_callback(lambda completed, rid=run_id: background_tasks.pop(rid, None))
+        await asyncio.sleep(0)
+        return {"runId": run_id, "threadId": request["threadId"]}
 
     async def resume(request: dict[str, Any]) -> dict[str, Any]:
         run_id = request.get("runId")
@@ -618,16 +1179,25 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         decisions = request.get("decisions")
         if not isinstance(decisions, list) or len(decisions) != len(interrupt["actions"]):
             return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Interrupt decisions do not match pending actions"}
-        for decision, action in zip(decisions, interrupt["actions"]):
-            decision_type = decision.get("type") if isinstance(decision, dict) else None
-            if decision_type not in action.get("allowedDecisions", []):
-                return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Interrupt decision is not allowed"}
-        repos["agentInterrupts"]["resolve"](interrupt["id"], decisions)
-        stored = resume_contexts.get(run_id, {})
         thread = repos["chat"]["getThread"](persisted["threadId"])
+        try:
+            normalized_decisions = [
+                _resume_decision(
+                    decision,
+                    action,
+                    thread.get("workspaceId") if thread else None,
+                )
+                for decision, action in zip(decisions, interrupt["actions"])
+            ]
+        except ValueError as error:
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": str(error)}
+        stored = resume_contexts.get(run_id, {})
         request = {
             **stored,
             **request,
+            "decisions": normalized_decisions,
+            "resolveInterruptId": interrupt["id"],
+            "resolveInterruptDecisions": decisions,
             "threadId": persisted["threadId"],
             "workspaceId": stored.get("workspaceId")
             if "workspaceId" in stored
@@ -637,7 +1207,22 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         }
         return await run(request, "resume", existing_run=True)
 
+    async def start_resume(request: dict[str, Any]) -> dict[str, Any]:
+        run_id = request["runId"]
+        if run_id in background_tasks and not background_tasks[run_id].done():
+            raise ValueError("Run is already active")
+        task = asyncio.create_task(resume(request))
+        background_tasks[run_id] = task
+        task.add_done_callback(lambda completed, rid=run_id: background_tasks.pop(rid, None))
+        await asyncio.sleep(0)
+        return {"runId": run_id}
+
     async def cancel(run_id: str) -> dict[str, Any]:
+        if cancel_run is not None:
+            try:
+                await _await(cancel_run(run_id))
+            except Exception:
+                pass
         control = active.get(run_id)
         if control is None:
             run = repos["agentRuns"]["get"](run_id)
@@ -659,12 +1244,81 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 break
         return {"runId": run_id, "cancelled": True}
 
-    def destroy() -> None:
-        for control in active.values():
+    async def delete_thread(thread_id: str) -> None:
+        runs = repos["agentRuns"]["listByThread"](thread_id)
+        run_ids = [
+            run["id"]
+            for run in runs
+            if isinstance(run.get("id"), str)
+        ]
+        for run_id in run_ids:
+            if run_id in background_tasks or run_id in active:
+                await cancel(run_id)
+        tasks = [
+            background_tasks[run_id]
+            for run_id in run_ids
+            if run_id in background_tasks
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for run_id in run_ids:
+            background_tasks.pop(run_id, None)
+            resume_contexts.pop(run_id, None)
+
+        checkpoint_path = deps.get("checkpointPath") or deps.get("checkpoint_path")
+        if not isinstance(checkpoint_path, str) or not os.path.isfile(checkpoint_path):
+            return
+        connection = sqlite3.connect(checkpoint_path)
+        try:
+            connection.execute("PRAGMA busy_timeout = 5000")
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            if not {"checkpoints", "writes"}.issubset(tables):
+                return
+            with connection:
+                connection.execute(
+                    "DELETE FROM writes WHERE thread_id = ?",
+                    [thread_id],
+                )
+                connection.execute(
+                    "DELETE FROM checkpoints WHERE thread_id = ?",
+                    [thread_id],
+                )
+        finally:
+            connection.close()
+
+    async def destroy() -> None:
+        for run_id, control in active.items():
             control["cancelled"] = True
+            if cancel_run is not None:
+                try:
+                    await _await(cancel_run(run_id))
+                except Exception:
+                    pass
+        tasks = list(background_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        background_tasks.clear()
         resume_contexts.clear()
 
-    return {"send": send, "run": run, "resume": resume, "cancel": cancel, "destroy": destroy}
+    return {
+        "send": send,
+        "start": start,
+        "run": run,
+        "resume": resume,
+        "startResume": start_resume,
+        "cancel": cancel,
+        "deleteThread": delete_thread,
+        "destroy": destroy,
+    }
 
 
 async def _iterate(values: Iterable[Any]):

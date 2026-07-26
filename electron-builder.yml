@@ -6,38 +6,19 @@ directories:
 files:
   - out/**/*
 extraResources:
-  - from: build/agent-runner
-    to: agent-runner
-    filter:
-      - '**/*'
-      - '!module-cache{,/**}'
   - from: resources/mineru_worker.py
     to: mineru/mineru_worker.py
-  - from: resources/ddgs_worker.py
-    to: web-search/ddgs_worker.py
-  - from: resources/agent/worker.py
-    to: agent-python/worker.py
-  - from: python/agent
-    to: agent-python
+  - from: build/python-server
+    to: python-server
     filter:
-      - pyproject.toml
-      - uv.lock
-  - from: python/server/refora_server
-    to: python-server/refora_server
-    filter:
-      - '**/*.py'
-  - from: src/main/db
-    to: python-server/db
-    filter:
-      - schema.sql
-      - migrations/**/*.sql
+      - '**/*'
 asar: true
 asarUnpack:
   - '**/*.node'
 mac:
   binaries:
-    - Contents/Resources/agent-runner/refora-agent-broker
-    - Contents/Resources/agent-runner/ReforaAgentRunner.app/Contents/MacOS/ReforaAgentRunner
+    - Contents/Resources/python-server/refora-server
+  artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - dmg
   category: public.app-category.productivity

@@ -90,13 +90,15 @@ function makeClient(): { client: ServerClient; http: Record<string, ReturnType<t
     workspacesDelete: vi.fn().mockResolvedValue({ ack: true }),
     workspacesOpenSandbox: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemsList: vi.fn().mockResolvedValue([item]),
+    workspaceItemGet: vi.fn().mockResolvedValue(item),
     workspaceItemsCreate: vi.fn().mockResolvedValue(item),
     workspaceItemsDelete: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemsReorder: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemResize: vi.fn().mockResolvedValue(item),
     workspaceItemMove: vi.fn().mockResolvedValue(item),
     workspaceAssetsList: vi.fn().mockResolvedValue([asset]),
-    workspaceAssetsAddFiles: vi.fn().mockResolvedValue([asset]),
+    workspaceAssetGet: vi.fn().mockResolvedValue(asset),
+    workspaceAssetsAddFiles: vi.fn().mockResolvedValue({ imported: [asset], errors: [] }),
     workspaceAssetPreview: vi.fn().mockResolvedValue({ content: 'preview', truncated: false }),
     workspaceAssetOpen: vi.fn().mockResolvedValue({ ack: true }),
     workspaceAssetReveal: vi.fn().mockResolvedValue({ ack: true }),
@@ -104,19 +106,22 @@ function makeClient(): { client: ServerClient; http: Record<string, ReturnType<t
     workspaceCanvasGet: vi.fn().mockResolvedValue({ panX: 1, panY: 2, zoom: 1 }),
     workspaceCanvasUpdate: vi.fn().mockResolvedValue({ panX: 3, panY: 4, zoom: 2 }),
     workspaceConnectionsList: vi.fn().mockResolvedValue([connection]),
+    workspaceConnectionGet: vi.fn().mockResolvedValue(connection),
     workspaceConnectionsCreate: vi.fn().mockResolvedValue(connection),
     workspaceConnectionsDelete: vi.fn().mockResolvedValue({ ack: true }),
     workspaceNotesList: vi.fn().mockResolvedValue([note]),
+    workspaceNoteGet: vi.fn().mockResolvedValue(note),
     workspaceNotesCreate: vi.fn().mockResolvedValue(note),
     workspaceNotesUpdate: vi.fn().mockResolvedValue(note),
     workspaceNotesDelete: vi.fn().mockResolvedValue({ ack: true }),
     mineruStatus: vi.fn().mockResolvedValue(status),
+    mineruChooseInstallRoot: vi.fn().mockResolvedValue(status),
     mineruInstall: vi.fn().mockResolvedValue({ ack: true }),
     mineruCancelInstall: vi.fn().mockResolvedValue({ ack: true }),
     mineruUninstall: vi.fn().mockResolvedValue({ ack: true }),
     ocrState: vi.fn().mockResolvedValue({ engine: status, activeJob: job, result: null }),
     ocrStart: vi.fn().mockResolvedValue({ jobId: job.id }),
-    ocrCancel: vi.fn().mockResolvedValue({ ack: true }),
+    ocrCancel: vi.fn().mockResolvedValue(job),
     ocrMarkdown: vi.fn().mockResolvedValue({ markdown: '# OCR' })
   }
   return { client: { http } as unknown as ServerClient, http }
@@ -169,7 +174,14 @@ describe('server workspace IPC handlers', () => {
     expect(http.workspaceItemsDelete).toHaveBeenCalledWith(workspace.id, item.id)
     expect(http.workspaceItemsReorder).toHaveBeenCalledWith(workspace.id, { ids: ['item-2', item.id] })
     expect(http.workspaceItemResize).toHaveBeenCalledWith(workspace.id, item.id, { width: 400, height: 500 })
-    expect(http.workspaceItemMove).toHaveBeenCalledWith(workspace.id, { itemId: item.id, targetWorkspaceId: workspace.id })
+    expect(http.workspaceItemMove).toHaveBeenCalledWith(workspace.id, {
+      itemId: item.id,
+      x: 7,
+      y: 8,
+      zIndex: 9
+    })
+    expect(http.workspacesList).not.toHaveBeenCalled()
+    expect(http.workspaceItemGet).toHaveBeenCalledTimes(3)
   })
 
   it('forwards asset operations through HTTP without native shell access', async () => {
@@ -181,11 +193,15 @@ describe('server workspace IPC handlers', () => {
     await handlers[IpcChannel.WorkspaceAssetsDelete](asset.id)
 
     expect(imported).toEqual({ ok: true, data: { imported: [asset], errors: [] } })
-    expect(http.workspaceAssetsAddFiles).toHaveBeenCalledWith(workspace.id, { paths: ['/tmp/file.txt'] })
+    expect(http.workspaceAssetsAddFiles).toHaveBeenCalledWith(workspace.id, {
+      paths: ['/tmp/file.txt'],
+      placement: { x: 2, y: 3 }
+    })
     expect(http.workspaceAssetPreview).toHaveBeenCalledWith(workspace.id, asset.id)
     expect(http.workspaceAssetOpen).toHaveBeenCalledWith(workspace.id, asset.id)
     expect(http.workspaceAssetReveal).toHaveBeenCalledWith(workspace.id, asset.id)
     expect(http.workspaceAssetDelete).toHaveBeenCalledWith(workspace.id, asset.id)
+    expect(http.workspaceAssetGet).toHaveBeenCalledTimes(4)
   })
 
   it('forwards canvas, connection, and note operations with converted arguments', async () => {
@@ -219,6 +235,8 @@ describe('server workspace IPC handlers', () => {
       noteType: note.noteType
     })
     expect(http.workspaceNotesDelete).toHaveBeenCalledWith(workspace.id, note.id)
+    expect(http.workspaceConnectionGet).toHaveBeenCalledOnce()
+    expect(http.workspaceNoteGet).toHaveBeenCalledTimes(2)
   })
 
   it('forwards MinerU and OCR operations through HTTP with legacy result shapes', async () => {
@@ -235,12 +253,14 @@ describe('server workspace IPC handlers', () => {
     expect(started).toEqual({ ok: true, data: job })
     expect(cancelled).toEqual({ ok: true, data: job })
     expect(markdown).toEqual({ ok: true, data: '# OCR' })
-    expect(http.mineruInstall).toHaveBeenCalledTimes(2)
+    expect(http.mineruChooseInstallRoot).toHaveBeenCalledOnce()
+    expect(http.mineruInstall).toHaveBeenCalledOnce()
     expect(http.mineruCancelInstall).toHaveBeenCalledOnce()
     expect(http.mineruUninstall).toHaveBeenCalledOnce()
     expect(http.ocrStart).toHaveBeenCalledWith({ documentId: job.documentId, profile: job.profile })
     expect(http.ocrCancel).toHaveBeenCalledWith({ jobId: job.id })
-    expect(http.ocrMarkdown).toHaveBeenCalledWith(job.resultKey)
+    expect(http.ocrState).toHaveBeenCalledWith(job.documentId)
+    expect(http.ocrMarkdown).toHaveBeenCalledWith(job.documentId, job.resultKey)
   })
 
   it('passes server errors through the shared Result envelope', async () => {

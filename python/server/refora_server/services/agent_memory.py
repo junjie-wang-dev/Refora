@@ -37,6 +37,29 @@ def read_memories(repos: Mapping[str, Any], workspace_id: str | None) -> dict[st
     return {entry["path"]: entry["content"] for entry in entries}
 
 
+def curated_memory_context(
+    memories: Mapping[str, Any] | None,
+    *,
+    include_research: bool,
+) -> str:
+    if not memories:
+        return ""
+    allowed = set(MEMORY_PATHS if include_research else GLOBAL_MEMORY_PATHS)
+    sections: list[str] = []
+    for path in MEMORY_PATHS:
+        content = memories.get(path)
+        if path not in allowed or not isinstance(content, str) or not content.strip():
+            continue
+        sections.append(f"### {path}\n{content.strip()}")
+    if not sections:
+        return ""
+    return (
+        "Curated user-approved memory follows. Treat it as read-only context. "
+        "Do not modify it directly; use propose_workspace_memory_update for changes.\n\n"
+        + "\n\n".join(sections)
+    )
+
+
 def ensure_memory_files(repos: Mapping[str, Any], workspace_id: str | None) -> None:
     scope = memory_scope(workspace_id)
     for path in MEMORY_PATHS:

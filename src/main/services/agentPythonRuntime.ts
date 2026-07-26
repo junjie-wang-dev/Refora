@@ -11,9 +11,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createInterface } from 'node:readline'
 import { dirname, join } from 'node:path'
-import type { AiSummaryContent } from '../../shared/ipc-types'
 
 export const AGENT_PYTHON_RUNTIME_VERSION = '0.3.0'
 
@@ -51,7 +49,6 @@ interface AgentPythonManifest {
 
 interface AgentPythonRuntimeDeps {
   userDataDir: string
-  workerScriptPath: string
   projectPath: string
   environment?: NodeJS.ProcessEnv
   architecture?: 'arm64' | 'x64'
@@ -63,77 +60,6 @@ interface RunFileOptions {
   env: NodeJS.ProcessEnv
   signal: AbortSignal
   timeoutMs?: number
-}
-
-export interface AgentPythonProviderConfig {
-  model: string
-  baseUrl: string
-  apiKey: string
-  useResponsesApi: boolean
-  modelKwargs: Record<string, unknown>
-  reasoning?: { effort: string; summary: 'auto' }
-  temperature: number | null
-  maxTokens: number | null
-}
-
-export interface AgentPythonAgentRequest {
-  mode: 'run' | 'resume'
-  runId: string
-  threadId: string
-  workspaceId: string | null
-  checkpointPath: string
-  checkpointBefore: string | null
-  provider: AgentPythonProviderConfig
-  systemPrompt: string
-  messages?: Array<Record<string, unknown>>
-  decisions?: Array<Record<string, unknown>>
-  enabledToolNames: string[]
-  sandboxRoot: string | null
-  memories: Record<string, string>
-  includeResearchMemory: boolean
-  recursionLimit: number
-}
-
-export interface AgentPythonSummaryRequest {
-  mode: 'summary'
-  provider: AgentPythonProviderConfig
-  text: string
-}
-
-export interface AgentPythonTitleRequest {
-  mode: 'title'
-  provider: AgentPythonProviderConfig
-  userMessage: string
-  reasoningModel: boolean
-}
-
-export type AgentPythonRequest =
-  | AgentPythonAgentRequest
-  | AgentPythonSummaryRequest
-  | AgentPythonTitleRequest
-
-export interface AgentPythonEvent {
-  event: string
-  name?: string
-  run_id?: string
-  parent_ids?: string[]
-  data?: Record<string, unknown>
-  tags?: string[]
-  metadata?: Record<string, unknown>
-}
-
-export interface AgentPythonCompletion {
-  result: unknown
-  state: Record<string, unknown>
-}
-
-interface AgentPythonStreamOptions {
-  executeTool: (
-    name: string,
-    args: Record<string, unknown>,
-    toolCallId: string | null
-  ) => Promise<string>
-  onComplete: (completion: AgentPythonCompletion) => void
 }
 
 function executable(path: string): Promise<boolean> {
@@ -448,164 +374,11 @@ export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
     return waitForSignal(installPromise ?? startInstall(), signal)
   }
 
-  async function *stream(
-    request: AgentPythonRequest,
-    options: AgentPythonStreamOptions,
-    signal: AbortSignal
-  ): AsyncGenerator<AgentPythonEvent> {
-    const python = await install(signal)
-    if (signal.aborted) throw cancelled()
-    const child = spawn(python, ['-I', '-u', deps.workerScriptPath], {
-      cwd: root,
-      env: environment(),
-      detached: true,
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
-    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        child.once('error', reject)
-        child.once('close', (code, closeSignal) => resolve({ code, signal: closeSignal }))
-      }
-    )
-    let stderr = ''
-    let completed = false
-    const abort = (): void => terminate(child)
-    signal.addEventListener('abort', abort, { once: true })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString('utf8')}`.slice(-1_000_000)
-    })
-    child.stdin.on('error', () => undefined)
-    child.stdin.write(`${JSON.stringify(request)}\n`)
-    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
-    try {
-      for await (const line of lines) {
-        if (signal.aborted) throw cancelled()
-        if (!line.trim()) continue
-        let message: Record<string, unknown>
-        try {
-          message = JSON.parse(line) as Record<string, unknown>
-        } catch {
-          throw new Error(`Agent Python worker returned invalid JSON: ${line.slice(0, 500)}`)
-        }
-        if (message.type === 'event') {
-          if (message.event && typeof message.event === 'object') {
-            yield message.event as AgentPythonEvent
-          }
-          continue
-        }
-        if (message.type === 'tool_request') {
-          const id = typeof message.id === 'string' ? message.id : ''
-          const name = typeof message.name === 'string' ? message.name : ''
-          const args = message.arguments && typeof message.arguments === 'object' &&
-            !Array.isArray(message.arguments)
-            ? message.arguments as Record<string, unknown>
-            : {}
-          const toolCallId = typeof message.toolCallId === 'string' ? message.toolCallId : null
-          try {
-            const result = await options.executeTool(name, args, toolCallId)
-            if (signal.aborted) throw cancelled()
-            child.stdin.write(`${JSON.stringify({ type: 'tool_response', id, ok: true, result })}\n`)
-          } catch (error) {
-            if (signal.aborted) throw cancelled()
-            child.stdin.write(`${JSON.stringify({
-              type: 'tool_response',
-              id,
-              ok: false,
-              error: error instanceof Error ? error.message : String(error)
-            })}\n`)
-          }
-          continue
-        }
-        if (message.type === 'complete') {
-          const state = message.state && typeof message.state === 'object'
-            ? message.state as Record<string, unknown>
-            : {}
-          options.onComplete({ result: message.result, state })
-          completed = true
-          continue
-        }
-        if (message.type === 'error') {
-          const error = message.error && typeof message.error === 'object'
-            ? message.error as Record<string, unknown>
-            : {}
-          const failure = new Error(
-            typeof error.message === 'string' ? error.message : 'Agent Python worker failed'
-          )
-          if (typeof error.name === 'string') failure.name = error.name
-          if (typeof error.status === 'number') {
-            Object.assign(failure, { status: error.status })
-          }
-          if (typeof error.code === 'string') {
-            Object.assign(failure, { code: error.code })
-          }
-          throw failure
-        }
-      }
-      const exit = await exitPromise
-      if (signal.aborted) throw cancelled()
-      if (!completed || exit.code !== 0) {
-        throw new Error(
-          stderr.trim() ||
-          `Agent Python worker exited with ${exit.code ?? exit.signal ?? 'no completion'}`
-        )
-      }
-    } finally {
-      signal.removeEventListener('abort', abort)
-      lines.close()
-      if (!child.killed && child.exitCode === null) terminate(child)
-    }
-  }
-
-  async function invoke(request: AgentPythonRequest, signal: AbortSignal): Promise<unknown> {
-    let result: unknown
-    for await (const _event of stream(
-      request,
-      {
-        executeTool: async (name) => {
-          throw new Error(`Unexpected host operation during ${request.mode}: ${name}`)
-        },
-        onComplete: (completion) => {
-          result = completion.result
-        }
-      },
-      signal
-    )) {
-      throw new Error(`Unexpected streamed event during ${request.mode}`)
-    }
-    return result
-  }
-
-  async function generateSummary(
-    request: Omit<AgentPythonSummaryRequest, 'mode'>,
-    signal: AbortSignal
-  ): Promise<AiSummaryContent> {
-    const result = await invoke({ mode: 'summary', ...request }, signal)
-    if (!result || typeof result !== 'object') {
-      throw new Error('Agent Python worker returned an invalid summary')
-    }
-    const value = result as Record<string, unknown>
-    if (typeof value.core !== 'string' || !Array.isArray(value.keyPoints)) {
-      throw new Error('Agent Python worker returned an invalid summary')
-    }
-    return {
-      core: value.core,
-      keyPoints: value.keyPoints.filter((item): item is string => typeof item === 'string')
-    }
-  }
-
-  async function generateTitle(
-    request: Omit<AgentPythonTitleRequest, 'mode'>,
-    signal: AbortSignal
-  ): Promise<string | null> {
-    const result = await invoke({ mode: 'title', ...request }, signal)
-    return typeof result === 'string' && result.length > 0 ? result : null
-  }
-
   function destroy(): void {
     lifecycleController.abort()
   }
 
-  return { install, stream, generateSummary, generateTitle, destroy }
+  return { install, destroy }
 }
 
 export type AgentPythonRuntime = ReturnType<typeof createAgentPythonRuntime>

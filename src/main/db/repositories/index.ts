@@ -12,13 +12,8 @@ import { createWorkspaceAssetsRepository } from './workspaceAssets'
 import { createAiSummariesRepository } from './aiSummaries'
 import { createAiReportsRepository } from './aiReports'
 import { createChatRepository } from './chat'
-import { createAgentTracesRepository } from './agentTraces'
 import { createAiProvidersRepository } from './aiProviders'
 import { createDocumentOcrRepository } from './documentOcr'
-import { createAgentRunsRepository } from './agentRuns'
-import { createAgentMemoriesRepository } from './agentMemories'
-import { createAgentInterruptsRepository } from './agentInterrupts'
-import { createAgentToolEffectsRepository } from './agentToolEffects'
 import { createWebSearchConfigRepository } from './webSearchConfig'
 import { RepoError } from './errors'
 
@@ -43,13 +38,8 @@ export function createRepositories(db: SqliteDb, deps: RepositoryDeps = {}) {
   const aiSummaries = createAiSummariesRepository(db)
   const aiReports = createAiReportsRepository(db)
   const chat = createChatRepository(db)
-  const agentTraces = createAgentTracesRepository(db)
   const aiProviders = createAiProvidersRepository(db)
   const documentOcr = createDocumentOcrRepository(db)
-  const agentRuns = createAgentRunsRepository(db)
-  const agentMemories = createAgentMemoriesRepository(db)
-  const agentInterrupts = createAgentInterruptsRepository(db)
-  const agentToolEffects = createAgentToolEffectsRepository(db)
   const webSearchConfig = createWebSearchConfigRepository(db)
 
   let depth = 0
@@ -104,13 +94,8 @@ export function createRepositories(db: SqliteDb, deps: RepositoryDeps = {}) {
     aiSummaries,
     aiReports,
     chat,
-    agentTraces,
     aiProviders,
     documentOcr,
-    agentRuns,
-    agentMemories,
-    agentInterrupts,
-    agentToolEffects,
     webSearchConfig,
     transaction
   }

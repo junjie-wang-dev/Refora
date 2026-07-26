@@ -1,10 +1,17 @@
 import asyncio
+import json
+import sqlite3
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 
 from conftest import insert_doc, insert_thread, make_workspaces_repo, open_migrated_db
 from refora_server.repositories import create_repositories
-from refora_server.services.agent_runtime import createAgentRuntime
+from refora_server.services.agent_runtime import (
+    ACADEMIC_PERSISTENCE_REDACTION,
+    AcademicRedactingSerializer,
+    createAgentRuntime,
+)
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 
 
@@ -103,10 +110,28 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         yield {"event": "token", "delta": "Hello "}
         yield {"event": "reasoning", "delta": "considering"}
         yield {
+            "event": "on_tool_start",
+            "name": "search_library",
+            "run_id": "call-search-1",
+            "data": {
+                "input": {
+                    "input": {"query": "test"},
+                    "tool_call_id": "call-search-1",
+                }
+            },
+        }
+        yield {
             "event": "on_tool_end",
             "name": "search_library",
+            "run_id": "call-search-1",
             "parent_ids": ["parent-1"],
-            "data": {"output": {"apiKey": "secret-api-key", "items": [1]}},
+            "data": {
+                "input": {
+                    "input": {"query": "test"},
+                    "tool_call_id": "call-search-1",
+                },
+                "output": {"apiKey": "secret-api-key", "items": [1]},
+            },
             "tags": ["tool"],
             "metadata": {"langgraph_checkpoint_ns": "agent"},
         }
@@ -144,15 +169,22 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     assert run["checkpointBefore"] == "checkpoint-before"
     assert run["checkpointAfter"] == "checkpoint-after"
     messages = repos["chat"]["listMessages"]("thread-1")
-    assert [(message["role"], message["content"]) for message in messages] == [
-        ("user", "Explain this"),
-        ("tool", "Found one paper"),
-        ("assistant", "Answer"),
-    ]
+    assert [message["role"] for message in messages] == ["user", "tool", "assistant"]
+    tool_payload = json.loads(messages[1]["content"])
+    assert tool_payload == {
+        "v": 2,
+        "name": "search_library",
+        "toolCallId": "call-search-1",
+        "input": '{"query":"test"}',
+        "output": '{"apiKey":"[redacted]","items":[1]}',
+    }
     assert repos["chat"]["getThread"]("thread-1")["headCheckpointId"] == "checkpoint-after"
     traces = repos["agentTraces"]["listByRun"]("run-1")
     assert [trace["kind"] for trace in traces] == ["run", "tool"]
     assert traces[0]["status"] == "done"
+    assert traces[1]["status"] == "done"
+    assert traces[1]["input"] is not None
+    assert traces[1]["endedAt"] == 1000
     assert "secret-api-key" not in str(seen)
     assert {event for event, _ in seen} >= {
         "ai.chat.token",
@@ -162,6 +194,65 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         "ai.chat.run-status",
         "ai.chat.title-updated",
     }
+    token = next(payload for event, payload in seen if event == "ai.chat.token")
+    assert token == {"runId": "run-1", "threadId": "thread-1", "token": "Hello "}
+    done = next(payload for event, payload in seen if event == "ai.chat.done")
+    assert done == {"runId": "run-1", "threadId": "thread-1", "finalText": "Answer"}
+    trace = next(payload for event, payload in seen if event == "ai.chat.trace")
+    assert trace["threadId"] == "thread-1"
+    assert trace["step"]["kind"] == "tool"
+
+
+def test_checkpoint_serializer_redacts_academic_calls_and_outputs():
+    serializer = AcademicRedactingSerializer()
+    value = {
+        "messages": [
+            AIMessage(
+                content=[
+                    {
+                        "type": "tool_call",
+                        "id": "content-academic-call",
+                        "name": "search_arxiv",
+                        "args": {"query": "content private topic"},
+                    }
+                ],
+                tool_calls=[
+                    {
+                        "id": "academic-call",
+                        "name": "search_arxiv",
+                        "args": {"query": "private topic"},
+                    }
+                ],
+                response_metadata={
+                    "nested": {
+                        "id": "metadata-academic-call",
+                        "name": "search_arxiv",
+                        "args": {"query": "metadata private topic"},
+                    }
+                },
+            ),
+            ToolMessage(
+                content="private abstract",
+                name="search_arxiv",
+                tool_call_id="academic-call",
+            ),
+            ToolMessage(
+                content="local result",
+                name="search_library",
+                tool_call_id="local-call",
+            ),
+        ]
+    }
+
+    decoded = serializer.loads_typed(serializer.dumps_typed(value))
+
+    assert decoded["messages"][0].tool_calls[0]["args"] == {"omitted": True}
+    assert decoded["messages"][0].content[0]["args"] == {"omitted": True}
+    assert decoded["messages"][0].response_metadata["nested"]["args"] == {
+        "omitted": True
+    }
+    assert decoded["messages"][1].content == ACADEMIC_PERSISTENCE_REDACTION
+    assert decoded["messages"][2].content == "local result"
 
 
 def test_native_langgraph_events_produce_tokens_result_and_checkpoint(repos, db, tmp_path):
@@ -190,7 +281,10 @@ def test_native_langgraph_events_produce_tokens_result_and_checkpoint(repos, db,
     assert agent.version == "v2"
     assert repos["agentRuns"]["get"]("run-1")["checkpointAfter"] == "checkpoint-native"
     assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Native answer"
-    assert ("ai.chat.token", {"runId": "run-1", "threadId": "thread-1", "delta": "Native "}) in seen
+    assert (
+        "ai.chat.token",
+        {"runId": "run-1", "threadId": "thread-1", "token": "Native "},
+    ) in seen
 
 
 def test_send_failure_persists_failed_run_and_error_event(repos, db):
@@ -218,14 +312,14 @@ def test_send_failure_persists_failed_run_and_error_event(repos, db):
     assert repos["agentRuns"]["get"]("run-1")["status"] == "failed"
     assert repos["agentTraces"]["listByRun"]("run-1")[0]["status"] == "error"
     error = next(payload for event, payload in seen if event == "ai.chat.error")
-    assert error["error"]["code"] == "agent_failed"
-    assert "secret-api-key" not in error["error"]["message"]
+    assert "secret-api-key" not in error["message"]
 
 
 def test_cancel_terminalizes_active_run(repos, db):
     insert_thread(db)
     started = asyncio.Event()
     released = asyncio.Event()
+    cancelled_runs = []
 
     async def stream(agent, req, mode):
         yield {"event": "token", "delta": "Starting"}
@@ -241,6 +335,7 @@ def test_cancel_terminalizes_active_run(repos, db):
                 "createModel": lambda provider: "model",
                 "createAgent": lambda model, tools, req: Agent(released),
                 "stream": stream,
+                "cancelRun": lambda run_id: cancelled_runs.append(run_id),
             },
         )
         pending = asyncio.create_task(runtime["send"](request()))
@@ -251,8 +346,93 @@ def test_cancel_terminalizes_active_run(repos, db):
     result = asyncio.run(exercise())
 
     assert result["status"] == "cancelled"
+    assert cancelled_runs == ["run-1"]
     assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
     assert repos["agentTraces"]["listByRun"]("run-1")[0]["status"] == "cancelled"
+
+
+def test_delete_thread_removes_checkpoint_rows(repos, db, tmp_path):
+    insert_thread(db)
+    repos["agentRuns"]["create"](
+        {
+            "id": "run-1",
+            "threadId": "thread-1",
+            "providerId": "provider-1",
+            "modelId": "model-1",
+            "status": "completed",
+        }
+    )
+    checkpoint_path = tmp_path / "checkpoints.sqlite"
+    connection = sqlite3.connect(checkpoint_path)
+    connection.executescript(
+        """
+        CREATE TABLE checkpoints (
+            thread_id TEXT,
+            checkpoint_ns TEXT,
+            checkpoint_id TEXT
+        );
+        CREATE TABLE writes (
+            thread_id TEXT,
+            checkpoint_ns TEXT,
+            checkpoint_id TEXT
+        );
+        INSERT INTO checkpoints VALUES ('thread-1', '', 'checkpoint-1');
+        INSERT INTO checkpoints VALUES ('thread-other', '', 'checkpoint-2');
+        INSERT INTO writes VALUES ('thread-1', '', 'checkpoint-1');
+        INSERT INTO writes VALUES ('thread-other', '', 'checkpoint-2');
+        """
+    )
+    connection.close()
+    runtime = createAgentRuntime(
+        repos,
+        {"checkpointPath": str(checkpoint_path)},
+    )
+
+    asyncio.run(runtime["deleteThread"]("thread-1"))
+
+    connection = sqlite3.connect(checkpoint_path)
+    assert connection.execute(
+        "SELECT thread_id FROM checkpoints ORDER BY thread_id"
+    ).fetchall() == [("thread-other",)]
+    assert connection.execute(
+        "SELECT thread_id FROM writes ORDER BY thread_id"
+    ).fetchall() == [("thread-other",)]
+    connection.close()
+
+
+def test_delete_thread_waits_for_active_run_cancellation(repos, db, tmp_path):
+    insert_thread(db)
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def stream(agent, req, mode):
+        started.set()
+        await blocked.wait()
+        yield {"event": "complete", "result": "late", "state": {}}
+
+    async def exercise():
+        runtime = createAgentRuntime(
+            repos,
+            {
+                "createTools": lambda req: [],
+                "createModel": lambda provider: "model",
+                "createAgent": lambda model, tools, req: Agent(),
+                "stream": stream,
+                "checkpointPath": str(tmp_path / "checkpoints.sqlite"),
+            },
+        )
+        await runtime["start"](
+            request(
+                checkpointPath=str(tmp_path / "checkpoints.sqlite"),
+                checkpointBefore=None,
+            )
+        )
+        await started.wait()
+        await runtime["deleteThread"]("thread-1")
+
+    asyncio.run(exercise())
+
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
 
 
 def test_interrupt_then_resume_resolves_decisions_and_completes(repos, db):
@@ -314,7 +494,295 @@ def test_interrupt_then_resume_resolves_decisions_and_completes(repos, db):
     run_traces = repos["agentTraces"]["listByRun"]("run-1")
     run_steps = [step for step in run_traces if step["kind"] == "run"]
     assert [step["status"] for step in run_steps] == ["interrupted", "done"]
+    approval_steps = [step for step in run_traces if step["kind"] == "tool"]
+    assert len(approval_steps) == 1
+    assert approval_steps[0]["name"] == "publish"
+    assert approval_steps[0]["status"] == "interrupted"
+    assert json.loads(approval_steps[0]["input"]) == {"path": "out"}
     assert repos["agentRuns"]["get"]("run-1")["status"] == "completed"
+
+
+def test_failed_resume_keeps_interrupt_pending_and_can_retry(repos, db):
+    insert_thread(db)
+    resume_attempts = 0
+
+    async def stream(agent, req, mode):
+        nonlocal resume_attempts
+        if mode == "send":
+            yield {
+                "event": "interrupted",
+                "state": {
+                    "config": {"configurable": {"checkpoint_id": "checkpoint-waiting"}},
+                    "tasks": [
+                        {
+                            "interrupts": [
+                                {
+                                    "value": {
+                                        "actionRequests": [
+                                            {"name": "publish", "args": {"path": "out"}}
+                                        ],
+                                        "reviewConfigs": [
+                                            {"allowedDecisions": ["approve", "reject"]}
+                                        ],
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                },
+            }
+            return
+        resume_attempts += 1
+        if resume_attempts == 1:
+            raise RuntimeError("temporary provider failure")
+        yield {
+            "event": "complete",
+            "result": {"messages": [{"content": "Published"}]},
+            "state": {"config": {"configurable": {"checkpoint_id": "checkpoint-after"}}},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+    asyncio.run(runtime["send"](request()))
+
+    first = asyncio.run(
+        runtime["resume"](
+            {"runId": "run-1", "decisions": [{"type": "approve"}]}
+        )
+    )
+
+    assert first["status"] == "interrupted"
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "interrupted"
+    assert repos["agentInterrupts"]["getPendingByRun"]("run-1") is not None
+
+    second = asyncio.run(
+        runtime["resume"](
+            {"runId": "run-1", "decisions": [{"type": "approve"}]}
+        )
+    )
+
+    assert second["status"] == "completed"
+    assert repos["agentInterrupts"]["getPendingByRun"]("run-1") is None
+
+
+def test_tool_error_finishes_the_matching_running_trace(repos, db):
+    insert_thread(db)
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_tool_start",
+            "name": "web_fetch",
+            "run_id": "tool-run-1",
+            "data": {"input": {"url": "https://example.test"}},
+        }
+        yield {
+            "event": "on_tool_error",
+            "name": "web_fetch",
+            "run_id": "tool-run-1",
+            "data": {"error": "fetch failed"},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "failed"
+    tool_steps = [
+        step
+        for step in repos["agentTraces"]["listByRun"]("run-1")
+        if step["kind"] == "tool"
+    ]
+    assert len(tool_steps) == 1
+    assert tool_steps[0]["status"] == "error"
+    assert tool_steps[0]["output"] == "fetch failed"
+
+
+def test_memory_edit_decision_is_validated_and_normalized_for_langgraph(repos, db):
+    workspace = make_workspaces_repo(db)["create"]("Research")
+    insert_thread(db, workspaceId=workspace["id"])
+    resume_decisions = []
+
+    async def stream(agent, req, mode):
+        if mode == "send":
+            yield {
+                "event": "interrupted",
+                "state": {
+                    "config": {"configurable": {"checkpoint_id": "checkpoint-waiting"}},
+                    "tasks": [
+                        {
+                            "interrupts": [
+                                {
+                                    "value": {
+                                        "actionRequests": [
+                                            {
+                                                "name": "propose_workspace_memory_update",
+                                                "args": {
+                                                    "path": "/brief.md",
+                                                    "content": "before",
+                                                    "rationale": "stable",
+                                                },
+                                            }
+                                        ],
+                                        "reviewConfigs": [
+                                            {
+                                                "allowedDecisions": [
+                                                    "approve",
+                                                    "edit",
+                                                    "reject",
+                                                ]
+                                            }
+                                        ],
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                },
+            }
+            return
+        resume_decisions.extend(req["decisions"])
+        yield {
+            "event": "complete",
+            "result": {"messages": [{"content": "Updated"}]},
+            "state": {"config": {"configurable": {"checkpoint_id": "checkpoint-after"}}},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+    asyncio.run(runtime["send"](request(workspaceId=workspace["id"])))
+
+    invalid = asyncio.run(
+        runtime["resume"](
+            {
+                "runId": "run-1",
+                "decisions": [
+                    {
+                        "type": "edit",
+                        "editedAction": {
+                            "name": "propose_workspace_memory_update",
+                            "args": {
+                                "path": "/research.md",
+                                "content": "after",
+                                "rationale": "",
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    assert invalid["status"] == "failed"
+    assert "rationale" in invalid["error"]
+    assert repos["agentInterrupts"]["getPendingByRun"]("run-1") is not None
+
+    resumed = asyncio.run(
+        runtime["resume"](
+            {
+                "runId": "run-1",
+                "decisions": [
+                    {
+                        "type": "edit",
+                        "editedAction": {
+                            "name": "propose_workspace_memory_update",
+                            "args": {
+                                "path": "/research.md",
+                                "content": "after",
+                                "rationale": "durable finding",
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    assert resumed["status"] == "completed"
+    assert resume_decisions == [
+        {
+            "type": "edit",
+            "edited_action": {
+                "name": "propose_workspace_memory_update",
+                "args": {
+                    "path": "/research.md",
+                    "content": "after",
+                    "rationale": "durable finding",
+                },
+            },
+        }
+    ]
+
+
+def test_academic_tool_output_is_not_traced_or_persisted_as_chat_history(repos, db):
+    insert_thread(db)
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_tool_end",
+            "name": "search_arxiv",
+            "run_id": "academic-call",
+            "data": {
+                "input": {"query": "private topic"},
+                "output": {"abstract": "private abstract"},
+            },
+        }
+        yield {
+            "event": "complete",
+            "result": {
+                "messages": [
+                    ToolMessage(
+                        content="private abstract",
+                        name="search_arxiv",
+                        tool_call_id="academic-call",
+                    ),
+                    AIMessage(content="Answer"),
+                ]
+            },
+            "state": {"config": {"configurable": {"checkpoint_id": "checkpoint-after"}}},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    messages = repos["chat"]["listMessages"]("thread-1")
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    tool_trace = next(
+        step
+        for step in repos["agentTraces"]["listByRun"]("run-1")
+        if step["kind"] == "tool"
+    )
+    assert tool_trace["output"] == ACADEMIC_PERSISTENCE_REDACTION
 
 
 def test_resume_replays_persisted_tool_effect_for_same_tool_call_id(repos, db):

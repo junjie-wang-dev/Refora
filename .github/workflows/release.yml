@@ -13,18 +13,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Verify, package, and publish
-    runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      GH_TOKEN: ${{ github.token }}
-
+  verify:
+    name: Verify
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,6 +26,12 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.11.32'
+          enable-cache: true
 
       - name: Verify tag matches package version
         shell: bash
@@ -57,6 +55,49 @@ jobs:
       - name: Unit and component tests
         run: npm run test
 
+      - name: Python server tests
+        run: uv run --project python/server --locked pytest
+
+  package:
+    name: Package ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.11.32'
+          enable-cache: true
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Prepare notarization key
         if: ${{ env.APPLE_API_KEY_BASE64 != '' }}
         shell: bash
@@ -66,7 +107,34 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - name: Package macOS application
+        env:
+          REFORA_TARGET_ARCH: ${{ matrix.arch }}
         run: npm run package -- --publish never
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dmg-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: package
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-dmg-*
+          path: dist
+          merge-multiple: true
 
       - name: Create checksums
         shell: bash

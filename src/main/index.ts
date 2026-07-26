@@ -8,18 +8,11 @@ import { initLogger, logger } from './services/logger'
 import { openDatabase, seedSettings, closeDatabase, getSetting, getSearchMode } from './db/connection'
 import { createRepositories } from './db/repositories'
 import { RepoError } from './db/repositories/errors'
-import { validateProxyUrl, type RuntimeRef } from './ipc/handlers'
 import { createImporter } from './services/importer'
 import { createMetadataService } from './services/metadata'
 import { createWatcher } from './services/watcher'
-import { createAiProvidersService } from './services/aiProviders'
 import { createPdfTextService } from './services/pdfText'
-import { createAiSummaryService } from './services/aiSummary'
-import type { AiProvidersService } from './services/aiProviders'
 import type { PdfTextService } from './services/pdfText'
-import type { AiSummaryService } from './services/aiSummary'
-import { createAiAgentService } from './services/aiAgent'
-import type { AiAgentService } from './services/aiAgent'
 import { checkMissing, findPdfsRecursively } from './services/files'
 import { writeExportFile, importFromJsonFile } from './services/export'
 import { emitLibraryScanning, emitLibrarySwitched } from './ipc/events'
@@ -32,37 +25,14 @@ import { runMenuAction } from './services/menuAction'
 import { prepareReplacement } from './services/resourceReplacement'
 import { requireWorkspaceAssetFile } from './services/workspaceAssets'
 import { isInsideLibrary } from './services/paths'
-import { createAgentSandboxService } from './services/agentSandbox'
-import type { AgentSandboxService } from './services/agentSandbox'
-import { createAgentDatabaseSnapshotService } from './services/agentDatabaseSnapshot'
-import { createAgentReadonlyFilesService } from './services/agentReadonlyFiles'
-import { createAgentRuntimeManager } from './services/agentRuntimeManager'
-import type { AgentRuntimeManager } from './services/agentRuntimeManager'
-import { createAgentExecutionService, createBrokerAgentRunner } from './services/agentExecution'
-import type { AgentExecutionService } from './services/agentExecution'
-import { createAgentArtifactPublisher } from './services/agentArtifactPublisher'
-import type { AgentArtifactPublisher } from './services/agentArtifactPublisher'
-import { createAgentCheckpointService } from './services/agentCheckpoint'
-import type { AgentCheckpointService } from './services/agentCheckpoint'
-import { createAcademicCache } from './services/academicCache'
-import { createArxivClient } from './services/arxivClient'
-import { createArxivPaperService } from './services/arxivPaperService'
-import { createSemanticScholarClient } from './services/semanticScholarClient'
-import { createAcademicIdentityService } from './services/academicIdentityService'
-import { createAcademicGraphService } from './services/academicGraphService'
-import { createResearchFrontierService } from './services/researchFrontierService'
 import { createMineruEngineManager } from './services/mineruEngineManager'
 import type { MineruEngineManager } from './services/mineruEngineManager'
 import { createMineruWorkerProcess } from './services/mineruWorkerProcess'
 import type { MineruWorkerProcess } from './services/mineruWorkerProcess'
 import { createMineruDocumentService } from './services/mineruDocumentService'
 import type { MineruDocumentService } from './services/mineruDocumentService'
-import { createDdgsRuntimeManager } from './services/ddgsRuntime'
-import type { DdgsRuntimeManager } from './services/ddgsRuntime'
 import { createAgentPythonRuntime } from './services/agentPythonRuntime'
 import type { AgentPythonRuntime } from './services/agentPythonRuntime'
-import { createWebSearchService } from './services/webSearch'
-import type { WebSearchService } from './services/webSearch'
 import {
   activeDuplicateFiles,
   duplicateFileFingerprint,
@@ -92,33 +62,37 @@ const LIBRARY_DUPLICATE_CACHE_KEY = 'libraryDuplicateFileCache'
 let serverAssembly: ServerAssembly | null = null
 
 type DbConnection = ReturnType<typeof openDatabase>
-interface Runtime extends RuntimeRef {
+interface Runtime {
   db: DbConnection
+  repos: ReturnType<typeof createRepositories>
   importer: ReturnType<typeof createImporter>
   metadataService: ReturnType<typeof createMetadataService>
   watcher: ReturnType<typeof createWatcher>
   missingCheckInterval: ReturnType<typeof setInterval> | null
   missingCheckAbort: AbortController
   activated: boolean
-  aiProvidersService: AiProvidersService
   pdfTextService: PdfTextService
-  aiSummaryService: AiSummaryService
-  aiAgentService: AiAgentService
-  agentSandboxService: AgentSandboxService
-  agentExecutionService: AgentExecutionService
-  agentArtifactPublisher: AgentArtifactPublisher
-  agentRuntimeManager: AgentRuntimeManager
-  agentCheckpointService: AgentCheckpointService
   mineruWorker: MineruWorkerProcess
   mineruDocumentService: MineruDocumentService
-  ddgsRuntimeManager: DdgsRuntimeManager
   agentPythonRuntime: AgentPythonRuntime
-  webSearchService: WebSearchService
 }
 let runtime: Runtime | null = null
 let mineruEngineManager: MineruEngineManager | null = null
 let win: BrowserWindow | null = null
 let isQuitting = false
+
+function validateProxyUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (
+      parsed.protocol === 'http:' ||
+      parsed.protocol === 'https:' ||
+      parsed.protocol === 'socks5:'
+    )
+  } catch {
+    return false
+  }
+}
 
 function detectLanguage(): 'zh' | 'en' {
   try {
@@ -458,13 +432,7 @@ function destroyRuntime(target: Runtime): void {
   target.metadataService.destroy()
   target.watcher.destroy()
   target.importer.destroy()
-  target.aiSummaryService.destroy()
-  target.aiAgentService.destroy()
-  target.webSearchService.destroy()
-  target.ddgsRuntimeManager.destroy()
   target.agentPythonRuntime.destroy()
-  target.agentExecutionService.destroy()
-  target.agentCheckpointService.close()
   target.pdfTextService.destroy()
   target.mineruDocumentService.destroy()
   closeDatabase(target.db)
@@ -482,34 +450,12 @@ function buildRuntime(dbPath: string): Runtime {
   try {
     seedSettings(db, detectLanguage())
     const repos = createRepositories(db, { getSearchMode: () => getSearchMode(db) })
-    const recoveredAt = Date.now()
-    const recoveredRuns = repos.agentRuns.reconcileRunning(
-      'Cancelled because Refora exited before the run completed',
-      recoveredAt
-    )
-    const recoveredTraces = repos.agentTraces.reconcileRunning(
-      'Cancelled because Refora exited before the step completed',
-      recoveredAt
-    )
-    if (recoveredRuns > 0 || recoveredTraces > 0) {
-      logger.info(`startup:reconciled ${recoveredRuns} agent runs and ${recoveredTraces} trace steps`)
-    }
-    const traceTtlMs = 30 * 24 * 60 * 60 * 1000
-    const pruned = repos.agentTraces.deleteOlderThan(Date.now() - traceTtlMs)
-    if (pruned > 0) logger.info(`startup:pruned ${pruned} trace steps older than 30 days`)
     const importer = createImporter(repos, () => win)
     const metadataService = createMetadataService(repos, () => win)
-    const aiProvidersService = createAiProvidersService(repos)
     const pdfTextService = createPdfTextService(repos, () => win)
-    const agentPythonWorkerPath = app.isPackaged
-      ? join(process.resourcesPath, 'agent-python', 'worker.py')
-      : join(__dirname, '../../resources/agent/worker.py')
-    const agentPythonProjectPath = app.isPackaged
-      ? join(process.resourcesPath, 'agent-python', 'pyproject.toml')
-      : join(__dirname, '../../python/agent/pyproject.toml')
+    const agentPythonProjectPath = join(__dirname, '../../python/server/pyproject.toml')
     const agentPythonRuntime = createAgentPythonRuntime({
       userDataDir: app.getPath('userData'),
-      workerScriptPath: agentPythonWorkerPath,
       projectPath: agentPythonProjectPath,
       downloadFile: async (url, destination, signal) => {
         const response = await net.fetch(url, { signal })
@@ -522,92 +468,6 @@ function buildRuntime(dbPath: string): Runtime {
         )
       }
     })
-    const aiSummaryService = createAiSummaryService(
-      repos,
-      () => win,
-      aiProvidersService,
-      pdfTextService,
-      agentPythonRuntime
-    )
-    const agentSandboxService = createAgentSandboxService({
-      repos,
-      dbPath,
-      trashItem: (path) => shell.trashItem(path)
-    })
-    const agentDatabaseSnapshotService = createAgentDatabaseSnapshotService({
-      db,
-      sandboxService: agentSandboxService
-    })
-    const agentReadonlyFilesService = createAgentReadonlyFilesService({
-      repos,
-      db,
-      sandboxService: agentSandboxService
-    })
-    const agentRuntimeManager = createAgentRuntimeManager({
-      sandboxService: agentSandboxService,
-      downloadFile: async (url, destination) => {
-        const response = await net.fetch(url)
-        if (!response.ok) throw new Error(`Runtime download failed with HTTP ${response.status}`)
-        if (!response.body) throw new Error('Runtime download returned an empty response')
-        await pipeline(
-          Readable.fromWeb(response.body as import('node:stream/web').ReadableStream<Uint8Array>),
-          createWriteStream(destination, { mode: 0o600 })
-        )
-      },
-      confirmInstall: async (message) => {
-        const language = detectLanguage()
-        const result = await dialog.showMessageBox({
-          type: 'warning',
-          title: language === 'zh' ? '安装 Agent 依赖' : 'Install Agent Dependencies',
-          message,
-          detail: language === 'zh'
-            ? '运行时只下载一份并在所有沙箱间共享；依赖使用共享缓存，安装脚本会被禁用。'
-            : 'Runtimes are downloaded once and shared by all sandboxes. Dependencies use shared caches and install scripts are disabled.',
-          buttons: language === 'zh' ? ['安装', '取消'] : ['Install', 'Cancel'],
-          defaultId: 0,
-          cancelId: 1
-        })
-        return result.response === 0
-      }
-    })
-    const agentBrokerPath = app.isPackaged
-      ? join(process.resourcesPath, 'agent-runner', 'refora-agent-broker')
-      : join(__dirname, '../../build/agent-runner/refora-agent-broker')
-    const agentExecutionService = createAgentExecutionService({
-      sandboxService: agentSandboxService,
-      snapshotService: agentDatabaseSnapshotService,
-      readonlyFilesService: agentReadonlyFilesService,
-      runtimeManager: agentRuntimeManager,
-      runner: createBrokerAgentRunner(agentBrokerPath)
-    })
-    const agentArtifactPublisher = createAgentArtifactPublisher({
-      repos,
-      sandboxService: agentSandboxService,
-      win: () => win
-    })
-    const agentCheckpointService = createAgentCheckpointService(dbPath)
-    void agentCheckpointService.pruneAcademicArtifacts().catch((error) => {
-      logger.warn(`academic-checkpoint:prune-failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    const academicCache = createAcademicCache(join(app.getPath('userData'), 'academic-cache'))
-    void academicCache.prune().catch((error) => {
-      logger.warn(`academic-cache:prune-failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    const academicFetch = (url: string, init?: RequestInit) => net.fetch(url, init)
-    const arxivClient = createArxivClient(academicFetch, academicCache)
-    const arxivPaperService = createArxivPaperService(arxivClient, academicCache)
-    const semanticScholarClient = createSemanticScholarClient(academicFetch, academicCache)
-    const academicIdentityService = createAcademicIdentityService(repos, semanticScholarClient)
-    const academicGraphService = createAcademicGraphService(
-      academicIdentityService,
-      semanticScholarClient
-    )
-    const researchFrontierService = createResearchFrontierService(
-      academicIdentityService,
-      academicGraphService,
-      arxivClient,
-      agentCheckpointService.researchFrontierDirectory
-    )
     const workerScriptPath = app.isPackaged
       ? join(process.resourcesPath, 'mineru', 'mineru_worker.py')
       : join(__dirname, '../../resources/mineru_worker.py')
@@ -627,50 +487,6 @@ function buildRuntime(dbPath: string): Runtime {
       emitCompleted: (payload) => send(IpcChannel.EventOcrCompleted, payload),
       emitError: (payload) => send(IpcChannel.EventOcrError, payload)
     })
-    const ddgsWorkerScriptPath = app.isPackaged
-      ? join(process.resourcesPath, 'web-search', 'ddgs_worker.py')
-      : join(__dirname, '../../resources/ddgs_worker.py')
-    const ddgsRuntimeManager = createDdgsRuntimeManager({
-      userDataDir: app.getPath('userData'),
-      workerScriptPath: ddgsWorkerScriptPath,
-      downloadFile: async (url, destination, signal) => {
-        const response = await net.fetch(url, { signal })
-        if (!response.ok) throw new Error(`Runtime download failed with HTTP ${response.status}`)
-        if (!response.body) throw new Error('Runtime download returned an empty response')
-        await pipeline(
-          Readable.fromWeb(response.body as import('node:stream/web').ReadableStream<Uint8Array>),
-          createWriteStream(destination, { mode: 0o600 }),
-          { signal }
-        )
-      }
-    })
-    const webSearchService = createWebSearchService({
-      repos,
-      ddgsRuntime: ddgsRuntimeManager,
-      fetch: (url, init) => net.fetch(url, init)
-    })
-    const aiAgentService = createAiAgentService(
-      repos,
-      () => win,
-      aiProvidersService,
-      pdfTextService,
-      aiSummaryService,
-      agentExecutionService,
-      agentArtifactPublisher,
-      agentRuntimeManager,
-      agentSandboxService,
-      agentCheckpointService,
-      {
-        arxivClient,
-        arxivPaperService,
-        identityService: academicIdentityService,
-        graphService: academicGraphService,
-        frontierService: researchFrontierService
-      },
-      mineruDocumentService,
-      webSearchService,
-      agentPythonRuntime
-    )
     const watcher = createWatcher({
       importFiles: (paths, isWatch) => importer.importFiles(paths, isWatch),
       getLibraryFolder: () => repos.settings.get<string>('libraryFolderPath', ''),
@@ -734,20 +550,10 @@ function buildRuntime(dbPath: string): Runtime {
       missingCheckInterval: null,
       missingCheckAbort: new AbortController(),
       activated: false,
-      aiProvidersService,
       pdfTextService,
-      aiSummaryService,
-      aiAgentService,
-      agentSandboxService,
-      agentExecutionService,
-      agentArtifactPublisher,
-      agentRuntimeManager,
-      agentCheckpointService,
       mineruWorker,
       mineruDocumentService,
-      ddgsRuntimeManager,
-      agentPythonRuntime,
-      webSearchService
+      agentPythonRuntime
     }
   } catch (error) {
     closeDatabase(db)
@@ -759,9 +565,6 @@ function activateRuntime(target: Runtime, startLibraryWatcher = true): void {
   if (target.activated) return
   target.activated = true
   target.metadataService.resumeOnStartup()
-  void target.agentSandboxService.ensure(null).catch((error) => {
-    logger.warn(`agent:sandbox init failed: ${error instanceof Error ? error.message : String(error)}`)
-  })
   void target.mineruDocumentService.initialize().catch((error) => {
     logger.warn(`ocr:init failed: ${error instanceof Error ? error.message : String(error)}`)
   })
@@ -808,18 +611,29 @@ async function createRuntimeServerAssembly(
 ): Promise<ServerAssembly> {
   const serverStateDir = join(app.getPath('userData'), 'server')
   mkdirSync(serverStateDir, { recursive: true })
-  const serverPython = await target.agentPythonRuntime.install(new AbortController().signal)
-  const serverSourceRoot = app.isPackaged
-    ? join(process.resourcesPath, 'python-server')
-    : join(__dirname, '../../python/server')
+  const serverExecutable = app.isPackaged
+    ? join(process.resourcesPath, 'python-server', 'refora-server')
+    : undefined
+  const serverPython = app.isPackaged
+    ? undefined
+    : await target.agentPythonRuntime.install(new AbortController().signal)
+  const serverSourceRoot = join(__dirname, '../../python/server')
   return createServerAssembly({
     lifecycle: createServerLifecycle({
       pythonPath: serverPython,
-      serverModule: 'refora_server.server.run',
+      serverModule: app.isPackaged ? undefined : 'refora_server.server.run',
+      executablePath: serverExecutable,
       stateDir: serverStateDir,
       dbPath,
       libraryFolder,
-      environment: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: serverSourceRoot }
+      environment: {
+        ...process.env,
+        PYTHONNOUSERSITE: '1',
+        ...(app.isPackaged ? {} : { PYTHONPATH: serverSourceRoot }),
+        REFORA_MINERU_WORKER_PATH: app.isPackaged
+          ? join(process.resourcesPath, 'mineru', 'mineru_worker.py')
+          : join(__dirname, '../../resources/mineru_worker.py')
+      }
     }),
     repos: target.repos,
     getWin: () => win,
@@ -1006,7 +820,6 @@ void app.whenReady().then(async () => {
   registerDocumentProtocol()
   const r = runtime.repos
   const savedBounds = r.settings.get<{ x?: number; y?: number; width?: number; height?: number } | null>('windowBounds', null)
-  win = createWindow(savedBounds)
   activateRuntime(runtime)
 
   const libraryFolder = runtime.repos.settings.get<string>('libraryFolderPath', '') || app.getPath('userData')
@@ -1032,6 +845,7 @@ void app.whenReady().then(async () => {
   })
   serverAssembly = await createRuntimeServerAssembly(runtime, dbPath, libraryFolder, switchLibraryFolder)
   await serverAssembly.start()
+  win = createWindow(savedBounds)
 
   Menu.setApplicationMenu(buildMenu())
 

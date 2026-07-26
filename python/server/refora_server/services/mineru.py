@@ -382,6 +382,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
         "cancel_event": None,
         "active_child": None,
         "install_started_at": None,
+        "last_error": None,
     }
     env_base: dict[str, str] = dict(os.environ if deps.environment is None else deps.environment)
 
@@ -503,7 +504,11 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 modelConfigPath=None,
                 installedAt=None,
                 diskBytes=None,
-                error="MinerU installation is incomplete or invalid" if path_exists else None,
+                error=(
+                    "MinerU installation is incomplete or invalid"
+                    if path_exists
+                    else state["last_error"]
+                ),
                 progress=None,
             )
         python_path = os.path.join(path, manifest.pythonRelativePath)
@@ -564,6 +569,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
         if current.state == "installed" and current.installRoot != resolved:
             raise RuntimeError("Uninstall MinerU before changing its install path")
         _write_install_root(resolved)
+        state["last_error"] = None
         return await _get_status()
 
     async def _install(install_root: str | None = None) -> MineruEngineStatus:
@@ -586,6 +592,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
             environment = _install_environment(path)
             archive = os.path.join(path, ".downloads", release["archive"])
             extracted = os.path.join(path, ".downloads", "uv-extracted")
+            state["last_error"] = None
             try:
                 _emit(install_id, "preparing", "Preparing the MinerU installation", None)
                 _require_safe_managed_path(_read_install_root(), path)
@@ -738,7 +745,10 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 _emit(install_id, "completed", "MinerU is ready", 100, cancellable=False)
                 state["progress"] = None
                 return await _get_status()
-            except Exception:
+            except Exception as error:
+                state["last_error"] = (
+                    None if cancel_event.is_set() else str(error) or error.__class__.__name__
+                )
                 try:
                     _require_safe_managed_path(_read_install_root(), path)
                     shutil.rmtree(path, ignore_errors=True)
@@ -790,6 +800,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
         _require_safe_managed_path(_read_install_root(), path)
         if _path_exists(path):
             await deps.trashItem(path)
+        state["last_error"] = None
         return await _get_status()
 
     def _on_progress(listener: ProgressListener) -> Callable[[], None]:

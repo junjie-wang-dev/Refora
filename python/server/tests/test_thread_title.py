@@ -120,7 +120,10 @@ def test_generate_title_non_reasoning_max_tokens(chat_repo, db):
         return "Title"
 
     svc = _svc(chat_repo, gen)
-    svc["generateThreadTitle"](thread, _provider(supportsReasoning=False))
+    svc["generateThreadTitle"](
+        thread,
+        _provider(model="gpt-4.1-mini", supportsReasoning=False),
+    )
     assert captured["config"]["maxTokens"] == 30
 
 

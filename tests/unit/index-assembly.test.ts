@@ -39,6 +39,10 @@ vi.mock('../../src/main/ipc/serverEventBridge', () => ({
   }))
 }))
 
+vi.mock('../../src/main/ipc/serverAppHandlers', () => ({
+  createServerAppHandlers: vi.fn(() => ({ app: vi.fn() }))
+}))
+
 vi.mock('../../src/main/ipc/serverLibraryHandlers', () => ({
   createServerLibraryHandlers: vi.fn(() => ({ library: vi.fn() }))
 }))
@@ -55,6 +59,7 @@ import { createServerAssembly } from '../../src/main/serverAssembly'
 import { createNativeRpc } from '../../src/main/services/nativeRpc'
 import { createServerClient } from '../../src/main/services/serverClient'
 import { createServerEventBridge } from '../../src/main/ipc/serverEventBridge'
+import { createServerAppHandlers } from '../../src/main/ipc/serverAppHandlers'
 import { createServerLibraryHandlers } from '../../src/main/ipc/serverLibraryHandlers'
 import { createServerWorkspaceHandlers } from '../../src/main/ipc/serverWorkspaceHandlers'
 import { createServerAiHandlers } from '../../src/main/ipc/serverAiHandlers'
@@ -115,11 +120,13 @@ describe('main process server assembly', () => {
       'bridge.start',
       'ipc.handle',
       'ipc.handle',
+      'ipc.handle',
       'ipc.handle'
     ])
     expect(createNativeRpc).toHaveBeenCalledWith(expect.objectContaining({ token: 'token' }))
     expect(createServerClient).toHaveBeenCalledWith(lifecycle, expect.anything())
     expect(createServerEventBridge).toHaveBeenCalledTimes(1)
+    expect(createServerAppHandlers).toHaveBeenCalledTimes(1)
     expect(createServerLibraryHandlers).toHaveBeenCalledTimes(1)
     expect(createServerWorkspaceHandlers).toHaveBeenCalledTimes(1)
     expect(createServerAiHandlers).toHaveBeenCalledTimes(1)
@@ -146,6 +153,7 @@ describe('main process server assembly', () => {
     expect(mocks.calls).toEqual([
       'bridge.stop',
       'ws.disconnect',
+      'ipc.removeHandler',
       'ipc.removeHandler',
       'ipc.removeHandler',
       'ipc.removeHandler',

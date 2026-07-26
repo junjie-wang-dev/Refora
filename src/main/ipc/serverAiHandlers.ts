@@ -13,11 +13,8 @@ import type {
   WorkspaceAgentMemory
 } from '../../shared/ipc-types'
 import type {
-  ChatCancelPayload,
   ChatResumePayload,
-  ChatSendPayload,
   ServerClient,
-  SummarizePayload
 } from '../services/serverClient'
 
 function errorResult(error: unknown): Result<never> {
@@ -51,7 +48,7 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       asyncWrap(async () => (await http.aiDocTextGet(documentId)).text),
     [IpcChannel.AiSummarize]: (documentId: string): Promise<Result<void>> =>
       asyncWrap(async () => {
-        await http.aiSummarize({ documentId } as SummarizePayload)
+        await http.aiSummarize({ documentId })
       }),
     [IpcChannel.AiSummaryGet]: (documentId: string): Promise<Result<AiSummary | null>> =>
       asyncWrap(() => http.aiSummaryGet(documentId)),
@@ -60,22 +57,20 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       request: ChatSendRequest
     ): Promise<Result<{ threadId: string; runId: string }>> =>
       asyncWrap(async () => {
-        const threadId = request.threadId ?? randomUUID()
         const runId = request.runId?.trim() || randomUUID()
         const result = await http.aiChatSend({
           ...request,
-          threadId,
           runId
-        } as unknown as ChatSendPayload)
-        return { threadId, runId: result.runId }
+        })
+        return result
       }),
     [IpcChannel.AiChatResume]: (request: AgentResumeRequest): Promise<Result<void>> =>
       asyncWrap(async () => {
         await http.aiChatResume(request as ChatResumePayload)
       }),
-    [IpcChannel.AiChatCancel]: (threadId: string): Promise<Result<void>> =>
+    [IpcChannel.AiChatCancel]: (runId: string): Promise<Result<void>> =>
       asyncWrap(async () => {
-        await http.aiChatCancel({ runId: threadId } as ChatCancelPayload)
+        await http.aiChatCancel({ runId })
       }),
     [IpcChannel.AiChatHistory]: (threadId: string): Promise<Result<ChatMessage[]>> =>
       asyncWrap(() => http.aiChatHistory(threadId)),
@@ -97,19 +92,19 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
     [IpcChannel.AiWorkspaceMemoriesList]: (
       workspaceId: string | null
     ): Promise<Result<WorkspaceAgentMemory[]>> =>
-      asyncWrap(() => http.aiChatMemories(workspaceId ?? 'global')),
+      asyncWrap(() => http.aiChatMemories(workspaceId)),
     [IpcChannel.AiWorkspaceMemoryUpdate]: (
       workspaceId: string | null,
       path: string,
       content: string
     ): Promise<Result<WorkspaceAgentMemory>> =>
-      asyncWrap(() => http.aiChatUpdateMemory(workspaceId ?? 'global', path, { value: content })),
+      asyncWrap(() => http.aiChatUpdateMemory(workspaceId, path, { value: content })),
     [IpcChannel.AiWorkspaceMemoryDelete]: (
       workspaceId: string | null,
       path: string
     ): Promise<Result<void>> =>
       asyncWrap(async () => {
-        await http.aiChatDeleteMemory(workspaceId ?? 'global', path)
+        await http.aiChatDeleteMemory(workspaceId, path)
       }),
 
     [IpcChannel.AiReportsList]: (workspaceId: string): Promise<Result<AiReport[]>> =>

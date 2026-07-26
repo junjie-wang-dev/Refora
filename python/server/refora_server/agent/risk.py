@@ -61,11 +61,7 @@ def classify(
     risk = _BASE.get(tool_name)
     if risk is not None:
         return risk
-    if isinstance(metadata, dict):
-        requires_approval = metadata.get("requires_approval", False)
-    else:
-        requires_approval = getattr(metadata, "requires_approval", False)
-    return RiskClass.EXTERNAL if requires_approval else RiskClass.READ
+    return RiskClass.EXTERNAL
 
 
 def is_consequential(risk: RiskClass) -> bool:

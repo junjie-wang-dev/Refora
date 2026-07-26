@@ -6,6 +6,7 @@ import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from './safeStorageProxy'
 import { providerRequiresApiKey } from '../../shared/providerCatalog'
 import { logger } from './logger'
+import { writeFileToClipboard } from './clipboard'
 
 const HOST = '127.0.0.1'
 const TOKEN_HEADER = 'x-refora-token'
@@ -22,6 +23,7 @@ export interface NativeRpcDeps {
   getWin?: () => BrowserWindow | null
   safeStorage?: SafeStorageProxy
   createHttpServer?: typeof createServer
+  copyFileToClipboard?: (path: string) => void
 }
 
 export interface NativeRpc {
@@ -93,16 +95,37 @@ interface ShowInFolderBody {
 interface ClipboardWriteBody {
   text?: unknown
 }
+interface ClipboardWriteFileBody {
+  path?: unknown
+}
 interface GetApiKeyBody {
   providerId?: unknown
 }
+interface EncryptApiKeyBody {
+  apiKey?: unknown
+}
+interface DecryptApiKeyBody {
+  apiKeyEnc?: unknown
+}
 interface DialogOpenDirectoryBody {
   title?: unknown
+}
+interface DialogOpenFileBody {
+  title?: unknown
+  extensions?: unknown
+}
+interface DialogChooseBody {
+  title?: unknown
+  message?: unknown
+  buttons?: unknown
+  defaultId?: unknown
+  cancelId?: unknown
 }
 
 export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const safeStorage = deps.safeStorage ?? createSafeStorageProxy()
   const createHttpServer = deps.createHttpServer ?? createServer
+  const copyFileToClipboard = deps.copyFileToClipboard ?? writeFileToClipboard
   let server: Server | null = null
   let info: NativeRpcInfo | null = null
 
@@ -168,6 +191,58 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     }
   }
 
+  async function handleDialogOpenFile(
+    body: DialogOpenFileBody
+  ): Promise<Result<{ canceled: boolean; path: string | null }>> {
+    const title = asString(body.title) ?? undefined
+    const extensions = Array.isArray(body.extensions)
+      ? body.extensions.filter((value): value is string => typeof value === 'string' && /^[a-z0-9]+$/i.test(value))
+      : []
+    try {
+      const result = await dialog.showOpenDialog((deps.getWin?.() ?? undefined) as BrowserWindow, {
+        ...(title ? { title } : {}),
+        properties: ['openFile'],
+        ...(extensions.length > 0
+          ? { filters: [{ name: extensions.map((value) => value.toUpperCase()).join('/'), extensions }] }
+          : {})
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return ok({ canceled: true, path: null })
+      }
+      return ok({ canceled: false, path: result.filePaths[0] })
+    } catch (e) {
+      return fail('dialog_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function handleDialogChoose(
+    body: DialogChooseBody
+  ): Promise<Result<{ response: number }>> {
+    const title = asString(body.title)
+    const message = asString(body.message)
+    const buttons = Array.isArray(body.buttons)
+      ? body.buttons.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : []
+    if (!title || !message || buttons.length === 0) {
+      return fail('invalid_input', 'title, message, and buttons are required')
+    }
+    const defaultId = typeof body.defaultId === 'number' ? body.defaultId : 0
+    const cancelId = typeof body.cancelId === 'number' ? body.cancelId : buttons.length - 1
+    try {
+      const result = await dialog.showMessageBox((deps.getWin?.() ?? undefined) as BrowserWindow, {
+        type: 'question',
+        title,
+        message,
+        buttons,
+        defaultId,
+        cancelId
+      })
+      return ok({ response: result.response })
+    } catch (e) {
+      return fail('dialog_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function handleClipboardWrite(
     body: ClipboardWriteBody
   ): Promise<Result<{ written: boolean }>> {
@@ -175,6 +250,19 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (text === null) return fail('invalid_input', 'text is required')
     try {
       clipboard.writeText(text)
+      return ok({ written: true })
+    } catch (e) {
+      return fail('clipboard_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function handleClipboardWriteFile(
+    body: ClipboardWriteFileBody
+  ): Promise<Result<{ written: boolean }>> {
+    const path = asString(body.path)
+    if (!path) return fail('invalid_input', 'path is required')
+    try {
+      copyFileToClipboard(path)
       return ok({ written: true })
     } catch (e) {
       return fail('clipboard_failed', e instanceof Error ? e.message : String(e))
@@ -197,6 +285,35 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     }
   }
 
+  async function handleEncryptApiKey(
+    body: EncryptApiKeyBody
+  ): Promise<Result<{ apiKeyEnc: string | null }>> {
+    const apiKey = asString(body.apiKey)
+    if (apiKey === null) return fail('invalid_input', 'apiKey is required')
+    try {
+      const encrypted = safeStorage.encrypt(apiKey)
+      return ok({ apiKeyEnc: encrypted?.toString('base64') ?? null })
+    } catch (e) {
+      return fail('encryption_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function handleDecryptApiKey(
+    body: DecryptApiKeyBody
+  ): Promise<Result<{ apiKey: string }>> {
+    const apiKeyEnc = asString(body.apiKeyEnc)
+    if (!apiKeyEnc) return fail('invalid_input', 'apiKeyEnc is required')
+    try {
+      const encrypted = Buffer.from(apiKeyEnc, 'base64')
+      if (encrypted.length === 0 || encrypted.toString('base64') !== apiKeyEnc) {
+        return fail('invalid_input', 'apiKeyEnc must be valid base64')
+      }
+      return ok({ apiKey: safeStorage.decrypt(encrypted, false) })
+    } catch (e) {
+      return fail('decryption_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function route(
     path: string,
     body: unknown
@@ -210,10 +327,20 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
         return handleShowInFolder(body as ShowInFolderBody)
       case '/native/dialog-open-directory':
         return handleDialogOpenDirectory(body as DialogOpenDirectoryBody)
+      case '/native/dialog-open-file':
+        return handleDialogOpenFile(body as DialogOpenFileBody)
+      case '/native/dialog-choose':
+        return handleDialogChoose(body as DialogChooseBody)
       case '/native/clipboard-write':
         return handleClipboardWrite(body as ClipboardWriteBody)
+      case '/native/clipboard-write-file':
+        return handleClipboardWriteFile(body as ClipboardWriteFileBody)
       case '/native/get-api-key':
         return handleGetApiKey(body as GetApiKeyBody)
+      case '/native/encrypt-api-key':
+        return handleEncryptApiKey(body as EncryptApiKeyBody)
+      case '/native/decrypt-api-key':
+        return handleDecryptApiKey(body as DecryptApiKeyBody)
       default:
         return fail('not_found', `Unknown route: ${path}`)
     }

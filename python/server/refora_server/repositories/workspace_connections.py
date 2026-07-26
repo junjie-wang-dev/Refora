@@ -42,6 +42,11 @@ def createWorkspaceConnectionsRepository(db):
         )
         return [_map_connection(r) for r in cur.fetchall()]
 
+    def get(id: str) -> dict[str, Any] | None:
+        cur = db.execute("SELECT * FROM workspace_connections WHERE id = ?", [id])
+        row = cur.fetchone()
+        return _map_connection(row) if row is not None else None
+
     def create(
         workspaceId: str,
         sourceItemId: str,
@@ -90,4 +95,4 @@ def createWorkspaceConnectionsRepository(db):
         db.execute("DELETE FROM workspace_connections WHERE id = ?", [id])
         touchWorkspace(existing["workspaceId"])
 
-    return {"list": list, "create": create, "delete": remove}
+    return {"list": list, "get": get, "create": create, "delete": remove}

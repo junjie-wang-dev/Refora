@@ -88,6 +88,64 @@ def createChatRepository(db):
         rows = cur.fetchall()
         return [_map_message(r) for r in rows]
 
+    def search(q: str, limit: int = 10) -> list[dict[str, Any]]:
+        trimmed = q.strip()
+        if not trimmed:
+            return []
+        escaped = trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        safe_limit = max(1, min(50, int(limit)))
+        rows = db.execute(
+            """
+            WITH matching_messages AS (
+              SELECT m.threadId, m.role, m.content, m.createdAt,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY m.threadId
+                       ORDER BY m.createdAt DESC, m.rowid DESC
+                     ) AS matchRank
+              FROM chat_messages m
+              WHERE m.role IN ('user', 'assistant')
+                AND m.content LIKE ? ESCAPE '\\'
+            )
+            SELECT t.id AS threadId, t.workspaceId, w.name AS workspaceName, t.title,
+                   m.role, m.content, COALESCE(m.createdAt, t.createdAt) AS matchedAt
+            FROM chat_threads t
+            LEFT JOIN workspaces w ON w.id = t.workspaceId
+            LEFT JOIN matching_messages m ON m.threadId = t.id AND m.matchRank = 1
+            WHERE t.title LIKE ? ESCAPE '\\'
+               OR m.threadId IS NOT NULL
+            ORDER BY matchedAt DESC, t.id
+            LIMIT ?
+            """,
+            [like, like, safe_limit],
+        ).fetchall()
+        normalized = trimmed.lower()
+        seen: set[str] = set()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            thread_id = row["threadId"]
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            content = (row["content"] or "").strip()
+            match_index = content.lower().find(normalized)
+            start = 0 if match_index < 0 else max(0, match_index - 80)
+            excerpt = content[start : start + 240].strip()
+            results.append(
+                {
+                    "threadId": thread_id,
+                    "workspaceId": row["workspaceId"],
+                    "workspaceName": row["workspaceName"],
+                    "title": row["title"],
+                    "snippet": excerpt or (row["title"] or ""),
+                    "role": row["role"] if row["role"] in {"user", "assistant"} else None,
+                    "matchedAt": row["matchedAt"],
+                }
+            )
+            if len(results) >= safe_limit:
+                break
+        return results
+
     def deleteLastExchange(threadId: str) -> int:
         cur = db.execute(
             "SELECT rowid FROM chat_messages WHERE threadId = ? AND role = 'user' "
@@ -137,6 +195,7 @@ def createChatRepository(db):
         "getThread": getThread,
         "addMessage": addMessage,
         "listMessages": listMessages,
+        "search": search,
         "deleteLastExchange": deleteLastExchange,
         "deleteThread": deleteThread,
         "updateTitle": updateTitle,

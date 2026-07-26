@@ -30,6 +30,7 @@ type Invocation = {
   args: unknown[]
   method: string
   forwarded: unknown[]
+  data?: unknown
 }
 
 describe('createServerLibraryHandlers', () => {
@@ -39,9 +40,30 @@ describe('createServerLibraryHandlers', () => {
       string,
       (...args: unknown[]) => Promise<unknown>
     >
+    void client.http.importJson
+    void client.http.importZotero
+    void client.http.importMendeley
+    void client.http.importIdentifier
+    void client.http.aiProvidersModels
+    void client.http.exportJson
+    void client.http.exportBibtex
+    void client.http.exportBibtexString
+    methods.get('importJson')?.mockResolvedValue({ imported: 3 })
+    methods.get('importZotero')?.mockResolvedValue({ added: 2, skipped: 1, errors: [] })
+    methods.get('importMendeley')?.mockResolvedValue({ added: 1, skipped: 0, errors: [] })
+    methods.get('importIdentifier')?.mockResolvedValue({ documentId: 'doc-new' })
+    methods.get('aiProvidersModels')?.mockResolvedValue({ ok: true, models: ['gpt-5'] })
+    methods.get('exportJson')?.mockResolvedValue({ version: 1 })
+    methods.get('exportBibtex')?.mockResolvedValue({ bibtex: '@article{one}' })
+    methods.get('exportBibtexString')?.mockResolvedValue({ bibtex: '@article{two}' })
     const invocations: Invocation[] = [
-      { channel: IpcChannel.DocumentsList, args: [{ mode: 'all' }], method: 'documentsList', forwarded: [{ mode: 'all' }] },
-      { channel: IpcChannel.DocumentsCount, args: [], method: 'documentsCount', forwarded: [{}] },
+      {
+        channel: IpcChannel.DocumentsList,
+        args: [{ mode: 'category', categoryId: 'cat-1', sort: { field: 'year', dir: 'asc' } }],
+        method: 'documentsList',
+        forwarded: [{ mode: 'category', categoryId: 'cat-1', sortField: 'year', sortDir: 'asc' }]
+      },
+      { channel: IpcChannel.DocumentsCount, args: [], method: 'documentsCount', forwarded: [] },
       { channel: IpcChannel.DocumentsSearch, args: ['paper'], method: 'documentsSearch', forwarded: ['paper'] },
       { channel: IpcChannel.DocumentsGet, args: ['doc-1'], method: 'documentsGet', forwarded: ['doc-1'] },
       { channel: IpcChannel.DocumentsUpdate, args: ['doc-1', { title: 'New' }], method: 'documentsUpdate', forwarded: ['doc-1', { title: 'New' }] },
@@ -57,10 +79,10 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.DocumentsRestoreFile, args: ['doc-1'], method: 'documentsRestoreFile', forwarded: ['doc-1'] },
       { channel: IpcChannel.ImportAddFiles, args: [['/tmp/paper.pdf']], method: 'importFiles', forwarded: [{ paths: ['/tmp/paper.pdf'] }] },
       { channel: IpcChannel.ImportAddFolder, args: ['/tmp'], method: 'importFolder', forwarded: [{ path: '/tmp' }] },
-      { channel: IpcChannel.ImportFromJson, args: ['/tmp/data.json'], method: 'importJson', forwarded: ['/tmp/data.json'] },
-      { channel: IpcChannel.ImportFromZotero, args: [{ paths: ['/tmp/zotero.sqlite'] }], method: 'importZotero', forwarded: [{ paths: ['/tmp/zotero.sqlite'] }] },
-      { channel: IpcChannel.ImportFromMendeley, args: [{ paths: ['/tmp/mendeley.sqlite'] }], method: 'importMendeley', forwarded: [{ paths: ['/tmp/mendeley.sqlite'] }] },
-      { channel: IpcChannel.ImportFromIdentifier, args: ['10.1000/test'], method: 'importIdentifier', forwarded: [{ identifier: '10.1000/test' }] },
+      { channel: IpcChannel.ImportFromJson, args: ['/tmp/data.json'], method: 'importJson', forwarded: ['/tmp/data.json'], data: 3 },
+      { channel: IpcChannel.ImportFromZotero, args: [{ paths: ['/tmp/zotero.bib'] }], method: 'importZotero', forwarded: [{ paths: ['/tmp/zotero.bib'] }], data: { added: 2, skipped: 1, errors: [] } },
+      { channel: IpcChannel.ImportFromMendeley, args: [{ paths: ['/tmp/mendeley.bib'] }], method: 'importMendeley', forwarded: [{ paths: ['/tmp/mendeley.bib'] }], data: { added: 1, skipped: 0, errors: [] } },
+      { channel: IpcChannel.ImportFromIdentifier, args: ['10.1000/test'], method: 'importIdentifier', forwarded: [{ identifier: '10.1000/test' }], data: { added: ['doc-new'] } },
       { channel: IpcChannel.CategoriesList, args: [], method: 'categoriesList', forwarded: [] },
       { channel: IpcChannel.CategoriesCreate, args: ['Reading', '#ff0000'], method: 'categoriesCreate', forwarded: [{ name: 'Reading', color: '#ff0000' }] },
       { channel: IpcChannel.CategoriesRename, args: ['cat-1', 'Read'], method: 'categoriesUpdate', forwarded: ['cat-1', { name: 'Read' }] },
@@ -81,20 +103,22 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.AiProvidersCreate, args: [{ name: 'OpenAI' }], method: 'aiProvidersCreate', forwarded: [{ name: 'OpenAI' }] },
       { channel: IpcChannel.AiProvidersUpdate, args: ['provider-1', { name: 'Updated' }], method: 'aiProvidersUpdate', forwarded: ['provider-1', { name: 'Updated' }] },
       { channel: IpcChannel.AiProvidersDelete, args: ['provider-1'], method: 'aiProvidersDelete', forwarded: ['provider-1'] },
-      { channel: IpcChannel.AiProvidersTest, args: ['provider-1', 'key'], method: 'aiProvidersTest', forwarded: ['provider-1', { apiKey: 'key' }] },
-      { channel: IpcChannel.AiProvidersListModels, args: ['provider-1', 'key'], method: 'aiProvidersModels', forwarded: ['provider-1', { apiKey: 'key' }] },
-      { channel: IpcChannel.ExportToJson, args: [{ documentIds: ['doc-1'] }], method: 'exportJson', forwarded: [{ documentIds: ['doc-1'] }] },
-      { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], method: 'exportBibtex', forwarded: [{ documentIds: ['doc-1'] }] },
-      { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], method: 'exportBibtexString', forwarded: [['doc-1']] },
+      { channel: IpcChannel.AiProvidersTest, args: ['provider-1'], method: 'aiProvidersTest', forwarded: ['provider-1'] },
+      { channel: IpcChannel.AiProvidersListModels, args: [{ providerId: 'provider-1', presetId: 'openai' }], method: 'aiProvidersModels', forwarded: [{ providerId: 'provider-1', presetId: 'openai' }], data: { ok: true, models: [expect.objectContaining({ id: 'gpt-5' })] } },
+      { channel: IpcChannel.ExportToJson, args: [{ documentIds: ['doc-1'] }], method: 'exportJson', forwarded: [{ documentIds: ['doc-1'] }], data: '{\n  "version": 1\n}' },
+      { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], method: 'exportBibtex', forwarded: [{ documentIds: ['doc-1'] }], data: '@article{one}' },
+      { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], method: 'exportBibtexString', forwarded: [['doc-1']], data: '@article{two}' },
       { channel: IpcChannel.ClipboardWriteText, args: ['text'], method: 'clipboardWriteText', forwarded: [{ text: 'text' }] },
-      { channel: IpcChannel.ClipboardCopyMarkdown, args: ['markdown'], method: 'clipboardCopyMarkdown', forwarded: [{ markdown: 'markdown' }] },
+      { channel: IpcChannel.ClipboardCopyMarkdown, args: ['title', 'markdown'], method: 'clipboardCopyMarkdown', forwarded: [{ title: 'title', markdown: 'markdown' }] },
       { channel: IpcChannel.ClipboardCopyWorkspaceAsset, args: ['asset-1'], method: 'clipboardCopyWorkspaceAsset', forwarded: [{ assetId: 'asset-1' }] }
     ]
 
-    for (const { channel, args, method, forwarded } of invocations) {
+    for (const { channel, args, method, forwarded, data } of invocations) {
       const result = await handlers[channel](...args)
       if (channel === IpcChannel.SettingsGet) {
         expect(result).toEqual({ ok: true, data: 'en' })
+      } else if (data !== undefined) {
+        expect(result).toEqual({ ok: true, data })
       } else {
         expect(result).toEqual({ ok: true, data: { method } })
       }

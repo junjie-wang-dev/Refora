@@ -113,27 +113,40 @@ class TestWorkspacesCrud:
 
     def test_update(self, service):
         w = service["createWorkspace"]("Old")
-        updated = service["updateWorkspace"](w["id"], "New")
+        updated = service["updateWorkspace"](w["id"], "  New  ")
         assert updated["name"] == "New"
+
+    @pytest.mark.parametrize("operation", ["createWorkspace", "updateWorkspace"])
+    def test_create_and_update_reject_blank_names(self, service, operation):
+        args = ("   ",)
+        if operation == "updateWorkspace":
+            workspace = service["createWorkspace"]("Existing")
+            args = (workspace["id"], "   ")
+        with pytest.raises(RepoError) as exc:
+            service[operation](*args)
+        assert exc.value.code == "invalid_name"
 
     def test_update_missing_raises(self, service):
         with pytest.raises(RepoError) as exc:
             service["updateWorkspace"]("nope", "New")
         assert exc.value.code == "not_found"
 
-    def test_delete_removes_workspace(self, service):
+    @pytest.mark.asyncio
+    async def test_delete_removes_workspace(self, service):
         w = service["createWorkspace"]("Gone")
-        service["deleteWorkspace"](w["id"])
+        await service["deleteWorkspace"](w["id"])
         assert service["listWorkspaces"]() == []
 
-    def test_delete_missing_raises(self, service):
+    @pytest.mark.asyncio
+    async def test_delete_missing_raises(self, service):
         with pytest.raises(RepoError) as exc:
-            service["deleteWorkspace"]("nope")
+            await service["deleteWorkspace"]("nope")
         assert exc.value.code == "not_found"
 
 
 class TestOpenSandbox:
-    def test_open_sandbox_via_connector(self, repos):
+    @pytest.mark.asyncio
+    async def test_open_sandbox_via_connector(self, repos):
         w = repos["workspaces"]["create"]("Research")
         connector = _FakeConnector()
         sandbox_roots = {}
@@ -145,10 +158,11 @@ class TestOpenSandbox:
         svc = createWorkspacesService(
             repos, {"connector": connector, "sandbox": {"ensure": ensure}}
         )
-        svc["openSandbox"](w["id"])
+        await svc["openSandbox"](w["id"])
         assert connector.opened == [f"/sandbox/{w['id']}"]
 
-    def test_open_sandbox_missing_workspace(self, repos):
+    @pytest.mark.asyncio
+    async def test_open_sandbox_missing_workspace(self, repos):
         connector = _FakeConnector()
         svc = createWorkspacesService(
             repos,
@@ -158,18 +172,20 @@ class TestOpenSandbox:
             },
         )
         with pytest.raises(RepoError) as exc:
-            svc["openSandbox"]("nope")
+            await svc["openSandbox"]("nope")
         assert exc.value.code == "not_found"
         assert connector.opened == []
 
-    def test_open_sandbox_no_sandbox_dep(self, repos):
+    @pytest.mark.asyncio
+    async def test_open_sandbox_no_sandbox_dep(self, repos):
         w = repos["workspaces"]["create"]("Research")
         svc = createWorkspacesService(repos, {"connector": _FakeConnector()})
         with pytest.raises(RepoError) as exc:
-            svc["openSandbox"](w["id"])
+            await svc["openSandbox"](w["id"])
         assert exc.value.code == "not_ready"
 
-    def test_open_sandbox_open_failure(self, repos):
+    @pytest.mark.asyncio
+    async def test_open_sandbox_open_failure(self, repos):
         w = repos["workspaces"]["create"]("Research")
         connector = _FakeConnector()
         connector.open_path_result = "boom"
@@ -181,7 +197,7 @@ class TestOpenSandbox:
             },
         )
         with pytest.raises(RepoError) as exc:
-            svc["openSandbox"](w["id"])
+            await svc["openSandbox"](w["id"])
         assert exc.value.code == "open_failed"
 
 class TestItems:
@@ -205,7 +221,7 @@ class TestItems:
         insert_doc(db, id="doc-1")
         w = _make_workspace(service)
         items = service["addItems"](w["id"], "document", ["doc-1"])
-        service["deleteItem"](items[0]["id"])
+        service["deleteItem"](w["id"], items[0]["id"])
         assert service["listItems"](w["id"]) == []
 
     def test_reorder_items(self, db, service):
@@ -236,7 +252,7 @@ class TestItems:
         insert_doc(db, id="doc-1")
         w = _make_workspace(service)
         items = service["addItems"](w["id"], "document", ["doc-1"])
-        resized = service["resizeItem"](items[0]["id"], 400, 300)
+        resized = service["resizeItem"](w["id"], items[0]["id"], 400, 300)
         assert resized["width"] == 400
         assert resized["height"] == 300
 
@@ -247,7 +263,7 @@ class TestItems:
         w = _make_workspace(service)
         items = service["addItems"](w["id"], "document", ["doc-1"])
         with pytest.raises(RepoError) as exc:
-            service["resizeItem"](items[0]["id"], 0, 100)
+            service["resizeItem"](w["id"], items[0]["id"], 0, 100)
         assert exc.value.code == "invalid_size"
 
     def test_move_item(self, db, service):
@@ -256,7 +272,7 @@ class TestItems:
         insert_doc(db, id="doc-1")
         w = _make_workspace(service)
         items = service["addItems"](w["id"], "document", ["doc-1"])
-        moved = service["moveItem"](items[0]["id"], 12.5, 34.0, 5)
+        moved = service["moveItem"](w["id"], items[0]["id"], 12.5, 34.0, 5)
         assert moved["x"] == 12.5
         assert moved["y"] == 34.0
         assert moved["zIndex"] == 5
@@ -268,8 +284,21 @@ class TestItems:
         w = _make_workspace(service)
         items = service["addItems"](w["id"], "document", ["doc-1"])
         with pytest.raises(RepoError) as exc:
-            service["moveItem"](items[0]["id"], float("nan"), 0, 1)
+            service["moveItem"](w["id"], items[0]["id"], float("nan"), 0, 1)
         assert exc.value.code == "invalid_position"
+
+    def test_item_mutations_reject_another_workspace_scope(self, db, service):
+        from conftest import insert_doc
+
+        insert_doc(db, id="doc-1")
+        source = _make_workspace(service, "Source")
+        other = _make_workspace(service, "Other")
+        item = service["addItems"](source["id"], "document", ["doc-1"])[0]
+        with pytest.raises(RepoError) as exc:
+            service["moveItem"](other["id"], item["id"], 99, 99, 9)
+        assert exc.value.code == "not_found"
+        assert service["getItem"](item["id"])["workspaceId"] == source["id"]
+        assert service["getItem"](item["id"])["x"] != 99
 
     def test_add_with_placement_offsets(self, db, service):
         from conftest import insert_doc
@@ -370,7 +399,7 @@ class TestAssetsImport:
         w = _make_workspace(service)
         result = service["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
-        preview = service["previewAsset"](asset_id)
+        preview = service["previewAsset"](w["id"], asset_id)
         assert preview["truncated"] is True
         assert len(preview["content"]) == WORKSPACE_ASSET_TEXT_PREVIEW_LIMIT
 
@@ -379,7 +408,7 @@ class TestAssetsImport:
         w = _make_workspace(service)
         result = service["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
-        preview = service["previewAsset"](asset_id)
+        preview = service["previewAsset"](w["id"], asset_id)
         assert preview["truncated"] is False
         assert preview["content"] == "short"
 
@@ -406,17 +435,52 @@ class TestAssetsListingPreview:
         result = service["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
         with pytest.raises(RepoError) as exc:
-            service["previewAsset"](asset_id)
+            service["previewAsset"](w["id"], asset_id)
         assert exc.value.code == "preview_not_supported"
 
     def test_preview_missing_asset_raises(self, service):
         with pytest.raises(RepoError) as exc:
-            service["previewAsset"]("nope")
+            service["previewAsset"]("workspace-nope", "nope")
         assert exc.value.code == "not_found"
+
+    def test_asset_access_rejects_another_workspace_scope(self, service, library_dir):
+        src = os.path.join(library_dir, "scope.txt")
+        with open(src, "wb") as fh:
+            fh.write(b"scope")
+        source = _make_workspace(service, "Source")
+        other = _make_workspace(service, "Other")
+        asset = service["importAssets"](source["id"], [src])["imported"][0]
+        with pytest.raises(RepoError) as exc:
+            service["previewAsset"](other["id"], asset["id"])
+        assert exc.value.code == "not_found"
+        assert service["getAsset"](asset["id"])["workspaceId"] == source["id"]
 
 
 class TestConnectorCallbacks:
-    def test_open_asset_uses_connector(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_open_asset_supports_async_python_connector(
+        self, repos, library_dir
+    ):
+        opened: list[str] = []
+
+        class Connector:
+            async def open_path(self, path):
+                opened.append(path)
+                return {"ok": True, "data": None}
+
+        svc = createWorkspacesService(repos, {"connector": Connector()})
+        src = os.path.join(library_dir, "async.txt")
+        with open(src, "wb") as fh:
+            fh.write(b"hi")
+        workspace = svc["createWorkspace"]("Async")
+        asset = svc["importAssets"](workspace["id"], [src])["imported"][0]
+
+        await svc["openAsset"](workspace["id"], asset["id"])
+
+        assert opened and opened[0].endswith("async.txt")
+
+    @pytest.mark.asyncio
+    async def test_open_asset_uses_connector(self, repos, library_dir):
         connector = _FakeConnector()
         svc = createWorkspacesService(repos, {"connector": connector})
         src = os.path.join(library_dir, "src", "note.txt")
@@ -426,11 +490,12 @@ class TestConnectorCallbacks:
         w = svc["createWorkspace"]("X")
         result = svc["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
-        svc["openAsset"](asset_id)
+        await svc["openAsset"](w["id"], asset_id)
         assert len(connector.opened) == 1
         assert connector.opened[0].endswith("note.txt")
 
-    def test_reveal_asset_uses_connector(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_reveal_asset_uses_connector(self, repos, library_dir):
         connector = _FakeConnector()
         svc = createWorkspacesService(repos, {"connector": connector})
         src = os.path.join(library_dir, "note.txt")
@@ -439,11 +504,12 @@ class TestConnectorCallbacks:
         w = svc["createWorkspace"]("X")
         result = svc["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
-        svc["revealAsset"](asset_id)
+        await svc["revealAsset"](w["id"], asset_id)
         assert len(connector.shown) == 1
         assert connector.shown[0].endswith("note.txt")
 
-    def test_open_asset_failure_raises(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_open_asset_failure_raises(self, repos, library_dir):
         connector = _FakeConnector()
         connector.open_path_result = "failed"
         svc = createWorkspacesService(repos, {"connector": connector})
@@ -454,10 +520,11 @@ class TestConnectorCallbacks:
         result = svc["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
         with pytest.raises(RepoError) as exc:
-            svc["openAsset"](asset_id)
+            await svc["openAsset"](w["id"], asset_id)
         assert exc.value.code == "open_failed"
 
-    def test_open_asset_without_connector_raises(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_open_asset_without_connector_raises(self, repos, library_dir):
         svc = createWorkspacesService(repos)
         src = os.path.join(library_dir, "note.txt")
         with open(src, "wb") as fh:
@@ -466,10 +533,11 @@ class TestConnectorCallbacks:
         result = svc["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
         with pytest.raises(RepoError) as exc:
-            svc["openAsset"](asset_id)
+            await svc["openAsset"](w["id"], asset_id)
         assert exc.value.code == "not_ready"
 
-    def test_delete_asset_trashes_via_connector(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_delete_asset_trashes_via_connector(self, repos, library_dir):
         connector = _FakeConnector()
         svc = createWorkspacesService(repos, {"connector": connector})
         src = os.path.join(library_dir, "note.txt")
@@ -478,18 +546,20 @@ class TestConnectorCallbacks:
         w = svc["createWorkspace"]("X")
         result = svc["importAssets"](w["id"], [src])
         asset_id = result["imported"][0]["id"]
-        svc["deleteAsset"](asset_id)
+        await svc["deleteAsset"](w["id"], asset_id)
         assert len(connector.trashed) == 1
         assert connector.trashed[0].endswith(asset_id)
         assert svc["listAssets"](w["id"]) == []
         assert svc["listItems"](w["id"]) == []
 
-    def test_delete_asset_missing_raises(self, service):
+    @pytest.mark.asyncio
+    async def test_delete_asset_missing_raises(self, service):
         with pytest.raises(RepoError) as exc:
-            service["deleteAsset"]("nope")
+            await service["deleteAsset"]("workspace-nope", "nope")
         assert exc.value.code == "not_found"
 
-    def test_delete_workspace_trashes_assets(self, repos, library_dir):
+    @pytest.mark.asyncio
+    async def test_delete_workspace_trashes_assets(self, repos, library_dir):
         connector = _FakeConnector()
         svc = createWorkspacesService(repos, {"connector": connector})
         src = os.path.join(library_dir, "note.txt")
@@ -497,7 +567,7 @@ class TestConnectorCallbacks:
             fh.write(b"hi")
         w = svc["createWorkspace"]("X")
         svc["importAssets"](w["id"], [src])
-        svc["deleteWorkspace"](w["id"])
+        await svc["deleteWorkspace"](w["id"])
         assert len(connector.trashed) == 1
         assert svc["listWorkspaces"]() == []
 
@@ -571,8 +641,26 @@ class TestConnections:
         conn = service["createConnection"](
             w["id"], items[0]["id"], items[1]["id"], "top", "bottom"
         )
-        service["deleteConnection"](conn["id"])
+        service["deleteConnection"](w["id"], conn["id"])
         assert service["listConnections"](w["id"]) == []
+
+    def test_delete_connection_rejects_another_workspace_scope(self, db, service):
+        from conftest import insert_doc
+
+        insert_doc(db, id="doc-1")
+        insert_doc(db, id="doc-2")
+        source = _make_workspace(service, "Source")
+        other = _make_workspace(service, "Other")
+        items = service["addItems"](
+            source["id"], "document", ["doc-1", "doc-2"]
+        )
+        connection = service["createConnection"](
+            source["id"], items[0]["id"], items[1]["id"], "top", "bottom"
+        )
+        with pytest.raises(RepoError) as exc:
+            service["deleteConnection"](other["id"], connection["id"])
+        assert exc.value.code == "not_found"
+        assert service["getConnection"](connection["id"])["workspaceId"] == source["id"]
 
 
 class TestNotes:
@@ -599,13 +687,24 @@ class TestNotes:
     def test_update_note(self, service):
         w = _make_workspace(service)
         note = service["createNote"](w["id"], "Title", "body", "markdown")
-        updated = service["updateNote"](note["id"], {"title": "New", "contentMd": "x"})
+        updated = service["updateNote"](
+            w["id"], note["id"], {"title": "New", "contentMd": "x"}
+        )
         assert updated["title"] == "New"
         assert updated["contentMd"] == "x"
 
     def test_delete_note_removes_item(self, service):
         w = _make_workspace(service)
         note = service["createNote"](w["id"], "Title", "body", "markdown")
-        service["deleteNote"](note["id"])
+        service["deleteNote"](w["id"], note["id"])
         assert service["listNotes"](w["id"]) == []
         assert service["listItems"](w["id"]) == []
+
+    def test_update_note_rejects_another_workspace_scope(self, service):
+        source = _make_workspace(service, "Source")
+        other = _make_workspace(service, "Other")
+        note = service["createNote"](source["id"], "Title", "body", "markdown")
+        with pytest.raises(RepoError) as exc:
+            service["updateNote"](other["id"], note["id"], {"title": "Wrong"})
+        assert exc.value.code == "not_found"
+        assert service["getNote"](note["id"])["title"] == "Title"

@@ -21,7 +21,6 @@ class Mode(str, Enum):
     DISCUSS = "discuss"
     PLAN = "plan"
     INTERACTIVE = "interactive"
-    AUTO = "auto"
 
 
 READ_ONLY_MODES = frozenset({Mode.DISCUSS, Mode.PLAN})
@@ -45,6 +44,8 @@ class PermissionEngine:
     risk_overrides: RiskOverrides | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.mode, Mode):
+            self.mode = Mode(self.mode)
         if self.sandbox_root is not None:
             self.sandbox_root = Path(self.sandbox_root).expanduser().resolve()
         self.allowed_commands = list(self.allowed_commands)
@@ -70,9 +71,6 @@ class PermissionEngine:
 
         if risk is RiskClass.READ:
             return Decision(True, "low risk")
-
-        if self.mode is Mode.AUTO:
-            return Decision(True, "full access")
 
         if risk is RiskClass.EXEC:
             command = arguments.get("command")

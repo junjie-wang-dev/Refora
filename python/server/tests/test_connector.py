@@ -35,6 +35,53 @@ async def test_connector_request_is_correlated_with_result():
 
 
 @pytest.mark.asyncio
+async def test_connector_can_encrypt_api_key_without_persisting_plaintext():
+    events = EventBus()
+    socket = Socket()
+    broker = ConnectorBroker(events)
+    await events.subscribe(socket, ["connector.encrypt-api-key"])
+
+    pending = asyncio.create_task(broker.encrypt_api_key("sk-secret"))
+    await asyncio.wait_for(socket.sent.wait(), 0.1)
+    request = socket.messages[0]["data"]
+    assert request["apiKey"] == "sk-secret"
+    assert broker.handle_result(
+        {
+            "requestId": request["requestId"],
+            "data": {"apiKeyEnc": "ZW5jcnlwdGVk"},
+        }
+    )
+
+    assert await pending == {
+        "ok": True,
+        "data": {"apiKeyEnc": "ZW5jcnlwdGVk"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_connector_can_decrypt_api_key_from_a_worker_thread():
+    events = EventBus()
+    socket = Socket()
+    broker = ConnectorBroker(events)
+    await events.subscribe(socket, ["connector.decrypt-api-key"])
+
+    pending = asyncio.create_task(
+        asyncio.to_thread(broker.decrypt_api_key_sync, b"encrypted", "tavily")
+    )
+    await asyncio.wait_for(socket.sent.wait(), 0.1)
+    request = socket.messages[0]["data"]
+    assert request["apiKeyEnc"] == "ZW5jcnlwdGVk"
+    assert broker.handle_result(
+        {
+            "requestId": request["requestId"],
+            "data": {"apiKey": "tavily-secret"},
+        }
+    )
+
+    assert await pending == "tavily-secret"
+
+
+@pytest.mark.asyncio
 async def test_connector_error_and_unknown_response_are_handled():
     events = EventBus()
     socket = Socket()

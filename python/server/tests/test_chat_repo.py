@@ -208,6 +208,31 @@ def test_list_messages_empty(db):
     assert chat["listMessages"](thread["id"]) == []
 
 
+def test_search_matches_messages_and_returns_workspace_context(db):
+    workspace = make_workspaces_repo(db)["create"]("Research")
+    chat = make_chat_repo(db)
+    thread = chat["createThread"](workspace["id"], "p1")
+    chat["updateTitle"](thread["id"], "Architecture")
+    message = chat["addMessage"](
+        thread["id"], "user", "Explain the latent representation"
+    )
+
+    results = chat["search"]("latent representation")
+
+    assert results == [
+        {
+            "threadId": thread["id"],
+            "workspaceId": workspace["id"],
+            "workspaceName": "Research",
+            "title": "Architecture",
+            "snippet": "Explain the latent representation",
+            "role": "user",
+            "matchedAt": message["createdAt"],
+        }
+    ]
+    assert chat["search"]("   ") == []
+
+
 def test_delete_last_exchange_removes_pair(db):
     ws = make_workspaces_repo(db)
     w = ws["create"]("Research")

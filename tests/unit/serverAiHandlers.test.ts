@@ -14,7 +14,7 @@ describe('server AI IPC handlers', () => {
       aiDocTextGet: vi.fn().mockResolvedValue({ text: 'document text' }),
       aiSummarize: vi.fn().mockResolvedValue({ summaryId: 'summary-1' }),
       aiSummaryGet: vi.fn().mockResolvedValue(null),
-      aiChatSend: vi.fn().mockResolvedValue({ runId: 'server-run' }),
+      aiChatSend: vi.fn().mockResolvedValue({ threadId: 'thread-1', runId: 'server-run' }),
       aiChatResume: vi.fn().mockResolvedValue({ runId: 'run-1' }),
       aiChatCancel: vi.fn().mockResolvedValue({ ack: true }),
       aiChatHistory: vi.fn().mockResolvedValue([]),
@@ -108,9 +108,9 @@ describe('server AI IPC handlers', () => {
     expect(http.aiChatPendingInterrupt).toHaveBeenCalledWith('run-1')
     expect(http.aiChatRenameThread).toHaveBeenCalledWith('thread-1', { title: 'Renamed' })
     expect(http.aiChatDeleteThread).toHaveBeenCalledWith('thread-1')
-    expect(http.aiChatMemories).toHaveBeenCalledWith('global')
-    expect(http.aiChatUpdateMemory).toHaveBeenCalledWith('global', '/brief.md', { value: 'Updated' })
-    expect(http.aiChatDeleteMemory).toHaveBeenCalledWith('global', '/brief.md')
+    expect(http.aiChatMemories).toHaveBeenCalledWith(null)
+    expect(http.aiChatUpdateMemory).toHaveBeenCalledWith(null, '/brief.md', { value: 'Updated' })
+    expect(http.aiChatDeleteMemory).toHaveBeenCalledWith(null, '/brief.md')
     expect(http.aiReportsList).toHaveBeenCalledWith('workspace-1')
     expect(http.aiReportsUpdate).toHaveBeenCalledWith('report-1', { title: 'Updated' })
     expect(http.aiReportsDelete).toHaveBeenCalledWith('report-1')

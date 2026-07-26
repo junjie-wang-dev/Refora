@@ -293,8 +293,9 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
                 raise RuntimeError("Summary service destroyed")
             if generate_summary is None:
                 raise RuntimeError("generate_summary dependency is not configured")
-            result = generate_summary(
-                {"provider": provider_config, "text": chunk}
+            result = await asyncio.to_thread(
+                generate_summary,
+                {"provider": provider_config, "text": chunk},
             )
             chunk_summaries.append(_content_to_text(result))
         combined = "\n\n".join(chunk_summaries)
@@ -302,8 +303,9 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
             return {"core": "", "keyPoints": []}
         if destroyed["value"]:
             raise RuntimeError("Summary service destroyed")
-        final_result = generate_summary(
-            {"provider": provider_config, "text": None, "combined": combined}
+        final_result = await asyncio.to_thread(
+            generate_summary,
+            {"provider": provider_config, "text": None, "combined": combined},
         )
         final_text = _content_to_text(final_result)
         try:

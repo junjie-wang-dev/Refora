@@ -29,6 +29,20 @@ const eventForwards: readonly EventForward[] = [
   ['ocr.error', IpcChannel.EventOcrError]
 ]
 
+const connectorEvents: readonly WsEventName[] = [
+  'connector.trash-item',
+  'connector.open-path',
+  'connector.show-in-folder',
+  'connector.dialog-open-directory',
+  'connector.dialog-open-file',
+  'connector.dialog-choose',
+  'connector.clipboard-write',
+  'connector.clipboard-write-file',
+  'connector.get-api-key',
+  'connector.encrypt-api-key',
+  'connector.decrypt-api-key'
+]
+
 export interface ServerEventBridgeDeps {
   serverClient: ServerClient
   getWin: () => BrowserWindow | null
@@ -55,7 +69,10 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps): ServerEven
     unsubscribeListeners = eventForwards.map(([event, channel]) =>
       deps.serverClient.ws.on(event, (data) => forward(channel, data))
     )
-    deps.serverClient.ws.subscribe(eventForwards.map(([event]) => event))
+    deps.serverClient.ws.subscribe([
+      ...eventForwards.map(([event]) => event),
+      ...connectorEvents
+    ])
   }
 
   function stop(): void {
@@ -63,7 +80,10 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps): ServerEven
     started = false
     for (const unsubscribe of unsubscribeListeners) unsubscribe()
     unsubscribeListeners = []
-    deps.serverClient.ws.unsubscribe(eventForwards.map(([event]) => event))
+    deps.serverClient.ws.unsubscribe([
+      ...eventForwards.map(([event]) => event),
+      ...connectorEvents
+    ])
   }
 
   return { start, stop }

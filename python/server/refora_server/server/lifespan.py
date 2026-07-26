@@ -34,6 +34,7 @@ from refora_server.services.academic_serializer import (
     serialize_semantic_recommendations_response,
 )
 from refora_server.services.chat_history import createChatHistoryService
+from refora_server.services.document_text import createDocumentTextService
 from refora_server.services.export import createExportService
 from refora_server.services.library import createLibraryService
 from refora_server.services.mineru import (
@@ -43,11 +44,12 @@ from refora_server.services.mineru import (
     create_mineru_worker_process,
 )
 from refora_server.services.ocr import OcrServiceDeps, create_ocr_service
-from refora_server.services.sandbox import createSandboxService
+from refora_server.services.related_papers import find_related_papers
+from refora_server.services.sandbox import SandboxOptions, createSandboxService
 from refora_server.services.thread_title import createThreadTitleService
 from refora_server.services.watcher import createWatcherService
 from refora_server.services.web_search import createWebSearchService
-from refora_server.services.web_fetch import fetchUrl
+from refora_server.services.web_fetch import fetchUrlAsync
 from refora_server.services.workspaces import createWorkspacesService
 from refora_server.library.importer import createImporter
 
@@ -112,7 +114,20 @@ async def _trash_mineru_path(connector: Any, path: str) -> None:
     raise RuntimeError(f"Native Trash connector is unavailable: {message}")
 
 
-def _schedule_event(events: Any, name: str, data: Any) -> None:
+def _schedule_event(
+    events: Any,
+    name: str,
+    data: Any,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if loop is not None and running_loop is not loop:
+        future = asyncio.run_coroutine_threadsafe(events.broadcast(name, data), loop)
+        future.add_done_callback(_consume_future)
+        return
     task = asyncio.create_task(events.broadcast(name, data))
 
     def consume_result(completed: asyncio.Task[Any]) -> None:
@@ -122,6 +137,13 @@ def _schedule_event(events: Any, name: str, data: Any) -> None:
             pass
 
     task.add_done_callback(consume_result)
+
+
+def _consume_future(completed: Any) -> None:
+    try:
+        completed.result()
+    except BaseException:
+        pass
 
 
 def _unavailable_ocr_service(reason: str) -> dict[str, Any]:
@@ -179,6 +201,46 @@ def create_lifespan(
         )
         events = create_event_bus()
         connector = create_connector_broker(events)
+        server_loop = asyncio.get_running_loop()
+        run_cancel_events: dict[str, asyncio.Event] = {}
+
+        async def await_run_operation(
+            operation: Any, cancel_event: asyncio.Event
+        ) -> Any:
+            task = asyncio.ensure_future(operation)
+            cancel_task = asyncio.create_task(cancel_event.wait())
+            done, _ = await asyncio.wait(
+                {task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancel_task in done and cancel_event.is_set():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise asyncio.CancelledError()
+            cancel_task.cancel()
+            await asyncio.gather(cancel_task, return_exceptions=True)
+            return await task
+
+        def run_on_server_loop(
+            operation: Any, cancel_event: asyncio.Event
+        ) -> Any:
+            future = asyncio.run_coroutine_threadsafe(
+                await_run_operation(operation, cancel_event), server_loop
+            )
+            return future.result()
+
+        def cancel_agent_network(run_id: str) -> None:
+            event = run_cancel_events.get(run_id)
+            if event is not None:
+                server_loop.call_soon_threadsafe(event.set)
+
+        def cancel_agent_run(run_id: str) -> bool:
+            cancel_agent_network(run_id)
+            cancel_sandbox = sandbox.get("cancel")
+            return bool(cancel_sandbox(run_id)) if callable(cancel_sandbox) else False
+
+        def finish_agent_run(run_id: str) -> None:
+            run_cancel_events.pop(run_id, None)
+
         emit = events.broadcast
         mineru = create_mineru_engine_manager(
             MineruEngineManagerDeps(
@@ -197,6 +259,17 @@ def create_lifespan(
         exporter = {}
         web_search = {}
         library = createLibraryService(repos, {"emit": lambda event, data: emit(event, data)})
+
+        def proxy_url() -> str:
+            settings_repo = repos.get("settings")
+            get_setting = (
+                settings_repo.get("get")
+                if isinstance(settings_repo, dict)
+                else None
+            )
+            value = get_setting("proxyUrl", "") if callable(get_setting) else ""
+            return value.strip() if isinstance(value, str) else ""
+
         if complete_repos:
             importer = createImporter(
                 repos,
@@ -213,7 +286,34 @@ def create_lifespan(
                 },
             )
             exporter = createExportService(repos)
-            web_search = createWebSearchService(repos, {})
+            async def decrypt_search_key(
+                api_key_enc: bytes, _provider: str | None = None
+            ) -> str:
+                result = await connector.decrypt_api_key(api_key_enc)
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    error = result.get("error") if isinstance(result, dict) else None
+                    message = (
+                        error.get("message")
+                        if isinstance(error, dict)
+                        else "Native key decryption failed"
+                    )
+                    raise RuntimeError(str(message))
+                data = result.get("data")
+                api_key = data.get("apiKey") if isinstance(data, dict) else None
+                if not isinstance(api_key, str) or not api_key:
+                    raise RuntimeError(
+                        "Native key storage returned an invalid payload"
+                    )
+                return api_key
+
+            web_search = createWebSearchService(
+                repos,
+                {
+                    "decryptKey": connector.decrypt_api_key_sync,
+                    "decryptKeyAsync": decrypt_search_key,
+                    "getProxy": proxy_url,
+                },
+            )
         worker_path = _mineru_worker_path()
         if ocr_repos_ready and os.path.isfile(worker_path):
             worker = create_mineru_worker_process(
@@ -235,6 +335,8 @@ def create_lifespan(
             ocr = _unavailable_ocr_service("OCR repositories are not available")
         else:
             ocr = _unavailable_ocr_service("MinerU worker script is missing")
+
+        document_text = createDocumentTextService(repos)
 
         def generate_summary(payload: dict[str, Any]) -> Any:
             provider = payload.get("provider")
@@ -262,8 +364,54 @@ def create_lifespan(
             return getattr(response, "content", response)
 
         summary_service = createAiSummaryService(
-            repos, {"generate_summary": generate_summary}
+            repos,
+            {
+                "generate_summary": generate_summary,
+                "emit_delta": lambda document_id, _summary_id: _schedule_event(
+                    events, "ai.summary.updated", document_id, server_loop
+                ),
+                "emit_error": lambda document_id, message: _schedule_event(
+                    events,
+                    "ai.summary.error",
+                    {"docId": document_id, "message": message},
+                    server_loop,
+                ),
+            },
         )
+
+        def generate_title(payload: dict[str, Any]) -> str:
+            provider = payload.get("provider")
+            user_message = payload.get("userMessage")
+            if not isinstance(provider, dict) or not isinstance(user_message, str):
+                raise RuntimeError("Thread title input is unavailable")
+            prompt = (
+                "Generate a concise title (3-8 words, no quotes, no punctuation at the end) "
+                "for a research conversation that starts with this user message. "
+                "Reply with ONLY the title, nothing else.\n\n"
+                f"User message: {user_message[:500]}"
+            )
+            response = create_model(provider).invoke(
+                [{"role": "user", "content": prompt}]
+            )
+            content = getattr(response, "content", response)
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        return part["text"]
+            additional = getattr(response, "additional_kwargs", None)
+            if isinstance(additional, dict):
+                reasoning_content = additional.get("reasoning_content")
+                if isinstance(reasoning_content, str):
+                    lines = [
+                        line.strip()
+                        for line in reasoning_content.splitlines()
+                        if line.strip()
+                    ]
+                    if lines:
+                        return lines[-1]
+            return ""
 
         async def academic_fetch(url: str, options: dict[str, Any]) -> FetchResponse:
             try:
@@ -284,8 +432,26 @@ def create_lifespan(
             async with httpx.AsyncClient(
                 timeout=timeout,
                 follow_redirects=options.get("follow_redirects") is True,
+                **({"proxy": proxy_url()} if proxy_url() else {}),
             ) as client:
-                response = await client.get(url, headers=request_headers)
+                request_task = asyncio.create_task(
+                    client.get(url, headers=request_headers)
+                )
+                if isinstance(signal, asyncio.Event):
+                    cancel_task = asyncio.create_task(signal.wait())
+                    done, _ = await asyncio.wait(
+                        {request_task, cancel_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task in done and signal.is_set():
+                        request_task.cancel()
+                        await asyncio.gather(
+                            request_task, return_exceptions=True
+                        )
+                        raise asyncio.CancelledError()
+                    cancel_task.cancel()
+                    await asyncio.gather(cancel_task, return_exceptions=True)
+                response = await request_task
             if isinstance(signal, asyncio.Event) and signal.is_set():
                 raise asyncio.CancelledError()
             return FetchResponse(
@@ -349,7 +515,15 @@ def create_lifespan(
                 },
                 "frontier": academic_frontier,
             }
-        sandbox = createSandboxService()
+        sandbox = createSandboxService(
+            SandboxOptions(
+                shared_root=os.path.join(
+                    os.path.abspath(app.state.library_folder),
+                    ".refora-agent",
+                    "shared",
+                )
+            )
+        )
         services = {
             "library": library,
             "importer": importer,
@@ -360,10 +534,13 @@ def create_lifespan(
             "ocr": ocr,
             "aiProviders": createAiProvidersService(repos),
             "aiSummary": summary_service,
+            "documentText": document_text,
             "academic": academic,
             "sandbox": sandbox,
             "chatHistory": createChatHistoryService(repos),
-            "threadTitle": createThreadTitleService(repos),
+            "threadTitle": createThreadTitleService(
+                repos, {"generate_title": generate_title}
+            ),
             "workspaces": createWorkspacesService(
                 repos,
                 {
@@ -375,15 +552,38 @@ def create_lifespan(
 
         def create_tools(request: dict[str, Any]) -> list[Any]:
             enabled_names = request.get("enabledToolNames")
-            if not isinstance(enabled_names, list):
-                return []
-            enabled = {name for name in enabled_names if isinstance(name, str)}
+            enabled = (
+                {name for name in enabled_names if isinstance(name, str)}
+                if isinstance(enabled_names, list)
+                else set()
+            )
+            run_id = request["runId"]
+            cancel_event = run_cancel_events.get(run_id)
+            if cancel_event is None or cancel_event.is_set():
+                cancel_event = asyncio.Event()
+                run_cancel_events[run_id] = cancel_event
+                server_loop.call_later(
+                    6 * 60 * 60,
+                    lambda: (
+                        run_cancel_events.pop(run_id, None)
+                        if run_cancel_events.get(run_id) is cancel_event
+                        else None
+                    ),
+                )
 
-            async def request_summary(document_id: str) -> Any:
+            def run_academic(operation: Any) -> Any:
+                return run_on_server_loop(operation, cancel_event)
+
+            def request_summary(document_id: str) -> Any:
                 provider = request.get("provider")
                 if not isinstance(provider, dict):
                     return _unavailable_agent_capability()
-                return await summary_service["summarize"](document_id, provider)
+                future = asyncio.run_coroutine_threadsafe(
+                    summary_service["summarize"](document_id, provider),
+                    server_loop,
+                )
+                future.add_done_callback(_consume_future)
+                return {"status": "queued", "docId": document_id}
 
             async def read_ocr_fulltext(document_id: str) -> str:
                 document = repos["documents"]["get"](document_id)
@@ -399,6 +599,58 @@ def create_lifespan(
             async def prepare_paper_ocr(document_id: str) -> dict[str, Any]:
                 job_id = await ocr["startOcr"](document_id, "balanced")
                 return {"status": "queued", "jobId": job_id, "documentId": document_id}
+
+            def open_paper(document_id: str) -> dict[str, Any]:
+                document = repos["documents"]["get"](document_id)
+                if document is None:
+                    return {"error": "Document not found.", "docId": document_id}
+                workspace_id = request.get("workspaceId")
+                if isinstance(workspace_id, str):
+                    workspace_doc_ids = {
+                        item["docId"]
+                        for item in repos["workspaceItems"]["list"](workspace_id)
+                        if item.get("kind") == "document"
+                    }
+                    if document_id not in workspace_doc_ids:
+                        return {
+                            "error": "Document is not in the current workspace.",
+                            "docId": document_id,
+                        }
+                result = asyncio.run_coroutine_threadsafe(
+                    connector.open_path(document["filePath"]),
+                    server_loop,
+                ).result(timeout=31)
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    error = result.get("error") if isinstance(result, dict) else None
+                    return {
+                        "error": error.get("message")
+                        if isinstance(error, dict)
+                        else "Failed to open document.",
+                        "docId": document_id,
+                    }
+                return {
+                    "opened": True,
+                    "docId": document_id,
+                    "title": document.get("title") or document.get("fileName"),
+                }
+
+            def related(document_id: str, limit: int = 8) -> dict[str, Any]:
+                return find_related_papers(
+                    repos,
+                    document_id,
+                    limit,
+                    request.get("workspaceId")
+                    if isinstance(request.get("workspaceId"), str)
+                    else None,
+                )
+
+            def workspace_changed(workspace_id: str, reason: str) -> None:
+                _schedule_event(
+                    events,
+                    "workspace.items.changed",
+                    {"workspaceId": workspace_id, "reason": reason},
+                    server_loop,
+                )
 
             def publish_artifacts(
                 workspace_id: str | None,
@@ -454,23 +706,122 @@ def create_lifespan(
                     }
                     for asset in imported["imported"]
                 ]
+                if published:
+                    workspace_changed(workspace_id, "other")
                 return {"published": published, "errors": [*errors, *imported["errors"]]}
 
-            install_runtime_packages = sandbox.get(
-                "install_runtime_packages", _unavailable_agent_capability
-            )
+            sandbox_root = request["sandboxRoot"]
+
+            def execute_sandbox(command: str, args: dict[str, Any] | None = None) -> Any:
+                return sandbox["execute_sandbox"](
+                    command,
+                    {**(args or {}), "_sandboxRoot": sandbox_root},
+                )
+
+            def install_runtime_packages(
+                workspace_id: str | None,
+                args: dict[str, Any] | None = None,
+            ) -> Any:
+                installer = sandbox.get("install_runtime_packages")
+                if not callable(installer):
+                    return _unavailable_agent_capability()
+                return installer(
+                    workspace_id,
+                    {**(args or {}), "_sandboxRoot": sandbox_root},
+                )
+
+            tool_academic: dict[str, Any] = {}
+            if academic:
+                tool_academic = {
+                    "arxiv": {
+                        "search": lambda value: run_academic(
+                            arxiv_client.search(value, cancel_event)
+                        )
+                    },
+                    "arxiv_papers": {
+                        "get_paper": lambda arxiv_id, section_id=None, cursor=None, max_chars=None: run_academic(
+                            arxiv_papers.get_paper(
+                                arxiv_id,
+                                section_id,
+                                cursor,
+                                max_chars,
+                                cancel_event,
+                            )
+                        )
+                    },
+                    "identity": {
+                        "resolve": lambda locator: run_academic(
+                            academic_identity.resolve(locator, cancel_event)
+                        )
+                    },
+                    "graph": {
+                        "get_citing_papers": lambda locator, cursor=None, limit=None, signal=None, filters=None: run_academic(
+                            academic_graph.get_citing_papers(
+                                locator,
+                                cursor,
+                                limit,
+                                cancel_event,
+                                filters,
+                            )
+                        ),
+                        "get_referenced_papers": lambda locator, cursor=None, limit=None, signal=None, filters=None: run_academic(
+                            academic_graph.get_referenced_papers(
+                                locator,
+                                cursor,
+                                limit,
+                                cancel_event,
+                                filters,
+                            )
+                        ),
+                        "get_recommendations": lambda locator, limit=None: run_academic(
+                            academic_graph.get_recommendations(
+                                locator, limit, cancel_event
+                            )
+                        ),
+                    },
+                    "frontier": {
+                        "start": lambda value: run_academic(
+                            academic_frontier.start(value, cancel_event)
+                        ),
+                        "expand": lambda value: run_academic(
+                            academic_frontier.expand(value, cancel_event)
+                        ),
+                        "continue_page": lambda value: run_academic(
+                            academic_frontier.continue_page(
+                                value, cancel_event
+                            )
+                        ),
+                    },
+                }
+
             tool_deps = {
                 "repos": repos,
-                "interrupt": lambda *_args: None,
                 "ai_summary": request_summary,
                 "read_ocr_fulltext": read_ocr_fulltext,
+                "open_paper": open_paper,
+                "find_related_papers": related,
                 "publish_artifacts": publish_artifacts,
                 "install_runtime_packages": install_runtime_packages,
                 "prepare_paper_ocr": prepare_paper_ocr,
-                "web_search": web_search.get("search", _unavailable_agent_capability),
-                "web_fetch": fetchUrl,
-                "execute_sandbox": sandbox["execute_sandbox"],
-                "academic": academic,
+                "web_search": (
+                    lambda value: run_on_server_loop(
+                        web_search["searchAsync"](value, cancel_event),
+                        cancel_event,
+                    )
+                )
+                if callable(web_search.get("searchAsync"))
+                else _unavailable_agent_capability,
+                "web_fetch": lambda value: run_on_server_loop(
+                    fetchUrlAsync(
+                        value,
+                        cancelEvent=cancel_event,
+                        proxy=proxy_url() or None,
+                    ),
+                    cancel_event,
+                ),
+                "execute_sandbox": execute_sandbox,
+                "workspace_changed": workspace_changed,
+                "academic": tool_academic,
             }
             tools = create_agent_tools(
                 AgentToolContext(
@@ -480,7 +831,31 @@ def create_lifespan(
                 ),
                 tool_deps,
             )
+            if not request.get("workspaceId"):
+                enabled -= {
+                    "list_workspace_context",
+                    "search_workspace_docs",
+                    "add_docs_to_workspace",
+                    "create_workspace_connections",
+                    "generate_report",
+                    "list_workspace_assets",
+                    "list_workspace_notes",
+                }
+            if not web_search.get("isEnabled", lambda: False)():
+                enabled -= {"web_search", "web_fetch"}
+            if "install_runtime_packages" not in sandbox:
+                enabled.discard("install_runtime_packages")
             return [tool for tool in tools if tool.name in enabled]
+
+        async def generate_thread_title(
+            thread_id: str,
+            provider: dict[str, Any],
+        ) -> str | None:
+            return await asyncio.to_thread(
+                services["threadTitle"]["generateThreadTitle"],
+                thread_id,
+                provider,
+            )
 
         agent_runtime = createAgentRuntime(
             repos,
@@ -490,7 +865,16 @@ def create_lifespan(
                 "createTools": create_tools,
                 "createModel": create_model,
                 "createAgent": create_agent,
-                "generateTitle": services["threadTitle"].get("generateThreadTitle"),
+                "generateTitle": generate_thread_title,
+                "cancelRun": cancel_agent_run,
+                "finishRun": finish_agent_run,
+                "checkpointPath": os.path.join(
+                    os.path.dirname(os.path.abspath(db_path)),
+                    ".refora-agent",
+                    "shared",
+                    "checkpoints-python.sqlite",
+                ),
+                "agentStateVersion": 2,
             },
         )
         app.state.repos = repos
@@ -498,6 +882,7 @@ def create_lifespan(
         app.state.event_bus = events
         app.state.connector = connector
         app.state.agent_runtime = agent_runtime
+        app.state.cancel_agent_network = cancel_agent_network
         if hasattr(app.state, "require_token"):
             from refora_server.server.app import configure_app
 
@@ -505,6 +890,7 @@ def create_lifespan(
         try:
             yield
         finally:
+            await agent_runtime["destroy"]()
             await ocr["stopWorker"]()
             ocr["destroy"]()
             mineru["destroy"]()

@@ -4,6 +4,9 @@ import json
 from typing import Any
 
 TOOL_HISTORY_OUTPUT_MAX = 3000
+HISTORY_TOKEN_BUDGET = 8000
+HISTORY_MIN_MESSAGES = 2
+HISTORY_MAX_MESSAGES = 50
 
 
 def parseToolPayload(content: str) -> dict[str, Any]:
@@ -41,6 +44,88 @@ def truncateOutput(output: str, max: int) -> str:
     if len(output) <= max:
         return output
     return f"{output[:max]}\n...[truncated]"
+
+
+def estimateTokens(text: str) -> int:
+    cjk = sum(
+        1
+        for char in text
+        if (
+            "\u3400" <= char <= "\u9fff"
+            or "\u3040" <= char <= "\u30ff"
+            or "\uac00" <= char <= "\ud7af"
+        )
+    )
+    return cjk + (len(text) - cjk + 3) // 4
+
+
+def _message_budget_text(message: dict[str, Any]) -> str:
+    values: list[Any] = [message.get("content") or ""]
+    if isinstance(message.get("tool_calls"), list):
+        values.append(message["tool_calls"])
+    try:
+        return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(values)
+
+
+def _history_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    units: list[list[dict[str, Any]]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+        if not isinstance(calls, list) or not calls:
+            units.append([message])
+            index += 1
+            continue
+        call_ids = {
+            call.get("id")
+            for call in calls
+            if isinstance(call, dict) and isinstance(call.get("id"), str)
+        }
+        unit = [message]
+        cursor = index + 1
+        while cursor < len(messages):
+            candidate = messages[cursor]
+            if (
+                candidate.get("role") != "tool"
+                or candidate.get("tool_call_id") not in call_ids
+            ):
+                break
+            unit.append(candidate)
+            cursor += 1
+        units.append(unit)
+        index = cursor
+    return units
+
+
+def truncateHistoryByTokens(
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int = HISTORY_TOKEN_BUDGET,
+    min_messages: int = HISTORY_MIN_MESSAGES,
+    max_messages: int = HISTORY_MAX_MESSAGES,
+) -> list[dict[str, Any]]:
+    if not messages:
+        return []
+    selected: list[list[dict[str, Any]]] = []
+    used_tokens = 0
+    used_messages = 0
+    for unit in reversed(_history_units(messages)):
+        unit_tokens = sum(estimateTokens(_message_budget_text(message)) + 4 for message in unit)
+        if used_messages and used_messages + len(unit) > max_messages:
+            break
+        if used_messages >= min_messages and used_tokens + unit_tokens > max_tokens:
+            break
+        selected.insert(0, unit)
+        used_tokens += unit_tokens
+        used_messages += len(unit)
+    result = [dict(message) for unit in selected for message in unit]
+    sanitizeToolCallPairs(result)
+    while result and result[0].get("role") == "tool":
+        result.pop(0)
+    return result
 
 
 def lastIsAiWithToolCall(

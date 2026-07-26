@@ -503,7 +503,7 @@ export interface ChatMessage {
   createdAt: number
 }
 
-export interface ChatSendRequest {
+export interface AgentTurnIntent {
   workspaceId: string | null
   threadId?: string
   runId?: string
@@ -518,6 +518,8 @@ export interface ChatSendRequest {
   }
   attachments?: ChatAttachment[]
 }
+
+export type ChatSendRequest = AgentTurnIntent
 
 export type AgentTraceStepKind =
   | 'llm'
@@ -860,7 +862,7 @@ export interface ReforaApi {
     chatHistory(threadId: string): Promise<ChatMessage[]>
     chatThreads(workspaceId: string | null): Promise<ChatThread[]>
     chatTraces(threadId: string): Promise<AgentTraceStep[]>
-    chatCancel(threadId: string): Promise<void>
+    chatCancel(runId: string): Promise<void>
     chatResume(req: AgentResumeRequest): Promise<void>
     chatPendingInterrupt(runId: string): Promise<AgentInterrupt | null>
     chatDeleteThread(threadId: string): Promise<void>

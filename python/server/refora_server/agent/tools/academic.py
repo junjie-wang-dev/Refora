@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from refora_server.academic.frontier import (
+    ContinueFrontierInput,
+    ExpandFrontierInput,
+    StartFrontierInput,
+)
 from refora_server.academic.types import ArxivSearchInput, PaperLocator
 from refora_server.agent.tools.common import call, object_schema, value
 from refora_server.agent.tools.registry import ToolGroup
@@ -42,13 +47,29 @@ def resolve_academic_identity(executor: Any, args: dict[str, Any]) -> Any:
 def get_citing_papers(executor: Any, args: dict[str, Any]) -> Any:
     academic = value(value(executor, "deps"), "academic")
     locator = PaperLocator(**args["paper"]) if "paper" in args else None
-    return call(value(academic, "graph"), "get_citing_papers", locator, args.get("cursor"), args.get("limit"), {"publishedAfter": args.get("publishedAfter")} if args.get("publishedAfter") else None)
+    filters = {"publishedAfter": args["publishedAfter"]} if args.get("publishedAfter") else None
+    return call(
+        value(academic, "graph"),
+        "get_citing_papers",
+        locator,
+        args.get("cursor"),
+        args.get("limit"),
+        filters=filters,
+    )
 
 
 def get_referenced_papers(executor: Any, args: dict[str, Any]) -> Any:
     academic = value(value(executor, "deps"), "academic")
     locator = PaperLocator(**args["paper"]) if "paper" in args else None
-    return call(value(academic, "graph"), "get_referenced_papers", locator, args.get("cursor"), args.get("limit"), {"publishedAfter": args.get("publishedAfter")} if args.get("publishedAfter") else None)
+    filters = {"publishedAfter": args["publishedAfter"]} if args.get("publishedAfter") else None
+    return call(
+        value(academic, "graph"),
+        "get_referenced_papers",
+        locator,
+        args.get("cursor"),
+        args.get("limit"),
+        filters=filters,
+    )
 
 
 def get_semantic_recommendations(executor: Any, args: dict[str, Any]) -> Any:
@@ -60,7 +81,39 @@ def get_semantic_recommendations(executor: Any, args: dict[str, Any]) -> Any:
 def explore_research_frontier(executor: Any, args: dict[str, Any]) -> Any:
     academic = value(value(executor, "deps"), "academic")
     frontier = value(academic, "frontier")
-    return call(frontier, {"start": "start", "expand": "expand", "continue": "continue"}[args["action"]], args)
+    context = value(executor, "context")
+    workspace_id = value(context, "workspace_id") or value(context, "workspaceId")
+    thread_id = value(context, "thread_id") or value(context, "threadId")
+    if not workspace_id or not thread_id:
+        raise ValueError("Research frontier requires a Workspace thread")
+    action = args["action"]
+    if action == "start":
+        request = StartFrontierInput(
+            workspaceId=workspace_id,
+            threadId=thread_id,
+            seed=PaperLocator(**args["seed"]),
+            objective=args["objective"],
+            branches=args.get("branches"),
+            searchQueries=args.get("searchQueries"),
+            publishedAfter=args.get("publishedAfter"),
+            strictArxivOnly=args.get("strictArxivOnly"),
+        )
+        return call(frontier, "start", request)
+    if action == "expand":
+        request = ExpandFrontierInput(
+            workspaceId=workspace_id,
+            threadId=thread_id,
+            frontierId=args["frontierId"],
+            paperIds=args["paperIds"],
+        )
+        return call(frontier, "expand", request)
+    request = ContinueFrontierInput(
+        workspaceId=workspace_id,
+        threadId=thread_id,
+        frontierId=args["frontierId"],
+        resumeToken=args["resumeToken"],
+    )
+    return call(frontier, "continue_page", request)
 
 
 class AcademicTools(ToolGroup):

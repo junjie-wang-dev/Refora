@@ -17,7 +17,21 @@ def search_workspace_docs(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
     item_doc_ids = {item["docId"] for item in call(repo(executor.repos, "workspaceItems"), "list", ws) if item.get("docId")}
     docs = call(repo(executor.repos, "documents"), "search", args.get("query", ""), 50) if args.get("query") else call(repo(executor.repos, "documents"), "list", {"mode": "all"})
-    return [{"docId": doc["id"], "title": doc.get("title") or doc.get("fileName"), "authors": doc.get("authors"), "year": doc.get("year")} for doc in docs if doc["id"] in item_doc_ids][:50]
+    summaries = repo(executor.repos, "aiSummaries")
+    return [
+        {
+            "docId": doc["id"],
+            "title": doc.get("title") or doc.get("fileName"),
+            "authors": doc.get("authors"),
+            "year": doc.get("year"),
+            "hasSummary": bool(
+                (summary := call(summaries, "getSummary", doc["id"]))
+                and summary.get("content")
+            ),
+        }
+        for doc in docs
+        if doc["id"] in item_doc_ids
+    ][:50]
 
 
 def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
@@ -28,6 +42,8 @@ def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
     present = {item["docId"] for item in call(items, "list", ws) if item.get("docId")}
     valid = [doc_id for doc_id in requested if call(documents, "get", doc_id)]
     added = call(items, "add", ws, "document", [doc_id for doc_id in valid if doc_id not in present])
+    if added and callable(value(executor.deps, "workspace_changed")):
+        call(executor.deps, "workspace_changed", ws, "agent_add_docs")
     return {"added": [item["docId"] for item in added], "alreadyInWorkspace": [doc_id for doc_id in requested if doc_id in present], "missing": [doc_id for doc_id in requested if doc_id not in valid]}
 
 
@@ -41,6 +57,8 @@ def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
             errors.append({"connection": connection, "message": "Invalid workspace connection"})
             continue
         created.append(call(repo(executor.repos, "workspaceConnections"), "create", ws, source, target, connection.get("sourceAnchor", "right"), connection.get("targetAnchor", "left")))
+    if created and callable(value(executor.deps, "workspace_changed")):
+        call(executor.deps, "workspace_changed", ws, "other")
     return {"created": created, "errors": errors}
 
 
@@ -48,6 +66,8 @@ def generate_report(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
     report = call(repo(executor.repos, "aiReports"), "create", ws, args["title"], args["contentMd"], ids(args.get("sourceDocIds")))
     call(repo(executor.repos, "workspaceItems"), "add", ws, "report", [report["id"]])
+    if callable(value(executor.deps, "workspace_changed")):
+        call(executor.deps, "workspace_changed", ws, "other")
     return report
 
 

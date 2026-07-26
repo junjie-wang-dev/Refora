@@ -282,36 +282,34 @@ describe('serverClient', () => {
     })
 
     it('routes ai chat endpoints', async () => {
-      const { fetch, calls } = makeFetchSpy(() => makeResponse({ runId: 'r1' }))
+      const { fetch, calls } = makeFetchSpy(() => makeResponse({ runId: 'r1', threadId: 't1' }))
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
       await client.http.aiChatSend({
         runId: 'r1',
         threadId: 't1',
         workspaceId: null,
-        checkpointPath: '/cp',
-        checkpointBefore: null,
-        provider: {
-          model: 'm',
-          baseUrl: 'http://x',
-          apiKey: 'k',
-          useResponsesApi: false,
-          modelKwargs: {},
-          temperature: null,
-          maxTokens: null
-        },
-        systemPrompt: 'p',
-        enabledToolNames: [],
-        sandboxRoot: null,
-        memories: {},
-        includeResearchMemory: false,
-        recursionLimit: 25
+        text: 'Summarize the evidence',
+        providerId: 'p1',
+        model: 'm'
       })
       await client.http.aiChatCancel({ runId: 'r1' })
       await client.http.aiChatThreads({ workspaceId: 'w1' })
+      await client.http.aiChatPendingInterrupt('r1')
+      await client.http.aiChatMemories(null)
       expect(calls[0].url).toContain('/ai/chat/send')
+      expect(JSON.parse(calls[0].body as string)).toEqual({
+        runId: 'r1',
+        threadId: 't1',
+        workspaceId: null,
+        text: 'Summarize the evidence',
+        providerId: 'p1',
+        model: 'm'
+      })
       expect(calls[1].url).toContain('/ai/chat/cancel')
       expect(calls[2].url).toContain('/ai/chat/threads')
       expect(calls[2].url).toContain('workspaceId=w1')
+      expect(calls[3].url).toContain('/ai/chat/runs/r1/pending-interrupt')
+      expect(calls[4].url).toContain('/ai/memories')
     })
 
     it('routes workspace and ocr endpoints', async () => {
@@ -319,11 +317,23 @@ describe('serverClient', () => {
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
       await client.http.workspacesOpenSandbox('w1')
       await client.http.ocrStart({ documentId: 'd1', profile: 'balanced' })
+      await client.http.workspaceItemMove('w1', { itemId: 'i1', x: 10, y: 20, zIndex: 3 })
+      await client.http.ocrState('d1')
+      await client.http.ocrMarkdown('d1', 'result-1')
       await client.http.exportBibtexString(['a', 'b'])
       expect(calls[0].url).toContain('/workspaces/w1/open-sandbox')
       expect(calls[1].url).toContain('/ocr/start')
-      expect(calls[2].url).toContain('/export/bibtex-string')
-      expect(calls[2].url).toContain('documentIds=a%2Cb')
+      expect(calls[2].url).toContain('/workspaces/w1/items/move')
+      expect(JSON.parse(calls[2].body as string)).toEqual({
+        itemId: 'i1',
+        x: 10,
+        y: 20,
+        zIndex: 3
+      })
+      expect(calls[3].url).toContain('/ocr/state?documentId=d1')
+      expect(calls[4].url).toContain('/ocr/documents/d1/results/result-1/markdown')
+      expect(calls[5].url).toContain('/export/bibtex-string')
+      expect(calls[5].url).toContain('documentIds=a%2Cb')
     })
   })
 
@@ -500,6 +510,26 @@ describe('serverClient', () => {
       })
     })
 
+    it('forwards connector.decrypt-api-key to native decrypt-api-key route', async () => {
+      const { ws, nativeCalls } = await connectWithClient(() => makeResponse({ apiKey: 'search-secret' }))
+
+      ws.message({
+        event: 'connector.decrypt-api-key',
+        data: { requestId: 'req-decrypt', apiKeyEnc: 'ZW5jcnlwdGVk' }
+      })
+      await vi.waitFor(() => {
+        expect(nativeCalls).toHaveLength(1)
+      })
+
+      expect(nativeCalls[0].url).toBe(`http://127.0.0.1:${NATIVE_PORT}/native/decrypt-api-key`)
+      expect(JSON.parse(nativeCalls[0].body as string)).toEqual({ apiKeyEnc: 'ZW5jcnlwdGVk' })
+      await vi.waitFor(() => {
+        const reply = JSON.parse(ws.sent[ws.sent.length - 1])
+        expect(reply.event).toBe('connector.result')
+        expect(reply.data.data).toEqual({ apiKey: 'search-secret' })
+      })
+    })
+
     it('replies connector.error when nativeRpc start fails', async () => {
       const failingNative: NativeRpc = {
         start: vi.fn().mockRejectedValue(new Error('not started')),
@@ -556,6 +586,7 @@ describe('serverClient', () => {
       const ws1 = FakeWebSocket.instances[0]
       ws1.open()
       await connectPromise
+      client.ws.subscribe(['connector.decrypt-api-key'])
 
       ws1.close()
       expect(FakeWebSocket.instances).toHaveLength(1)
@@ -564,6 +595,10 @@ describe('serverClient', () => {
       expect(FakeWebSocket.instances).toHaveLength(2)
       FakeWebSocket.instances[1].open()
       expect(client.ws.isConnected()).toBe(true)
+      expect(JSON.parse(FakeWebSocket.instances[1].sent[0])).toEqual({
+        event: 'subscribe',
+        data: { topics: ['connector.decrypt-api-key'] }
+      })
     })
 
     it('does not reconnect after manual disconnect', async () => {

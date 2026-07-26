@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from refora_server.agent.permissions import Mode, PermissionEngine
 from refora_server.agent.risk import RiskClass, classify
 
@@ -39,6 +41,18 @@ def test_shell_operators_do_not_bypass_command_allowlist():
     engine = PermissionEngine(allowed_commands=["python -m pytest"])
 
     decision = engine.evaluate("__execute", {"command": "python -m pytest; rm -rf /"})
+
+    assert not decision.allowed
+    assert decision.needs_user
+
+
+def test_unattended_auto_mode_is_not_supported():
+    with pytest.raises(ValueError):
+        PermissionEngine(mode="auto")
+
+
+def test_unknown_tools_are_approval_gated():
+    decision = PermissionEngine().evaluate("new_unclassified_tool", {})
 
     assert not decision.allowed
     assert decision.needs_user

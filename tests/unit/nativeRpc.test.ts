@@ -8,6 +8,7 @@ const electronMocks = vi.hoisted(() => ({
   openPath: vi.fn(),
   showItemInFolder: vi.fn(),
   showOpenDialog: vi.fn(),
+  showMessageBox: vi.fn(),
   writeText: vi.fn()
 }))
 
@@ -18,7 +19,8 @@ vi.mock('electron', () => ({
     showItemInFolder: electronMocks.showItemInFolder
   },
   dialog: {
-    showOpenDialog: electronMocks.showOpenDialog
+    showOpenDialog: electronMocks.showOpenDialog,
+    showMessageBox: electronMocks.showMessageBox
   },
   clipboard: {
     writeText: electronMocks.writeText
@@ -133,12 +135,14 @@ describe('nativeRpc', () => {
     repos?: Parameters<typeof createNativeRpc>[0]['repos']
     safeStorage?: ReturnType<typeof makeSafeStorage>
     token?: string
+    copyFileToClipboard?: (path: string) => void
   } = {}) {
     const { factory, server } = createFakeHttpServer()
     const rpc = createNativeRpc({
       repos: overrides.repos ?? makeRepos(),
       token: overrides.token ?? TOKEN,
       safeStorage: overrides.safeStorage ?? makeSafeStorage(),
+      copyFileToClipboard: overrides.copyFileToClipboard,
       createHttpServer: factory
     })
     const info = await rpc.start()
@@ -298,6 +302,51 @@ describe('nativeRpc', () => {
     expect(body).toEqual({ ok: true, data: { canceled: true, path: null } })
   })
 
+  it('opens a filtered file dialog', async () => {
+    electronMocks.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/x/library.json']
+    })
+    const { server } = await setup()
+    const { body } = await dispatch(
+      server,
+      'POST',
+      '/native/dialog-open-file',
+      { title: 'Import JSON', extensions: ['json'] },
+      TOKEN
+    )
+    expect(body).toEqual({
+      ok: true,
+      data: { canceled: false, path: '/Users/x/library.json' }
+    })
+    expect(electronMocks.showOpenDialog).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      })
+    )
+  })
+
+  it('returns a native dialog choice', async () => {
+    electronMocks.showMessageBox.mockResolvedValue({ response: 1 })
+    const { server } = await setup()
+    const { body } = await dispatch(
+      server,
+      'POST',
+      '/native/dialog-choose',
+      {
+        title: 'Import Mode',
+        message: 'Choose a mode',
+        buttons: ['Merge', 'Replace', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2
+      },
+      TOKEN
+    )
+    expect(body).toEqual({ ok: true, data: { response: 1 } })
+  })
+
   it('writes text to the clipboard', async () => {
     const { server } = await setup()
     const { status, body } = await dispatch(
@@ -309,6 +358,20 @@ describe('nativeRpc', () => {
     )
     expect(status).toBe(200)
     expect(electronMocks.writeText).toHaveBeenCalledWith('hello world')
+    expect(body).toEqual({ ok: true, data: { written: true } })
+  })
+
+  it('writes a validated file to the clipboard adapter', async () => {
+    const copyFileToClipboard = vi.fn()
+    const { server } = await setup({ copyFileToClipboard })
+    const { body } = await dispatch(
+      server,
+      'POST',
+      '/native/clipboard-write-file',
+      { path: '/Users/x/paper.pdf' },
+      TOKEN
+    )
+    expect(copyFileToClipboard).toHaveBeenCalledWith('/Users/x/paper.pdf')
     expect(body).toEqual({ ok: true, data: { written: true } })
   })
 
@@ -334,6 +397,54 @@ describe('nativeRpc', () => {
     expect(status).toBe(200)
     expect(decrypt).toHaveBeenCalledWith(encBuffer, false)
     expect(body).toEqual({ ok: true, data: { apiKey: 'sk-decrypted' } })
+  })
+
+  it('encrypts an API key and returns base64 ciphertext', async () => {
+    const safeStorage = makeSafeStorage()
+    safeStorage.encrypt.mockReturnValue(Buffer.from('encrypted-key'))
+    const { server } = await setup({ safeStorage })
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/encrypt-api-key',
+      { apiKey: 'sk-secret' },
+      TOKEN
+    )
+    expect(status).toBe(200)
+    expect(safeStorage.encrypt).toHaveBeenCalledWith('sk-secret')
+    expect(body).toEqual({
+      ok: true,
+      data: { apiKeyEnc: Buffer.from('encrypted-key').toString('base64') }
+    })
+  })
+
+  it('decrypts an API key from base64 ciphertext', async () => {
+    const encrypted = Buffer.from('encrypted-search-key')
+    const safeStorage = makeSafeStorage({ decrypt: vi.fn(() => 'search-secret') })
+    const { server } = await setup({ safeStorage })
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/decrypt-api-key',
+      { apiKeyEnc: encrypted.toString('base64') },
+      TOKEN
+    )
+    expect(status).toBe(200)
+    expect(safeStorage.decrypt).toHaveBeenCalledWith(encrypted, false)
+    expect(body).toEqual({ ok: true, data: { apiKey: 'search-secret' } })
+  })
+
+  it('rejects invalid base64 ciphertext', async () => {
+    const { server } = await setup()
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/decrypt-api-key',
+      { apiKeyEnc: 'not base64!' },
+      TOKEN
+    )
+    expect(status).toBe(400)
+    expect(body).toMatchObject({ ok: false, error: { code: 'invalid_input' } })
   })
 
   it('returns not_found when the provider does not exist', async () => {

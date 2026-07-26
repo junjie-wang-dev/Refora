@@ -1,5 +1,5 @@
 import { safeStorage } from 'electron'
-import { encryptKey, decryptKey } from './aiProviders'
+import { RepoError } from '../db/repositories/errors'
 
 export interface SafeStorageProxy {
   isEncryptionAvailable(): boolean
@@ -13,10 +13,27 @@ export function createSafeStorageProxy(): SafeStorageProxy {
       return safeStorage.isEncryptionAvailable()
     },
     encrypt(apiKey: string | undefined): Buffer | null {
-      return encryptKey(apiKey)
+      if (!apiKey) return null
+      if (!safeStorage.isEncryptionAvailable()) {
+        throw new RepoError(
+          'encryption_unavailable',
+          'OS keychain (safeStorage) is not available. API keys cannot be securely stored.'
+        )
+      }
+      return safeStorage.encryptString(apiKey)
     },
     decrypt(enc: Buffer | null, allowEmpty = false): string {
-      return decryptKey(enc, allowEmpty)
+      if (!enc) {
+        if (allowEmpty) return ''
+        throw new RepoError('no_api_key', 'Provider has no API key')
+      }
+      if (!safeStorage.isEncryptionAvailable()) {
+        throw new RepoError(
+          'encryption_unavailable',
+          'OS keychain (safeStorage) is not available. Cannot decrypt API key.'
+        )
+      }
+      return safeStorage.decryptString(enc)
     }
   }
 }

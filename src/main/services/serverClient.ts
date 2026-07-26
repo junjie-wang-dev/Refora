@@ -5,16 +5,24 @@ import type { IpcError, Result } from '../../shared/ipc-types'
 import type {
   AiProvider,
   AiProviderInput,
+  AgentTurnIntent,
   AiReport,
   AiSummary,
+  BibImportResult,
+  BootstrapData,
   Category,
   ChatMessage,
   ChatThread,
   Document,
+  DocumentCounts,
   DocumentPatch,
+  GlobalSearchResult,
+  ListModelsRequest,
+  PdfImportResult,
   Workspace,
   WorkspaceAgentMemory,
   WorkspaceAsset,
+  WorkspaceAssetImportResult,
   WorkspaceAssetTextPreview,
   WorkspaceConnection,
   WorkspaceConnectionAnchor,
@@ -28,6 +36,7 @@ import type {
 import type {
   MineruEngineStatus,
   OcrDocumentState,
+  OcrJob,
   OcrProfile
 } from '../../shared/mineru-types'
 import type {
@@ -77,8 +86,13 @@ export type WsEventName =
   | 'connector.open-path'
   | 'connector.show-in-folder'
   | 'connector.dialog-open-directory'
+  | 'connector.dialog-open-file'
+  | 'connector.dialog-choose'
   | 'connector.clipboard-write'
+  | 'connector.clipboard-write-file'
   | 'connector.get-api-key'
+  | 'connector.encrypt-api-key'
+  | 'connector.decrypt-api-key'
 
 export type WsEventListener = (data: unknown) => void
 
@@ -109,8 +123,11 @@ export interface ConnectorRequest {
 
 export interface DocumentsListQuery {
   q?: string
+  mode?: string
   categoryId?: string
   starred?: boolean
+  sortField?: string
+  sortDir?: string
   limit?: number
   offset?: number
   [key: string]: string | number | boolean | undefined
@@ -187,6 +204,7 @@ export interface ClipboardWritePayload {
 }
 
 export interface ClipboardCopyMarkdownPayload {
+  title: string
   markdown: string
 }
 
@@ -204,25 +222,9 @@ export interface ProviderModelsPayload {
 
 export interface SummarizePayload {
   documentId: string
-  provider: ProviderConfig
 }
 
-export interface ChatSendPayload {
-  runId: string
-  threadId: string
-  workspaceId: string | null
-  checkpointPath: string
-  checkpointBefore: string | null
-  provider: ProviderConfig
-  systemPrompt: string
-  messages?: unknown[]
-  decisions?: unknown[]
-  enabledToolNames: string[]
-  sandboxRoot: string | null
-  memories: Record<string, string>
-  includeResearchMemory: boolean
-  recursionLimit: number
-}
+export type ChatSendPayload = AgentTurnIntent
 
 export interface ChatResumePayload {
   runId: string
@@ -276,11 +278,14 @@ export interface WorkspaceItemSizePayload {
 
 export interface WorkspaceItemMovePayload {
   itemId: string
-  targetWorkspaceId: string
+  x: number
+  y: number
+  zIndex: number
 }
 
 export interface WorkspaceAssetsFilesPayload {
   paths: string[]
+  placement?: WorkspaceItemPlacement
 }
 
 export interface WorkspaceConnectionInput {
@@ -324,9 +329,12 @@ export interface ProviderConfig {
 export interface ServerHttp {
   systemReady(): Promise<{ status: string }>
   systemShutdown(): Promise<{ ack: boolean }>
+  appBootstrap(): Promise<BootstrapData>
+  globalSearch(query: string): Promise<GlobalSearchResult>
+  dialogOpenDirectory(title?: string): Promise<{ canceled: boolean; path: string | null }>
 
   documentsList(query?: DocumentsListQuery): Promise<Document[]>
-  documentsCount(query?: DocumentsListQuery): Promise<{ count: number }>
+  documentsCount(): Promise<DocumentCounts>
   documentsSearch(q: string): Promise<Document[]>
   documentsGet(documentId: string): Promise<Document>
   documentsUpdate(documentId: string, patch: DocumentPatch): Promise<Document>
@@ -341,11 +349,11 @@ export interface ServerHttp {
   documentsOpenPdf(documentId: string): Promise<{ ack: boolean }>
   documentsOpenInFinder(documentId: string): Promise<{ ack: boolean }>
 
-  importFiles(payload: ImportFilesPayload): Promise<{ imported: Document[]; skipped: Array<{ path: string; reason: string }> }>
-  importFolder(payload: ImportFolderPayload): Promise<{ imported: Document[] }>
+  importFiles(payload: ImportFilesPayload): Promise<PdfImportResult>
+  importFolder(payload: ImportFolderPayload): Promise<PdfImportResult>
   importJson(payload: unknown): Promise<{ imported: number }>
-  importZotero(payload: ImportBibPayload): Promise<{ imported: number }>
-  importMendeley(payload: ImportBibPayload): Promise<{ imported: number }>
+  importZotero(payload: ImportBibPayload): Promise<BibImportResult>
+  importMendeley(payload: ImportBibPayload): Promise<BibImportResult>
   importIdentifier(payload: ImportIdentifierPayload): Promise<{ documentId: string }>
 
   categoriesList(): Promise<Category[]>
@@ -372,25 +380,25 @@ export interface ServerHttp {
   aiProvidersCreate(input: AiProviderInput): Promise<AiProvider>
   aiProvidersUpdate(providerId: string, input: AiProviderInput): Promise<AiProvider>
   aiProvidersDelete(providerId: string): Promise<{ ack: boolean }>
-  aiProvidersTest(providerId: string, payload: ProviderTestPayload): Promise<{ ok: boolean; model?: string }>
-  aiProvidersModels(providerId: string, payload: ProviderModelsPayload): Promise<{ models: string[] }>
+  aiProvidersTest(providerId: string): Promise<{ ok: boolean; model?: string }>
+  aiProvidersModels(request: ListModelsRequest): Promise<{ ok: boolean; models: string[]; error?: string }>
 
   aiDocTextGet(documentId: string): Promise<{ text: string }>
   aiSummarize(payload: SummarizePayload): Promise<{ summaryId: string }>
   aiSummaryGet(documentId: string): Promise<AiSummary | null>
 
-  aiChatSend(payload: ChatSendPayload): Promise<{ runId: string }>
+  aiChatSend(payload: ChatSendPayload): Promise<{ runId: string; threadId: string }>
   aiChatResume(payload: ChatResumePayload): Promise<{ runId: string }>
   aiChatCancel(payload: ChatCancelPayload): Promise<{ ack: boolean }>
   aiChatThreads(query?: ChatThreadsQuery): Promise<ChatThread[]>
   aiChatHistory(threadId: string): Promise<ChatMessage[]>
   aiChatTraces(threadId: string): Promise<unknown[]>
-  aiChatPendingInterrupt(threadId: string): Promise<unknown | null>
+  aiChatPendingInterrupt(runId: string): Promise<unknown | null>
   aiChatDeleteThread(threadId: string): Promise<{ ack: boolean }>
   aiChatRenameThread(threadId: string, payload: RenameThreadPayload): Promise<ChatThread>
-  aiChatMemories(threadId: string): Promise<WorkspaceAgentMemory[]>
-  aiChatUpdateMemory(threadId: string, memoryId: string, payload: MemoryUpdatePayload): Promise<WorkspaceAgentMemory>
-  aiChatDeleteMemory(threadId: string, memoryId: string): Promise<{ ack: boolean }>
+  aiChatMemories(workspaceId: string | null): Promise<WorkspaceAgentMemory[]>
+  aiChatUpdateMemory(workspaceId: string | null, path: string, payload: MemoryUpdatePayload): Promise<WorkspaceAgentMemory>
+  aiChatDeleteMemory(workspaceId: string | null, path: string): Promise<{ ack: boolean }>
 
   aiReportsList(workspaceId?: string): Promise<AiReport[]>
   aiReportsDelete(reportId: string): Promise<{ ack: boolean }>
@@ -403,6 +411,7 @@ export interface ServerHttp {
   workspacesOpenSandbox(workspaceId: string): Promise<{ ack: boolean }>
 
   workspaceItemsList(workspaceId: string): Promise<WorkspaceItem[]>
+  workspaceItemGet(itemId: string): Promise<WorkspaceItem>
   workspaceItemsCreate(workspaceId: string, input: WorkspaceItemInput): Promise<WorkspaceItem>
   workspaceItemsDelete(workspaceId: string, itemId: string): Promise<{ ack: boolean }>
   workspaceItemsReorder(workspaceId: string, payload: WorkspaceItemsReorderPayload): Promise<{ ack: boolean }>
@@ -410,7 +419,8 @@ export interface ServerHttp {
   workspaceItemMove(workspaceId: string, payload: WorkspaceItemMovePayload): Promise<WorkspaceItem>
 
   workspaceAssetsList(workspaceId: string): Promise<WorkspaceAsset[]>
-  workspaceAssetsAddFiles(workspaceId: string, payload: WorkspaceAssetsFilesPayload): Promise<WorkspaceAsset[]>
+  workspaceAssetGet(assetId: string): Promise<WorkspaceAsset>
+  workspaceAssetsAddFiles(workspaceId: string, payload: WorkspaceAssetsFilesPayload): Promise<WorkspaceAssetImportResult>
   workspaceAssetPreview(workspaceId: string, assetId: string): Promise<WorkspaceAssetTextPreview>
   workspaceAssetOpen(workspaceId: string, assetId: string): Promise<{ ack: boolean }>
   workspaceAssetReveal(workspaceId: string, assetId: string): Promise<{ ack: boolean }>
@@ -419,24 +429,27 @@ export interface ServerHttp {
   workspaceCanvasGet(workspaceId: string): Promise<unknown>
   workspaceCanvasUpdate(workspaceId: string, canvas: unknown): Promise<unknown>
   workspaceConnectionsList(workspaceId: string): Promise<WorkspaceConnection[]>
+  workspaceConnectionGet(connectionId: string): Promise<WorkspaceConnection>
   workspaceConnectionsCreate(workspaceId: string, input: WorkspaceConnectionInput): Promise<WorkspaceConnection>
   workspaceConnectionsDelete(workspaceId: string, connectionId: string): Promise<{ ack: boolean }>
   workspaceNotesList(workspaceId: string): Promise<WorkspaceNote[]>
+  workspaceNoteGet(noteId: string): Promise<WorkspaceNote>
   workspaceNotesCreate(workspaceId: string, input: WorkspaceNoteInput): Promise<WorkspaceNote>
   workspaceNotesUpdate(workspaceId: string, noteId: string, input: WorkspaceNoteInput): Promise<WorkspaceNote>
   workspaceNotesDelete(workspaceId: string, noteId: string): Promise<{ ack: boolean }>
 
   mineruStatus(): Promise<MineruEngineStatus>
+  mineruChooseInstallRoot(): Promise<MineruEngineStatus>
   mineruInstall(payload?: MineruInstallPayload): Promise<{ ack: boolean }>
   mineruCancelInstall(): Promise<{ ack: boolean }>
   mineruUninstall(): Promise<{ ack: boolean }>
   ocrStart(payload: OcrStartPayload): Promise<{ jobId: string }>
-  ocrCancel(payload: OcrCancelPayload): Promise<{ ack: boolean }>
-  ocrState(): Promise<OcrDocumentState>
-  ocrMarkdown(jobId: string): Promise<{ markdown: string }>
+  ocrCancel(payload: OcrCancelPayload): Promise<OcrJob>
+  ocrState(documentId: string): Promise<OcrDocumentState>
+  ocrMarkdown(documentId: string, resultKey: string): Promise<{ markdown: string }>
 
   exportJson(payload: ExportJsonPayload): Promise<unknown>
-  exportBibtex(payload: ExportBibtexPayload): Promise<unknown>
+  exportBibtex(payload: ExportBibtexPayload): Promise<{ bibtex: string }>
   exportBibtexString(documentIds: string[]): Promise<{ bibtex: string }>
 
   clipboardWriteText(payload: ClipboardWritePayload): Promise<{ ack: boolean }>
@@ -560,9 +573,12 @@ export function createServerClient(
   const http: ServerHttp = {
     systemReady: () => get<{ status: string }>('/ready'),
     systemShutdown: () => post<{ ack: boolean }>('/shutdown'),
+    appBootstrap: () => get<BootstrapData>('/app/bootstrap'),
+    globalSearch: (query) => get<GlobalSearchResult>('/search/global', { q: query }),
+    dialogOpenDirectory: (title) => post<{ canceled: boolean; path: string | null }>('/dialog/open-directory', { title }),
 
     documentsList: (query) => get<Document[]>('/documents', query),
-    documentsCount: (query) => get<{ count: number }>('/documents/count', query),
+    documentsCount: () => get<DocumentCounts>('/documents/count'),
     documentsSearch: (q) => get<Document[]>('/documents/search', { q }),
     documentsGet: (id) => get<Document>(`/documents/${id}`),
     documentsUpdate: (id, p) => patch<Document>(`/documents/${id}`, p),
@@ -577,11 +593,11 @@ export function createServerClient(
     documentsOpenPdf: (id) => post<{ ack: boolean }>(`/documents/${id}/open-pdf`),
     documentsOpenInFinder: (id) => post<{ ack: boolean }>(`/documents/${id}/open-in-finder`),
 
-    importFiles: (payload) => post<{ imported: Document[]; skipped: Array<{ path: string; reason: string }> }>('/import/files', payload),
-    importFolder: (payload) => post<{ imported: Document[] }>('/import/folder', payload),
+    importFiles: (payload) => post<PdfImportResult>('/import/files', payload),
+    importFolder: (payload) => post<PdfImportResult>('/import/folder', payload),
     importJson: (payload) => post<{ imported: number }>('/import/json', payload),
-    importZotero: (payload) => post<{ imported: number }>('/import/zotero', payload),
-    importMendeley: (payload) => post<{ imported: number }>('/import/mendeley', payload),
+    importZotero: (payload) => post<BibImportResult>('/import/zotero', payload),
+    importMendeley: (payload) => post<BibImportResult>('/import/mendeley', payload),
     importIdentifier: (payload) => post<{ documentId: string }>('/import/identifier', payload),
 
     categoriesList: () => get<Category[]>('/categories'),
@@ -608,25 +624,25 @@ export function createServerClient(
     aiProvidersCreate: (input) => post<AiProvider>('/ai/providers', input),
     aiProvidersUpdate: (id, input) => patch<AiProvider>(`/ai/providers/${id}`, input),
     aiProvidersDelete: (id) => del<{ ack: boolean }>(`/ai/providers/${id}`),
-    aiProvidersTest: (id, payload) => post<{ ok: boolean; model?: string }>(`/ai/providers/${id}/test`, payload),
-    aiProvidersModels: (id, payload) => post<{ models: string[] }>(`/ai/providers/${id}/models`, payload),
+    aiProvidersTest: (id) => post<{ ok: boolean; model?: string }>(`/ai/providers/${id}/test`),
+    aiProvidersModels: (provider) => post<{ ok: boolean; models: string[]; error?: string }>('/ai/providers/models', provider),
 
     aiDocTextGet: (id) => get<{ text: string }>(`/ai/doc-text/${id}`),
     aiSummarize: (payload) => post<{ summaryId: string }>('/ai/summarize', payload),
     aiSummaryGet: (id) => get<AiSummary | null>(`/ai/summary/${id}`),
 
-    aiChatSend: (payload) => post<{ runId: string }>('/ai/chat/send', payload),
+    aiChatSend: (payload) => post<{ runId: string; threadId: string }>('/ai/chat/send', payload),
     aiChatResume: (payload) => post<{ runId: string }>('/ai/chat/resume', payload),
     aiChatCancel: (payload) => post<{ ack: boolean }>('/ai/chat/cancel', payload),
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
     aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${id}/history`),
     aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${id}/traces`),
-    aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/threads/${id}/pending-interrupt`),
+    aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/runs/${id}/pending-interrupt`),
     aiChatDeleteThread: (id) => del<{ ack: boolean }>(`/ai/chat/threads/${id}`),
     aiChatRenameThread: (id, payload) => patch<ChatThread>(`/ai/chat/threads/${id}`, payload),
-    aiChatMemories: (id) => get<WorkspaceAgentMemory[]>(`/ai/chat/threads/${id}/memories`),
-    aiChatUpdateMemory: (id, memoryId, payload) => put<WorkspaceAgentMemory>(`/ai/chat/threads/${id}/memories/${memoryId}`, payload),
-    aiChatDeleteMemory: (id, memoryId) => del<{ ack: boolean }>(`/ai/chat/threads/${id}/memories/${memoryId}`),
+    aiChatMemories: (workspaceId) => get<WorkspaceAgentMemory[]>('/ai/memories', { workspaceId: workspaceId ?? undefined }),
+    aiChatUpdateMemory: (workspaceId, path, payload) => put<WorkspaceAgentMemory>('/ai/memories', { workspaceId, path, value: payload.value }),
+    aiChatDeleteMemory: (workspaceId, path) => del<{ ack: boolean }>('/ai/memories', { workspaceId: workspaceId ?? undefined, path }),
 
     aiReportsList: (workspaceId) => get<AiReport[]>('/ai/reports', { workspaceId }),
     aiReportsDelete: (id) => del<{ ack: boolean }>(`/ai/reports/${id}`),
@@ -639,6 +655,7 @@ export function createServerClient(
     workspacesOpenSandbox: (id) => post<{ ack: boolean }>(`/workspaces/${id}/open-sandbox`),
 
     workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${id}/items`),
+    workspaceItemGet: (id) => get<WorkspaceItem>(`/workspace-items/${id}`),
     workspaceItemsCreate: (id, input) => post<WorkspaceItem>(`/workspaces/${id}/items`, input),
     workspaceItemsDelete: (id, itemId) => del<{ ack: boolean }>(`/workspaces/${id}/items/${itemId}`),
     workspaceItemsReorder: (id, payload) => post<{ ack: boolean }>(`/workspaces/${id}/items/reorder`, payload),
@@ -646,7 +663,8 @@ export function createServerClient(
     workspaceItemMove: (id, payload) => post<WorkspaceItem>(`/workspaces/${id}/items/move`, payload),
 
     workspaceAssetsList: (id) => get<WorkspaceAsset[]>(`/workspaces/${id}/assets`),
-    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAsset[]>(`/workspaces/${id}/assets/files`, payload),
+    workspaceAssetGet: (id) => get<WorkspaceAsset>(`/workspace-assets/${id}`),
+    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${id}/assets/files`, payload),
     workspaceAssetPreview: (id, assetId) => get<WorkspaceAssetTextPreview>(`/workspaces/${id}/assets/${assetId}/preview`),
     workspaceAssetOpen: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/open`),
     workspaceAssetReveal: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/reveal`),
@@ -655,24 +673,27 @@ export function createServerClient(
     workspaceCanvasGet: (id) => get<unknown>(`/workspaces/${id}/canvas`),
     workspaceCanvasUpdate: (id, canvas) => put<unknown>(`/workspaces/${id}/canvas`, canvas),
     workspaceConnectionsList: (id) => get<WorkspaceConnection[]>(`/workspaces/${id}/connections`),
+    workspaceConnectionGet: (id) => get<WorkspaceConnection>(`/workspace-connections/${id}`),
     workspaceConnectionsCreate: (id, input) => post<WorkspaceConnection>(`/workspaces/${id}/connections`, input),
     workspaceConnectionsDelete: (id, connectionId) => del<{ ack: boolean }>(`/workspaces/${id}/connections/${connectionId}`),
     workspaceNotesList: (id) => get<WorkspaceNote[]>(`/workspaces/${id}/notes`),
+    workspaceNoteGet: (id) => get<WorkspaceNote>(`/workspace-notes/${id}`),
     workspaceNotesCreate: (id, input) => post<WorkspaceNote>(`/workspaces/${id}/notes`, input),
     workspaceNotesUpdate: (id, noteId, input) => patch<WorkspaceNote>(`/workspaces/${id}/notes/${noteId}`, input),
     workspaceNotesDelete: (id, noteId) => del<{ ack: boolean }>(`/workspaces/${id}/notes/${noteId}`),
 
     mineruStatus: () => get<MineruEngineStatus>('/mineru/status'),
+    mineruChooseInstallRoot: () => post<MineruEngineStatus>('/mineru/choose-install-root'),
     mineruInstall: (payload) => post<{ ack: boolean }>('/mineru/install', payload ?? {}),
     mineruCancelInstall: () => post<{ ack: boolean }>('/mineru/cancel-install'),
     mineruUninstall: () => post<{ ack: boolean }>('/mineru/uninstall'),
     ocrStart: (payload) => post<{ jobId: string }>('/ocr/start', payload),
-    ocrCancel: (payload) => post<{ ack: boolean }>('/ocr/cancel', payload),
-    ocrState: () => get<OcrDocumentState>('/ocr/state'),
-    ocrMarkdown: (jobId) => get<{ markdown: string }>(`/ocr/${jobId}/markdown`),
+    ocrCancel: (payload) => post<OcrJob>('/ocr/cancel', payload),
+    ocrState: (documentId) => get<OcrDocumentState>('/ocr/state', { documentId }),
+    ocrMarkdown: (documentId, resultKey) => get<{ markdown: string }>(`/ocr/documents/${documentId}/results/${resultKey}/markdown`),
 
     exportJson: (payload) => post<unknown>('/export/json', payload),
-    exportBibtex: (payload) => post<unknown>('/export/bibtex', payload),
+    exportBibtex: (payload) => post<{ bibtex: string }>('/export/bibtex', payload),
     exportBibtexString: (ids) => get<{ bibtex: string }>('/export/bibtex-string', { documentIds: ids.join(',') }),
 
     clipboardWriteText: (payload) => post<{ ack: boolean }>('/clipboard/write-text', payload),
@@ -686,6 +707,7 @@ export function createServerClient(
   let connectPromise: Promise<void> | null = null
   let reconnectAttempts = 0
   let manualClose = false
+  const subscribedTopics = new Set<string>()
 
   function ensureListeners(event: WsEventName): Set<WsEventListener> {
     let set = listeners.get(event)
@@ -784,13 +806,39 @@ export function createServerClient(
         route = '/native/dialog-open-directory'
         body = { title: request.title }
         break
+      case 'connector.dialog-open-file':
+        route = '/native/dialog-open-file'
+        body = { title: request.title, extensions: request.extensions }
+        break
+      case 'connector.dialog-choose':
+        route = '/native/dialog-choose'
+        body = {
+          title: request.title,
+          message: request.message,
+          buttons: request.buttons,
+          defaultId: request.defaultId,
+          cancelId: request.cancelId
+        }
+        break
       case 'connector.clipboard-write':
         route = '/native/clipboard-write'
         body = { text: request.text }
         break
+      case 'connector.clipboard-write-file':
+        route = '/native/clipboard-write-file'
+        body = { path: request.path }
+        break
       case 'connector.get-api-key':
         route = '/native/get-api-key'
         body = { providerId: request.providerId }
+        break
+      case 'connector.encrypt-api-key':
+        route = '/native/encrypt-api-key'
+        body = { apiKey: request.apiKey }
+        break
+      case 'connector.decrypt-api-key':
+        route = '/native/decrypt-api-key'
+        body = { apiKeyEnc: request.apiKeyEnc }
         break
       default:
         sendConnectorErrorImpl({ requestId, ok: false, error: { code: 'unknown_connector', message: `Unknown connector event: ${event}` } })
@@ -863,6 +911,12 @@ export function createServerClient(
       const onOpen = (): void => {
         cleanup()
         reconnectAttempts = 0
+        if (subscribedTopics.size > 0) {
+          sendRaw({
+            event: 'subscribe',
+            data: { topics: [...subscribedTopics] }
+          })
+        }
         resolve()
       }
       const onError = (): void => {
@@ -929,9 +983,11 @@ export function createServerClient(
       if (set) set.delete(cb)
     },
     subscribe(topics): void {
+      for (const topic of topics) subscribedTopics.add(topic)
       sendRaw({ event: 'subscribe', data: { topics } })
     },
     unsubscribe(topics): void {
+      for (const topic of topics) subscribedTopics.delete(topic)
       sendRaw({ event: 'unsubscribe', data: { topics } })
     },
     ping(): void {

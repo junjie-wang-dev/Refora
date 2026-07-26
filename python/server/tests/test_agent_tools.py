@@ -3,6 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from refora_server.academic.frontier import (
+    ContinueFrontierInput,
+    ExpandFrontierInput,
+    ResearchFrontierService,
+    StartFrontierInput,
+)
 from refora_server.academic.types import (
     AcademicGraphCandidate,
     AcademicGraphCoverage,
@@ -44,14 +50,55 @@ class Functions(dict):
 _SEED = PaperIdentity(canonicalId="s2:seed", title="Seed", authors=[], matchStatus="exact", evidence=[])
 
 
+def _frontier_view(round_: int, action: str | None) -> FrontierView:
+    return FrontierView(
+        frontierId="f-1",
+        round=round_,
+        seed=_SEED,
+        expandedFrom=["s2:seed"] if round_ else [],
+        groups=FrontierGroups(),
+        coverage=FrontierCoverageSet(),
+        nextActions=(
+            [FrontierNextAction(type=action, description="d")] if action else []
+        ),
+        warnings=[],
+        fetchedAt="2026-01-01T00:00:00.000Z",
+    )
+
+
+class _RecordingFrontier(ResearchFrontierService):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    async def start(
+        self, input: StartFrontierInput, signal: Optional[Any] = None
+    ) -> FrontierView:
+        self.calls.append(("start", input))
+        return _frontier_view(0, "expand")
+
+    async def expand(
+        self, input: ExpandFrontierInput, signal: Optional[Any] = None
+    ) -> FrontierView:
+        self.calls.append(("expand", input))
+        return _frontier_view(1, "continue")
+
+    async def continue_page(
+        self, input: ContinueFrontierInput, signal: Optional[Any] = None
+    ) -> FrontierView:
+        self.calls.append(("continue_page", input))
+        return _frontier_view(2, None)
+
+
 class _AcademicDeps:
     def __init__(self) -> None:
         self.arxiv_search: list[ArxivSearchInput] = []
         self.recommendation_locators: list[PaperLocator] = []
         self.citing_locators: list[PaperLocator] = []
         self.referenced_locators: list[PaperLocator] = []
+        self.citing_filters: list[dict[str, Any] | None] = []
+        self.referenced_filters: list[dict[str, Any] | None] = []
         self.identity_locators: list[PaperLocator] = []
-        self.frontier_calls: list[tuple[str, dict[str, Any]]] = []
+        self._frontier = _RecordingFrontier()
 
     @property
     def academic(self) -> Any:
@@ -98,10 +145,12 @@ class _AcademicDeps:
 
     async def get_citing_papers(self, locator: PaperLocator, cursor: Optional[str] = None, limit: Optional[int] = None, signal: Optional[Any] = None, filters: Optional[dict[str, Any]] = None) -> AcademicGraphPage:
         self.citing_locators.append(locator)
+        self.citing_filters.append(filters)
         return AcademicGraphPage(seed=_SEED, direction="incoming", items=[], coverage=AcademicGraphCoverage(scanned=0, total=0, complete=True), fetchedAt="2026-01-01T00:00:00.000Z", cached=False)
 
     async def get_referenced_papers(self, locator: PaperLocator, cursor: Optional[str] = None, limit: Optional[int] = None, signal: Optional[Any] = None, filters: Optional[dict[str, Any]] = None) -> AcademicGraphPage:
         self.referenced_locators.append(locator)
+        self.referenced_filters.append(filters)
         return AcademicGraphPage(seed=_SEED, direction="outgoing", items=[AcademicGraphCandidate(paper=_SEED)], coverage=AcademicGraphCoverage(scanned=1, total=1, complete=True), fetchedAt="2026-01-01T00:00:00.000Z", cached=False)
 
     async def get_recommendations(self, locator: PaperLocator, limit: Optional[int] = None, signal: Optional[Any] = None) -> SemanticRecommendationResult:
@@ -110,28 +159,20 @@ class _AcademicDeps:
 
     @property
     def frontier(self) -> Any:
-        async def start(args: dict[str, Any]) -> FrontierView:
-            self.frontier_calls.append(("start", args))
-            return FrontierView(frontierId="f-1", round=0, seed=_SEED, expandedFrom=[], groups=FrontierGroups(), coverage=FrontierCoverageSet(), nextActions=[FrontierNextAction(type="expand", description="d")], warnings=[], fetchedAt="2026-01-01T00:00:00.000Z")
-
-        async def expand(args: dict[str, Any]) -> FrontierView:
-            self.frontier_calls.append(("expand", args))
-            return FrontierView(frontierId="f-1", round=1, seed=_SEED, expandedFrom=["s2:seed"], groups=FrontierGroups(), coverage=FrontierCoverageSet(), nextActions=[FrontierNextAction(type="continue", description="d")], warnings=[], fetchedAt="2026-01-01T00:00:00.000Z")
-
-        async def continue_(args: dict[str, Any]) -> FrontierView:
-            self.frontier_calls.append(("continue", args))
-            return FrontierView(frontierId="f-1", round=2, seed=_SEED, expandedFrom=["s2:seed"], groups=FrontierGroups(), coverage=FrontierCoverageSet(), nextActions=[], warnings=[], fetchedAt="2026-01-01T00:00:00.000Z")
-
-        frontier = Functions()
-        frontier["start"] = start
-        frontier["expand"] = expand
-        frontier["continue"] = continue_
-        return frontier
+        return self._frontier
 
 
 def _academic_executor() -> tuple[AgentToolExecutor, _AcademicDeps]:
     deps = _AcademicDeps()
-    return AgentToolExecutor(AgentToolContext(run_id="run"), {"repos": {}, "academic": deps}), deps
+    return (
+        AgentToolExecutor(
+            AgentToolContext(
+                run_id="run", thread_id="thread-1", workspace_id="workspace-1"
+            ),
+            {"repos": {}, "academic": deps},
+        ),
+        deps,
+    )
 
 
 def test_academic_tools_registered_in_group_registry():
@@ -264,15 +305,19 @@ def test_get_paper_summary_returns_content_or_unavailable_notice():
 
 def test_request_summary_queues_when_service_available_and_reports_unavailable_otherwise():
     queued = []
+    repos = {
+        "documents": Functions(get=lambda doc_id: {"id": doc_id}),
+        "aiSummaries": Functions(getSummary=lambda doc_id: None),
+    }
 
     def queue(doc_id):
         queued.append(doc_id)
 
-    executor = _library_executor({}, {"ai_summary": queue})
+    executor = _library_executor(repos, {"ai_summary": queue})
     assert json.loads(executor.execute("request_summary", {"docId": "d1"})) == {"status": "queued", "docId": "d1"}
     assert queued == ["d1"]
 
-    executor = _library_executor({}, {"ai_summary": None})
+    executor = _library_executor(repos, {"ai_summary": None})
     assert json.loads(executor.execute("request_summary", {"docId": "d1"})) == {"status": "unavailable", "docId": "d1"}
 
 
@@ -373,11 +418,10 @@ def test_write_tool_uses_effects_and_replays_finished_result():
     assert [call[0] for call in calls] == ["begin", "finish"]
 
 
-def test_approval_sensitive_memory_tool_interrupts_before_writing():
-    interrupted = []
+def test_external_tool_executor_has_no_parallel_approval_callback():
     writes = []
     executor = AgentToolExecutor(
-        AgentToolContext(run_id="run"),
+        AgentToolContext(run_id="run", workspace_id="workspace"),
         {
             "repos": {
                 "agentMemories": {
@@ -385,15 +429,47 @@ def test_approval_sensitive_memory_tool_interrupts_before_writing():
                     "upsert": lambda entry: writes.append(entry) or entry,
                 },
             },
-            "interrupt": lambda name, args: interrupted.append((name, args)) or {"status": "interrupted"},
         },
     )
 
-    result = json.loads(executor.execute("propose_workspace_memory_update", {"path": "/brief.md", "content": "x", "rationale": "stable"}, "call"))
+    result = json.loads(
+        executor.execute(
+            "propose_workspace_memory_update",
+            {"path": "/brief.md", "content": "x", "rationale": "stable"},
+        )
+    )
 
-    assert result == {"status": "interrupted"}
-    assert interrupted[0][0] == "propose_workspace_memory_update"
-    assert writes == []
+    assert result["path"] == "/brief.md"
+    assert result["content"] == "x"
+    assert len(writes) == 1
+
+
+def test_global_memory_tool_uses_global_scope_and_excludes_research_path():
+    writes = []
+    repos = {
+        "agentMemories": {
+            "list": lambda scope, scope_id: [],
+            "upsert": lambda entry: writes.append(entry) or entry,
+        }
+    }
+    context = AgentToolContext(run_id="run", workspace_id=None)
+    executor = AgentToolExecutor(context, {"repos": repos})
+
+    result = json.loads(
+        executor.execute(
+            "propose_workspace_memory_update",
+            {"path": "/brief.md", "content": "global", "rationale": "stable"},
+        )
+    )
+    tools = create_agent_tools(context, {"repos": repos})
+    memory_tool = next(
+        tool for tool in tools if tool.name == "propose_workspace_memory_update"
+    )
+
+    assert result["scope"] == "global"
+    assert result["scopeId"] == "global"
+    assert writes[0]["workspaceId"] is None
+    assert "/research.md" not in memory_tool.args_schema["properties"]["path"]["enum"]
 
 
 
@@ -401,6 +477,8 @@ def test_ocr_memory_registers_its_tools():
     tools = register_ocr(None, None)
 
     assert set(tools) == {"prepare_paper_ocr", "propose_workspace_memory_update"}
+    memory_schema = tools["propose_workspace_memory_update"][1]
+    assert "/research.md" in memory_schema["properties"]["path"]["enum"]
 
 
 def test_search_arxiv_dispatches_to_academic_arxiv_search():
@@ -438,22 +516,40 @@ def test_resolve_academic_identity_passes_paper_locator():
 def test_get_citing_papers_returns_incoming_page():
     executor, deps = _academic_executor()
 
-    result = json.loads(executor.execute("get_citing_papers", {"paper": {"type": "arxiv_id", "value": "2401.00001"}}))
+    result = json.loads(
+        executor.execute(
+            "get_citing_papers",
+            {
+                "paper": {"type": "arxiv_id", "value": "2401.00001"},
+                "publishedAfter": "2025-01-01",
+            },
+        )
+    )
 
     assert result["direction"] == "incoming"
     assert result["items"] == []
     assert len(deps.citing_locators) == 1
+    assert deps.citing_filters == [{"publishedAfter": "2025-01-01"}]
 
 
 def test_get_referenced_papers_returns_outgoing_page_with_candidates():
     executor, deps = _academic_executor()
 
-    result = json.loads(executor.execute("get_referenced_papers", {"paper": {"type": "arxiv_id", "value": "2401.00001"}}))
+    result = json.loads(
+        executor.execute(
+            "get_referenced_papers",
+            {
+                "paper": {"type": "arxiv_id", "value": "2401.00001"},
+                "publishedAfter": "2024-01-01",
+            },
+        )
+    )
 
     assert result["direction"] == "outgoing"
     assert len(result["items"]) == 1
     assert result["items"][0]["paper"]["canonicalId"] == _SEED.canonicalId
     assert len(deps.referenced_locators) == 1
+    assert deps.referenced_filters == [{"publishedAfter": "2024-01-01"}]
 
 
 def test_get_semantic_recommendations_returns_seed_and_items():
@@ -483,7 +579,24 @@ def test_explore_research_frontier_routes_start_expand_continue_actions():
     assert cont["round"] == 2
     assert cont["nextActions"] == []
 
-    assert [call[0] for call in deps.frontier_calls] == ["start", "expand", "continue"]
+    assert [call[0] for call in deps.frontier.calls] == [
+        "start",
+        "expand",
+        "continue_page",
+    ]
+    start_input = deps.frontier.calls[0][1]
+    assert isinstance(start_input, StartFrontierInput)
+    assert start_input.workspaceId == "workspace-1"
+    assert start_input.threadId == "thread-1"
+    assert start_input.seed == PaperLocator(type="arxiv_id", value="2401.00001")
+    expand_input = deps.frontier.calls[1][1]
+    assert isinstance(expand_input, ExpandFrontierInput)
+    assert expand_input.workspaceId == "workspace-1"
+    assert expand_input.threadId == "thread-1"
+    continue_input = deps.frontier.calls[2][1]
+    assert isinstance(continue_input, ContinueFrontierInput)
+    assert continue_input.workspaceId == "workspace-1"
+    assert continue_input.threadId == "thread-1"
 
 
 def test_tool_invoke_persists_tool_effect_from_tool_call_id():
@@ -567,4 +680,3 @@ def test_tool_invoke_without_tool_call_id_skips_effect_recording():
         assert rows[0] == 0
     finally:
         db.close()
-

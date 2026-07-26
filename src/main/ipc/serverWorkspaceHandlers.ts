@@ -45,44 +45,26 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
   const { http } = serverClient
 
   async function workspaceForItem(itemId: string): Promise<string> {
-    for (const workspace of await http.workspacesList()) {
-      if ((await http.workspaceItemsList(workspace.id)).some((item) => item.id === itemId)) {
-        return workspace.id
-      }
-    }
-    throw Object.assign(new Error(`Workspace item not found: ${itemId}`), { code: 'not_found' })
+    return (await http.workspaceItemGet(itemId)).workspaceId
   }
 
   async function workspaceForAsset(assetId: string): Promise<string> {
-    for (const workspace of await http.workspacesList()) {
-      if ((await http.workspaceAssetsList(workspace.id)).some((asset) => asset.id === assetId)) {
-        return workspace.id
-      }
-    }
-    throw Object.assign(new Error(`Workspace asset not found: ${assetId}`), { code: 'not_found' })
+    return (await http.workspaceAssetGet(assetId)).workspaceId
   }
 
   async function workspaceForConnection(connectionId: string): Promise<string> {
-    for (const workspace of await http.workspacesList()) {
-      if ((await http.workspaceConnectionsList(workspace.id)).some((connection) => connection.id === connectionId)) {
-        return workspace.id
-      }
-    }
-    throw Object.assign(new Error(`Workspace connection not found: ${connectionId}`), { code: 'not_found' })
+    return (await http.workspaceConnectionGet(connectionId)).workspaceId
   }
 
   async function noteForId(noteId: string): Promise<{ workspaceId: string; note: WorkspaceNote }> {
-    for (const workspace of await http.workspacesList()) {
-      const note = (await http.workspaceNotesList(workspace.id)).find((candidate) => candidate.id === noteId)
-      if (note) return { workspaceId: workspace.id, note }
-    }
-    throw Object.assign(new Error(`Workspace note not found: ${noteId}`), { code: 'not_found' })
+    const note = await http.workspaceNoteGet(noteId)
+    return { workspaceId: note.workspaceId, note }
   }
 
-  async function activeOcrJob(): Promise<OcrJob> {
-    const job = (await http.ocrState()).activeJob
-    if (job) return job
-    throw Object.assign(new Error('OCR job not found'), { code: 'not_found' })
+  async function activeOcrJob(documentId: string, jobId: string): Promise<OcrJob> {
+    const job = (await http.ocrState(documentId)).activeJob
+    if (job?.id === jobId) return job
+    throw Object.assign(new Error(`OCR job not found: ${jobId}`), { code: 'not_found' })
   }
 
   const handlers = {
@@ -119,18 +101,18 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
       }),
     [IpcChannel.WorkspaceItemsResize]: (itemId: string, width: number, height: number) =>
       wrap(async () => http.workspaceItemResize(await workspaceForItem(itemId), itemId, { width, height })),
-    [IpcChannel.WorkspaceItemsMove]: (itemId: string, _x: number, _y: number, _zIndex: number) =>
+    [IpcChannel.WorkspaceItemsMove]: (itemId: string, x: number, y: number, zIndex: number) =>
       wrap(async () => {
         const workspaceId = await workspaceForItem(itemId)
-        return http.workspaceItemMove(workspaceId, { itemId, targetWorkspaceId: workspaceId })
+        return http.workspaceItemMove(workspaceId, { itemId, x, y, zIndex })
       }),
 
     [IpcChannel.WorkspaceAssetsList]: (workspaceId: string) => wrap(() => http.workspaceAssetsList(workspaceId)),
     [IpcChannel.WorkspaceAssetsAddFiles]: (
       workspaceId: string,
       paths: string[],
-      _placement?: WorkspaceItemPlacement
-    ) => wrap(async () => ({ imported: await http.workspaceAssetsAddFiles(workspaceId, { paths }), errors: [] })),
+      placement?: WorkspaceItemPlacement
+    ) => wrap(() => http.workspaceAssetsAddFiles(workspaceId, { paths, placement })),
     [IpcChannel.WorkspaceAssetsTextPreview]: (assetId: string) =>
       wrap(async () => http.workspaceAssetPreview(await workspaceForAsset(assetId), assetId)),
     [IpcChannel.WorkspaceAssetsOpen]: (assetId: string) =>
@@ -193,11 +175,7 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
       }),
 
     [IpcChannel.MineruStatus]: () => wrap(() => http.mineruStatus()),
-    [IpcChannel.MineruChooseInstallRoot]: () =>
-      wrap(async () => {
-        await http.mineruInstall()
-        return http.mineruStatus()
-      }),
+    [IpcChannel.MineruChooseInstallRoot]: () => wrap(() => http.mineruChooseInstallRoot()),
     [IpcChannel.MineruInstall]: () =>
       wrap(async () => {
         await http.mineruInstall()
@@ -214,19 +192,15 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
         return http.mineruStatus()
       }),
 
-    [IpcChannel.OcrGetState]: (_documentId: string) => wrap(() => http.ocrState()),
+    [IpcChannel.OcrGetState]: (documentId: string) => wrap(() => http.ocrState(documentId)),
     [IpcChannel.OcrStart]: (documentId: string, profile: OcrProfile) =>
       wrap(async () => {
-        await http.ocrStart({ documentId, profile })
-        return activeOcrJob()
+        const { jobId } = await http.ocrStart({ documentId, profile })
+        return activeOcrJob(documentId, jobId)
       }),
-    [IpcChannel.OcrCancel]: (jobId: string) =>
-      wrap(async () => {
-        await http.ocrCancel({ jobId })
-        return activeOcrJob()
-      }),
-    [IpcChannel.OcrReadMarkdown]: (_documentId: string, resultKey: string) =>
-      wrap(async () => (await http.ocrMarkdown(resultKey)).markdown)
+    [IpcChannel.OcrCancel]: (jobId: string) => wrap(() => http.ocrCancel({ jobId })),
+    [IpcChannel.OcrReadMarkdown]: (documentId: string, resultKey: string) =>
+      wrap(async () => (await http.ocrMarkdown(documentId, resultKey)).markdown)
   }
 
   return handlers

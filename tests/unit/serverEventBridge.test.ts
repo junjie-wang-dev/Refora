@@ -48,7 +48,10 @@ describe('server event bridge', () => {
       'import.progress',
       'workspace.items.changed',
       'mineru.install-progress',
-      'ocr.error'
+      'ocr.error',
+      'connector.get-api-key',
+      'connector.encrypt-api-key',
+      'connector.decrypt-api-key'
     ]))
 
     const payload = { threadId: 'thread-1', token: 'Hello' }
@@ -70,7 +73,13 @@ describe('server event bridge', () => {
 
     expect(send).not.toHaveBeenCalled()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
-    expect(unsubscribe).toHaveBeenCalledWith(expect.arrayContaining(['ai.chat.done', 'ocr.progress']))
+    expect(unsubscribe).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        'ai.chat.done',
+        'ocr.progress',
+        'connector.decrypt-api-key'
+      ])
+    )
   })
 
   it('does not send after the window or web contents are destroyed', () => {

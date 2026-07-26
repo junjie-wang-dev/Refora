@@ -6,8 +6,10 @@ import httpx
 
 from refora_server.providers.catalog import (
     getProviderPreset,
+    inferModelCapabilities,
     providerRequiresApiKey,
 )
+from refora_server.services.ai_summary import build_provider_reasoning_options
 from refora_server.repositories.errors import RepoError
 
 TEST_TIMEOUT_MS = 8_000
@@ -132,11 +134,68 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             _warn(f"aiProviders:listModels failed: {e}")
             return {"ok": False, "models": [], "error": str(e)}
 
+    def buildProviderConfig(
+        providerId: str,
+        apiKey: str,
+        *,
+        model_id: str | None = None,
+        features: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        provider = resolveProvider(providerId, apiKey)
+        key = provider["apiKey"]
+        model = (model_id or "").strip() or (provider.get("model") or "")
+        if not model:
+            raise RepoError("invalid_input", "Model is required")
+        requested = features or {}
+        requested_effort = requested.get("reasoningEffort")
+        if isinstance(requested_effort, str):
+            provider["reasoningEffort"] = requested_effort
+        if provider.get("reasoningControl") == "none":
+            provider["reasoningEffort"] = "none"
+        capabilities = inferModelCapabilities(provider["presetId"], model)
+        supports_reasoning = capabilities.get("supportsReasoning") is True
+        if isinstance(requested_effort, str):
+            deep_thinking = requested_effort != "none"
+        else:
+            deep_thinking = requested.get("deepThinking") is True
+        reasoning_options = build_provider_reasoning_options(
+            provider,
+            deep_thinking if supports_reasoning else None,
+        )
+        config: dict[str, Any] = {
+            "model": model,
+            "baseUrl": normalize_base_url(provider["baseUrl"]),
+            "apiKey": key,
+            "useResponsesApi": reasoning_options["useResponsesApi"],
+            "modelKwargs": reasoning_options["modelKwargs"],
+            "temperature": None
+            if supports_reasoning
+            else provider.get("temperature"),
+            "maxTokens": provider.get("maxTokens"),
+        }
+        if reasoning_options.get("reasoning") is not None:
+            config["reasoning"] = reasoning_options["reasoning"]
+        return config
+
+    def resolveProvider(providerId: str, apiKey: str) -> dict[str, Any]:
+        raw = repos["aiProviders"]["getRaw"](providerId)
+        if raw is None:
+            raise RepoError("not_found", f"provider not found: {providerId}")
+        provider = _map_raw_to_provider(raw)
+        key = apiKey.strip()
+        if not key and providerRequiresApiKey(provider["presetId"]):
+            raise RepoError("invalid_input", "API key is required")
+        provider.pop("apiKeyEnc", None)
+        provider["apiKey"] = key
+        return provider
+
     return {
         "list": list,
         "getProvider": getProvider,
         "testProvider": testProvider,
         "listModels": listModels,
+        "resolveProvider": resolveProvider,
+        "buildProviderConfig": buildProviderConfig,
     }
 
 

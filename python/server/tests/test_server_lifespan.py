@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from fastapi import FastAPI
+import pytest
 
 from refora_server.server.connector import ConnectorBroker
 from refora_server.server.lifespan import create_lifespan
@@ -18,7 +19,7 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     create_repositories = Mock(return_value=repos)
     events = Mock(flush=AsyncMock())
     connector = Mock(cancel_pending=AsyncMock())
-    runtime = object()
+    runtime = {"destroy": AsyncMock()}
 
     monkeypatch.setattr("refora_server.server.lifespan.open_database", open_database)
     monkeypatch.setattr("refora_server.server.lifespan.close_database", close_database)
@@ -45,6 +46,7 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     open_database.assert_called_once_with("/tmp/refora.db")
     connector.cancel_pending.assert_awaited_once()
     events.flush.assert_awaited_once()
+    runtime["destroy"].assert_awaited_once()
     close_database.assert_called_once_with(db)
 
 
@@ -64,13 +66,15 @@ async def test_lifespan_closes_runner_owned_database(monkeypatch) -> None:
     monkeypatch.setattr("refora_server.server.lifespan.createChatHistoryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createThreadTitleService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createWorkspacesService", Mock(return_value={}))
-    monkeypatch.setattr("refora_server.server.lifespan.createAgentRuntime", Mock(return_value={}))
+    runtime = {"destroy": AsyncMock()}
+    monkeypatch.setattr("refora_server.server.lifespan.createAgentRuntime", Mock(return_value=runtime))
 
     app = FastAPI(lifespan=create_lifespan("/tmp/refora.db", "/tmp/library", db))
     async with app.router.lifespan_context(app):
         assert app.state.db is db
 
     close_database.assert_not_called()
+    runtime["destroy"].assert_awaited_once()
 
 
 async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
@@ -78,30 +82,92 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
     repos = {"documents": object()}
     events = Mock(flush=AsyncMock(), broadcast=AsyncMock())
     connector = Mock(cancel_pending=AsyncMock())
-    runtime_factory = Mock(return_value={})
+    runtime = {"destroy": AsyncMock()}
+    runtime_factory = Mock(return_value=runtime)
     tool_factory = Mock(
         return_value=[
             SimpleNamespace(name="search_library"),
             SimpleNamespace(name="prepare_paper_ocr"),
+            SimpleNamespace(name="list_workspace_context"),
+            SimpleNamespace(name="web_search"),
         ]
     )
     model_factory = Mock(return_value="model")
     agent_factory = Mock(return_value="agent")
+    summary_factory = Mock(return_value={})
+    title_factory = Mock(return_value={"generateThreadTitle": Mock()})
+    execute_sandbox = Mock(return_value={"status": "ok"})
+    install_runtime_packages = Mock(return_value={"status": "ok"})
+    cancel_sandbox = Mock(return_value=True)
+    sandbox_factory = Mock(
+        return_value={
+            "execute_sandbox": execute_sandbox,
+            "install_runtime_packages": install_runtime_packages,
+            "cancel": cancel_sandbox,
+        }
+    )
+    academic_loops: list[asyncio.AbstractEventLoop] = []
+    academic_started = asyncio.Event()
+
+    async def academic_search(value, signal):
+        academic_loops.append(asyncio.get_running_loop())
+        if getattr(value, "query", "") == "block":
+            academic_started.set()
+            await signal.wait()
+            raise asyncio.CancelledError()
+        return {"papers": []}
+
+    arxiv_client = SimpleNamespace(search=academic_search)
+    academic_identity = SimpleNamespace()
+    academic_graph = SimpleNamespace(
+        get_citing_papers=AsyncMock(),
+        get_referenced_papers=AsyncMock(),
+        get_recommendations=AsyncMock(),
+    )
+    academic_frontier = SimpleNamespace()
+    arxiv_papers = SimpleNamespace()
 
     monkeypatch.setattr("refora_server.server.lifespan.create_repositories", Mock(return_value=repos))
     monkeypatch.setattr("refora_server.server.lifespan.create_event_bus", Mock(return_value=events))
     monkeypatch.setattr("refora_server.server.lifespan.create_connector_broker", Mock(return_value=connector))
     monkeypatch.setattr("refora_server.server.lifespan.createLibraryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiProvidersService", Mock(return_value={}))
-    monkeypatch.setattr("refora_server.server.lifespan.createAiSummaryService", Mock(return_value={}))
+    monkeypatch.setattr("refora_server.server.lifespan.createAiSummaryService", summary_factory)
     monkeypatch.setattr("refora_server.server.lifespan.createChatHistoryService", Mock(return_value={}))
     monkeypatch.setattr(
         "refora_server.server.lifespan.createThreadTitleService",
-        Mock(return_value={"generateThreadTitle": Mock()}),
+        title_factory,
     )
     monkeypatch.setattr("refora_server.server.lifespan.createWorkspacesService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAgentRuntime", runtime_factory)
     monkeypatch.setattr("refora_server.server.lifespan.create_agent_tools", tool_factory)
+    monkeypatch.setattr("refora_server.server.lifespan.createSandboxService", sandbox_factory)
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_academic_cache", Mock()
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_arxiv_client",
+        Mock(return_value=arxiv_client),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_semantic_scholar_client", Mock()
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_academic_identity_service",
+        Mock(return_value=academic_identity),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_academic_graph_service",
+        Mock(return_value=academic_graph),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_research_frontier_service",
+        Mock(return_value=academic_frontier),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_arxiv_paper_service",
+        Mock(return_value=arxiv_papers),
+    )
     monkeypatch.setattr("refora_server.agent.providers.ChatOpenAI", model_factory)
     monkeypatch.setattr("refora_server.agent.providers.create_deep_agent", agent_factory)
 
@@ -112,7 +178,12 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             "runId": "run-1",
             "threadId": "thread-1",
             "workspaceId": None,
-            "enabledToolNames": ["search_library"],
+            "sandboxRoot": "/tmp/library/.refora/sandboxes/default",
+            "enabledToolNames": [
+                "search_library",
+                "list_workspace_context",
+                "web_search",
+            ],
             "systemPrompt": "Use the library.",
         }
 
@@ -121,7 +192,57 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         context = tool_factory.call_args.args[0]
         assert context.run_id == "run-1"
         assert context.thread_id == "thread-1"
-        assert tool_factory.call_args.args[1]["repos"] is repos
+        tool_dependencies = tool_factory.call_args.args[1]
+        assert tool_dependencies["repos"] is repos
+        assert callable(tool_dependencies["open_paper"])
+        assert callable(tool_dependencies["find_related_papers"])
+        assert callable(tool_dependencies["workspace_changed"])
+        assert callable(tool_dependencies["ai_summary"])
+        search_academic = tool_dependencies["academic"]["arxiv"]["search"]
+        assert await asyncio.to_thread(
+            search_academic, SimpleNamespace(query="first")
+        ) == {"papers": []}
+        assert academic_loops == [asyncio.get_running_loop()]
+        blocked = asyncio.create_task(
+            asyncio.to_thread(
+                search_academic, SimpleNamespace(query="block")
+            )
+        )
+        await asyncio.wait_for(academic_started.wait(), 1)
+        app.state.cancel_agent_network("run-1")
+        with pytest.raises(asyncio.CancelledError):
+            await blocked
+        assert tool_dependencies["execute_sandbox"](
+            "pwd",
+            {"_sandboxRoot": "/tmp/untrusted", "_runId": "run-1"},
+        ) == {"status": "ok"}
+        execute_sandbox.assert_called_once_with(
+            "pwd",
+            {
+                "_sandboxRoot": "/tmp/library/.refora/sandboxes/default",
+                "_runId": "run-1",
+            },
+        )
+        assert tool_dependencies["install_runtime_packages"](
+            None,
+            {"_sandboxRoot": "/tmp/untrusted", "_runId": "run-1"},
+        ) == {"status": "ok"}
+        install_runtime_packages.assert_called_once_with(
+            None,
+            {
+                "_sandboxRoot": "/tmp/library/.refora/sandboxes/default",
+                "_runId": "run-1",
+            },
+        )
+        assert dependencies["cancelRun"]("run-1") is True
+        cancel_sandbox.assert_called_once_with("run-1")
+        assert callable(dependencies["finishRun"])
+
+        summary_dependencies = summary_factory.call_args.args[1]
+        assert callable(summary_dependencies["generate_summary"])
+        assert callable(summary_dependencies["emit_delta"])
+        assert callable(summary_dependencies["emit_error"])
+        assert callable(title_factory.call_args.args[1]["generate_title"])
 
         assert dependencies["createModel"](
             {
@@ -147,17 +268,23 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             max_completion_tokens=123,
         )
 
-        assert dependencies["createAgent"]("model", ["tool"], request) == "agent"
+        runtime_tools = [
+            SimpleNamespace(name="search_library"),
+            SimpleNamespace(name="prepare_paper_ocr"),
+        ]
+        assert dependencies["createAgent"]("model", runtime_tools, request) == "agent"
         agent_factory.assert_called_once()
         assert agent_factory.call_args.kwargs["model"] == "model"
-        assert agent_factory.call_args.kwargs["tools"] == ["tool"]
+        assert agent_factory.call_args.kwargs["tools"] == runtime_tools
         assert agent_factory.call_args.kwargs["system_prompt"] == "Use the library."
         assert set(agent_factory.call_args.kwargs["interrupt_on"]) == {
+            "search_library",
             "prepare_paper_ocr",
-            "publish_workspace_artifacts",
-            "install_runtime_packages",
-            "propose_workspace_memory_update",
         }
+        assert agent_factory.call_args.kwargs["skills"] is None
+        assert agent_factory.call_args.kwargs["subagents"] == []
+
+    runtime["destroy"].assert_awaited_once()
 
 
 async def test_connector_cancels_pending_requests() -> None:

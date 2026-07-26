@@ -441,12 +441,29 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
             return fh.read()
 
     async def read_markdown(document_id: str, result_key: str) -> str:
+        document = documents["get"](document_id)
+        if document is None:
+            raise RepoError("not_found", f"Document not found: {document_id}")
         result = document_ocr["getResultByKey"](document_id, result_key)
         if result is None:
             raise RepoError("not_found", "OCR result not found")
+        source_hash = document.get("fileHash")
+        if (
+            isinstance(source_hash, str)
+            and source_hash
+            and result.get("sourceHash") != source_hash
+        ):
+            raise RepoError("stale", "OCR result is stale for the current document")
         path = resolve_ocr_result_file(deps.getLibraryFolder(), result["markdownRelativePath"])
-        with open(path, "r", encoding="utf-8") as fh:
-            return fh.read()
+        try:
+            if _is_symlink(path) or not _is_regular_file(path):
+                raise RepoError("file_missing", "OCR markdown file is missing")
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except RepoError:
+            raise
+        except (OSError, UnicodeError) as error:
+            raise RepoError("file_missing", "OCR markdown file is unavailable") from error
 
     async def prepare_document_delete(document_id: str) -> None:
         active = document_ocr["getActiveJob"](document_id)

@@ -50,6 +50,28 @@ def test_get_missing_returns_none(db):
     assert ws["get"]("nonexistent") is None
 
 
+def test_search_content_matches_notes_and_reports(db):
+    ws = make_workspaces_repo(db)
+    created = ws["create"]("Research")
+    db.execute(
+        "INSERT INTO workspace_notes "
+        "(id, workspaceId, title, contentMd, noteType, createdAt, updatedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["note-1", created["id"], "Architecture", "latent representation details", "markdown", 1, 2],
+    )
+    db.execute(
+        "INSERT INTO ai_reports (id, workspaceId, title, contentMd, createdAt) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ["report-1", created["id"], "Report", "latent representation results", 3],
+    )
+
+    results = ws["searchContent"]("latent representation")
+
+    assert {result["id"] for result in results} == {"note-1", "report-1"}
+    assert all(result["workspaceName"] == "Research" for result in results)
+    assert ws["searchContent"]("   ") == []
+
+
 def test_rename_updates_name_and_returns_workspace(db):
     ws = make_workspaces_repo(db)
     created = ws["create"]("Old")

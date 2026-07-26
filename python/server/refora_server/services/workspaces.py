@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import shutil
 import time
@@ -108,9 +109,16 @@ def _require_workspace_asset_file(
 def _connector_method(connector, name):
     if connector is None:
         return None
+    aliases = {
+        "openPath": "open_path",
+        "showInFolder": "show_in_folder",
+        "trashItem": "trash_item",
+    }
     if isinstance(connector, dict):
-        return connector.get(name)
-    return getattr(connector, name, None)
+        return connector.get(name) or connector.get(aliases.get(name, ""))
+    return getattr(connector, name, None) or getattr(
+        connector, aliases.get(name, ""), None
+    )
 
 
 def _sandbox_method(sandbox, name):
@@ -127,22 +135,75 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     logger = deps.get("logger")
     sandbox = deps.get("sandbox")
 
+    async def _connector_call(name: str, *args: Any) -> Any:
+        operation = _connector_method(connector, name)
+        if operation is None:
+            raise RepoError("not_ready", "Connector is not available")
+        result = operation(*args)
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, dict) and isinstance(result.get("ok"), bool):
+            if result["ok"]:
+                return result.get("data")
+            error = result.get("error")
+            code = (
+                error.get("code")
+                if isinstance(error, dict) and isinstance(error.get("code"), str)
+                else "connector_failed"
+            )
+            message = (
+                error.get("message")
+                if isinstance(error, dict) and isinstance(error.get("message"), str)
+                else "Native operation failed"
+            )
+            raise RepoError(code, message)
+        return result
+
     def _transaction(fn: Callable[[], Any]) -> Any:
         tx = repos.get("transaction")
         if tx is not None:
             return tx(fn)
         return fn()
 
+    def _require_workspace(workspace_id: str) -> dict[str, Any]:
+        workspace = repos["workspaces"]["get"](workspace_id)
+        if workspace is None:
+            raise RepoError("not_found", f"workspace not found: {workspace_id}")
+        return workspace
+
+    def _require_scoped(
+        repository_name: str,
+        record_name: str,
+        record_id: str,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        repository = repos[repository_name]
+        getter = repository.get("get") if isinstance(repository, dict) else getattr(repository, "get", None)
+        if not callable(getter):
+            raise RepoError("not_ready", f"{record_name} lookup is unavailable")
+        record = getter(record_id)
+        if record is None or (
+            workspace_id is not None and record.get("workspaceId") != workspace_id
+        ):
+            raise RepoError("not_found", f"{record_name} not found: {record_id}")
+        return record
+
     def list_workspaces() -> list[dict[str, Any]]:
         return repos["workspaces"]["list"]()
 
     def create_workspace(name: str) -> dict[str, Any]:
-        return repos["workspaces"]["create"](name)
+        normalized = name.strip()
+        if not normalized:
+            raise RepoError("invalid_name", "workspace name cannot be empty")
+        return repos["workspaces"]["create"](normalized)
 
     def update_workspace(workspace_id: str, name: str) -> dict[str, Any]:
-        return repos["workspaces"]["rename"](workspace_id, name)
+        normalized = name.strip()
+        if not normalized:
+            raise RepoError("invalid_name", "workspace name cannot be empty")
+        return repos["workspaces"]["rename"](workspace_id, normalized)
 
-    def delete_workspace(workspace_id: str) -> None:
+    async def delete_workspace(workspace_id: str) -> None:
         assets = repos["workspaceAssets"]["list"](workspace_id)
         for asset in assets:
             try:
@@ -152,26 +213,26 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             except RepoError:
                 continue
             if os.path.isdir(asset_directory):
-                _connector_trash(asset_directory)
+                await _connector_trash(asset_directory)
         repos["workspaces"]["delete"](workspace_id)
 
-    def open_sandbox(workspace_id: str) -> None:
-        if not any(w["id"] == workspace_id for w in repos["workspaces"]["list"]()):
-            raise RepoError("not_found", f"workspace not found: {workspace_id}")
+    async def open_sandbox(workspace_id: str) -> None:
+        _require_workspace(workspace_id)
         ensure = _sandbox_method(sandbox, "ensure")
         if ensure is None:
             raise RepoError("not_ready", "Agent sandbox is not available")
         sandbox_paths = ensure(workspace_id)
         sandbox_root = sandbox_paths["sandboxRoot"]
-        open_path = _connector_method(connector, "openPath")
-        if open_path is None:
-            raise RepoError("not_ready", "Connector is not available")
-        message = open_path(sandbox_root)
+        message = await _connector_call("openPath", sandbox_root)
         if message:
             raise RepoError("open_failed", message)
 
     def list_items(workspace_id: str) -> list[dict[str, Any]]:
+        _require_workspace(workspace_id)
         return repos["workspaceItems"]["list"](workspace_id)
+
+    def get_item(item_id: str) -> dict[str, Any]:
+        return _require_scoped("workspaceItems", "workspace item", item_id)
 
     def add_items(
         workspace_id: str,
@@ -183,7 +244,8 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             lambda: repos["workspaceItems"]["add"](workspace_id, kind, ids, placement)
         )
 
-    def delete_item(item_id: str) -> None:
+    def delete_item(workspace_id: str, item_id: str) -> None:
+        _require_scoped("workspaceItems", "workspace item", item_id, workspace_id)
         repos["workspaceItems"]["remove"](item_id)
 
     def reorder_items(workspace_id: str, ordered_ids: list[str]) -> list[dict[str, Any]]:
@@ -191,13 +253,20 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             lambda: repos["workspaceItems"]["reorder"](workspace_id, ordered_ids)
         )
 
-    def resize_item(item_id: str, width: int, height: int) -> dict[str, Any]:
+    def resize_item(
+        workspace_id: str, item_id: str, width: int, height: int
+    ) -> dict[str, Any]:
+        _require_scoped("workspaceItems", "workspace item", item_id, workspace_id)
         return repos["workspaceItems"]["resize"](item_id, width, height)
 
-    def move_item(item_id: str, x: float, y: float, z_index: int) -> dict[str, Any]:
+    def move_item(
+        workspace_id: str, item_id: str, x: float, y: float, z_index: int
+    ) -> dict[str, Any]:
+        _require_scoped("workspaceItems", "workspace item", item_id, workspace_id)
         return repos["workspaceItems"]["move"](item_id, x, y, z_index)
 
     def list_assets(workspace_id: str) -> list[dict[str, Any]]:
+        _require_workspace(workspace_id)
         assets = repos["workspaceAssets"]["list"](workspace_id)
         result: list[dict[str, Any]] = []
         for asset in assets:
@@ -210,13 +279,15 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
                     result.append(current)
         return result
 
+    def get_asset(asset_id: str) -> dict[str, Any]:
+        return _require_scoped("workspaceAssets", "workspace asset", asset_id)
+
     def import_assets(
         workspace_id: str,
         paths: list[str],
         placement: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if not any(w["id"] == workspace_id for w in repos["workspaces"]["list"]()):
-            raise RepoError("not_found", f"workspace not found: {workspace_id}")
+        _require_workspace(workspace_id)
         library_folder = _require_library_folder(repos)
         imported: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
@@ -263,7 +334,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
                 )
                 imported.append(saved)
             except Exception as exc:
-                _connector_trash(asset_directory)
+                shutil.rmtree(asset_directory, ignore_errors=True)
                 errors.append(
                     {"path": raw_path, "message": str(exc) if isinstance(exc, RepoError) else str(exc)}
                 )
@@ -286,7 +357,8 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         repos_["workspaceItems"]["add"](workspace_id, "asset", [created["id"]], item_placement)
         return created
 
-    def preview_asset(asset_id: str) -> dict[str, Any]:
+    def preview_asset(workspace_id: str, asset_id: str) -> dict[str, Any]:
+        _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
         asset, file_path = _require_workspace_asset_file(repos, asset_id)
         if asset["previewKind"] != "text":
             raise RepoError("preview_not_supported", "This file does not support text preview")
@@ -297,30 +369,26 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         content = data[:length].decode("utf-8", errors="replace")
         return {"content": content, "truncated": truncated}
 
-    def open_asset(asset_id: str) -> None:
+    async def open_asset(workspace_id: str, asset_id: str) -> None:
+        _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
         _, file_path = _require_workspace_asset_file(repos, asset_id)
-        open_path = _connector_method(connector, "openPath")
-        if open_path is None:
-            raise RepoError("not_ready", "Connector is not available")
-        message = open_path(file_path)
+        message = await _connector_call("openPath", file_path)
         if message:
             raise RepoError("open_failed", message)
 
-    def reveal_asset(asset_id: str) -> None:
+    async def reveal_asset(workspace_id: str, asset_id: str) -> None:
+        _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
         _, file_path = _require_workspace_asset_file(repos, asset_id)
-        show_in_folder = _connector_method(connector, "showInFolder")
-        if show_in_folder is None:
-            raise RepoError("not_ready", "Connector is not available")
-        show_in_folder(file_path)
+        await _connector_call("showInFolder", file_path)
 
-    def delete_asset(asset_id: str) -> None:
-        asset = repos["workspaceAssets"]["get"](asset_id)
-        if asset is None:
-            raise RepoError("not_found", f"workspace asset not found: {asset_id}")
+    async def delete_asset(workspace_id: str, asset_id: str) -> None:
+        asset = _require_scoped(
+            "workspaceAssets", "workspace asset", asset_id, workspace_id
+        )
         file_path = _resolve_workspace_asset_path(repos, asset)
         asset_directory = os.path.dirname(file_path)
         if os.path.isdir(asset_directory):
-            _connector_trash(asset_directory)
+            await _connector_trash(asset_directory)
         _transaction(
             lambda: _remove_asset_and_items(repos, asset_id)
         )
@@ -329,27 +397,31 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         repos_["workspaceItems"]["removeByAssetId"](asset_id)
         repos_["workspaceAssets"]["delete"](asset_id)
 
-    def _connector_trash(path: str) -> None:
-        trash = _connector_method(connector, "trashItem")
-        if trash is not None:
-            try:
-                trash(path)
-            except Exception as exc:
-                if logger is not None:
-                    logger.warn(f"workspaceAsset:trash-failed {path}: {exc}")
-        elif logger is not None:
-            logger.warn(f"workspaceAsset:trash-skip {path}: connector unavailable")
+    async def _connector_trash(path: str) -> None:
+        try:
+            await _connector_call("trashItem", path)
+        except Exception as exc:
+            if logger is not None:
+                logger.warn(f"workspaceAsset:trash-failed {path}: {exc}")
 
     def get_canvas(workspace_id: str) -> dict[str, Any] | None:
+        _require_workspace(workspace_id)
         return repos["workspaceCanvas"]["get"](workspace_id)
 
     def put_canvas(
         workspace_id: str, pan_x: float, pan_y: float, zoom: float
     ) -> dict[str, Any]:
+        _require_workspace(workspace_id)
         return repos["workspaceCanvas"]["update"](workspace_id, pan_x, pan_y, zoom)
 
     def list_connections(workspace_id: str) -> list[dict[str, Any]]:
+        _require_workspace(workspace_id)
         return repos["workspaceConnections"]["list"](workspace_id)
+
+    def get_connection(connection_id: str) -> dict[str, Any]:
+        return _require_scoped(
+            "workspaceConnections", "workspace connection", connection_id
+        )
 
     def create_connection(
         workspace_id: str,
@@ -362,11 +434,21 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             workspace_id, source_item_id, target_item_id, source_anchor, target_anchor
         )
 
-    def delete_connection(connection_id: str) -> None:
+    def delete_connection(workspace_id: str, connection_id: str) -> None:
+        _require_scoped(
+            "workspaceConnections",
+            "workspace connection",
+            connection_id,
+            workspace_id,
+        )
         repos["workspaceConnections"]["delete"](connection_id)
 
     def list_notes(workspace_id: str) -> list[dict[str, Any]]:
+        _require_workspace(workspace_id)
         return repos["workspaceNotes"]["list"](workspace_id)
+
+    def get_note(note_id: str) -> dict[str, Any]:
+        return _require_scoped("workspaceNotes", "workspace note", note_id)
 
     def create_note(
         workspace_id: str,
@@ -382,10 +464,14 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
 
         return _transaction(_do)
 
-    def update_note(note_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    def update_note(
+        workspace_id: str, note_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        _require_scoped("workspaceNotes", "workspace note", note_id, workspace_id)
         return repos["workspaceNotes"]["update"](note_id, patch)
 
-    def delete_note(note_id: str) -> None:
+    def delete_note(workspace_id: str, note_id: str) -> None:
+        _require_scoped("workspaceNotes", "workspace note", note_id, workspace_id)
         _transaction(lambda: _remove_note_and_items(repos, note_id))
 
     def _remove_note_and_items(repos_: dict[str, Any], note_id: str) -> None:
@@ -399,12 +485,14 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "deleteWorkspace": delete_workspace,
         "openSandbox": open_sandbox,
         "listItems": list_items,
+        "getItem": get_item,
         "addItems": add_items,
         "deleteItem": delete_item,
         "reorderItems": reorder_items,
         "resizeItem": resize_item,
         "moveItem": move_item,
         "listAssets": list_assets,
+        "getAsset": get_asset,
         "importAssets": import_assets,
         "previewAsset": preview_asset,
         "openAsset": open_asset,
@@ -413,9 +501,11 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "getCanvas": get_canvas,
         "putCanvas": put_canvas,
         "listConnections": list_connections,
+        "getConnection": get_connection,
         "createConnection": create_connection,
         "deleteConnection": delete_connection,
         "listNotes": list_notes,
+        "getNote": get_note,
         "createNote": create_note,
         "updateNote": update_note,
         "deleteNote": delete_note,

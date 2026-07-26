@@ -1483,7 +1483,9 @@ describe('useChatStream lifecycle', () => {
 
     unmount()
 
-    expect(mockChatCancel).toHaveBeenCalledWith('thread-1')
+    expect(mockChatCancel).toHaveBeenCalledWith(
+      (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId
+    )
     expect(setChatStreaming).toHaveBeenLastCalledWith(false)
   })
 
@@ -1507,12 +1509,12 @@ describe('useChatStream lifecycle', () => {
       result.current.handleCancel()
     })
 
-    expect(mockChatCancel).not.toHaveBeenCalled()
+    expect(mockChatCancel).toHaveBeenCalledWith(requestedRunId)
     await act(async () => {
       resolveSend?.({ threadId: 'new-thread', runId: requestedRunId })
       await sendPromise
     })
-    expect(mockChatCancel).toHaveBeenCalledWith('new-thread')
+    expect(mockChatCancel).toHaveBeenCalledWith(requestedRunId)
     expect(result.current.streaming).toBe(true)
     act(() => {
       chatDoneHandler?.({

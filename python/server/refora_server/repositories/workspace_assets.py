@@ -142,6 +142,41 @@ def createWorkspaceAssetsRepository(db: Any):
         rows = cur.fetchall()
         return [_map_asset(r) for r in rows]
 
+    def search(q: str, limit: int = 10) -> list[dict[str, Any]]:
+        trimmed = q.strip()
+        if not trimmed:
+            return []
+        escaped = trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        safe_limit = max(1, min(50, int(limit)))
+        rows = db.execute(
+            """
+            SELECT a.id, a.workspaceId, w.name AS workspaceName, a.fileName,
+                   a.mimeType, a.previewKind, a.fileMissing, a.updatedAt
+            FROM workspace_assets a
+            JOIN workspaces w ON w.id = a.workspaceId
+            WHERE a.fileName LIKE ? ESCAPE '\\'
+               OR a.sourcePath LIKE ? ESCAPE '\\'
+               OR a.mimeType LIKE ? ESCAPE '\\'
+            ORDER BY a.updatedAt DESC, a.id
+            LIMIT ?
+            """,
+            [like, like, like, safe_limit],
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "workspaceId": row["workspaceId"],
+                "workspaceName": row["workspaceName"],
+                "fileName": row["fileName"],
+                "mimeType": row["mimeType"],
+                "previewKind": row["previewKind"],
+                "fileMissing": int(row["fileMissing"]),
+                "updatedAt": row["updatedAt"],
+            }
+            for row in rows
+        ]
+
     def create(asset: dict[str, Any]) -> dict[str, Any]:
         workspace_id = asset["workspaceId"]
         if not _workspace_exists(workspace_id):
@@ -234,6 +269,7 @@ def createWorkspaceAssetsRepository(db: Any):
 
     return {
         "list": list,
+        "search": search,
         "create": create,
         "get": get,
         "update": update,
