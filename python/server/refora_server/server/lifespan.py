@@ -267,7 +267,14 @@ def create_lifespan(
         watcher = {}
         exporter = {}
         web_search = {}
-        library = createLibraryService(repos, {"emit": lambda event, data: emit(event, data)})
+        library = createLibraryService(
+            repos,
+            {
+                "emit": lambda event, data: _schedule_event(
+                    events, event, data, server_loop
+                )
+            },
+        )
 
         def proxy_url() -> str:
             settings_repo = repos.get("settings")
@@ -284,9 +291,30 @@ def create_lifespan(
                 repos,
                 {
                     "getLibraryFolder": lambda: app.state.library_folder,
-                    "emitProgress": lambda data: emit("import.progress", data),
+                    "emitProgress": lambda data: _schedule_event(
+                        events, "import.progress", data, server_loop
+                    ),
                 },
             )
+
+            def enqueue_imported_metadata(result: dict[str, Any]) -> None:
+                imported = result.get("imported")
+                if not isinstance(imported, list):
+                    return
+                document_ids = [
+                    value
+                    for value in imported
+                    if isinstance(value, str) and value
+                ]
+                if document_ids:
+                    _schedule_event(
+                        events,
+                        "metadata.enqueue",
+                        {"documentIds": document_ids},
+                        server_loop,
+                    )
+
+            importer["onComplete"](enqueue_imported_metadata)
             watcher = createWatcherService(
                 repos,
                 {
@@ -294,6 +322,7 @@ def create_lifespan(
                     "onNewPdf": lambda paths: importer["importFiles"](paths, True),
                 },
             )
+            watcher["startScanning"]()
             exporter = createExportService(repos)
             async def decrypt_search_key(
                 api_key_enc: bytes, _provider: str | None = None
@@ -998,6 +1027,9 @@ def create_lifespan(
                 recovery_task.cancel()
                 await asyncio.gather(recovery_task, return_exceptions=True)
             await agent_runtime["destroy"]()
+            stop_watcher = watcher.get("stopScanning")
+            if callable(stop_watcher):
+                stop_watcher()
             await ocr["stopWorker"]()
             ocr["destroy"]()
             mineru["destroy"]()

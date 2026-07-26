@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
-import sqlite3
 import tempfile
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Final
 
+import aiosqlite
 from deepagents import create_deep_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from refora_server.agent.sandbox_backend import ReforaFilesystemBackend
 
@@ -36,6 +37,7 @@ REQUIRED_MODULES: Final[tuple[str, ...]] = (
 )
 
 REQUIRED_DISTRIBUTIONS: Final[tuple[str, ...]] = (
+    "aiosqlite",
     "deepagents",
     "langchain",
     "langchain-core",
@@ -52,20 +54,22 @@ def verify_artifact() -> dict[str, Any]:
         distribution: version(distribution)
         for distribution in REQUIRED_DISTRIBUTIONS
     }
-    connection = sqlite3.connect(":memory:")
-    try:
-        checkpointer = SqliteSaver(connection)
-        checkpointer.setup()
-        tables = {
-            row[0]
-            for row in connection.execute(
+
+    async def verify_checkpointer() -> None:
+        connection = await aiosqlite.connect(":memory:")
+        try:
+            checkpointer = AsyncSqliteSaver(connection)
+            await checkpointer.setup()
+            async with connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        if not {"checkpoints", "writes"}.issubset(tables):
-            raise RuntimeError("SQLite checkpointer did not initialize")
-    finally:
-        connection.close()
+            ) as cursor:
+                tables = {row[0] for row in await cursor.fetchall()}
+            if not {"checkpoints", "writes"}.issubset(tables):
+                raise RuntimeError("SQLite checkpointer did not initialize")
+        finally:
+            await connection.close()
+
+    asyncio.run(verify_checkpointer())
     with tempfile.TemporaryDirectory(prefix="refora-artifact-") as directory:
         backend = ReforaFilesystemBackend(Path(directory).resolve())
         written = backend.write("/tmp/artifact.txt", "ready")

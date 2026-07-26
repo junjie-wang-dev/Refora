@@ -6,7 +6,9 @@ import inspect
 import json
 import os
 import re
+import shutil
 import tempfile
+import time
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
@@ -17,6 +19,7 @@ from fastapi.responses import JSONResponse
 from refora_server.academic.arxiv import base_arxiv_id
 from refora_server.academic.types import ArxivSearchInput
 from refora_server.library.bib_import import importBibtex
+from refora_server.library.file_hash import streamHash
 from refora_server.library.identifier_import import importByIdentifier
 from refora_server.library.json_import import importFromJson
 from refora_server.library.paths import resolveFromLibrary
@@ -212,6 +215,7 @@ def create_library_router(deps: Any) -> APIRouter:
     exporter = _dependency(deps, "exporter", "export")
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
+    ai_summaries = _value(repos, "aiSummaries")
 
     async def run(action):
         try:
@@ -518,8 +522,42 @@ def create_library_router(deps: Any) -> APIRouter:
     @router.post("/documents/{document_id}/relocate")
     async def relocate_document(document_id: str, body: dict[str, Any]):
         async def action():
-            path = resolvePdfFilePath(_string(_body_dict(body), "path"))
-            await _call(documents, "updateFilePath", document_id, path, os.path.basename(path))
+            current = await document(document_id)
+            raw_path = _body_dict(body).get("path")
+            if raw_path is not None and not isinstance(raw_path, str):
+                raise ValueError("path must be a string")
+            if not raw_path:
+                selection = await _connector(
+                    connector,
+                    "dialog_file",
+                    "Select PDF File",
+                    ["pdf"],
+                    False,
+                )
+                if not isinstance(selection, Mapping):
+                    raise _UnavailableError("Native file dialog returned an invalid payload")
+                if selection.get("canceled") is True:
+                    return current
+                raw_path = selection.get("path")
+            if not isinstance(raw_path, str):
+                raise _UnavailableError("Native file dialog did not return a path")
+            path = resolvePdfFilePath(raw_path)
+            file_hash = await asyncio.to_thread(streamHash, path)
+            if not isinstance(file_hash, str):
+                raise ValueError("Unable to hash selected PDF")
+            await _call(
+                documents,
+                "updateFileIdentity",
+                document_id,
+                path,
+                os.path.basename(path),
+                os.path.getsize(path),
+                file_hash,
+            )
+            if current.get("fileHash") != file_hash and callable(
+                _value(ai_summaries, "delete")
+            ):
+                await _call(ai_summaries, "delete", document_id)
             return await document(document_id)
         return await run(action)
 
@@ -528,15 +566,43 @@ def create_library_router(deps: Any) -> APIRouter:
         async def action():
             if callable(_value(documents, "restoreFile")):
                 return await _call(documents, "restoreFile", document_id)
-            raise _UnavailableError("File restoration is unavailable")
+            current = await document(document_id)
+            original_folder = current.get("originalFolderPath")
+            if (
+                not isinstance(original_folder, str)
+                or not os.path.isabs(original_folder)
+                or os.path.islink(original_folder)
+                or not os.path.isdir(original_folder)
+            ):
+                raise ValueError("Original folder no longer exists")
+            source_path = resolvePdfFilePath(current["filePath"])
+            source = Path(source_path)
+            destination = Path(original_folder) / source.name
+            index = 1
+            while destination.exists():
+                destination = Path(original_folder) / (
+                    f"{source.stem} ({index}){source.suffix}"
+                )
+                index += 1
+            restored_path = shutil.move(source_path, str(destination))
+            await _call(
+                documents,
+                "updateFilePath",
+                document_id,
+                restored_path,
+                destination.name,
+            )
+            return await document(document_id)
         return await run(action)
 
     @router.post("/documents/{document_id}/open-pdf")
     async def open_document_pdf(document_id: str):
         async def action():
             item = await document(document_id)
-            await _connector(connector, "open", item["filePath"])
-            return {"ack": True}
+            path = resolvePdfFilePath(item["filePath"])
+            await _connector(connector, "open", path)
+            await _call(documents, "setLastReadAt", document_id, int(time.time() * 1000))
+            return await document(document_id)
         return await run(action)
 
     @router.post("/documents/{document_id}/open-in-finder")
@@ -571,8 +637,26 @@ def create_library_router(deps: Any) -> APIRouter:
     async def import_files(body: dict[str, Any]):
         async def action():
             paths = _body_dict(body).get("paths", _body_dict(body).get("filePaths"))
-            if not isinstance(paths, list) or not paths:
-                raise ValueError("paths must be a non-empty list")
+            if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+                raise ValueError("paths must be a list of strings")
+            if not paths:
+                selection = await _connector(
+                    connector,
+                    "dialog_file",
+                    "Add PDF Files",
+                    ["pdf"],
+                    True,
+                )
+                if not isinstance(selection, Mapping):
+                    raise _UnavailableError("Native file dialog returned an invalid payload")
+                if selection.get("canceled") is True:
+                    return {"added": [], "skipped": [], "errors": []}
+                selected_paths = selection.get("paths")
+                if not isinstance(selected_paths, list) or any(
+                    not isinstance(path, str) for path in selected_paths
+                ):
+                    raise _UnavailableError("Native file dialog returned invalid paths")
+                paths = selected_paths
             resolved = [resolvePdfFilePath(path) if isinstance(path, str) else (_ for _ in ()).throw(ValueError("Invalid PDF path")) for path in paths]
             return await import_result(await _call(importer, "importFiles", resolved))
         return await run(action)

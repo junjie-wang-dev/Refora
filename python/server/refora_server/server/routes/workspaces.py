@@ -89,6 +89,13 @@ def _string(value: dict[str, Any], name: str) -> str:
     return result
 
 
+def _text(value: dict[str, Any], name: str) -> str:
+    result = value.get(name)
+    if not isinstance(result, str):
+        raise RequestError(f"{name} must be a string")
+    return result
+
+
 def _number(value: dict[str, Any], name: str) -> float:
     result = value.get(name)
     if isinstance(result, bool) or not isinstance(result, (int, float)):
@@ -147,6 +154,30 @@ def _detach(coroutine: Awaitable[Any]) -> None:
             pass
 
     task.add_done_callback(consume_result)
+
+
+async def _select_workspace_files(connector: Any) -> list[str]:
+    if connector is None:
+        raise RuntimeError("Native file picker is unavailable")
+    chooser = getattr(connector, "dialog_open_file", None)
+    if not callable(chooser):
+        raise RuntimeError("Native file picker is unavailable")
+    selection = chooser("Add Files to Workspace", None, True)
+    if inspect.isawaitable(selection):
+        selection = await selection
+    if not isinstance(selection, dict) or selection.get("ok") is not True:
+        error = selection.get("error") if isinstance(selection, dict) else None
+        message = error.get("message") if isinstance(error, dict) else None
+        raise RuntimeError(message or "Native file picker failed")
+    data = selection.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Native file picker returned an invalid result")
+    if data.get("canceled") is True:
+        return []
+    paths = data.get("paths")
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise RuntimeError("Native file picker returned invalid paths")
+    return paths
 
 
 def create_workspaces_router(deps: Any) -> APIRouter:
@@ -281,11 +312,18 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     async def import_assets(
         workspace_id: str, body: dict[str, Any] | None = Body(default=None)
     ) -> JSONResponse:
-        return await _invoke(
-            lambda: workspaces["importAssets"](
-                workspace_id, _string_list(_body(body), "paths"), _placement(_body(body))
+        async def operation() -> Any:
+            payload = _body(body)
+            paths = _string_list(payload, "paths")
+            if not paths:
+                paths = await _select_workspace_files(connector)
+            if not paths:
+                return {"imported": [], "errors": []}
+            return workspaces["importAssets"](
+                workspace_id, paths, _placement(payload)
             )
-        )
+
+        return await _invoke(operation)
 
     @router.get("/workspaces/{workspace_id}/assets/{asset_id}/preview")
     async def preview_asset(workspace_id: str, asset_id: str) -> JSONResponse:
@@ -388,7 +426,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
             lambda: workspaces["createNote"](
                 workspace_id,
                 _string(_body(body), "title"),
-                _string(_body(body), "contentMd"),
+                _text(_body(body), "contentMd"),
                 _string(_body(body), "noteType") if _body(body).get("noteType") is not None else "markdown",
                 _placement(_body(body)),
             )

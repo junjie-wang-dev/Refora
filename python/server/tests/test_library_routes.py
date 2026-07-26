@@ -16,6 +16,9 @@ class Fakes:
         self.document_filter = None
         self.listed_documents = []
         self.clipboard_files = []
+        self.imported_file_paths = []
+        self.document_overrides = {}
+        self.last_read_at = {}
         self.documents = {
             "list": self.list_documents,
             "counts": lambda: {
@@ -29,7 +32,9 @@ class Fakes:
             "delete": self.delete_document,
             "setStarred": lambda _id, _starred: None,
             "update": lambda _id, patch: {"id": _id, **patch},
-            "updateFilePath": lambda _id, _path, _name: None,
+            "updateFilePath": self.update_file_path,
+            "updateFileIdentity": self.update_file_identity,
+            "setLastReadAt": self.set_last_read_at,
         }
         self.categories = {
             "list": lambda: [],
@@ -41,7 +46,7 @@ class Fakes:
             "listForDocument": lambda _document_id: [],
         }
         self.importer = {
-            "importFiles": lambda _paths: {"imported": [], "skipped": [], "errors": []},
+            "importFiles": self.import_files,
             "importFolder": lambda _path, _recursive: {"imported": [], "skipped": [], "errors": []},
         }
         self.watcher = {
@@ -96,6 +101,10 @@ class Fakes:
                 "ok": True,
                 "data": {"canceled": True, "path": None},
             },
+            "dialogOpenFile": lambda _title, _extensions, _multiple=False: {
+                "ok": True,
+                "data": {"canceled": True, "path": None, "paths": []},
+            },
             "getApiKey": lambda _provider_id: {
                 "ok": True,
                 "data": {"apiKey": "stored-key"},
@@ -121,7 +130,10 @@ class Fakes:
     def get_document(self, document_id: str):
         if document_id == "missing":
             return None
-        return {"id": document_id, "filePath": "/tmp/source.pdf"}
+        return self.document_overrides.get(
+            document_id,
+            {"id": document_id, "filePath": "/tmp/source.pdf"},
+        )
 
     def list_documents(self, filter_: dict):
         self.document_filter = filter_
@@ -129,6 +141,37 @@ class Fakes:
 
     def delete_document(self, _document_id: str):
         return None
+
+    def import_files(self, paths: list[str]):
+        self.imported_file_paths.extend(paths)
+        return {"imported": [], "skipped": [], "errors": []}
+
+    def update_file_identity(
+        self,
+        document_id: str,
+        path: str,
+        name: str,
+        size: int,
+        file_hash: str,
+    ):
+        self.document_overrides[document_id].update(
+            {
+                "filePath": path,
+                "fileName": name,
+                "fileSize": size,
+                "fileHash": file_hash,
+                "fileMissing": 0,
+            }
+        )
+
+    def update_file_path(self, document_id: str, path: str, name: str):
+        self.document_overrides[document_id].update(
+            {"filePath": path, "fileName": name}
+        )
+
+    def set_last_read_at(self, document_id: str, timestamp: int):
+        self.last_read_at[document_id] = timestamp
+        self.document_overrides[document_id]["lastReadAt"] = timestamp
 
     def trash(self, path: str):
         self.trashed.append(path)
@@ -289,6 +332,91 @@ def test_bootstrap_global_search_and_directory_dialog_are_enveloped():
         "ok": True,
         "data": {"canceled": True, "path": None},
     }
+
+
+def test_empty_import_paths_open_the_native_pdf_picker(tmp_path):
+    client, fakes = make_client()
+    first = tmp_path / "one.pdf"
+    second = tmp_path / "two.pdf"
+    first.write_bytes(b"%PDF-1.4\n")
+    second.write_bytes(b"%PDF-1.4\n")
+    fakes.connector["dialogOpenFile"] = (
+        lambda _title, _extensions, _multiple=False: {
+            "ok": True,
+            "data": {
+                "canceled": False,
+                "path": str(first),
+                "paths": [str(first), str(second)],
+            },
+        }
+    )
+
+    response = client.post(
+        "/import/files",
+        headers={"X-Refora-Token": "test-token"},
+        json={"paths": []},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "data": {"added": [], "skipped": [], "errors": []},
+    }
+    assert fakes.imported_file_paths == [str(first), str(second)]
+
+
+def test_open_relocate_and_restore_preserve_document_contracts(tmp_path):
+    client, fakes = make_client()
+    original_folder = tmp_path / "original"
+    library_folder = tmp_path / "library"
+    original_folder.mkdir()
+    library_folder.mkdir()
+    current = library_folder / "paper.pdf"
+    replacement = tmp_path / "replacement.pdf"
+    current.write_bytes(b"%PDF-current\n")
+    replacement.write_bytes(b"%PDF-replacement\n")
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": str(current),
+        "fileName": current.name,
+        "fileSize": current.stat().st_size,
+        "fileHash": "old-hash",
+        "fileMissing": 0,
+        "originalFolderPath": str(original_folder),
+    }
+    fakes.connector["dialogOpenFile"] = (
+        lambda _title, _extensions, _multiple=False: {
+            "ok": True,
+            "data": {
+                "canceled": False,
+                "path": str(replacement),
+            },
+        }
+    )
+
+    opened = client.post(
+        "/documents/doc-1/open-pdf",
+        headers={"X-Refora-Token": "test-token"},
+    )
+    relocated = client.post(
+        "/documents/doc-1/relocate",
+        headers={"X-Refora-Token": "test-token"},
+        json={"path": ""},
+    )
+    fakes.document_overrides["doc-1"]["filePath"] = str(current)
+    restored = client.post(
+        "/documents/doc-1/restore-file",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert opened.json()["data"]["id"] == "doc-1"
+    assert fakes.last_read_at["doc-1"] > 0
+    assert relocated.json()["data"]["filePath"] == str(replacement)
+    assert relocated.json()["data"]["fileHash"] != "old-hash"
+    assert restored.status_code == 200
+    restored_path = restored.json()["data"]["filePath"]
+    assert restored_path.startswith(str(original_folder))
+    assert not current.exists()
 
 
 def test_settings_roundtrip_uses_json_values():

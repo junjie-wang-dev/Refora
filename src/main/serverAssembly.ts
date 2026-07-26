@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Repositories } from './db/repositories'
-import type { LibrarySwitchResult } from '../shared/ipc-types'
+import type { Document, LibrarySwitchResult } from '../shared/ipc-types'
 import { createServerAppHandlers } from './ipc/serverAppHandlers'
 import { createServerAiHandlers } from './ipc/serverAiHandlers'
 import { createServerEventBridge, type ServerEventBridge } from './ipc/serverEventBridge'
@@ -15,6 +15,12 @@ export interface ServerAssemblyDeps {
   repos: Repositories
   getWin: () => BrowserWindow | null
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  metadataService?: {
+    enqueue(documentId: string): void
+    updateVerifiedArxivId(documentId: string, input: string): Promise<Document>
+    refreshMetadata(documentId: string): void
+    bulkRefreshMetadata(documentIds: string[]): void
+  }
 }
 
 export interface ServerAssembly {
@@ -38,12 +44,20 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     await nativeRpc.start()
     serverClient = createServerClient(deps.lifecycle, nativeRpc)
     await serverClient.ws.connect()
-    eventBridge = createServerEventBridge({ serverClient, getWin: deps.getWin })
+    eventBridge = createServerEventBridge({
+      serverClient,
+      getWin: deps.getWin,
+      enqueueMetadata: (documentId) => deps.metadataService?.enqueue(documentId)
+    })
     eventBridge.start()
 
     const handlers = {
       ...createServerAppHandlers(serverClient),
-      ...createServerLibraryHandlers({ serverClient, switchLibraryFolder: deps.switchLibraryFolder }),
+      ...createServerLibraryHandlers({
+        serverClient,
+        switchLibraryFolder: deps.switchLibraryFolder,
+        metadataService: deps.metadataService
+      }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient })
     }

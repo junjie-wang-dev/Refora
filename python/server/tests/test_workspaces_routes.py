@@ -105,6 +105,20 @@ def client(services: FakeServices) -> TestClient:
         async def dialog_open_directory(self, title: str) -> dict[str, Any]:
             return {"ok": True, "data": {"canceled": False, "path": "/tmp/mineru"}}
 
+        async def dialog_open_file(
+            self,
+            title: str,
+            extensions: list[str] | None,
+            multiple: bool,
+        ) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "data": {
+                    "canceled": False,
+                    "paths": ["/tmp/notes.md", "/tmp/data.csv"],
+                },
+            }
+
     app = FastAPI()
     app.include_router(
         create_workspaces_router(
@@ -252,6 +266,36 @@ def test_mineru_choose_root_uses_native_selection(
     assert response.status_code == 200
     assert response.json() == {"ok": True, "data": {"state": "notInstalled"}}
     assert services.calls[-1] == ("setInstallRoot", ("/tmp/mineru",))
+
+
+def test_workspace_file_picker_and_empty_note_content_are_supported(
+    client: TestClient, services: FakeServices
+) -> None:
+    files = client.post(
+        "/workspaces/workspace-1/assets/files",
+        headers=HEADERS,
+        json={"paths": [], "placement": {"x": 10, "y": 20}},
+    )
+    note = client.post(
+        "/workspaces/workspace-1/notes",
+        headers=HEADERS,
+        json={"title": "Untitled", "contentMd": "", "noteType": "markdown"},
+    )
+
+    assert files.status_code == 200
+    assert (
+        "importAssets",
+        (
+            "workspace-1",
+            ["/tmp/notes.md", "/tmp/data.csv"],
+            {"x": 10.0, "y": 20.0},
+        ),
+    ) in services.calls
+    assert note.status_code == 200
+    assert services.calls[-1] == (
+        "createNote",
+        ("workspace-1", "Untitled", "", "markdown", None),
+    )
 
 
 def test_mineru_install_returns_immediate_acknowledgement(client: TestClient, services: FakeServices) -> None:

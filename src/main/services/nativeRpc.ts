@@ -113,6 +113,7 @@ interface DialogOpenDirectoryBody {
 interface DialogOpenFileBody {
   title?: unknown
   extensions?: unknown
+  multiple?: unknown
 }
 interface DialogChooseBody {
   title?: unknown
@@ -193,23 +194,28 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
 
   async function handleDialogOpenFile(
     body: DialogOpenFileBody
-  ): Promise<Result<{ canceled: boolean; path: string | null }>> {
+  ): Promise<Result<{ canceled: boolean; path: string | null; paths?: string[] }>> {
     const title = asString(body.title) ?? undefined
     const extensions = Array.isArray(body.extensions)
       ? body.extensions.filter((value): value is string => typeof value === 'string' && /^[a-z0-9]+$/i.test(value))
       : []
+    const multiple = body.multiple === true
     try {
       const result = await dialog.showOpenDialog((deps.getWin?.() ?? undefined) as BrowserWindow, {
         ...(title ? { title } : {}),
-        properties: ['openFile'],
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
         ...(extensions.length > 0
           ? { filters: [{ name: extensions.map((value) => value.toUpperCase()).join('/'), extensions }] }
           : {})
       })
       if (result.canceled || result.filePaths.length === 0) {
-        return ok({ canceled: true, path: null })
+        return ok(multiple
+          ? { canceled: true, path: null, paths: [] }
+          : { canceled: true, path: null })
       }
-      return ok({ canceled: false, path: result.filePaths[0] })
+      return ok(multiple
+        ? { canceled: false, path: result.filePaths[0], paths: result.filePaths }
+        : { canceled: false, path: result.filePaths[0] })
     } catch (e) {
       return fail('dialog_failed', e instanceof Error ? e.message : String(e))
     }

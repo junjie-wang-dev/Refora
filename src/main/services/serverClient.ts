@@ -75,6 +75,7 @@ export type WsEventName =
   | 'window.focus-changed'
   | 'import.progress'
   | 'import.toast'
+  | 'metadata.enqueue'
   | 'workspace.items.changed'
   | 'mineru.install-progress'
   | 'ocr.progress'
@@ -347,7 +348,7 @@ export interface ServerHttp {
   documentsRefreshMetadata(documentId: string): Promise<Document>
   documentsRelocate(documentId: string, payload: RelocatePayload): Promise<Document>
   documentsRestoreFile(documentId: string): Promise<Document>
-  documentsOpenPdf(documentId: string): Promise<{ ack: boolean }>
+  documentsOpenPdf(documentId: string): Promise<Document>
   documentsOpenInFinder(documentId: string): Promise<{ ack: boolean }>
 
   importFiles(payload: ImportFilesPayload): Promise<PdfImportResult>
@@ -592,7 +593,7 @@ export function createServerClient(
     documentsRefreshMetadata: (id) => post<Document>(`/documents/${id}/refresh-metadata`),
     documentsRelocate: (id, payload) => post<Document>(`/documents/${id}/relocate`, payload),
     documentsRestoreFile: (id) => post<Document>(`/documents/${id}/restore-file`),
-    documentsOpenPdf: (id) => post<{ ack: boolean }>(`/documents/${id}/open-pdf`),
+    documentsOpenPdf: (id) => post<Document>(`/documents/${id}/open-pdf`),
     documentsOpenInFinder: (id) => post<{ ack: boolean }>(`/documents/${id}/open-in-finder`),
 
     importFiles: (payload) => post<PdfImportResult>('/import/files', payload),
@@ -811,7 +812,11 @@ export function createServerClient(
         break
       case 'connector.dialog-open-file':
         route = '/native/dialog-open-file'
-        body = { title: request.title, extensions: request.extensions }
+        body = {
+          title: request.title,
+          extensions: request.extensions,
+          multiple: request.multiple
+        }
         break
       case 'connector.dialog-choose':
         route = '/native/dialog-choose'

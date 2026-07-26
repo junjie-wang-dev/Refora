@@ -68,13 +68,18 @@ class ConnectorBroker:
         return await self.send("connector.dialog-open-directory", data)
 
     async def dialog_open_file(
-        self, title: str | None = None, extensions: list[str] | None = None
+        self,
+        title: str | None = None,
+        extensions: list[str] | None = None,
+        multiple: bool = False,
     ) -> Result:
         data: dict[str, Any] = {}
         if title is not None:
             data["title"] = title
         if extensions:
             data["extensions"] = extensions
+        if multiple:
+            data["multiple"] = True
         return await self.send("connector.dialog-open-file", data)
 
     async def dialog_choose(

@@ -2,6 +2,7 @@ import { IpcChannel } from '../../shared/ipc-channels'
 import type {
   AiProviderInput,
   AiProviderPatch,
+  Document,
   DocumentPatch,
   LibrarySwitchResult,
   ListFilter,
@@ -19,6 +20,12 @@ import type {
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  metadataService?: {
+    enqueue(documentId: string): void
+    updateVerifiedArxivId(documentId: string, input: string): Promise<Document>
+    refreshMetadata(documentId: string): void
+    bulkRefreshMetadata(documentIds: string[]): void
+  }
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -38,7 +45,11 @@ async function forward<T>(request: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-export function createServerLibraryHandlers({ serverClient, switchLibraryFolder }: ServerLibraryHandlerDeps) {
+export function createServerLibraryHandlers({
+  serverClient,
+  switchLibraryFolder,
+  metadataService
+}: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
   return {
@@ -56,7 +67,18 @@ export function createServerLibraryHandlers({ serverClient, switchLibraryFolder 
     [IpcChannel.DocumentsSearch]: (query: string) => forward(() => http.documentsSearch(query)),
     [IpcChannel.DocumentsGet]: (documentId: string) => forward(() => http.documentsGet(documentId)),
     [IpcChannel.DocumentsUpdate]: (documentId: string, patch: DocumentPatch) =>
-      forward(() => http.documentsUpdate(documentId, patch)),
+      metadataService && typeof patch.arxivId === 'string'
+        ? forward(async () => {
+            const { arxivId, ...otherFields } = patch
+            const verified = await metadataService.updateVerifiedArxivId(
+              documentId,
+              arxivId as string
+            )
+            return Object.keys(otherFields).length > 0
+              ? http.documentsUpdate(verified.id, otherFields)
+              : verified
+          })
+        : forward(() => http.documentsUpdate(documentId, patch)),
     [IpcChannel.DocumentsSetStarred]: (documentId: string, starred: boolean) =>
       forward(() => http.documentsSetStarred(documentId, starred)),
     [IpcChannel.DocumentsDelete]: (documentId: string) =>
@@ -66,13 +88,22 @@ export function createServerLibraryHandlers({ serverClient, switchLibraryFolder 
     [IpcChannel.DocumentsBulkCategorize]: (ids: string[], categoryId: string | null) =>
       forward(() => http.documentsBulkCategorize({ ids, categoryId })),
     [IpcChannel.DocumentsBulkRefreshMetadata]: (documentIds: string[]) =>
-      forward(() => http.documentsBulkRefreshMetadata(documentIds)),
+      metadataService
+        ? forward(async () => {
+            metadataService.bulkRefreshMetadata(documentIds)
+          })
+        : forward(() => http.documentsBulkRefreshMetadata(documentIds)),
     [IpcChannel.DocumentsOpenPdf]: (documentId: string) =>
       forward(() => http.documentsOpenPdf(documentId)),
     [IpcChannel.DocumentsOpenInFinder]: (documentId: string) =>
       forward(() => http.documentsOpenInFinder(documentId)),
     [IpcChannel.DocumentsRefreshMetadata]: (documentId: string) =>
-      forward(() => http.documentsRefreshMetadata(documentId)),
+      metadataService
+        ? forward(async () => {
+            metadataService.refreshMetadata(documentId)
+            return http.documentsGet(documentId)
+          })
+        : forward(() => http.documentsRefreshMetadata(documentId)),
     [IpcChannel.DocumentsRelocateFile]: (documentId: string, path: string) =>
       forward(() => http.documentsRelocate(documentId, { path })),
     [IpcChannel.DocumentsRestoreFile]: (documentId: string) =>

@@ -935,6 +935,7 @@ name = "refora-server"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "beautifulsoup4" },
     { name = "deepagents" },
     { name = "fastapi" },
@@ -962,6 +963,7 @@ sidecar = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", specifier = "==0.22.1" },
     { name = "beautifulsoup4", specifier = ">=4.12,<5.0" },
     { name = "deepagents", specifier = "==0.6.12" },
     { name = "fastapi", specifier = ">=0.115,<0.116" },

@@ -328,6 +328,36 @@ describe('nativeRpc', () => {
     )
   })
 
+  it('opens a multi-file dialog and returns every selected path', async () => {
+    electronMocks.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/x/one.pdf', '/Users/x/two.pdf']
+    })
+    const { server } = await setup()
+    const { body } = await dispatch(
+      server,
+      'POST',
+      '/native/dialog-open-file',
+      { title: 'Add PDF Files', extensions: ['pdf'], multiple: true },
+      TOKEN
+    )
+
+    expect(body).toEqual({
+      ok: true,
+      data: {
+        canceled: false,
+        path: '/Users/x/one.pdf',
+        paths: ['/Users/x/one.pdf', '/Users/x/two.pdf']
+      }
+    })
+    expect(electronMocks.showOpenDialog).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        properties: ['openFile', 'multiSelections']
+      })
+    )
+  })
+
   it('returns a native dialog choice', async () => {
     electronMocks.showMessageBox.mockResolvedValue({ response: 1 })
     const { server } = await setup()

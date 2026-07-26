@@ -59,6 +59,34 @@ async def test_connector_can_encrypt_api_key_without_persisting_plaintext():
 
 
 @pytest.mark.asyncio
+async def test_connector_requests_multiple_files():
+    events = EventBus()
+    socket = Socket()
+    broker = ConnectorBroker(events)
+    await events.subscribe(socket, ["connector.dialog-open-file"])
+
+    pending = asyncio.create_task(
+        broker.dialog_open_file("Add PDF Files", ["pdf"], True)
+    )
+    await asyncio.wait_for(socket.sent.wait(), 0.1)
+    request = socket.messages[0]["data"]
+    assert request["title"] == "Add PDF Files"
+    assert request["extensions"] == ["pdf"]
+    assert request["multiple"] is True
+    assert broker.handle_result(
+        {
+            "requestId": request["requestId"],
+            "data": {"canceled": False, "paths": ["/tmp/one.pdf"]},
+        }
+    )
+
+    assert await pending == {
+        "ok": True,
+        "data": {"canceled": False, "paths": ["/tmp/one.pdf"]},
+    }
+
+
+@pytest.mark.asyncio
 async def test_connector_can_decrypt_api_key_from_a_worker_thread():
     events = EventBus()
     socket = Socket()

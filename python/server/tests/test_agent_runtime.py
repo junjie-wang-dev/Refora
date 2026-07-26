@@ -407,6 +407,64 @@ def test_native_langgraph_events_produce_tokens_result_and_checkpoint(repos, db,
     assert isinstance(token["stepId"], str)
 
 
+def test_runtime_attaches_async_sqlite_checkpointer_to_async_graph(
+    repos, db, tmp_path
+):
+    insert_thread(db)
+
+    class CheckpointState(TypedDict):
+        messages: list[dict[str, str]]
+
+    def answer(state: CheckpointState) -> CheckpointState:
+        return {
+            "messages": [
+                *state["messages"],
+                {"role": "assistant", "content": "Persisted answer"},
+            ]
+        }
+
+    builder = StateGraph(CheckpointState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile()
+    checkpoint_path = tmp_path / "async-checkpoints.sqlite"
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: graph,
+        },
+    )
+
+    result = asyncio.run(
+        runtime["send"](
+            request(
+                checkpointPath=str(checkpoint_path),
+                checkpointBefore=None,
+            )
+        )
+    )
+
+    assert result["status"] == "completed"
+    connection = sqlite3.connect(checkpoint_path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert {"checkpoints", "writes"} <= tables
+        assert connection.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
+            ["thread-1"],
+        ).fetchone()[0] > 0
+    finally:
+        connection.close()
+
+
 def test_recover_continues_existing_run_from_latest_checkpoint(repos, db, tmp_path):
     insert_thread(db)
     user_message = repos["chat"]["addMessage"](

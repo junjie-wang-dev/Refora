@@ -10,10 +10,11 @@ import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from typing import Any
 
+import aiosqlite
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from refora_server.academic.types import ACADEMIC_RESEARCH_TOOL_NAMES
@@ -818,7 +819,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             "recursion_limit": int(request.get("recursionLimit") or 50),
         }
 
-    def configure_checkpoint(agent: Any, request: dict[str, Any]) -> sqlite3.Connection | None:
+    async def configure_checkpoint(
+        agent: Any, request: dict[str, Any]
+    ) -> aiosqlite.Connection | None:
         checkpoint_path = request.get("checkpointPath")
         if not isinstance(checkpoint_path, str) or not checkpoint_path:
             return None
@@ -827,13 +830,13 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         try:
             parent = os.path.dirname(os.path.abspath(checkpoint_path))
             os.makedirs(parent, mode=0o700, exist_ok=True)
-            connection = sqlite3.connect(checkpoint_path, check_same_thread=False)
-            agent.checkpointer = SqliteSaver(
+            connection = await aiosqlite.connect(checkpoint_path)
+            agent.checkpointer = AsyncSqliteSaver(
                 connection,
                 serde=AcademicRedactingSerializer(),
             )
             return connection
-        except (AttributeError, OSError, sqlite3.Error):
+        except (AttributeError, OSError, aiosqlite.Error):
             return None
 
     async def agent_state(agent: Any, request: dict[str, Any]) -> dict[str, Any]:
@@ -1154,7 +1157,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         active_by_thread[thread_id] = run_id
         user_message = None
         run_trace: dict[str, Any] | None = None
-        checkpoint_connection: sqlite3.Connection | None = None
+        checkpoint_connection: aiosqlite.Connection | None = None
         tool_history: list[dict[str, str | None]] = []
         open_tool_traces: dict[str, str] = {}
         open_llm_traces: dict[str, str] = {}
@@ -1250,7 +1253,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             run_trace = add_trace(request, 0, "run", "agent", TRACE_STATUS_RUNNING, checkpoint=request.get("checkpointBefore"))
             agent = await create_runtime_agent(request)
             control["agent"] = agent
-            checkpoint_connection = configure_checkpoint(agent, request)
+            checkpoint_connection = await configure_checkpoint(agent, request)
             stream = await event_stream(agent, request, mode)
             if not isinstance(stream, AsyncIterable):
                 if not isinstance(stream, Iterable):
@@ -1695,7 +1698,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 except Exception:
                     pass
             if checkpoint_connection is not None:
-                checkpoint_connection.close()
+                await checkpoint_connection.close()
             persisted = repos["agentRuns"]["get"](run_id)
             if persisted is None or persisted.get("status") != RUN_STATUS_INTERRUPTED:
                 resume_contexts.pop(run_id, None)

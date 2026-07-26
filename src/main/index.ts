@@ -637,7 +637,8 @@ async function createRuntimeServerAssembly(
     }),
     repos: target.repos,
     getWin: () => win,
-    switchLibraryFolder
+    switchLibraryFolder,
+    metadataService: target.metadataService
   })
 }
 

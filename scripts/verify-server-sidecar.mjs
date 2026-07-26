@@ -57,6 +57,7 @@ const artifactCheck = await runFile(executable, ['--verify-artifact'], {
 })
 const artifact = JSON.parse(artifactCheck.stdout.trim().split('\n').at(-1))
 for (const distribution of [
+  'aiosqlite',
   'deepagents',
   'langchain',
   'langchain-core',

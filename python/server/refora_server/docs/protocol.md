@@ -73,7 +73,7 @@ never raise across the transport.
 | POST | `/documents/{documentId}/refresh-metadata` | required | — | `Document` |
 | POST | `/documents/{documentId}/relocate` | required | `{path:string}` | `Document` |
 | POST | `/documents/{documentId}/restore-file` | required | — | `Document` |
-| POST | `/documents/{documentId}/open-pdf` | required | — | `{ack:true}` (via connector) |
+| POST | `/documents/{documentId}/open-pdf` | required | — | `Document` (updates `lastReadAt`, then opens via connector) |
 | POST | `/documents/{documentId}/open-in-finder` | required | — | `{ack:true}` (via connector) |
 
 `Document` shape mirrors the existing `DocumentRecord` domain type:
@@ -85,7 +85,7 @@ never raise across the transport.
 ### Import
 | Method | Path | Token | Body | Returns |
 |---|---|---|---|---|
-| POST | `/import/files` | required | multipart: file paths (server resolves abs paths) | `{imported:Document[], skipped:{path,reason}[]}` |
+| POST | `/import/files` | required | `{paths:string[]}`; empty paths open the native multi-PDF picker | `{imported:Document[], skipped:{path,reason}[]}` |
 | POST | `/import/folder` | required | `{path:string, recursive?:boolean}` | `{imported:Document[]}` |
 | POST | `/import/json` | required | `ExportPayload` | `{imported:number}` |
 | POST | `/import/zotero` | required | `{dbPath?:string, paths:string[]}` | `{imported:number}` |

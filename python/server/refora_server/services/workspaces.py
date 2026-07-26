@@ -134,6 +134,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     connector = deps.get("connector")
     logger = deps.get("logger")
     sandbox = deps.get("sandbox")
+    get_sandbox_path = deps.get("getSandboxPath") or deps.get("get_sandbox_path")
 
     async def _connector_call(name: str, *args: Any) -> Any:
         operation = _connector_method(connector, name)
@@ -219,10 +220,18 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     async def open_sandbox(workspace_id: str) -> None:
         _require_workspace(workspace_id)
         ensure = _sandbox_method(sandbox, "ensure")
-        if ensure is None:
+        if ensure is not None:
+            sandbox_paths = ensure(workspace_id)
+            sandbox_root = sandbox_paths["sandboxRoot"]
+        elif callable(get_sandbox_path):
+            sandbox_root = get_sandbox_path(workspace_id)
+            if not isinstance(sandbox_root, str) or not os.path.isabs(sandbox_root):
+                raise RepoError("invalid_path", "Agent sandbox path is invalid")
+            os.makedirs(sandbox_root, mode=0o700, exist_ok=True)
+            if os.path.islink(sandbox_root) or not os.path.isdir(sandbox_root):
+                raise RepoError("invalid_path", "Agent sandbox path is invalid")
+        else:
             raise RepoError("not_ready", "Agent sandbox is not available")
-        sandbox_paths = ensure(workspace_id)
-        sandbox_root = sandbox_paths["sandboxRoot"]
         message = await _connector_call("openPath", sandbox_root)
         if message:
             raise RepoError("open_failed", message)

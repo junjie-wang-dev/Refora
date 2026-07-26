@@ -200,6 +200,24 @@ class TestOpenSandbox:
             await svc["openSandbox"](w["id"])
         assert exc.value.code == "open_failed"
 
+    @pytest.mark.asyncio
+    async def test_open_sandbox_uses_configured_workspace_path(self, repos, tmp_path):
+        w = repos["workspaces"]["create"]("Research")
+        connector = _FakeConnector()
+        sandbox_root = tmp_path / "sandboxes" / w["id"]
+        svc = createWorkspacesService(
+            repos,
+            {
+                "connector": connector,
+                "getSandboxPath": lambda _wid: str(sandbox_root),
+            },
+        )
+
+        await svc["openSandbox"](w["id"])
+
+        assert sandbox_root.is_dir()
+        assert connector.opened == [str(sandbox_root)]
+
 class TestItems:
     def test_list_empty(self, service):
         w = _make_workspace(service)

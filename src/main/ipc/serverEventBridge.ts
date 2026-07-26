@@ -46,6 +46,7 @@ const connectorEvents: readonly WsEventName[] = [
 export interface ServerEventBridgeDeps {
   serverClient: ServerClient
   getWin: () => BrowserWindow | null
+  enqueueMetadata?: (documentId: string) => void
 }
 
 export interface ServerEventBridge {
@@ -69,9 +70,22 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps): ServerEven
     unsubscribeListeners = eventForwards.map(([event, channel]) =>
       deps.serverClient.ws.on(event, (data) => forward(channel, data))
     )
+    unsubscribeListeners.push(
+      deps.serverClient.ws.on('metadata.enqueue', (data) => {
+        if (!data || typeof data !== 'object') return
+        const documentIds = (data as { documentIds?: unknown }).documentIds
+        if (!Array.isArray(documentIds)) return
+        for (const documentId of documentIds) {
+          if (typeof documentId === 'string' && documentId) {
+            deps.enqueueMetadata?.(documentId)
+          }
+        }
+      })
+    )
     deps.serverClient.ws.subscribe([
       ...eventForwards.map(([event]) => event),
-      ...connectorEvents
+      ...connectorEvents,
+      'metadata.enqueue'
     ])
   }
 
@@ -82,7 +96,8 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps): ServerEven
     unsubscribeListeners = []
     deps.serverClient.ws.unsubscribe([
       ...eventForwards.map(([event]) => event),
-      ...connectorEvents
+      ...connectorEvents,
+      'metadata.enqueue'
     ])
   }
 

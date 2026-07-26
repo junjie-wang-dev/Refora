@@ -11,6 +11,55 @@ from refora_server.server.connector import ConnectorBroker
 from refora_server.server.lifespan import create_lifespan
 
 
+class EventSocket:
+    def __init__(self) -> None:
+        self.messages = []
+
+    async def send_json(self, message) -> None:
+        self.messages.append(message)
+
+
+async def test_lifespan_starts_watcher_and_requests_metadata_for_imports(
+    tmp_path,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+    app = FastAPI(
+        lifespan=create_lifespan(
+            str(tmp_path / "refora.sqlite"),
+            str(library),
+        )
+    )
+    socket = EventSocket()
+
+    async with app.router.lifespan_context(app):
+        await app.state.event_bus.subscribe(
+            socket,
+            ["import.progress", "metadata.enqueue"],
+        )
+        result = app.state.services["importer"]["importFiles"]([str(source)])
+        await asyncio.sleep(0.01)
+
+        assert app.state.services["watcher"]["_state"]["running"] is True
+        assert len(result["imported"]) == 1
+        assert {
+            message["event"]
+            for message in socket.messages
+        } == {"import.progress", "metadata.enqueue"}
+        metadata_event = next(
+            message
+            for message in socket.messages
+            if message["event"] == "metadata.enqueue"
+        )
+        assert metadata_event["data"] == {
+            "documentIds": result["imported"]
+        }
+
+    assert app.state.services["watcher"]["_state"]["running"] is False
+
+
 async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     db = object()
     open_database = Mock(return_value=(db, object()))
