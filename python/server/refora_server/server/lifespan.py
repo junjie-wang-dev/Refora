@@ -732,7 +732,7 @@ def create_lifespan(
 
             def prepare_paper_ocr(document_id: str) -> dict[str, Any]:
                 cached = run_on_server_loop(
-                    ocr["prepareForAgent"](document_id),
+                    ocr["prepareForAgent"](document_id, cancel_event),
                     cancel_event,
                 )
                 result = cached["result"]

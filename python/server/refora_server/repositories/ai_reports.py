@@ -126,10 +126,29 @@ def createAiReportsRepository(db):
             [now, existing["workspaceId"]],
         )
 
+    def remove_doc_from_sources(doc_id: str) -> None:
+        pattern = f'%"{doc_id}"%'
+        rows = db.execute(
+            "SELECT id, sourceDocIds FROM ai_reports WHERE sourceDocIds LIKE ?",
+            [pattern],
+        ).fetchall()
+        for row in rows:
+            ids = _parse_source_doc_ids(row["sourceDocIds"])
+            if doc_id not in ids:
+                continue
+            updated = [i for i in ids if i != doc_id]
+            if len(updated) == len(ids):
+                continue
+            db.execute(
+                "UPDATE ai_reports SET sourceDocIds = ? WHERE id = ?",
+                [json.dumps(updated), row["id"]],
+            )
+
     return {
         "list": list,
         "create": create,
         "get": get,
         "update": update,
         "delete": remove,
+        "removeDocFromSources": remove_doc_from_sources,
     }

@@ -7,6 +7,40 @@ from refora_server.library.pdf_path import resolvePdfFilePath
 from refora_server.repositories.errors import RepoError
 
 
+def _classify_pdf_error(error: Exception) -> tuple[str, str]:
+    name = type(error).__name__
+    message = str(error) or name
+    lower = message.lower()
+    if (
+        name in ("WrongPasswordError", "FileNotDecryptedError")
+        or "password" in lower
+        or "encrypted" in lower
+        or "decrypt" in lower
+    ):
+        return "encrypted", message
+    if name in ("PdfReadError", "PyPdfError", "EmptyFileError", "ParseError", "PdfStreamError"):
+        return "corrupted", message
+    return "corrupted", message
+
+
+def _is_encrypted(reader: Any) -> bool:
+    try:
+        return bool(getattr(reader, "is_encrypted", False))
+    except Exception:
+        return False
+
+
+def _open_reader(path: str, reader_factory: Any) -> tuple[Any, str | None]:
+    try:
+        reader = reader_factory(path)
+    except Exception as error:
+        code, message = _classify_pdf_error(error)
+        raise RepoError(code, f"Failed to extract PDF text: {message}") from error
+    if _is_encrypted(reader):
+        raise RepoError("encrypted", "Failed to extract PDF text: PDF is encrypted")
+    return reader, None
+
+
 def createDocumentTextService(
     repos: dict[str, Any],
     deps: dict[str, Any] | None = None,
@@ -16,12 +50,12 @@ def createDocumentTextService(
 
     def extract_path(path: str) -> str:
         try:
-            if reader_factory is None:
+            factory = reader_factory
+            if factory is None:
                 from pypdf import PdfReader
 
-                reader = PdfReader(path)
-            else:
-                reader = reader_factory(path)
+                factory = PdfReader
+            reader, _ = _open_reader(path, factory)
             pages: list[str] = []
             for page in reader.pages:
                 value = page.extract_text()
@@ -31,10 +65,8 @@ def createDocumentTextService(
         except RepoError:
             raise
         except Exception as error:
-            raise RepoError(
-                "pdf_extract_failed",
-                f"Failed to extract PDF text: {error}",
-            ) from error
+            code, message = _classify_pdf_error(error)
+            raise RepoError(code, f"Failed to extract PDF text: {message}") from error
         return text
 
     def extract(document_id: str) -> str:

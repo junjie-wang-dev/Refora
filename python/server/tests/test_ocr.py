@@ -436,3 +436,90 @@ async def test_prepare_document_delete_cancels_and_removes_root(repos, library_f
     assert worker.cancelled
     job = repos["documentOcr"]["getJob"](job_id)
     assert job["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_agent_signal_already_set_cancels_immediately(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    block_event = asyncio.Event()
+    worker = _FakeWorker(block_event=block_event)
+    service = create_ocr_service(repos, _make_deps(library_folder, worker))
+
+    signal = asyncio.Event()
+    signal.set()
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await service["prepareForAgent"]("doc-1", signal)
+
+    assert repos["documentOcr"]["getAnyActiveJob"]() is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_agent_signal_set_during_job_cancels_agent_job(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    block_event = asyncio.Event()
+    worker = _FakeWorker(block_event=block_event)
+    service = create_ocr_service(repos, _make_deps(library_folder, worker))
+
+    signal = asyncio.Event()
+
+    async def trigger_signal():
+        await asyncio.sleep(0.02)
+        signal.set()
+
+    asyncio.create_task(trigger_signal())
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await service["prepareForAgent"]("doc-1", signal)
+
+    assert worker.cancelled is True
+    assert repos["documentOcr"]["getAnyActiveJob"]() is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_agent_signal_does_not_cancel_preexisting_job(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    block_event = asyncio.Event()
+    worker = _FakeWorker(block_event=block_event)
+    service = create_ocr_service(repos, _make_deps(library_folder, worker))
+
+    preexisting_job_id = await service["startOcr"]("doc-1", "balanced")
+    await asyncio.sleep(0.02)
+
+    signal = asyncio.Event()
+
+    async def trigger_signal():
+        await asyncio.sleep(0.02)
+        signal.set()
+
+    asyncio.create_task(trigger_signal())
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await service["prepareForAgent"]("doc-1", signal)
+
+    block_event.set()
+    await asyncio.sleep(0.05)
+    job = repos["documentOcr"]["getJob"](preexisting_job_id)
+    assert job["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_agent_without_signal_completes_normally(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    service = create_ocr_service(
+        repos,
+        _make_deps(library_folder, _FakeWorker(delay=0.01)),
+    )
+
+    cached = await service["prepareForAgent"]("doc-1", None)
+
+    assert cached["result"]["profile"] == "balanced"
+    assert cached["markdown"] == "# Title\n\nBody text"
