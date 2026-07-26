@@ -7,13 +7,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
 from fastapi import FastAPI
+from langchain_openai import ChatOpenAI
 
 from refora_server.db.connection import close_database, get_search_mode, open_database
 from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
 from refora_server.services.agent_runtime import createAgentRuntime
+from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
 from refora_server.services.chat_history import createChatHistoryService
@@ -129,6 +133,43 @@ def _unavailable_ocr_service(reason: str) -> dict[str, Any]:
     }
 
 
+def _create_model(provider: dict[str, Any]) -> ChatOpenAI:
+    options: dict[str, Any] = {
+        "model": provider["model"],
+        "api_key": provider["apiKey"],
+        "base_url": provider["baseUrl"],
+        "streaming": True,
+        "use_responses_api": provider.get("useResponsesApi", False),
+        "model_kwargs": dict(provider.get("modelKwargs") or {}),
+    }
+    if provider.get("temperature") is not None:
+        options["temperature"] = provider["temperature"]
+    if provider.get("maxTokens") is not None:
+        options["max_completion_tokens"] = provider["maxTokens"]
+    if isinstance(provider.get("reasoning"), dict):
+        options["reasoning"] = provider["reasoning"]
+    return ChatOpenAI(**options)
+
+
+def _create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
+    return create_deep_agent(
+        model=model,
+        tools=tools,
+        system_prompt=request.get("systemPrompt") or None,
+        backend=StateBackend(),
+        interrupt_on={
+            "prepare_paper_ocr": True,
+            "publish_workspace_artifacts": True,
+            "install_runtime_packages": True,
+            "propose_workspace_memory_update": True,
+        },
+    )
+
+
+def _unavailable_agent_capability(*_args: Any, **_kwargs: Any) -> Any:
+    raise RuntimeError("Agent capability is unavailable")
+
+
 def create_lifespan(
     db_path: str,
     library_folder: str,
@@ -228,7 +269,45 @@ def create_lifespan(
                 },
             ),
         }
-        agent_runtime = createAgentRuntime(repos, {"emit": events.broadcast, "connector": connector})
+
+        def create_tools(request: dict[str, Any]) -> list[Any]:
+            enabled_names = request.get("enabledToolNames")
+            if not isinstance(enabled_names, list):
+                return []
+            enabled = {name for name in enabled_names if isinstance(name, str)}
+            tool_deps = {
+                "repos": repos,
+                "interrupt": lambda *_args: None,
+                "ai_summary": _unavailable_agent_capability,
+                "read_ocr_fulltext": _unavailable_agent_capability,
+                "publish_artifacts": _unavailable_agent_capability,
+                "install_runtime_packages": _unavailable_agent_capability,
+                "prepare_paper_ocr": _unavailable_agent_capability,
+                "web_search": web_search.get("search", _unavailable_agent_capability),
+                "web_fetch": _unavailable_agent_capability,
+                "academic": {},
+            }
+            tools = create_agent_tools(
+                AgentToolContext(
+                    run_id=request["runId"],
+                    thread_id=request.get("threadId"),
+                    workspace_id=request.get("workspaceId"),
+                ),
+                tool_deps,
+            )
+            return [tool for tool in tools if tool.name in enabled]
+
+        agent_runtime = createAgentRuntime(
+            repos,
+            {
+                "emit": events.broadcast,
+                "connector": connector,
+                "createTools": create_tools,
+                "createModel": _create_model,
+                "createAgent": _create_agent,
+                "generateTitle": services["threadTitle"].get("generateThreadTitle"),
+            },
+        )
         app.state.repos = repos
         app.state.services = services
         app.state.event_bus = events
