@@ -45,6 +45,11 @@ interface SpawnResult {
   portPromise: Promise<number>
 }
 
+interface TokenFile {
+  port: number
+  token: string
+}
+
 function defaultFetchHealth(url: string, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -53,6 +58,29 @@ function defaultFetchHealth(url: string, timeoutMs: number): Promise<boolean> {
     .then((response) => response.ok)
     .catch(() => false)
     .finally(() => clearTimeout(timer))
+}
+
+function parseTokenFile(contents: string, tokenPath: string): TokenFile {
+  let value: unknown
+  try {
+    value = JSON.parse(contents)
+  } catch {
+    throw new Error(`Server token file is not valid JSON: ${tokenPath}`)
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Server token file has an invalid shape: ${tokenPath}`)
+  }
+
+  const { port, token } = value as Record<string, unknown>
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error(`Server token file has an invalid port: ${tokenPath}`)
+  }
+  if (typeof token !== 'string' || !token.trim()) {
+    throw new Error(`Server token file has an empty token: ${tokenPath}`)
+  }
+
+  return { port, token }
 }
 
 export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycle {
@@ -154,14 +182,16 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     return { child: spawned, portPromise }
   }
 
-  async function buildConnection(port: number): Promise<ServerConnection> {
+  async function buildConnection(listeningPort: number): Promise<ServerConnection> {
     const tokenPath = join(deps.stateDir, TOKEN_FILE)
-    const token = (await readFile(tokenPath)).trim()
-    if (!token) throw new Error(`Server token file is empty: ${tokenPath}`)
+    const tokenFile = parseTokenFile(await readFile(tokenPath), tokenPath)
+    if (tokenFile.port !== listeningPort) {
+      throw new Error(`Server token file port does not match listening port: ${tokenPath}`)
+    }
     return {
-      baseUrl: `http://127.0.0.1:${port}`,
-      token,
-      port
+      baseUrl: `http://127.0.0.1:${tokenFile.port}`,
+      token: tokenFile.token,
+      port: tokenFile.port
     }
   }
 
@@ -221,12 +251,12 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     let port: number
     try {
       port = await portPromise
+      connection = await buildConnection(port)
     } catch (error) {
       terminate(spawned, 'SIGTERM')
       child = null
       throw error
     }
-    connection = await buildConnection(port)
     attachCrashHandler(spawned)
     scheduleHealthCheck()
     return connection

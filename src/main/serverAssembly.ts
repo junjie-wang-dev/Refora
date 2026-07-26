@@ -1,5 +1,6 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Repositories } from './db/repositories'
+import type { LibrarySwitchResult } from '../shared/ipc-types'
 import { createServerAiHandlers } from './ipc/serverAiHandlers'
 import { createServerEventBridge, type ServerEventBridge } from './ipc/serverEventBridge'
 import { createServerLibraryHandlers } from './ipc/serverLibraryHandlers'
@@ -12,6 +13,7 @@ export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
   repos: Repositories
   getWin: () => BrowserWindow | null
+  switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
 }
 
 export interface ServerAssembly {
@@ -23,6 +25,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
   let nativeRpc: NativeRpc | null = null
   let serverClient: ServerClient | null = null
   let eventBridge: ServerEventBridge | null = null
+  let handlerChannels: string[] = []
 
   async function start(): Promise<void> {
     const connection = await deps.lifecycle.start()
@@ -38,10 +41,11 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     eventBridge.start()
 
     const handlers = {
-      ...createServerLibraryHandlers({ serverClient }),
+      ...createServerLibraryHandlers({ serverClient, switchLibraryFolder: deps.switchLibraryFolder }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient })
     }
+    handlerChannels = Object.keys(handlers)
     for (const [channel, handler] of Object.entries(handlers)) {
       ipcMain.handle(channel, (_event, ...args) =>
         (handler as (...handlerArgs: unknown[]) => unknown)(...args)
@@ -52,6 +56,8 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
   async function stop(): Promise<void> {
     eventBridge?.stop()
     serverClient?.ws.disconnect()
+    for (const channel of handlerChannels) ipcMain.removeHandler(channel)
+    handlerChannels = []
     await nativeRpc?.stop()
     await deps.lifecycle.stop()
   }

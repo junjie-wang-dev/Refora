@@ -18,6 +18,7 @@ export default defineConfig({
       'tests/integration/**/*.test.ts',
       'tests/smoke/**/*.test.ts'
     ],
+    exclude: ['tests/integration/serverLifecycle.e2e.test.ts'],
     globals: false,
     setupFiles: ['tests/setup.ts'],
     server: {

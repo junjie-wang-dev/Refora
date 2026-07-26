@@ -73,6 +73,7 @@ import {
 } from './services/libraryDuplicateCache'
 import { createServerLifecycle } from './services/serverLifecycle'
 import { createServerAssembly, type ServerAssembly } from './serverAssembly'
+import { createLibraryHandoff } from './services/libraryHandoff'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -799,6 +800,33 @@ function activateRuntime(target: Runtime, startLibraryWatcher = true): void {
   }, 10 * 60 * 1000)
 }
 
+async function createRuntimeServerAssembly(
+  target: Runtime,
+  dbPath: string,
+  libraryFolder: string,
+  switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult>
+): Promise<ServerAssembly> {
+  const serverStateDir = join(app.getPath('userData'), 'server')
+  mkdirSync(serverStateDir, { recursive: true })
+  const serverPython = await target.agentPythonRuntime.install(new AbortController().signal)
+  const serverSourceRoot = app.isPackaged
+    ? join(process.resourcesPath, 'python-server')
+    : join(__dirname, '../../python/server')
+  return createServerAssembly({
+    lifecycle: createServerLifecycle({
+      pythonPath: serverPython,
+      serverModule: 'refora_server.server.run',
+      stateDir: serverStateDir,
+      dbPath,
+      libraryFolder,
+      environment: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: serverSourceRoot }
+    }),
+    repos: target.repos,
+    getWin: () => win,
+    switchLibraryFolder
+  })
+}
+
 function resolveStartupDbPath(): string {
   const userDataDir = app.getPath('userData')
   const userDataDbPath = join(userDataDir, DB_FILE_NAME)
@@ -981,29 +1009,28 @@ void app.whenReady().then(async () => {
   win = createWindow(savedBounds)
   activateRuntime(runtime)
 
-  const serverStateDir = join(app.getPath('userData'), 'server')
-  mkdirSync(serverStateDir, { recursive: true })
   const libraryFolder = runtime.repos.settings.get<string>('libraryFolderPath', '') || app.getPath('userData')
-  const serverPython = await runtime.agentPythonRuntime.install(new AbortController().signal)
-  const serverSourceRoot = app.isPackaged
-    ? join(process.resourcesPath, 'python-server')
-    : join(__dirname, '../../python/server')
-  serverAssembly = createServerAssembly({
-    lifecycle: createServerLifecycle({
-      pythonPath: serverPython,
-      serverModule: 'refora_server.server.run',
-      stateDir: serverStateDir,
-      dbPath,
-      libraryFolder,
-      environment: {
-        ...process.env,
-        PYTHONNOUSERSITE: '1',
-        PYTHONPATH: serverSourceRoot
-      }
-    }),
-    repos: runtime.repos,
-    getWin: () => win
+  const switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult> = createLibraryHandoff<Runtime>({
+    getRuntime: () => runtime,
+    setRuntime: (nextRuntime) => { runtime = nextRuntime },
+    getAssembly: () => serverAssembly,
+    setAssembly: (nextAssembly) => { serverAssembly = nextAssembly },
+    createRuntime: buildRuntime,
+    destroyRuntime,
+    createAssembly: (nextRuntime, nextDbPath, nextLibraryFolder): Promise<ServerAssembly> =>
+      createRuntimeServerAssembly(nextRuntime, nextDbPath, nextLibraryFolder, switchLibraryFolder),
+    activateRuntime: (nextRuntime) => activateRuntime(nextRuntime, false),
+    dbPathForLibraryFolder,
+    dbExistsInLibraryFolder,
+    findPdfsRecursively,
+    writeLibraryFolderPath: (folder) => writeLibraryFolderPath(app.getPath('userData'), folder),
+    emitLibraryScanning,
+    emitLibrarySwitched,
+    getWin: () => win,
+    exists: existsSync,
+    isDirectory: (folder) => statSync(folder).isDirectory()
   })
+  serverAssembly = await createRuntimeServerAssembly(runtime, dbPath, libraryFolder, switchLibraryFolder)
   await serverAssembly.start()
 
   Menu.setApplicationMenu(buildMenu())

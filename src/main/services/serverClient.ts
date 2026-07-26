@@ -805,9 +805,9 @@ export function createServerClient(
   }
 
   function handleMessage(raw: string): void {
-    let message: { event?: string; data?: unknown }
+    let message: { event?: string; data?: unknown; topics?: unknown }
     try {
-      message = JSON.parse(raw) as { event?: string; data?: unknown }
+      message = JSON.parse(raw) as { event?: string; data?: unknown; topics?: unknown }
     } catch (e) {
       logger.warn(`serverClient:parse-error ${e instanceof Error ? e.message : String(e)}`)
       return
@@ -815,7 +815,11 @@ export function createServerClient(
     const eventName = message.event
     if (!eventName) return
     const event = eventName as WsEventName
-    const data = message.data
+    const data = message.data ?? (
+      (event === 'subscribed' || event === 'unsubscribed') && Array.isArray(message.topics)
+        ? { topics: message.topics }
+        : undefined
+    )
     if (event.startsWith('connector.')) {
       const request = (data ?? {}) as ConnectorRequest
       if (typeof request.requestId === 'string') {

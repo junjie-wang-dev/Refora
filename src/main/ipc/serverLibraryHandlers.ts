@@ -3,6 +3,7 @@ import type {
   AiProviderInput,
   AiProviderPatch,
   DocumentPatch,
+  LibrarySwitchResult,
   ListFilter,
   Result
 } from '../../shared/ipc-types'
@@ -14,6 +15,7 @@ import type {
 
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient
+  switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -33,7 +35,7 @@ async function forward<T>(request: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-export function createServerLibraryHandlers({ serverClient }: ServerLibraryHandlerDeps) {
+export function createServerLibraryHandlers({ serverClient, switchLibraryFolder }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
   return {
@@ -93,7 +95,8 @@ export function createServerLibraryHandlers({ serverClient }: ServerLibraryHandl
     [IpcChannel.WatchToggle]: (watchId: string, enabled: boolean) =>
       forward(() => http.watchToggle(watchId, { enabled })),
 
-    [IpcChannel.LibrarySwitch]: (path: string) => forward(() => http.librarySwitch({ path })),
+    [IpcChannel.LibrarySwitch]: (path: string) =>
+      switchLibraryFolder ? forward<LibrarySwitchResult>(() => switchLibraryFolder(path)) : forward(() => http.librarySwitch({ path })),
 
     [IpcChannel.SettingsGet]: (key: string, defaultValue: unknown) =>
       forward(async () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   ipcHandle: vi.fn(),
+  ipcRemoveHandler: vi.fn(),
   nativeStart: vi.fn(),
   nativeStop: vi.fn(),
   wsConnect: vi.fn(),
@@ -12,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: mocks.ipcHandle }
+  ipcMain: { handle: mocks.ipcHandle, removeHandler: mocks.ipcRemoveHandler }
 }))
 
 vi.mock('../../src/main/services/nativeRpc', () => ({
@@ -83,6 +84,9 @@ describe('main process server assembly', () => {
     mocks.ipcHandle.mockImplementation(() => {
       mocks.calls.push('ipc.handle')
     })
+    mocks.ipcRemoveHandler.mockImplementation(() => {
+      mocks.calls.push('ipc.removeHandler')
+    })
   })
 
   it('starts services and registers all server handler maps in order', async () => {
@@ -142,6 +146,9 @@ describe('main process server assembly', () => {
     expect(mocks.calls).toEqual([
       'bridge.stop',
       'ws.disconnect',
+      'ipc.removeHandler',
+      'ipc.removeHandler',
+      'ipc.removeHandler',
       'native.stop',
       'lifecycle.stop'
     ])

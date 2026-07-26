@@ -26,6 +26,11 @@ extraResources:
     to: python-server/refora_server
     filter:
       - '**/*.py'
+  - from: src/main/db
+    to: python-server/db
+    filter:
+      - schema.sql
+      - migrations/**/*.sql
 asar: true
 asarUnpack:
   - '**/*.node'

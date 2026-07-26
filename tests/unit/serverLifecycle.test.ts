@@ -56,12 +56,13 @@ function makeSpawn(emitListening: (child: FakeChildProcess) => void) {
 }
 
 describe('serverLifecycle', () => {
+  const port = 8321
   const token = 'secret-token-123'
 
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
-    mockReadFile.mockResolvedValue(token)
+    mockReadFile.mockResolvedValue(JSON.stringify({ port, token }))
     mockFetchHealth.mockResolvedValue(true)
   })
 
@@ -70,11 +71,13 @@ describe('serverLifecycle', () => {
   })
 
   function makeDeps(overrides: Partial<Parameters<typeof createServerLifecycle>[0]> = {}) {
-    const spawn = makeSpawn((child) => announce(child, 8321))
+    const spawn = makeSpawn((child) => announce(child, port))
     return {
       pythonPath: '/usr/bin/python3',
       serverModule: 'refora_server.server.run',
       stateDir: '/tmp/refora-server',
+      dbPath: '/tmp/refora-server.sqlite',
+      libraryFolder: '/tmp/refora-library',
       spawnChild: spawn,
       readFile: mockReadFile,
       fetchHealth: mockFetchHealth,
@@ -82,12 +85,12 @@ describe('serverLifecycle', () => {
     }
   }
 
-  it('parses the listening port from stdout and reads the token', async () => {
+  it('parses the JSON token state emitted by the server', async () => {
     const lifecycle = createServerLifecycle(makeDeps())
     const connection = await lifecycle.start()
 
-    expect(connection.port).toBe(8321)
-    expect(connection.baseUrl).toBe('http://127.0.0.1:8321')
+    expect(connection.port).toBe(port)
+    expect(connection.baseUrl).toBe(`http://127.0.0.1:${port}`)
     expect(connection.token).toBe(token)
     expect(mockReadFile).toHaveBeenCalledWith(
       expect.stringContaining('server.token')
@@ -124,14 +127,26 @@ describe('serverLifecycle', () => {
     await expect(promise).rejects.toThrow(/listening port/)
   })
 
-  it('rejects when the token file is empty', async () => {
-    mockReadFile.mockResolvedValue('   ')
-    const lifecycle = createServerLifecycle(makeDeps())
-    await expect(lifecycle.start()).rejects.toThrow(/empty/)
+  it.each([
+    ['malformed JSON', '{'],
+    ['a non-object value', 'null'],
+    ['a missing port', JSON.stringify({ token })],
+    ['an invalid port', JSON.stringify({ port: 0, token })],
+    ['a missing token', JSON.stringify({ port })],
+    ['an empty token', JSON.stringify({ port, token: '  ' })]
+  ])('rejects %s in the token state file', async (_description, contents) => {
+    mockReadFile.mockResolvedValue(contents)
+    await expect(createServerLifecycle(makeDeps()).start()).rejects.toThrow(/token file/)
+  })
+
+  it('rejects when the token state port differs from stdout', async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: port + 1, token }))
+    await expect(createServerLifecycle(makeDeps()).start()).rejects.toThrow(/does not match/)
   })
 
   it('sends SIGTERM on stop', async () => {
     const spawn = makeSpawn((child) => announce(child, 9000))
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9000, token }))
     const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
     await lifecycle.start()
     const child = spawn.mock.results[0].value as FakeChildProcess
@@ -149,6 +164,7 @@ describe('serverLifecycle', () => {
         }
       })
     })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9001, token }))
     const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
     await lifecycle.start()
     const child = spawn.mock.results[0].value as FakeChildProcess
@@ -171,6 +187,7 @@ describe('serverLifecycle', () => {
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 3 })
     )
+    mockReadFile.mockImplementation(async () => JSON.stringify({ port: 7000 + spawnCount, token }))
     const first = await lifecycle.start()
     expect(first.port).toBe(7001)
 
@@ -195,6 +212,7 @@ describe('serverLifecycle', () => {
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 2 })
     )
+    mockReadFile.mockImplementation(async () => JSON.stringify({ port: 6000 + spawnCount, token }))
     await lifecycle.start()
 
     const firstChild = spawn.mock.results[0].value as FakeChildProcess
@@ -215,6 +233,7 @@ describe('serverLifecycle', () => {
 
   it('runs periodic health checks', async () => {
     const spawn = makeSpawn((child) => announce(child, 5555))
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 5555, token }))
     const lifecycle = createServerLifecycle(
       makeDeps({
         spawnChild: spawn,

@@ -15,6 +15,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
+    "test:server-integration": "vitest run --config vitest.server-integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "test:e2e:workspace-card": "electron-vite build && playwright test tests/e2e/workspace-card-pointer.spec.ts --workers=1",
