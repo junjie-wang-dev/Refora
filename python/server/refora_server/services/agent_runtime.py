@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -18,6 +19,11 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from refora_server.academic.types import ACADEMIC_RESEARCH_TOOL_NAMES
+from refora_server.agent.academic_artifacts import (
+    ACADEMIC_ARTIFACT_MARKER_KEY,
+    AcademicArtifactStore,
+    academic_artifact_id_from_marker,
+)
 from refora_server.agent.engine import RunStateMachine
 from refora_server.agent.engine_schema import (
     RUN_STATUS_CANCELLED,
@@ -187,14 +193,208 @@ def _sanitize_academic_checkpoint_value(value: Any) -> Any:
 
 
 class AcademicRedactingSerializer(SerializerProtocol):
-    def __init__(self) -> None:
+    def __init__(self, artifact_store: AcademicArtifactStore | None = None) -> None:
         self._delegate = JsonPlusSerializer()
+        self._artifact_store = artifact_store
 
     def dumps_typed(self, obj: Any) -> tuple[str, bytes]:
-        return self._delegate.dumps_typed(_sanitize_academic_checkpoint_value(obj))
+        if self._artifact_store is None:
+            return self._delegate.dumps_typed(_sanitize_academic_checkpoint_value(obj))
+        return self._delegate.dumps_typed(
+            _externalize_academic_checkpoint_value(
+                obj, self._delegate, self._artifact_store
+            )
+        )
 
     def loads_typed(self, data: tuple[str, bytes]) -> Any:
-        return self._delegate.loads_typed(data)
+        value = self._delegate.loads_typed(data)
+        if self._artifact_store is None:
+            return value
+        return _hydrate_academic_checkpoint_value(
+            value, self._delegate, self._artifact_store
+        )
+
+
+def _academic_message_marker(value: Any) -> str | None:
+    if not isinstance(value, (AIMessage, ToolMessage)):
+        return None
+    metadata = value.response_metadata
+    marker = metadata.get(ACADEMIC_ARTIFACT_MARKER_KEY) if isinstance(metadata, dict) else None
+    return marker if academic_artifact_id_from_marker(marker) is not None else None
+
+
+def _with_academic_message_marker(value: AIMessage | ToolMessage, marker: str) -> Any:
+    metadata = {
+        **(value.response_metadata if isinstance(value.response_metadata, dict) else {}),
+        ACADEMIC_ARTIFACT_MARKER_KEY: marker,
+    }
+    return value.model_copy(update={"response_metadata": metadata})
+
+
+def _without_academic_message_marker(value: AIMessage | ToolMessage) -> Any:
+    metadata = dict(value.response_metadata or {})
+    metadata.pop(ACADEMIC_ARTIFACT_MARKER_KEY, None)
+    return value.model_copy(update={"response_metadata": metadata})
+
+
+def _has_academic_checkpoint_value(
+    value: Any, academic_ids: set[str], seen: set[int] | None = None
+) -> bool:
+    if value is None or isinstance(value, (str, int, float, bool, bytes)):
+        return False
+    seen = seen if seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return False
+    seen.add(identity)
+    if isinstance(value, ToolMessage):
+        return value.name in _ACADEMIC_TOOL_NAMES or value.tool_call_id in academic_ids
+    mapping = value if isinstance(value, dict) else _as_mapping(value)
+    if _academic_call_name(mapping):
+        return True
+    tool_call_id = mapping.get("tool_call_id") or mapping.get("toolCallId")
+    if isinstance(tool_call_id, str) and tool_call_id in academic_ids:
+        return True
+    if isinstance(value, dict):
+        values = value.values()
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    elif isinstance(value, AIMessage):
+        values = (
+            value.content,
+            value.tool_calls,
+            value.invalid_tool_calls,
+            value.additional_kwargs,
+            value.response_metadata,
+        )
+    else:
+        return False
+    return any(_has_academic_checkpoint_value(item, academic_ids, seen) for item in values)
+
+
+def _externalize_academic_checkpoint_value(
+    value: Any, delegate: JsonPlusSerializer, artifact_store: AcademicArtifactStore
+) -> Any:
+    academic_ids: set[str] = set()
+    _collect_academic_tool_call_ids(value, academic_ids, set())
+
+    def store(current: Any) -> str:
+        type_name, data = delegate.dumps_typed(current)
+        return artifact_store.write(type_name, data)
+
+    def visit(current: Any) -> Any:
+        if isinstance(current, ToolMessage):
+            if current.name in _ACADEMIC_TOOL_NAMES or current.tool_call_id in academic_ids:
+                return _with_academic_message_marker(
+                    _sanitize_academic_checkpoint_value(current), store(current)
+                )
+            return current
+        if isinstance(current, AIMessage):
+            if not _has_academic_checkpoint_value(current, academic_ids):
+                return current
+            return _with_academic_message_marker(
+                _sanitize_academic_checkpoint_value(current), store(current)
+            )
+        if isinstance(current, list):
+            return [visit(item) for item in current]
+        if isinstance(current, tuple):
+            return tuple(visit(item) for item in current)
+        if not isinstance(current, dict):
+            return current
+        if _academic_call_name(current):
+            return {
+                ACADEMIC_ARTIFACT_MARKER_KEY: store(current),
+                "fallback": _sanitize_academic_checkpoint_value(current),
+            }
+        return {key: visit(item) for key, item in current.items()}
+
+    return visit(value)
+
+
+def _hydrate_academic_checkpoint_value(
+    value: Any, delegate: JsonPlusSerializer, artifact_store: AcademicArtifactStore
+) -> Any:
+    def load(marker: str) -> Any | None:
+        stored = artifact_store.read(marker)
+        return delegate.loads_typed((stored.type, stored.data)) if stored else None
+
+    def visit(current: Any) -> Any:
+        marker = _academic_message_marker(current)
+        if marker is not None:
+            restored = load(marker)
+            return (
+                restored
+                if restored is not None
+                else _without_academic_message_marker(current)
+            )
+        if isinstance(current, list):
+            return [visit(item) for item in current]
+        if isinstance(current, tuple):
+            return tuple(visit(item) for item in current)
+        if not isinstance(current, dict):
+            return current
+        marker = current.get(ACADEMIC_ARTIFACT_MARKER_KEY)
+        if academic_artifact_id_from_marker(marker) is not None and "fallback" in current:
+            restored = load(marker)
+            return restored if restored is not None else visit(current["fallback"])
+        return {key: visit(item) for key, item in current.items()}
+
+    return visit(value)
+
+
+_ACADEMIC_ARTIFACT_MARKER_RE = re.compile(
+    r"refora-academic-artifact:v1:([a-f0-9]{64})"
+)
+
+
+def _checkpoint_artifact_root(checkpoint_path: str) -> str:
+    return os.path.join(
+        os.path.dirname(os.path.abspath(checkpoint_path)), "academic-artifacts"
+    )
+
+
+def _artifact_ids_in_checkpoint_database(
+    checkpoint_path: str, thread_id: str | None = None
+) -> set[str]:
+    if not os.path.isfile(checkpoint_path):
+        return set()
+    connection = sqlite3.connect(checkpoint_path)
+    try:
+        ids: set[str] = set()
+        for table, column in (
+            ("checkpoints", "checkpoint"),
+            ("checkpoints", "metadata"),
+            ("writes", "value"),
+        ):
+            columns = {
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column not in columns:
+                continue
+            query = f"SELECT {column} FROM {table}"
+            values: list[object] = []
+            if thread_id is not None and "thread_id" in columns:
+                query += " WHERE thread_id = ?"
+                values.append(thread_id)
+            for (value,) in connection.execute(query, values):
+                if isinstance(value, str):
+                    text = value
+                elif isinstance(value, bytes):
+                    text = value.decode("utf-8", errors="ignore")
+                else:
+                    continue
+                ids.update(match.group(1) for match in _ACADEMIC_ARTIFACT_MARKER_RE.finditer(text))
+        return ids
+    except sqlite3.Error:
+        return set()
+    finally:
+        connection.close()
+
+
+def _prune_academic_artifacts(checkpoint_path: str) -> None:
+    store = AcademicArtifactStore(_checkpoint_artifact_root(checkpoint_path))
+    store.prune_artifacts(_artifact_ids_in_checkpoint_database(checkpoint_path))
 
 
 def _checkpoint_id(value: Any) -> str | None:
@@ -688,6 +888,12 @@ def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
 
 def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None):
     deps = deps or {}
+    configured_checkpoint_path = deps.get("checkpointPath") or deps.get("checkpoint_path")
+    if isinstance(configured_checkpoint_path, str) and configured_checkpoint_path:
+        try:
+            _prune_academic_artifacts(configured_checkpoint_path)
+        except OSError:
+            pass
     active: dict[str, dict[str, Any]] = {}
     active_by_thread: dict[str, str] = {}
     background_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
@@ -833,7 +1039,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             connection = await aiosqlite.connect(checkpoint_path)
             agent.checkpointer = AsyncSqliteSaver(
                 connection,
-                serde=AcademicRedactingSerializer(),
+                serde=AcademicRedactingSerializer(
+                    AcademicArtifactStore(_checkpoint_artifact_root(checkpoint_path))
+                ),
             )
             return connection
         except (AttributeError, OSError, aiosqlite.Error):
@@ -1797,6 +2005,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         return {"runId": run_id}
 
     async def recover(request: dict[str, Any]) -> dict[str, Any]:
+        checkpoint_path = request.get("checkpointPath")
+        if isinstance(checkpoint_path, str) and checkpoint_path:
+            try:
+                await asyncio.to_thread(_prune_academic_artifacts, checkpoint_path)
+            except OSError:
+                pass
         mode = (
             "recover"
             if request.get("recoverLatestCheckpoint") is True
@@ -1869,6 +2083,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         checkpoint_path = deps.get("checkpointPath") or deps.get("checkpoint_path")
         if not isinstance(checkpoint_path, str) or not os.path.isfile(checkpoint_path):
             return
+        artifact_store = AcademicArtifactStore(
+            _checkpoint_artifact_root(checkpoint_path)
+        )
+        candidate_artifact_ids = _artifact_ids_in_checkpoint_database(
+            checkpoint_path, thread_id
+        )
         connection = sqlite3.connect(checkpoint_path)
         try:
             connection.execute("PRAGMA busy_timeout = 5000")
@@ -1878,19 +2098,22 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-            if not {"checkpoints", "writes"}.issubset(tables):
-                return
-            with connection:
-                connection.execute(
-                    "DELETE FROM writes WHERE thread_id = ?",
-                    [thread_id],
-                )
-                connection.execute(
-                    "DELETE FROM checkpoints WHERE thread_id = ?",
-                    [thread_id],
-                )
+            if {"checkpoints", "writes"}.issubset(tables):
+                with connection:
+                    connection.execute(
+                        "DELETE FROM writes WHERE thread_id = ?",
+                        [thread_id],
+                    )
+                    connection.execute(
+                        "DELETE FROM checkpoints WHERE thread_id = ?",
+                        [thread_id],
+                    )
         finally:
             connection.close()
+        artifact_store.delete_thread_artifacts(
+            candidate_artifact_ids,
+            _artifact_ids_in_checkpoint_database(checkpoint_path),
+        )
 
     async def destroy() -> None:
         for run_id, control in active.items():
