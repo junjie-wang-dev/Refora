@@ -90,6 +90,7 @@ const mockEventsOff = vi.fn()
 const mockOnWorkspaceItemsChanged = vi.fn()
 const mockOnAiSummaryUpdated = vi.fn()
 const mockOnAiReportCreated = vi.fn()
+const mockOnLibrarySwitched = vi.fn()
 const mockWorkspacesList = vi.fn()
 const mockWorkspacesCreate = vi.fn()
 const mockWorkspacesRename = vi.fn()
@@ -137,6 +138,7 @@ beforeEach(() => {
   mockOnWorkspaceItemsChanged.mockReset()
   mockOnAiSummaryUpdated.mockReset()
   mockOnAiReportCreated.mockReset()
+  mockOnLibrarySwitched.mockReset()
   mockWorkspacesList.mockReset()
   mockWorkspacesCreate.mockReset()
   mockWorkspacesRename.mockReset()
@@ -205,6 +207,7 @@ beforeEach(() => {
   events.onWorkspaceItemsChanged = mockOnWorkspaceItemsChanged
   events.onAiSummaryUpdated = mockOnAiSummaryUpdated
   events.onAiReportCreated = mockOnAiReportCreated
+  events.onLibrarySwitched = mockOnLibrarySwitched
 
   const workspaces = api.workspaces as Record<string, unknown>
   workspaces.list = mockWorkspacesList
@@ -599,7 +602,44 @@ describe('WorkspaceStore', () => {
       expect(mockEventsOff).toHaveBeenCalledWith('ai:summary:updated', summaryUpdated)
       expect(mockEventsOff).toHaveBeenCalledWith('ai:report:created', reportCreated)
       expect(mockEventsOff).toHaveBeenCalledWith('workspace:items:changed', expect.any(Function))
+      expect(mockEventsOff).toHaveBeenCalledWith('library:switched', expect.any(Function))
       expect(useWorkspaceStore.getState().initialized).toBe(false)
+    })
+
+    it('resets workspace state and refetches on library:switched', async () => {
+      const staleWorkspaces = [{ id: 'old-ws', name: 'Old', createdAt: 0, updatedAt: 0 }]
+      useWorkspaceStore.setState({
+        workspaces: staleWorkspaces,
+        activeWorkspaceId: 'old-ws',
+        activeThreadId: 'old-thread',
+        panelOpen: true,
+        items: [makeItem()],
+        reports: [makeReport()],
+        notes: [makeNote()],
+        assets: [makeAsset()],
+        threads: [{ id: 'old-thread', workspaceId: 'old-ws', providerId: 'p', title: 'T', createdAt: 0 }]
+      })
+
+      useWorkspaceStore.getState().init()
+      const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void) | undefined
+      expect(cb).toBeDefined()
+
+      const freshWorkspaces = [{ id: 'new-ws', name: 'New', createdAt: 1, updatedAt: 1 }]
+      mockWorkspacesList.mockResolvedValue(freshWorkspaces)
+
+      cb!()
+      await vi.waitFor(() => {
+        expect(useWorkspaceStore.getState().workspaces).toEqual(freshWorkspaces)
+      })
+
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+      expect(useWorkspaceStore.getState().activeThreadId).toBeNull()
+      expect(useWorkspaceStore.getState().panelOpen).toBe(false)
+      expect(useWorkspaceStore.getState().items).toEqual([])
+      expect(useWorkspaceStore.getState().reports).toEqual([])
+      expect(useWorkspaceStore.getState().notes).toEqual([])
+      expect(useWorkspaceStore.getState().assets).toEqual([])
+      expect(useWorkspaceStore.getState().threads).toEqual([])
     })
   })
 

@@ -70,6 +70,7 @@ interface WorkspaceState {
 const aiSummaryUpdatedCb: Array<null | ((docId: string) => void)> = [null]
 const aiReportCreatedCb: Array<null | ((report: AiReport) => void)> = [null]
 const workspaceItemsChangedCb: Array<null | ((payload: WorkspaceItemsChangedEvent) => void)> = [null]
+const librarySwitchedCb: Array<null | (() => void)> = [null]
 
 function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
@@ -118,6 +119,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     api.events.onWorkspaceItemsChanged(workspaceItemsChangedCb[0])
 
+    librarySwitchedCb[0] = () => {
+      set({
+        workspaces: [],
+        activeWorkspaceId: null,
+        activeThreadId: null,
+        panelOpen: false,
+        fullscreen: false,
+        chatStreaming: false,
+        items: [],
+        reports: [],
+        notes: [],
+        assets: [],
+        threads: [],
+        markdownCardRequest: null
+      })
+      void get().fetchWorkspaces()
+    }
+    api.events.onLibrarySwitched(librarySwitchedCb[0])
+
     void get().fetchWorkspaces()
   },
 
@@ -133,6 +153,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (workspaceItemsChangedCb[0]) {
       api.events.off('workspace:items:changed', workspaceItemsChangedCb[0])
       workspaceItemsChangedCb[0] = null
+    }
+    if (librarySwitchedCb[0]) {
+      api.events.off('library:switched', librarySwitchedCb[0])
+      librarySwitchedCb[0] = null
     }
     set({ initialized: false })
   },
