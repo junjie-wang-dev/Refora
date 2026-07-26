@@ -10,22 +10,8 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 
 from refora_server.academic.types import ArxivSearchInput, PaperLocator, to_json
+from refora_server.agent.risk import RiskClass, classify
 from refora_server.services.agent_memory import update_memory
-
-IDEMPOTENT_TOOL_NAMES = {
-    "generate_report",
-    "add_docs_to_workspace",
-    "create_workspace_connections",
-    "publish_workspace_artifacts",
-    "install_runtime_packages",
-    "propose_workspace_memory_update",
-}
-APPROVAL_TOOL_NAMES = {
-    "prepare_paper_ocr",
-    "publish_workspace_artifacts",
-    "install_runtime_packages",
-    "propose_workspace_memory_update",
-}
 
 
 @dataclass(frozen=True)
@@ -87,14 +73,15 @@ class AgentToolExecutor:
     def execute(self, name: str, arguments: Mapping[str, Any] | None = None, tool_call_id: str | None = None) -> str:
         arguments = dict(arguments or {})
         try:
-            if name in APPROVAL_TOOL_NAMES:
+            risk = classify(name)
+            if risk is RiskClass.EXTERNAL:
                 approval = _value(self.deps, "interrupt")
                 if not callable(approval):
                     raise ValueError(f"Approval handler is unavailable for {name}")
                 result = _call(self.deps, "interrupt", name, arguments)
                 if result is not None:
                     return _json(result)
-            if name in IDEMPOTENT_TOOL_NAMES:
+            if risk is not RiskClass.READ:
                 return self._effect(name, arguments, tool_call_id)
             return _json(self._dispatch(name, arguments))
         except Exception as error:
