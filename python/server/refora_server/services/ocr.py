@@ -533,7 +533,49 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
             "markdown": await read_markdown(document_id, result["resultKey"]),
         }
 
-    async def prepare_for_agent(document_id: str) -> dict[str, Any]:
+    async def _wait_for_job_with_signal(
+        job_id: str,
+        signal: asyncio.Event | None,
+        cancel_on_signal: bool,
+    ) -> dict[str, Any]:
+        if signal is None:
+            return await wait_for_job(job_id)
+
+        if signal.is_set():
+            if cancel_on_signal:
+                await asyncio.shield(cancel_ocr(job_id))
+            raise RuntimeError("OCR reading was cancelled")
+
+        running_task = state["running_task"]
+        if not running_task or running_task["jobId"] != job_id:
+            return await wait_for_job(job_id)
+
+        async def _wait_for_signal():
+            await signal.wait()
+
+        signal_future = asyncio.ensure_future(_wait_for_signal())
+        try:
+            done, pending = await asyncio.wait(
+                {running_task["task"], signal_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not signal_future.done():
+                signal_future.cancel()
+
+        if signal_future in done:
+            if cancel_on_signal:
+                await asyncio.shield(cancel_ocr(job_id))
+            raise RuntimeError("OCR reading was cancelled")
+
+        return await wait_for_job(job_id)
+
+    async def prepare_for_agent(
+        document_id: str,
+        signal: asyncio.Event | None = None,
+    ) -> dict[str, Any]:
+        if signal is not None and signal.is_set():
+            raise RuntimeError("OCR reading was cancelled")
         cached = await read_cached_for_agent(document_id)
         if cached is not None and cached["result"].get("profile") in {
             "balanced",
@@ -555,10 +597,12 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
             job_id = await start_ocr(document_id, "balanced")
             started_by_agent = True
         try:
-            await wait_for_job(job_id)
+            await _wait_for_job_with_signal(job_id, signal, started_by_agent)
         except asyncio.CancelledError:
             if started_by_agent:
                 await asyncio.shield(cancel_ocr(job_id))
+            raise
+        except RuntimeError:
             raise
         cached = await read_cached_for_agent(document_id)
         if cached is None or cached["result"].get("profile") not in {

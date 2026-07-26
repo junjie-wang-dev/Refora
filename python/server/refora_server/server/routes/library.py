@@ -237,6 +237,8 @@ def create_library_router(deps: Any) -> APIRouter:
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
     ai_summaries = _value(repos, "aiSummaries")
+    ai_reports = _value(repos, "aiReports")
+    transaction = _value(repos, "transaction")
 
     async def run(action):
         try:
@@ -530,7 +532,18 @@ def create_library_router(deps: Any) -> APIRouter:
                         await _connector(connector, "trash", path)
                     except Exception:
                         pass
-            await _call(documents, "delete", document_id)
+
+            def _cleanup():
+                _method(documents, "delete")(document_id)
+                if callable(_value(ai_summaries, "delete")):
+                    _value(ai_summaries, "delete")(document_id)
+                if callable(_value(ai_reports, "removeDocFromSources")):
+                    _value(ai_reports, "removeDocFromSources")(document_id)
+
+            if callable(transaction):
+                transaction(_cleanup)
+            else:
+                _cleanup()
         return {"ack": True}
 
     @router.delete("/documents/{document_id}")
