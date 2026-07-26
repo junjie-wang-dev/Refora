@@ -24,6 +24,7 @@ from refora_server.academic.arxiv import FetchResponse
 from refora_server.agent.providers import create_agent, create_model
 from refora_server.db.connection import close_database, get_search_mode, open_database
 from refora_server.db.settings_seed import seed_default_settings
+from refora_server.library.paths import resolveFromLibrary
 from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
@@ -612,13 +613,28 @@ def create_lifespan(
                 },
                 "frontier": academic_frontier,
             }
+        def list_readonly_workspace_assets(workspace_id: str) -> list[dict[str, Any]]:
+            assets = repos["workspaceAssets"]["list"](workspace_id)
+            return [
+                {
+                    **asset,
+                    "filePath": resolveFromLibrary(
+                        asset["filePath"], app.state.library_folder
+                    ),
+                }
+                for asset in assets
+            ]
+
         sandbox = createSandboxService(
             SandboxOptions(
                 shared_root=os.path.join(
                     os.path.abspath(app.state.library_folder),
                     ".refora-agent",
                     "shared",
-                )
+                ),
+                db_path=db_path,
+                documents_repo=repos["documents"],
+                workspace_assets_repo={"list": list_readonly_workspace_assets},
             )
         )
         if isinstance(repos.get("documents"), dict):
@@ -876,7 +892,11 @@ def create_lifespan(
             def execute_sandbox(command: str, args: dict[str, Any] | None = None) -> Any:
                 return sandbox["execute_sandbox"](
                     command,
-                    {**(args or {}), "_sandboxRoot": sandbox_root},
+                    {
+                        **(args or {}),
+                        "_sandboxRoot": sandbox_root,
+                        "_workspaceId": request.get("workspaceId"),
+                    },
                 )
 
             def install_runtime_packages(

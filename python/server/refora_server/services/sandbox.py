@@ -8,10 +8,13 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
+from refora_server.agent.db_snapshot import cleanup_snapshot, create_db_snapshot
+from refora_server.agent.readonly_files import write_readonly_files_manifest
 from refora_server.services.agent_runtime_manager import (
     DownloadFile,
     ManagedRuntimeManager,
@@ -90,6 +93,9 @@ class SandboxOptions:
     download_file: DownloadFile | None = None
     discover_runtime_path: bool = True
     read_only_paths: tuple[str, ...] = ()
+    db_path: str | None = None
+    documents_repo: Any = None
+    workspace_assets_repo: Any = None
     extra_env: dict[str, str] = field(default_factory=dict)
     cancel_event: threading.Event | None = None
 
@@ -327,6 +333,44 @@ def _changed_files(
         if len(changed) >= MAX_CHANGED_FILES:
             break
     return tuple(changed)
+
+
+def _prepare_readonly_context(
+    options: SandboxOptions,
+    roots: dict[str, Path],
+    workspace_id: str | None,
+) -> tuple[Path, Path] | None:
+    if (
+        not options.db_path
+        or options.documents_repo is None
+        or options.workspace_assets_repo is None
+    ):
+        return None
+    readonly_root = roots["shared"] / "readonly"
+    token = uuid.uuid4().hex
+    snapshot_path = readonly_root / f"refora-readonly-{token}.db"
+    manifest_path = readonly_root / f"readonly-files-{token}.json"
+    try:
+        create_db_snapshot(options.db_path, snapshot_path)
+        write_readonly_files_manifest(
+            workspace_id,
+            options.documents_repo,
+            options.workspace_assets_repo,
+            manifest_path,
+        )
+        return snapshot_path, manifest_path
+    except Exception:
+        cleanup_snapshot(snapshot_path)
+        manifest_path.unlink(missing_ok=True)
+        raise
+
+
+def _cleanup_readonly_context(context: tuple[Path, Path] | None) -> None:
+    if context is None:
+        return
+    snapshot_path, manifest_path = context
+    cleanup_snapshot(snapshot_path)
+    manifest_path.unlink(missing_ok=True)
 
 
 def execute(command: str, options: SandboxOptions | None = None) -> dict[str, Any]:
@@ -596,6 +640,9 @@ class SandboxExecutor:
         if isinstance(cwd, str) and cwd:
             overrides["cwd"] = cwd
         run_id = arguments.get("_runId")
+        workspace_id = arguments.get("_workspaceId")
+        if not isinstance(workspace_id, str) or not workspace_id:
+            workspace_id = None
         cancel_event = threading.Event()
         overrides["cancel_event"] = cancel_event
         merged = replace(self._options, **overrides)
@@ -615,9 +662,38 @@ class SandboxExecutor:
         if isinstance(run_id, str) and run_id:
             with self._lock:
                 self._cancellations[run_id] = cancel_event
+        readonly_context: tuple[Path, Path] | None = None
         try:
+            try:
+                readonly_context = _prepare_readonly_context(
+                    merged, roots, workspace_id
+                )
+            except Exception as error:
+                return SandboxResult(
+                    stdout="",
+                    stderr=str(error),
+                    status="error",
+                    exit_code=-1,
+                    error="readonly_context_failed",
+                ).as_dict()
+            if readonly_context is not None:
+                snapshot_path, manifest_path = readonly_context
+                merged = replace(
+                    merged,
+                    read_only_paths=(
+                        *merged.read_only_paths,
+                        str(snapshot_path),
+                        str(manifest_path),
+                    ),
+                    extra_env={
+                        **merged.extra_env,
+                        "REFORA_READONLY_DB": str(snapshot_path),
+                        "REFORA_READONLY_FILES": str(manifest_path),
+                    },
+                )
             return execute(command, merged)
         finally:
+            _cleanup_readonly_context(readonly_context)
             if isinstance(run_id, str) and run_id:
                 with self._lock:
                     if self._cancellations.get(run_id) is cancel_event:
