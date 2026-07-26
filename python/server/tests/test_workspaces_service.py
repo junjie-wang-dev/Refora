@@ -591,9 +591,16 @@ class TestConnectorCallbacks:
 
 
 class TestCanvas:
-    def test_get_canvas_none_when_absent(self, service):
+    def test_get_canvas_returns_default_when_absent(self, service):
         w = _make_workspace(service)
-        assert service["getCanvas"](w["id"]) is None
+        canvas = service["getCanvas"](w["id"])
+        assert canvas == {
+            "workspaceId": w["id"],
+            "panX": 0.0,
+            "panY": 0.0,
+            "zoom": 1.0,
+            "updatedAt": 0,
+        }
 
     def test_put_canvas(self, service):
         w = _make_workspace(service)

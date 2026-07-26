@@ -5,8 +5,35 @@ from refora_server.library.bib_import import (
     extractAttachmentPaths,
     importBibtex,
     importFromBibtex,
+    normalizeAuthors,
     parseBibtex,
 )
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("Smith, Jane", "Smith, Jane"),
+        ("Smith,Jane", "Smith, Jane"),
+        ("Smith , Jane", "Smith, Jane"),
+        ("Smith, Jane and Doe, John", "Smith, Jane; Doe, John"),
+        ("John Smith", "John Smith"),
+        ("Mary Jane Watson", "Mary Jane Watson"),
+        ("Doe, John, Jr.", "Doe, John, Jr."),
+        ("Solo", "Solo"),
+        ("  smith  and  jones  ", "smith; jones"),
+        ("", ""),
+        ("Van Der Berg, Carl", "Van Der Berg, Carl"),
+    ],
+)
+def test_normalize_authors_matches_ts_behavior(raw: str, expected: str) -> None:
+    assert normalizeAuthors(raw) == expected
+
+
+def test_normalize_authors_does_not_rearrange_no_comma_names() -> None:
+    assert normalizeAuthors("John Smith") == "John Smith"
+    assert normalizeAuthors("Mary Jane Watson") == "Mary Jane Watson"
+    assert normalizeAuthors("John Smith and Mary Jane Watson") == "John Smith; Mary Jane Watson"
 
 
 def test_parse_bibtex_handles_nested_values_and_ignored_entries() -> None:

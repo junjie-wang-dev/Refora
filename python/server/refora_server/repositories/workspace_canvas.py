@@ -8,6 +8,17 @@ from refora_server.repositories.errors import RepoError
 
 WORKSPACE_CANVAS_MIN_ZOOM = 0.25
 WORKSPACE_CANVAS_MAX_ZOOM = 2.5
+WORKSPACE_CANVAS_DEFAULT_ZOOM = 1.0
+
+
+def _default_canvas(workspaceId: str) -> dict[str, Any]:
+    return {
+        "workspaceId": workspaceId,
+        "panX": 0.0,
+        "panY": 0.0,
+        "zoom": WORKSPACE_CANVAS_DEFAULT_ZOOM,
+        "updatedAt": 0,
+    }
 
 
 def now_ms() -> int:
@@ -41,7 +52,7 @@ def createWorkspaceCanvasRepository(db):
         if cur.fetchone() is None:
             raise RepoError("not_found", f"workspace not found: {workspaceId}")
 
-    def get(workspaceId: str) -> dict[str, Any] | None:
+    def get(workspaceId: str) -> dict[str, Any]:
         _ensure_workspace(workspaceId)
         cur = db.execute(
             "SELECT workspaceId, panX, panY, zoom, updatedAt "
@@ -50,7 +61,7 @@ def createWorkspaceCanvasRepository(db):
         )
         row = cur.fetchone()
         if row is None:
-            return None
+            return _default_canvas(workspaceId)
         return _map_canvas(row)
 
     def update(workspaceId: str, panX: float, panY: float, zoom: float) -> dict[str, Any]:
