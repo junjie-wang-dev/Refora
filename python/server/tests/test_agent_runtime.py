@@ -57,6 +57,41 @@ class Agent:
             self.cancelled.set()
 
 
+class NativeSnapshot:
+    def __init__(self):
+        self.config = {"configurable": {"checkpoint_id": "checkpoint-native"}}
+        self.values = {}
+        self.tasks = ()
+        self.next = ()
+
+
+class NativeAgent:
+    def __init__(self):
+        self.invocation = None
+        self.config = None
+        self.version = None
+
+    async def astream_events(self, invocation, *, config, version):
+        self.invocation = invocation
+        self.config = config
+        self.version = version
+        yield {"event": "on_chat_model_stream", "data": {"chunk": NativeMessage("Native ")}}
+        yield {
+            "event": "on_chain_end",
+            "name": "LangGraph",
+            "data": {"output": {"messages": [{"content": "Native answer"}]}},
+        }
+
+    async def aget_state(self, config):
+        assert config["configurable"]["thread_id"] == "thread-1"
+        return NativeSnapshot()
+
+
+class NativeMessage:
+    def __init__(self, content):
+        self.content = content
+
+
 def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     insert_thread(db)
     seen = []
@@ -127,6 +162,35 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         "ai.chat.run-status",
         "ai.chat.title-updated",
     }
+
+
+def test_native_langgraph_events_produce_tokens_result_and_checkpoint(repos, db, tmp_path):
+    insert_thread(db)
+    agent = NativeAgent()
+    seen = []
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: agent,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(
+        runtime["send"](
+            request(checkpointPath=str(tmp_path / "checkpoints.sqlite"))
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert agent.invocation == {"messages": [{"role": "user", "content": "Explain this"}]}
+    assert agent.config["configurable"]["thread_id"] == "thread-1"
+    assert agent.version == "v2"
+    assert repos["agentRuns"]["get"]("run-1")["checkpointAfter"] == "checkpoint-native"
+    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Native answer"
+    assert ("ai.chat.token", {"runId": "run-1", "threadId": "thread-1", "delta": "Native "}) in seen
 
 
 def test_send_failure_persists_failed_run_and_error_event(repos, db):

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
+import sqlite3
 import time
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from typing import Any
@@ -22,6 +24,7 @@ from refora_server.agent.engine_schema import (
     is_terminal_run,
     protocol_status,
 )
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 
 _SECRET_KEYS = {"apiKey", "api_key", "authorization", "Authorization"}
@@ -87,11 +90,14 @@ def _checkpoint_id(value: Any) -> str | None:
 def _message_text(value: Any) -> str:
     if isinstance(value, str):
         return value
+    if value is None:
+        return ""
     if isinstance(value, list):
         return "".join(_message_text(part.get("text") if isinstance(part, dict) else part) for part in value)
     if isinstance(value, dict):
         return _message_text(value.get("text") or value.get("content"))
-    return ""
+    content = getattr(value, "content", None)
+    return _message_text(content) if content is not None else ""
 
 
 def _result_text(result: Any) -> str:
@@ -116,15 +122,87 @@ def _tool_message_texts(result: Any, state: dict[str, Any]) -> list[str]:
         if not isinstance(messages, list):
             continue
         for message in messages:
-            if not isinstance(message, dict):
-                continue
-            role = message.get("role") or message.get("type")
+            role = (
+                message.get("role") or message.get("type")
+                if isinstance(message, dict)
+                else getattr(message, "role", None) or getattr(message, "type", None)
+            )
             if role not in {"tool", "ToolMessage"}:
                 continue
-            text = _message_text(message.get("content"))
+            text = _message_text(
+                message.get("content")
+                if isinstance(message, dict)
+                else getattr(message, "content", None)
+            )
             if text and text not in texts:
                 texts.append(text)
     return texts
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            pass
+    return {}
+
+
+def _serializable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _serializable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_serializable(item) for item in value]
+    data = _as_mapping(value)
+    if data:
+        return _serializable(data)
+    content = getattr(value, "content", None)
+    if content is not None:
+        result = {"content": _serializable(content)}
+        message_type = getattr(value, "type", None)
+        if isinstance(message_type, str):
+            result["type"] = message_type
+        return result
+    return str(value)
+
+
+def _state_snapshot(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    config = _serializable(getattr(value, "config", {}))
+    values = _serializable(getattr(value, "values", {}))
+    tasks: list[dict[str, Any]] = []
+    for task in getattr(value, "tasks", ()):
+        interrupts: list[dict[str, Any]] = []
+        for interrupt in getattr(task, "interrupts", ()):
+            interrupt_value = _serializable(getattr(interrupt, "value", interrupt))
+            interrupt_id = getattr(interrupt, "id", None)
+            entry: dict[str, Any] = {"value": interrupt_value}
+            if isinstance(interrupt_id, str):
+                entry["id"] = interrupt_id
+            interrupts.append(entry)
+        entry = {"interrupts": interrupts}
+        for name in ("id", "name"):
+            item = getattr(task, name, None)
+            if isinstance(item, str):
+                entry[name] = item
+        tasks.append(entry)
+    result: dict[str, Any] = {
+        "config": config if isinstance(config, dict) else {},
+        "values": values if isinstance(values, dict) else {},
+        "tasks": tasks,
+    }
+    next_nodes = getattr(value, "next", ())
+    if isinstance(next_nodes, (list, tuple)):
+        result["next"] = [node for node in next_nodes if isinstance(node, str)]
+    return result
 
 
 def _interrupt_actions(state: Any) -> list[dict[str, Any]]:
@@ -177,12 +255,20 @@ def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
                 if isinstance(value, str):
                     return value
             return _message_text(chunk.get("content"))
+        if chunk is not None:
+            additional = getattr(chunk, "additional_kwargs", None)
+            if reasoning and isinstance(additional, dict):
+                value = additional.get("reasoning_content")
+                if isinstance(value, str):
+                    return value
+            return _message_text(chunk)
     return ""
 
 
 def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None):
     deps = deps or {}
     active: dict[str, dict[str, Any]] = {}
+    resume_contexts: dict[str, dict[str, Any]] = {}
     clock: Callable[[], int] = deps.get("clock") or _now_ms
     create_tools = deps.get("createTools") or deps.get("create_tools")
     create_model = deps.get("createModel") or deps.get("create_model")
@@ -193,7 +279,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     state_machine = RunStateMachine(repos["agentRuns"], repos["agentTraces"], clock)
 
     async def emit_event(name: str, payload: dict[str, Any]) -> None:
-        safe_payload = _without_secrets(payload)
+        safe_payload = _without_secrets(_serializable(payload))
         try:
             if emit is not None:
                 await _await(emit(name, safe_payload))
@@ -260,6 +346,42 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             raise RuntimeError("createAgent dependency is not configured")
         return await _await(create_agent(model, tools, request))
 
+    def runtime_config(request: dict[str, Any]) -> dict[str, Any]:
+        configurable = {"thread_id": request["threadId"]}
+        checkpoint = request.get("checkpointBefore")
+        if isinstance(checkpoint, str) and checkpoint:
+            configurable["checkpoint_id"] = checkpoint
+        return {
+            "configurable": configurable,
+            "recursion_limit": int(request.get("recursionLimit") or 50),
+        }
+
+    def configure_checkpoint(agent: Any, request: dict[str, Any]) -> sqlite3.Connection | None:
+        checkpoint_path = request.get("checkpointPath")
+        if not isinstance(checkpoint_path, str) or not checkpoint_path:
+            return None
+        if getattr(agent, "checkpointer", None) is not None:
+            return None
+        try:
+            parent = os.path.dirname(os.path.abspath(checkpoint_path))
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+            connection = sqlite3.connect(checkpoint_path, check_same_thread=False)
+            agent.checkpointer = SqliteSaver(connection)
+            return connection
+        except (AttributeError, OSError, sqlite3.Error):
+            return None
+
+    async def agent_state(agent: Any, request: dict[str, Any]) -> dict[str, Any]:
+        for method_name in ("aget_state", "get_state"):
+            method = getattr(agent, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                return _state_snapshot(await _await(method(runtime_config(request))))
+            except Exception:
+                continue
+        return {}
+
     async def event_stream(agent: Any, request: dict[str, Any], mode: str) -> AsyncIterable[Any]:
         if stream_factory is not None:
             return await _await(stream_factory(agent, request, mode))
@@ -267,13 +389,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             invocation: Any = {"messages": request.get("messages") or []}
             if mode == "resume":
                 invocation = {"resume": {"decisions": request.get("decisions") or []}}
-            config = {
-                "configurable": {"thread_id": request["threadId"]},
-                "recursion_limit": int(request.get("recursionLimit") or 50),
-            }
-            if request.get("checkpointBefore"):
-                config["configurable"]["checkpoint_id"] = request["checkpointBefore"]
-            return agent.astream_events(invocation, config=config, version="v2")
+            return agent.astream_events(
+                invocation, config=runtime_config(request), version="v2"
+            )
         if hasattr(agent, "stream"):
             return await _await(agent.stream(request, mode))
         raise RuntimeError("Agent does not provide a stream")
@@ -366,8 +484,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         active[run_id] = control
         user_message = None
         run_trace: dict[str, Any] | None = None
+        checkpoint_connection: sqlite3.Connection | None = None
         try:
             if not existing_run:
+                resume_contexts[run_id] = {
+                    key: value
+                    for key, value in request.items()
+                    if key not in {"messages", "decisions"}
+                }
                 for message in reversed(request.get("messages") or []):
                     if isinstance(message, dict) and message.get("role") in {"user", "human"}:
                         content = _message_text(message.get("content"))
@@ -394,6 +518,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             run_trace = add_trace(request, 0, "run", "agent", TRACE_STATUS_RUNNING, checkpoint=request.get("checkpointBefore"))
             agent = await create_runtime_agent(request)
             control["agent"] = agent
+            checkpoint_connection = configure_checkpoint(agent, request)
             stream = await event_stream(agent, request, mode)
             if not isinstance(stream, AsyncIterable):
                 if not isinstance(stream, Iterable):
@@ -426,6 +551,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     if isinstance(candidate_state, dict):
                         state = candidate_state
                     continue
+                if event_name == "on_chain_end":
+                    data = event.get("data")
+                    if isinstance(data, dict) and data.get("output") is not None:
+                        result = data["output"]
                 if event_name in {"error", "on_chain_error", "on_tool_error"}:
                     detail = event.get("error") or event.get("data") or "Agent execution failed"
                     raise RuntimeError(_as_text(detail))
@@ -449,6 +578,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 seq += 1
             if control["cancelled"]:
                 return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
+            snapshot = await agent_state(agent, request)
+            if snapshot:
+                state = snapshot
+                values = snapshot.get("values")
+                if isinstance(values, dict) and values.get("messages"):
+                    result = values
             if interrupted or _interrupt_actions(state):
                 return await finish_interrupted(request, state, run_trace)
             return await finish_completed(request, result, state, run_trace)
@@ -463,6 +598,11 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             return await terminalize(request, RUN_STATUS_CANCELLED if control["cancelled"] else RUN_STATUS_FAILED, message or "Agent execution failed", run_trace)
         finally:
             active.pop(run_id, None)
+            if checkpoint_connection is not None:
+                checkpoint_connection.close()
+            persisted = repos["agentRuns"]["get"](run_id)
+            if persisted is None or persisted.get("status") != RUN_STATUS_INTERRUPTED:
+                resume_contexts.pop(run_id, None)
 
     async def send(request: dict[str, Any]) -> dict[str, Any]:
         return await run(request, "send")
@@ -483,7 +623,18 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             if decision_type not in action.get("allowedDecisions", []):
                 return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Interrupt decision is not allowed"}
         repos["agentInterrupts"]["resolve"](interrupt["id"], decisions)
-        request = {**request, "threadId": persisted["threadId"], "checkpointBefore": interrupt.get("checkpointId") or persisted.get("checkpointAfter")}
+        stored = resume_contexts.get(run_id, {})
+        thread = repos["chat"]["getThread"](persisted["threadId"])
+        request = {
+            **stored,
+            **request,
+            "threadId": persisted["threadId"],
+            "workspaceId": stored.get("workspaceId")
+            if "workspaceId" in stored
+            else (thread.get("workspaceId") if thread else None),
+            "checkpointBefore": interrupt.get("checkpointId")
+            or persisted.get("checkpointAfter"),
+        }
         return await run(request, "resume", existing_run=True)
 
     async def cancel(run_id: str) -> dict[str, Any]:
@@ -494,6 +645,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 return {"runId": run_id, "cancelled": False}
             request = {"runId": run_id, "threadId": run["threadId"]}
             await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", None)
+            resume_contexts.pop(run_id, None)
             return {"runId": run_id, "cancelled": True}
         control["cancelled"] = True
         agent = control.get("agent")
@@ -510,6 +662,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     def destroy() -> None:
         for control in active.values():
             control["cancelled"] = True
+        resume_contexts.clear()
 
     return {"send": send, "run": run, "resume": resume, "cancel": cancel, "destroy": destroy}
 
