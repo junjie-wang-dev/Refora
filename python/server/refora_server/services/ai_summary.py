@@ -246,6 +246,8 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
     job_queue: list[Callable[..., Any]] = []
     active = {"value": 0}
     lock = asyncio.Lock() if loop is None else None
+    semaphore: asyncio.Semaphore | None = None
+    inflight: set[asyncio.Task[Any]] = set()
 
     def _info(message: str) -> None:
         if logger is not None:
@@ -378,11 +380,41 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
         return await _run_job(_job)
 
     async def _run_job(job: Callable[..., Awaitable[str | None]]) -> str | None:
-        return await job()
+        nonlocal semaphore
+        if destroyed["value"]:
+            return None
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+        if destroyed["value"]:
+            return None
+
+        acquired = False
+        try:
+            await semaphore.acquire()
+            acquired = True
+        except asyncio.CancelledError:
+            return None
+
+        if destroyed["value"]:
+            if acquired:
+                semaphore.release()
+            return None
+
+        task = asyncio.ensure_future(job())
+        inflight.add(task)
+        try:
+            return await task
+        finally:
+            inflight.discard(task)
+            if acquired:
+                semaphore.release()
 
     def destroy() -> None:
         destroyed["value"] = True
         job_queue.clear()
+        for task in list(inflight):
+            task.cancel()
+        inflight.clear()
 
     return {
         "summarize": summarize,

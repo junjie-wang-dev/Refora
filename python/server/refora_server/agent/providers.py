@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 from typing import Any, TypedDict
 
 from deepagents import (
@@ -109,6 +110,30 @@ class AgentProviderConfig(TypedDict, total=False):
     streaming: bool
 
 
+def _normalize_compatible_streaming_roles(model: ChatOpenAI) -> ChatOpenAI:
+    original = getattr(model, "_convert_chunk_to_generation_chunk", None)
+    if not callable(original):
+        return model
+
+    def _patched(self: Any, chunk: Any, default_chunk_class: Any, base_generation_info: Any = None) -> Any:
+        try:
+            if isinstance(chunk, dict):
+                choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices")
+                if isinstance(choices, list) and choices:
+                    delta = choices[0].get("delta")
+                    if isinstance(delta, dict) and not delta.get("role"):
+                        delta["role"] = "assistant"
+        except Exception:
+            pass
+        return original(chunk, default_chunk_class, base_generation_info)
+
+    try:
+        model._convert_chunk_to_generation_chunk = types.MethodType(_patched, model)
+    except Exception:
+        return model
+    return model
+
+
 def create_model(config: dict[str, Any]) -> ChatOpenAI:
     api_key = config.get("apiKey")
     if not isinstance(api_key, str) or not api_key:
@@ -127,7 +152,7 @@ def create_model(config: dict[str, Any]) -> ChatOpenAI:
         options["max_completion_tokens"] = config["maxTokens"]
     if isinstance(config.get("reasoning"), dict):
         options["reasoning"] = config["reasoning"]
-    return ChatOpenAI(**options)
+    return _normalize_compatible_streaming_roles(ChatOpenAI(**options))
 
 
 def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
