@@ -15,6 +15,8 @@ def _effects():
 
 def test_workspace_mutations_emit_refresh_events():
     changed: list[tuple[str, str]] = []
+    reports = []
+    transactions = []
     items = [
         {"id": "source", "kind": "document", "docId": "doc-1"},
         {"id": "target", "kind": "document", "docId": "doc-2"},
@@ -29,18 +31,22 @@ def test_workspace_mutations_emit_refresh_events():
             ],
         },
         "workspaceConnections": {
+            "list": lambda _workspace_id: [],
             "create": lambda *_args: {"id": "connection-1"}
         },
         "aiReports": {
-            "create": lambda workspace_id, title, content, source_ids: {
+            "create": lambda workspace_id, title, content, source_ids, model: {
                 "id": "report-1",
                 "workspaceId": workspace_id,
                 "title": title,
                 "contentMd": content,
                 "sourceDocIds": source_ids,
+                "model": model,
             }
         },
         "agentToolEffects": _effects(),
+        "transaction": lambda operation: transactions.append("transaction")
+        or operation(),
     }
     executor = AgentToolExecutor(
         AgentToolContext(run_id="run", workspace_id="workspace"),
@@ -49,6 +55,8 @@ def test_workspace_mutations_emit_refresh_events():
             "workspace_changed": lambda workspace_id, reason: changed.append(
                 (workspace_id, reason)
             ),
+            "report_created": reports.append,
+            "model": "model-1",
         },
     )
 
@@ -81,6 +89,17 @@ def test_workspace_mutations_emit_refresh_events():
         ("workspace", "other"),
         ("workspace", "other"),
     ]
+    assert transactions == ["transaction", "transaction"]
+    assert reports == [
+        {
+            "id": "report-1",
+            "workspaceId": "workspace",
+            "title": "Report",
+            "contentMd": "Body",
+            "sourceDocIds": ["doc-1"],
+            "model": "model-1",
+        }
+    ]
 
 
 def test_workspace_search_reports_summary_availability():
@@ -112,3 +131,76 @@ def test_workspace_search_reports_summary_availability():
     result = json.loads(executor.execute("search_workspace_docs", {"query": ""}))
 
     assert result[0]["hasSummary"] is True
+
+
+def test_workspace_context_enriches_cards_and_connections():
+    repos = {
+        "workspaceItems": {
+            "list": lambda _workspace_id: [
+                {
+                    "id": "item-doc",
+                    "kind": "document",
+                    "docId": "doc-1",
+                    "sortOrder": 0,
+                },
+                {
+                    "id": "item-report",
+                    "kind": "report",
+                    "reportId": "report-1",
+                    "sortOrder": 1,
+                },
+            ]
+        },
+        "workspaceConnections": {
+            "list": lambda _workspace_id: [
+                {
+                    "id": "connection-1",
+                    "sourceItemId": "item-doc",
+                    "targetItemId": "item-report",
+                    "sourceAnchor": "right",
+                    "targetAnchor": "left",
+                }
+            ]
+        },
+        "documents": {
+            "get": lambda _document_id: {
+                "title": "Paper",
+                "authors": "Ada",
+                "year": "2025",
+            }
+        },
+        "aiSummaries": {"getSummary": lambda _document_id: {"content": "Summary"}},
+        "aiReports": {
+            "list": lambda _workspace_id: [
+                {
+                    "id": "report-1",
+                    "title": "Report",
+                    "sourceDocIds": ["doc-1"],
+                }
+            ]
+        },
+        "workspaceNotes": {"list": lambda _workspace_id: []},
+        "workspaceAssets": {"list": lambda _workspace_id: []},
+    }
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {"repos": repos},
+    )
+
+    result = json.loads(executor.execute("list_workspace_context", {}))
+
+    assert result["itemCount"] == 2
+    assert result["connectionCount"] == 1
+    assert result["items"][0] == {
+        "itemId": "item-doc",
+        "kind": "document",
+        "sortOrder": 0,
+        "docId": "doc-1",
+        "title": "Paper",
+        "authors": "Ada",
+        "year": "2025",
+        "hasSummary": True,
+        "unavailable": False,
+    }
+    assert result["items"][1]["reportId"] == "report-1"
+    assert result["connections"][0]["connectionId"] == "connection-1"

@@ -659,6 +659,7 @@ export interface ChatErrorEvent {
   threadId: string
   message: string
   runId?: string
+  partialText?: string
 }
 
 export interface ChatTraceEvent {
@@ -862,6 +863,7 @@ export interface ReforaApi {
     chatHistory(threadId: string): Promise<ChatMessage[]>
     chatThreads(workspaceId: string | null): Promise<ChatThread[]>
     chatTraces(threadId: string): Promise<AgentTraceStep[]>
+    chatRun(runId: string): Promise<AgentRun>
     chatCancel(runId: string): Promise<void>
     chatResume(req: AgentResumeRequest): Promise<void>
     chatPendingInterrupt(runId: string): Promise<AgentInterrupt | null>

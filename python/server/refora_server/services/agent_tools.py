@@ -24,7 +24,6 @@ from refora_server.agent.tools.ocr_memory import (
 )
 from refora_server.agent.tools.registry import collect_registry
 from refora_server.agent.tools.sandbox import SandboxTools
-from refora_server.agent.tools.todo import TodoTools
 from refora_server.agent.tools.web import WebTools
 from refora_server.agent.tools.workspace import WorkspaceTools
 
@@ -81,7 +80,6 @@ _REGISTRY = collect_registry(
     SandboxTools,
     AcademicTools,
     WebTools,
-    TodoTools,
 )
 
 
@@ -94,7 +92,6 @@ class AgentToolExecutor:
         self.context = context
         self.deps = deps
         self.repos = value(deps, "repos", deps)
-        self.todos: list[dict[str, str]] = []
 
     def execute(self, name: str, arguments: Mapping[str, Any] | None = None, tool_call_id: str | None = None) -> str:
         arguments = dict(arguments or {})

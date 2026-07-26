@@ -83,7 +83,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const [selectedReasoningEffort, setSelectedReasoningEffort] =
     useState<AiReasoningEffort>('none')
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
-  const [modelSwitchHint, setModelSwitchHint] = useState(false)
+  const [modelSwitchHint, setModelSwitchHint] = useState<'model' | 'provider' | null>(null)
   const [loadingModels, setLoadingModels] = useState(false)
 
   const [input, setInput] = useState('')
@@ -265,6 +265,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     async (baseModel: string, variant = '', providerId?: string) => {
       const nextProviderId = providerId ?? activeProviderId
       if (!providers.some((provider) => provider.id === nextProviderId)) return
+      const providerChanged = !!providerId && providerId !== activeProviderId
       if (providerId && providerId !== activeProviderId) {
         const nextProvider = providers.find((provider) => provider.id === providerId)
         setActiveProviderId(providerId)
@@ -280,12 +281,20 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       void api.settings.set('chatSelectedProviderId', nextProviderId)
       void api.settings.set('chatSelectedModel', baseModel)
       void api.settings.set('chatSelectedVariant', variant)
-      if (chat.hadMessagesRef.current || chat.messages.length > 0) {
-        setModelSwitchHint(true)
-        window.setTimeout(() => setModelSwitchHint(false), 3500)
+      if (providerChanged && (chat.hadMessagesRef.current || chat.messages.length > 0)) {
+        setModelSwitchHint('provider')
+        window.setTimeout(() => setModelSwitchHint(null), 3500)
+      } else if (chat.hadMessagesRef.current || chat.messages.length > 0) {
+        setModelSwitchHint('model')
+        window.setTimeout(() => setModelSwitchHint(null), 3500)
       }
     },
-    [activeProviderId, chat.messages.length, providers, chat.hadMessagesRef]
+    [
+      activeProviderId,
+      chat.messages.length,
+      providers,
+      chat.hadMessagesRef
+    ]
   )
 
   const applyReasoningEffort = useCallback(
@@ -435,8 +444,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         <div className="shrink-0 px-3 pb-1">
           <div className="rounded-lg bg-panel-2 px-3 py-1.5 text-label text-muted">
             {t(
-              'workspace.chat.modelSwitchHint',
-              'Model switched — applies to new messages only.'
+              modelSwitchHint === 'provider'
+                ? 'workspace.chat.providerSwitchHint'
+                : 'workspace.chat.modelSwitchHint',
+              modelSwitchHint === 'provider'
+                ? 'Provider switched — applies to new messages only.'
+                : 'Model switched — applies to new messages only.'
             )}
           </div>
         </div>

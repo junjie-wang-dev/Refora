@@ -43,11 +43,15 @@ UV_CACHE_DIR=${UV_CACHE_DIR:-"${TMPDIR:-/tmp}/refora-uv-cache"} uv run \
   --collect-all deepagents \
   --collect-all langchain \
   --collect-all langchain_core \
+  --collect-all langchain_openai \
   --collect-all langgraph \
+  --collect-all langgraph.checkpoint.sqlite \
   --copy-metadata deepagents \
   --copy-metadata langchain \
   --copy-metadata langchain-core \
+  --copy-metadata langchain-openai \
   --copy-metadata langgraph \
+  --copy-metadata langgraph-checkpoint-sqlite \
   --add-data "$ROOT_DIR/src/main/db:db" \
   "$ENTRYPOINT"
 

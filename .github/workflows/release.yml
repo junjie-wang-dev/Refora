@@ -56,7 +56,7 @@ jobs:
         run: npm run test
 
       - name: Python server tests
-        run: uv run --project python/server --locked pytest
+        run: uv run --project python/server --locked pytest -c python/server/pyproject.toml python/server/tests
 
   package:
     name: Package ${{ matrix.arch }}

@@ -34,13 +34,22 @@ def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, 
     if not doc:
         return {"error": "Document not found."}
     if ocr:
-        text = call(executor.deps, "read_ocr_fulltext", args["docId"])
+        cached = call(executor.deps, "read_ocr_fulltext", args["docId"])
+        if cached is None:
+            return {
+                "status": "ocr_cache_missing",
+                "docId": args["docId"],
+                "nextTool": "prepare_paper_ocr",
+                "approval": "handled_by_application",
+                "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
+            }
+        result = cached["result"]
+        text = cached["markdown"]
     else:
-        entry = call(repo(executor.repos, "aiSummaries"), "getFullText", args["docId"])
-        text = entry.get("text", "") if entry else ""
+        text = call(executor.deps, "read_paper_fulltext", args["docId"])
     offset, limit = max(0, int(args.get("offset", 0))), min(12_000, max(500, int(args.get("limit", 8_000))))
     chunk_count = max(1, (len(text) + limit - 1) // limit)
-    return {
+    response = {
         "docId": args["docId"],
         "title": doc.get("title") or doc.get("fileName"),
         "offset": offset,
@@ -51,6 +60,17 @@ def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, 
         "chunkCount": chunk_count,
         "text": text[offset:offset + limit],
     }
+    if offset >= len(text):
+        response["message"] = "offset past end"
+    if ocr:
+        response.update(
+            {
+                "source": "mineru_ocr",
+                "profile": result["profile"],
+                "resultKey": result["resultKey"],
+            }
+        )
+    return response
 
 
 def get_paper_summary(executor: Any, args: dict[str, Any]) -> Any:

@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from conftest import insert_doc, insert_thread, open_migrated_db
+from langgraph.types import Command
 from refora_server.repositories import create_repositories
 from refora_server.services.agent_runtime import createAgentRuntime
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
@@ -17,7 +18,7 @@ class ScriptedAgent:
         self._outputs = outputs
         self._statuses = statuses
 
-    async def astream_events(self, invocation: dict[str, Any], *, config: dict[str, Any], version: str):
+    async def astream_events(self, invocation: Any, *, config: dict[str, Any], version: str):
         assert version == "v2"
         self._statuses.append(self._repos["agentRuns"]["get"]("run-e2e")["status"])
         tool = next(item for item in self._tools if item.name == "add_docs_to_workspace")
@@ -32,7 +33,7 @@ class ScriptedAgent:
         )
         content = result.content if hasattr(result, "content") else result
         self._outputs.append(content)
-        if "resume" not in invocation:
+        if not isinstance(invocation, Command):
             yield {
                 "event": "interrupted",
                 "state": {

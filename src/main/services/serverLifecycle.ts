@@ -215,6 +215,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     spawned.once('close', (code, signal) => {
       if (stopping) return
       if (child === spawned) child = null
+      connection = null
       clearHealthTimer()
       if (restartCount >= maxRestarts) {
         logger.error(
@@ -231,10 +232,8 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       )
       setTimeout(() => {
         if (stopping) return
-        startPromise = doStart().catch((error) => {
+        void start().catch((error) => {
           logger.error(`serverLifecycle:restart failed: ${error instanceof Error ? error.message : String(error)}`)
-          startPromise = null
-          throw error
         })
       }, backoff)
     })

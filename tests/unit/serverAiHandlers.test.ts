@@ -20,6 +20,7 @@ describe('server AI IPC handlers', () => {
       aiChatHistory: vi.fn().mockResolvedValue([]),
       aiChatThreads: vi.fn().mockResolvedValue([]),
       aiChatTraces: vi.fn().mockResolvedValue([]),
+      aiChatRun: vi.fn().mockResolvedValue({ id: 'run-1', status: 'running' }),
       aiChatPendingInterrupt: vi.fn().mockResolvedValue(null),
       aiChatRenameThread: vi.fn().mockResolvedValue({ id: 'thread-1', title: 'Renamed' }),
       aiChatDeleteThread: vi.fn().mockResolvedValue({ ack: true }),
@@ -91,6 +92,7 @@ describe('server AI IPC handlers', () => {
       handlers[IpcChannel.AiChatHistory]('thread-1'),
       handlers[IpcChannel.AiChatThreads](null),
       handlers[IpcChannel.AiChatTraces]('thread-1'),
+      handlers[IpcChannel.AiChatRun]('run-1'),
       handlers[IpcChannel.AiChatPendingInterrupt]('run-1'),
       handlers[IpcChannel.AiChatRenameThread]('thread-1', 'Renamed'),
       handlers[IpcChannel.AiChatDeleteThread]('thread-1'),
@@ -105,6 +107,7 @@ describe('server AI IPC handlers', () => {
     expect(http.aiChatHistory).toHaveBeenCalledWith('thread-1')
     expect(http.aiChatThreads).toHaveBeenCalledWith({})
     expect(http.aiChatTraces).toHaveBeenCalledWith('thread-1')
+    expect(http.aiChatRun).toHaveBeenCalledWith('run-1')
     expect(http.aiChatPendingInterrupt).toHaveBeenCalledWith('run-1')
     expect(http.aiChatRenameThread).toHaveBeenCalledWith('thread-1', { title: 'Renamed' })
     expect(http.aiChatDeleteThread).toHaveBeenCalledWith('thread-1')

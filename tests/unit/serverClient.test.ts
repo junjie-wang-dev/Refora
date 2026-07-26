@@ -294,6 +294,7 @@ describe('serverClient', () => {
       })
       await client.http.aiChatCancel({ runId: 'r1' })
       await client.http.aiChatThreads({ workspaceId: 'w1' })
+      await client.http.aiChatRun('r1')
       await client.http.aiChatPendingInterrupt('r1')
       await client.http.aiChatMemories(null)
       expect(calls[0].url).toContain('/ai/chat/send')
@@ -308,8 +309,36 @@ describe('serverClient', () => {
       expect(calls[1].url).toContain('/ai/chat/cancel')
       expect(calls[2].url).toContain('/ai/chat/threads')
       expect(calls[2].url).toContain('workspaceId=w1')
-      expect(calls[3].url).toContain('/ai/chat/runs/r1/pending-interrupt')
-      expect(calls[4].url).toContain('/ai/memories')
+      expect(calls[3].url).toContain('/ai/chat/runs/r1')
+      expect(calls[4].url).toContain('/ai/chat/runs/r1/pending-interrupt')
+      expect(calls[5].url).toContain('/ai/memories')
+    })
+
+    it('unwraps the persistent run snapshot envelope', async () => {
+      const snapshot = {
+        id: 'r1',
+        threadId: 't1',
+        providerId: 'p1',
+        modelId: 'm1',
+        status: 'completed' as const,
+        checkpointBefore: null,
+        checkpointAfter: 'checkpoint-1',
+        replacesRunId: null,
+        userMessageId: 'user-1',
+        assistantMessageId: 'assistant-1',
+        startedAt: 1,
+        endedAt: 2,
+        error: null
+      }
+      const { fetch, calls } = makeFetchSpy(() => makeResponse(snapshot))
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
+
+      await expect(client.http.aiChatRun('r1')).resolves.toEqual(snapshot)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({
+        url: `http://127.0.0.1:${PORT}/ai/chat/runs/r1`,
+        method: 'GET'
+      })
     })
 
     it('routes workspace and ocr endpoints', async () => {
@@ -347,22 +376,42 @@ describe('serverClient', () => {
       expect(client.ws.isConnected()).toBe(true)
     })
 
-    it('dispatches server events to subscribed listeners', async () => {
+    it('forwards every AI chat event payload unchanged', async () => {
       const client = createServerClient(lifecycle, nativeRpc, {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
 
-      const tokenCb = vi.fn()
-      const doneCb = vi.fn()
-      client.ws.on('ai.chat.token', tokenCb)
-      client.ws.on('ai.chat.done', doneCb)
+      const cases = [
+        ['ai.chat.token', { runId: 'r1', threadId: 't1', token: 'hi', stepId: 's1' }],
+        ['ai.chat.reasoning', { runId: 'r1', threadId: 't1', token: 'think', stepId: 's2' }],
+        ['ai.chat.done', { runId: 'r1', threadId: 't1', finalText: 'answer' }],
+        ['ai.chat.error', {
+          runId: 'r1',
+          threadId: 't1',
+          message: 'failed',
+          partialText: 'partial answer'
+        }],
+        ['ai.chat.trace', {
+          runId: 'r1',
+          threadId: 't1',
+          step: { id: 's3', kind: 'tool', status: 'done' }
+        }],
+        ['ai.chat.interrupted', {
+          runId: 'r1',
+          threadId: 't1',
+          interrupt: { id: 'i1', status: 'pending' }
+        }],
+        ['ai.chat.run-status', { runId: 'r1', threadId: 't1', status: 'failed' }]
+      ] as const
 
-      ws.message({ event: 'ai.chat.token', data: { runId: 'r1', threadId: 't1', delta: 'hi' } })
-      ws.message({ event: 'ai.chat.done', data: { runId: 'r1', threadId: 't1' } })
-
-      expect(tokenCb).toHaveBeenCalledWith({ runId: 'r1', threadId: 't1', delta: 'hi' })
-      expect(doneCb).toHaveBeenCalledWith({ runId: 'r1', threadId: 't1' })
+      for (const [event, payload] of cases) {
+        const listener = vi.fn()
+        client.ws.on(event, listener)
+        ws.message({ event, data: payload })
+        expect(listener).toHaveBeenCalledOnce()
+        expect(listener).toHaveBeenCalledWith(payload)
+      }
     })
 
     it('off removes a listener', async () => {
@@ -586,7 +635,16 @@ describe('serverClient', () => {
       const ws1 = FakeWebSocket.instances[0]
       ws1.open()
       await connectPromise
-      client.ws.subscribe(['connector.decrypt-api-key'])
+      const topics = [
+        'ai.chat.token',
+        'ai.chat.reasoning',
+        'ai.chat.done',
+        'ai.chat.error',
+        'ai.chat.trace',
+        'ai.chat.interrupted',
+        'ai.chat.run-status'
+      ]
+      client.ws.subscribe(topics)
 
       ws1.close()
       expect(FakeWebSocket.instances).toHaveLength(1)
@@ -597,8 +655,43 @@ describe('serverClient', () => {
       expect(client.ws.isConnected()).toBe(true)
       expect(JSON.parse(FakeWebSocket.instances[1].sent[0])).toEqual({
         event: 'subscribe',
-        data: { topics: ['connector.decrypt-api-key'] }
+        data: { topics }
       })
+    })
+
+    it('uses the latest sidecar connection after a restart', async () => {
+      vi.useFakeTimers()
+      const restartedConnection: ServerConnection = {
+        baseUrl: 'http://127.0.0.1:9988',
+        token: 'restarted-token',
+        port: 9988
+      }
+      const getServerBaseUrl = vi.fn()
+        .mockResolvedValueOnce(makeConnection())
+        .mockResolvedValue(restartedConnection)
+      const restartingLifecycle: ServerLifecycle = {
+        start: vi.fn().mockResolvedValue(makeConnection()),
+        getServerBaseUrl,
+        stop: vi.fn().mockResolvedValue(undefined)
+      }
+      const client = createServerClient(restartingLifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        wsReconnectMaxAttempts: 3
+      })
+      const connectPromise = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      FakeWebSocket.instances[0].open()
+      await connectPromise
+
+      FakeWebSocket.instances[0].close()
+      await vi.advanceTimersByTimeAsync(600)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      expect(FakeWebSocket.instances[1].url).toBe(
+        'ws://127.0.0.1:9988/ws?token=restarted-token'
+      )
+      FakeWebSocket.instances[1].open()
+      expect(client.ws.isConnected()).toBe(true)
+      expect(getServerBaseUrl).toHaveBeenCalledTimes(2)
     })
 
     it('does not reconnect after manual disconnect', async () => {

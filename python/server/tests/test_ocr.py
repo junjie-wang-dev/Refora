@@ -194,6 +194,43 @@ async def test_get_markdown_returns_content(repos, library_folder, pdf_path):
 
 
 @pytest.mark.asyncio
+async def test_prepare_for_agent_waits_until_cache_is_ready(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    service = create_ocr_service(
+        repos,
+        _make_deps(library_folder, _FakeWorker(delay=0.01)),
+    )
+
+    cached = await service["prepareForAgent"]("doc-1")
+
+    assert cached["result"]["profile"] == "balanced"
+    assert cached["result"]["resultKey"]
+    assert cached["markdown"] == "# Title\n\nBody text"
+    assert repos["documentOcr"]["getAnyActiveJob"]() is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_agent_prepare_cleans_up_its_ocr_job(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    block_event = asyncio.Event()
+    worker = _FakeWorker(block_event=block_event)
+    service = create_ocr_service(repos, _make_deps(library_folder, worker))
+    task = asyncio.create_task(service["prepareForAgent"]("doc-1"))
+    await asyncio.sleep(0.02)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker.cancelled is True
+    assert repos["documentOcr"]["getAnyActiveJob"]() is None
+
+
+@pytest.mark.asyncio
 async def test_get_state_returns_engine_active_and_result(repos, library_folder, pdf_path):
     _seed_doc(repos, pdf_path)
     worker = _FakeWorker()

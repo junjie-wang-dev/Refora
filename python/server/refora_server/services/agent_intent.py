@@ -258,8 +258,6 @@ async def assemble_turn(
             raise ValueError(f"Thread not found: {requested_thread_id}")
         if thread.get("workspaceId") != workspace_id:
             raise ValueError("Thread does not belong to the requested workspace")
-        if thread.get("providerId") != provider_id:
-            raise ValueError("Thread provider does not match the requested provider")
     else:
         thread = _value(repos.get("chat"), "createThread")(workspace_id, provider_id)
 

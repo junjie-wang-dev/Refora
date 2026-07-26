@@ -185,11 +185,12 @@ def test_academic_tools_registered_in_group_registry():
         assert description
 
 
-def test_tool_factory_covers_read_web_academic_workspace_memory_and_todo_tools():
+def test_tool_factory_covers_read_web_academic_workspace_and_memory_tools():
     tools = create_agent_tools(AgentToolContext(run_id="run"), {})
     names = {tool.name for tool in tools}
 
-    assert {"search_library", "read_paper_fulltext", "web_search", "web_fetch", "search_arxiv", "get_semantic_recommendations", "list_workspace_context", "list_workspace_assets", "list_workspace_notes", "generate_report", "propose_workspace_memory_update", "write_todos"} <= names
+    assert {"search_library", "read_paper_fulltext", "web_search", "web_fetch", "search_arxiv", "get_semantic_recommendations", "list_workspace_context", "list_workspace_assets", "list_workspace_notes", "generate_report", "propose_workspace_memory_update"} <= names
+    assert "write_todos" not in names
 
 
 def test_library_tools_registered_with_document_and_summary_schemas():
@@ -249,8 +250,14 @@ def test_get_paper_metadata_returns_document_or_not_found():
 
 def test_read_paper_fulltext_paginates_extracted_text():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
-    summaries = Functions(getFullText=lambda doc_id: {"text": "a" * 100})
-    executor = _library_executor({"documents": docs, "aiSummaries": summaries})
+    extracted = []
+    executor = _library_executor(
+        {"documents": docs},
+        {
+            "read_paper_fulltext": lambda doc_id: extracted.append(doc_id)
+            or "a" * 100
+        },
+    )
 
     first = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1", "limit": 50}))
     assert first["offset"] == 0
@@ -258,9 +265,12 @@ def test_read_paper_fulltext_paginates_extracted_text():
     assert first["totalChars"] == 100
     assert first["nextOffset"] is None
     assert first["text"] == "a" * 100
+    assert extracted == ["d1"]
 
-    large = Functions(getFullText=lambda doc_id: {"text": "b" * 2000})
-    executor = _library_executor({"documents": docs, "aiSummaries": large})
+    executor = _library_executor(
+        {"documents": docs},
+        {"read_paper_fulltext": lambda _doc_id: "b" * 2000},
+    )
     page = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1", "offset": 0, "limit": 100}))
     assert page["limit"] == 500
     assert page["nextOffset"] == 500
@@ -278,13 +288,44 @@ def test_read_paper_fulltext_returns_error_when_document_missing():
 
 def test_read_paper_ocr_fulltext_uses_ocr_dependency():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "fileName": "f.pdf"})
-    executor = _library_executor({"documents": docs}, {"read_ocr_fulltext": lambda doc_id: "OCR" * 100})
+    executor = _library_executor(
+        {"documents": docs},
+        {
+            "read_ocr_fulltext": lambda doc_id: {
+                "result": {"profile": "quality", "resultKey": "result-1"},
+                "markdown": "OCR" * 100,
+            }
+        },
+    )
 
     result = json.loads(executor.execute("read_paper_ocr_fulltext", {"docId": "d1", "limit": 50}))
 
     assert result["title"] == "f.pdf"
     assert result["text"] == ("OCR" * 100)[:500]
     assert result["limit"] == 500
+    assert result["source"] == "mineru_ocr"
+    assert result["profile"] == "quality"
+    assert result["resultKey"] == "result-1"
+
+
+def test_read_paper_ocr_fulltext_returns_cache_missing_contract():
+    docs = Functions(get=lambda doc_id: {"id": doc_id, "fileName": "f.pdf"})
+    executor = _library_executor(
+        {"documents": docs},
+        {"read_ocr_fulltext": lambda _doc_id: None},
+    )
+
+    result = json.loads(
+        executor.execute("read_paper_ocr_fulltext", {"docId": "d1"})
+    )
+
+    assert result == {
+        "status": "ocr_cache_missing",
+        "docId": "d1",
+        "nextTool": "prepare_paper_ocr",
+        "approval": "handled_by_application",
+        "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
+    }
 
 
 def test_read_paper_ocr_fulltext_reports_missing_document():

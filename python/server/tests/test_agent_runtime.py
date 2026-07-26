@@ -1,9 +1,13 @@
 import asyncio
 import json
 import sqlite3
+from typing import TypedDict
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from conftest import insert_doc, insert_thread, make_workspaces_repo, open_migrated_db
 from refora_server.repositories import create_repositories
@@ -95,8 +99,9 @@ class NativeAgent:
 
 
 class NativeMessage:
-    def __init__(self, content):
+    def __init__(self, content, additional_kwargs=None):
         self.content = content
+        self.additional_kwargs = additional_kwargs or {}
 
 
 def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
@@ -201,6 +206,12 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     trace = next(payload for event, payload in seen if event == "ai.chat.trace")
     assert trace["threadId"] == "thread-1"
     assert trace["step"]["kind"] == "tool"
+    statuses = [
+        payload["status"]
+        for event, payload in seen
+        if event == "ai.chat.run-status"
+    ]
+    assert statuses == ["queued", "running", "completed"]
 
 
 def test_checkpoint_serializer_redacts_academic_calls_and_outputs():
@@ -349,6 +360,7 @@ def test_cancel_terminalizes_active_run(repos, db):
     assert cancelled_runs == ["run-1"]
     assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
     assert repos["agentTraces"]["listByRun"]("run-1")[0]["status"] == "cancelled"
+    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Starting"
 
 
 def test_delete_thread_removes_checkpoint_rows(repos, db, tmp_path):
@@ -869,3 +881,391 @@ def test_resume_replays_persisted_tool_effect_for_same_tool_call_id(repos, db):
         ["run-1", "call-replay"],
     ).fetchone()
     assert rows[0] == 1
+
+
+class ApprovalState(TypedDict):
+    messages: list[dict[str, str]]
+
+
+def test_real_langgraph_interrupt_resumes_with_command(repos, db):
+    insert_thread(db)
+
+    def approval_node(state: ApprovalState) -> ApprovalState:
+        response = interrupt(
+            {
+                "action_requests": [
+                    {"name": "publish", "args": {"path": "out/report.md"}}
+                ],
+                "review_configs": [
+                    {"allowed_decisions": ["approve", "reject"]}
+                ],
+            }
+        )
+        decision = response["decisions"][0]["type"]
+        return {
+            "messages": [
+                *state["messages"],
+                {"role": "assistant", "content": f"Decision: {decision}"},
+            ]
+        }
+
+    builder = StateGraph(ApprovalState)
+    builder.add_node("approval", approval_node)
+    builder.add_edge(START, "approval")
+    builder.add_edge("approval", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    providers_seen = []
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: providers_seen.append(provider) or "model",
+            "createAgent": lambda model, tools, req: graph,
+        },
+    )
+    original_provider = {
+        **request()["provider"],
+        "reasoning": {"effort": "high"},
+    }
+
+    interrupted = asyncio.run(
+        runtime["send"](
+            request(
+                checkpointBefore=None,
+                checkpointPath=None,
+                provider=original_provider,
+            )
+        )
+    )
+    completed = asyncio.run(
+        runtime["resume"](
+            {
+                "runId": "run-1",
+                "decisions": [{"type": "approve"}],
+                "provider": {
+                    "model": "test-model",
+                    "baseUrl": "https://example.test/v1",
+                },
+            }
+        )
+    )
+
+    assert interrupted["status"] == "interrupted"
+    assert completed["status"] == "completed", completed
+    assert providers_seen == [original_provider, original_provider]
+    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Decision: approve"
+
+
+def test_resume_validation_failure_emits_error_and_raw_status(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "interrupted",
+            "state": {
+                "tasks": [
+                    {
+                        "interrupts": [
+                            {
+                                "value": {
+                                    "actionRequests": [
+                                        {"name": "publish", "args": {"path": "out"}}
+                                    ],
+                                    "reviewConfigs": [
+                                        {"allowedDecisions": ["approve", "reject"]}
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+    asyncio.run(runtime["send"](request()))
+    seen.clear()
+
+    result = asyncio.run(
+        runtime["resume"]({"runId": "run-1", "decisions": []})
+    )
+
+    assert result["status"] == "failed"
+    assert [event for event, _ in seen] == [
+        "ai.chat.error",
+        "ai.chat.run-status",
+    ]
+    assert seen[-1][1]["status"] == "interrupted"
+
+
+def test_reasoning_content_is_not_emitted_as_answer_token(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-reasoning",
+            "data": {
+                "chunk": NativeMessage(
+                    "",
+                    {"reasoning_content": "private chain"},
+                )
+            },
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"output": AIMessage(content="Visible answer")},
+        }
+        yield {"event": "complete", "result": "Visible answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    reasoning = next(
+        payload for event, payload in seen if event == "ai.chat.reasoning"
+    )
+    assert reasoning["token"] == "private chain"
+    assert isinstance(reasoning["stepId"], str)
+    assert not [payload for event, payload in seen if event == "ai.chat.token"]
+
+
+def test_failure_preserves_partial_response_and_emits_done(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {"event": "token", "delta": "Partial answer"}
+        raise RuntimeError("provider disconnected")
+        yield
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "failed"
+    assistant = repos["chat"]["listMessages"]("thread-1")[-1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"].startswith("Partial answer")
+    assert "provider disconnected" in assistant["content"]
+    assert any(event == "ai.chat.done" for event, _ in seen)
+    error = next(payload for event, payload in seen if event == "ai.chat.error")
+    assert error["partialText"] == assistant["content"]
+
+
+def test_new_run_supersedes_same_thread_without_late_assistant_write(repos, db):
+    insert_thread(db)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def stream(agent, req, mode):
+        if req["runId"] == "run-1":
+            yield {"event": "token", "delta": "Old partial"}
+            started.set()
+            await released.wait()
+            yield {"event": "complete", "result": "Old late answer", "state": {}}
+            return
+        yield {"event": "complete", "result": "New answer", "state": {}}
+
+    async def exercise():
+        runtime = createAgentRuntime(
+            repos,
+            {
+                "createTools": lambda req: [],
+                "createModel": lambda provider: "model",
+                "createAgent": lambda model, tools, req: Agent(released),
+                "stream": stream,
+            },
+        )
+        first = asyncio.create_task(runtime["send"](request()))
+        await started.wait()
+        second = await runtime["send"](
+            request(
+                runId="run-2",
+                messages=[{"role": "user", "content": "New question"}],
+            )
+        )
+        return await first, second
+
+    first, second = asyncio.run(exercise())
+
+    assert first["status"] == "cancelled"
+    assert second["status"] == "completed"
+    assistants = [
+        message["content"]
+        for message in repos["chat"]["listMessages"]("thread-1")
+        if message["role"] == "assistant"
+    ]
+    assert assistants == ["New answer"]
+
+
+def test_llm_todo_and_failed_tool_traces_are_paired(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-1",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-1",
+            "data": {"chunk": NativeMessage("Answer")},
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "llm-1",
+            "data": {
+                "output": AIMessage(
+                    content="Answer",
+                    usage_metadata={
+                        "input_tokens": 11,
+                        "output_tokens": 7,
+                        "total_tokens": 18,
+                    },
+                )
+            },
+        }
+        yield {
+            "event": "on_tool_start",
+            "name": "write_todos",
+            "run_id": "todo-1",
+            "data": {"input": {"todos": []}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "write_todos",
+            "run_id": "todo-1",
+            "data": {"output": {"todos": []}},
+        }
+        yield {
+            "event": "on_tool_start",
+            "name": "search_library",
+            "run_id": "tool-1",
+            "data": {"input": {"query": "test"}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "search_library",
+            "run_id": "tool-1",
+            "data": {
+                "output": ToolMessage(
+                    content='{"error":{"code":"failed","message":"no result"}}',
+                    name="search_library",
+                    tool_call_id="tool-1",
+                    status="error",
+                )
+            },
+        }
+        yield {"event": "complete", "result": "Answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    traces = repos["agentTraces"]["listByRun"]("run-1")
+    assert [(trace["kind"], trace["status"]) for trace in traces] == [
+        ("run", "done"),
+        ("llm", "done"),
+        ("todo", "done"),
+        ("tool", "error"),
+    ]
+    llm_trace = traces[1]
+    assert (
+        llm_trace["inputTokens"],
+        llm_trace["outputTokens"],
+        llm_trace["totalTokens"],
+    ) == (11, 7, 18)
+    token = next(payload for event, payload in seen if event == "ai.chat.token")
+    assert token["stepId"] == llm_trace["id"]
+
+
+def test_title_generation_does_not_delay_completed_run(repos, db):
+    insert_thread(db)
+
+    async def stream(agent, req, mode):
+        yield {"event": "complete", "result": "Answer", "state": {}}
+
+    async def exercise():
+        release_title = asyncio.Event()
+        title_started = asyncio.Event()
+
+        async def generate_title(thread_id, provider):
+            title_started.set()
+            await release_title.wait()
+            return "Generated title"
+
+        runtime = createAgentRuntime(
+            repos,
+            {
+                "createTools": lambda req: [],
+                "createModel": lambda provider: "model",
+                "createAgent": lambda model, tools, req: Agent(),
+                "stream": stream,
+                "generateTitle": generate_title,
+            },
+        )
+        result = await asyncio.wait_for(runtime["send"](request()), timeout=0.2)
+        assert title_started.is_set()
+        assert repos["chat"]["getThread"]("thread-1")["title"] is None
+        release_title.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return result
+
+    result = asyncio.run(exercise())
+
+    assert result["status"] == "completed"
+    assert repos["chat"]["getThread"]("thread-1")["title"] == "Generated title"

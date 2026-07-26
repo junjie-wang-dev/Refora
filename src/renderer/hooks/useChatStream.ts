@@ -5,12 +5,14 @@ import { errorMessage } from '../../shared/ipc-types'
 import type {
   AgentInterrupt,
   AgentInterruptDecision,
+  AgentRunStatus,
   AgentTraceStep,
   ChatDoneEvent,
   ChatErrorEvent,
   ChatInterruptedEvent,
   ChatMessage,
   ChatReasoningEvent,
+  ChatRunStatusEvent,
   ChatTokenEvent,
   ChatTraceEvent,
   ChatTitleUpdatedEvent
@@ -34,7 +36,26 @@ interface ResumeRetryContext {
 }
 
 const MIN_LIVE_ACTIVITY_MS = 160
+const RUN_RECOVERY_POLL_MS = 5000
 const LIVE_ACTIVITY_TOOL_NAMES = new Set(['write_file', 'edit_file', 'write_todos'])
+const CANCELLED_RESPONSE = '[Response cancelled by user]'
+
+function latestRunStep(steps: AgentTraceStep[], runId?: string | null): AgentTraceStep | null {
+  const candidates = steps
+    .filter((step) => step.kind === 'run' && (!runId || step.runId === runId))
+    .sort((left, right) => right.startedAt - left.startedAt || right.seq - left.seq)
+  return candidates[0] ?? null
+}
+
+function traceRunStatus(step: AgentTraceStep | null): AgentRunStatus | null {
+  if (!step) return null
+  if (step.status === 'running') return 'running'
+  if (step.status === 'done') return 'completed'
+  if (step.status === 'error') return 'failed'
+  if (step.status === 'interrupted') return 'interrupted'
+  if (step.status === 'cancelled') return 'cancelled'
+  return null
+}
 
 function reviewedOcrDocumentId(context: ResumeRetryContext): string | null {
   if (context.decision === 'reject') return null
@@ -95,6 +116,15 @@ export function useChatStream({
   const deferredTraceTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>()
   )
+  const reconcileRunSnapshotRef = useRef<((
+    runId: string,
+    threadId: string,
+    hintedStatus?: AgentRunStatus
+  ) => Promise<void>) | undefined>(undefined)
+  const tRef = useRef(t)
+  const fetchThreadsRef = useRef(fetchThreads)
+  tRef.current = t
+  fetchThreadsRef.current = fetchThreads
 
   const displayMessages = useMemo(() => messages.filter((m) => m.role !== 'tool'), [messages])
 
@@ -147,16 +177,14 @@ export function useChatStream({
         setTraceSteps(traces)
         hadMessagesRef.current = history.length > 0
         setLoadingHistory(false)
-        const runSteps = traces
-          .filter((step) => step.kind === 'run')
-          .sort((left, right) => right.startedAt - left.startedAt || right.seq - left.seq)
-        if (runSteps[0]) {
-          void api.ai.chatPendingInterrupt(runSteps[0].runId).then((interrupt) => {
-            if (!cancelled && threadIdRef.current === activeThreadId) {
-              pendingInterruptRef.current = interrupt
-              setPendingInterrupt(interrupt)
-            }
-          }).catch(() => undefined)
+        const runStep = latestRunStep(traces)
+        const status = traceRunStatus(runStep)
+        if (runStep && (status === 'running' || status === 'interrupted')) {
+          activeRunIdRef.current = runStep.runId
+          setActiveRunId(runStep.runId)
+          isSendingRef.current = status === 'running'
+          setStreaming(status === 'running')
+          void reconcileRunSnapshotRef.current?.(runStep.runId, activeThreadId, status ?? undefined)
         }
       })
       .catch(() => {
@@ -222,6 +250,153 @@ export function useChatStream({
     deferredTraceTimersRef.current.set(step.id, timer)
   }, [])
 
+  const settleRun = useCallback((
+    runId: string,
+    options: {
+      status: Extract<AgentRunStatus, 'completed' | 'failed' | 'cancelled'>
+      threadId: string
+      finalText?: string
+      partialText?: string
+      error?: string | null
+      history?: ChatMessage[]
+      traces?: AgentTraceStep[]
+    }
+  ) => {
+    if (activeRunIdRef.current !== runId) return
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
+    }
+    const partial = (options.partialText ?? streamingTextRef.current).trimEnd()
+    const interruptedText = options.error
+      ? tRef.current('workspace.chat.partialInterrupted', {
+          message: options.error,
+          defaultValue: 'Response interrupted: {{message}}'
+        })
+      : ''
+    const suffix = options.status === 'cancelled'
+      ? options.finalText || CANCELLED_RESPONSE
+      : options.status === 'failed'
+        ? interruptedText
+        : ''
+    const preservedPartial = partial
+      ? `${partial}${suffix ? `\n\n${suffix}` : ''}`
+      : options.status === 'cancelled'
+        ? suffix
+        : ''
+    const completedText = options.status === 'completed'
+      ? options.finalText?.trim() || partial
+      : preservedPartial
+
+    if (options.traces) setTraceSteps(options.traces)
+    setMessages((previous) => {
+      const base = options.history ?? previous
+      if (!completedText) return base
+      if (
+        options.status === 'completed' &&
+        base.some((message) =>
+          message.role === 'assistant' &&
+          message.threadId === options.threadId &&
+          message.content === completedText
+        )
+      ) {
+        return base
+      }
+      const withoutTerminalPlaceholder = options.status === 'cancelled'
+        ? base.filter((message, index) =>
+            !(
+              index === base.length - 1 &&
+              message.role === 'assistant' &&
+              message.content === (options.finalText || CANCELLED_RESPONSE)
+            )
+          )
+        : base
+      return [
+        ...withoutTerminalPlaceholder,
+        localMessage(options.threadId, 'assistant', completedText)
+      ]
+    })
+    isSendingRef.current = false
+    activeRunIdRef.current = null
+    setActiveRunId(null)
+    cancelledRef.current = false
+    cancelledRunRef.current = null
+    resumeRetryRef.current = null
+    pendingInterruptRef.current = null
+    setPendingInterrupt(null)
+    setCanRetry(options.status === 'failed' && retrySendRef.current !== null)
+    if (options.status !== 'failed') retrySendRef.current = null
+    setError(options.status === 'failed' ? options.error || tRef.current(
+      'workspace.chat.runFailed',
+      'The agent run failed.'
+    ) : null)
+    streamingTextRef.current = ''
+    streamingReasoningRef.current = ''
+    streamingStepOutputRef.current.clear()
+    setStreamingText('')
+    setStreamingReasoning('')
+    setStreaming(false)
+    setActiveOcrDocumentId(null)
+    void fetchThreadsRef.current()
+  }, [])
+
+  const reconcileRunSnapshot = useCallback(async (
+    runId: string,
+    threadId: string,
+    hintedStatus?: AgentRunStatus
+  ) => {
+    try {
+      const run = await api.ai.chatRun(runId)
+      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      if (run.status === 'queued' || run.status === 'running') {
+        isSendingRef.current = true
+        setStreaming(true)
+        return
+      }
+      const [history, traces] = await Promise.all([
+        api.ai.chatHistory(threadId),
+        api.ai.chatTraces(threadId)
+      ])
+      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      setTraceSteps(traces)
+      if (run.status === 'interrupted') {
+        const interrupt = await api.ai.chatPendingInterrupt(runId)
+        if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+        setMessages(history)
+        isSendingRef.current = false
+        pendingInterruptRef.current = interrupt
+        setPendingInterrupt(interrupt)
+        setStreamingText(streamingTextRef.current)
+        setStreamingReasoning(streamingReasoningRef.current)
+        setStreaming(false)
+        setCanRetry(false)
+        setError(run.error)
+        setActiveOcrDocumentId(null)
+        return
+      }
+      settleRun(runId, {
+        status: run.status,
+        threadId,
+        finalText: history.filter((message) => message.role === 'assistant').at(-1)?.content,
+        error: run.error,
+        history,
+        traces
+      })
+    } catch (cause) {
+      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      if (hintedStatus === 'failed' || hintedStatus === 'cancelled') {
+        settleRun(runId, {
+          status: hintedStatus,
+          threadId,
+          error: hintedStatus === 'failed'
+            ? errorMessage(cause, tRef.current('workspace.chat.runFailed', 'The agent run failed.'))
+            : null
+        })
+      }
+    }
+  }, [settleRun])
+  reconcileRunSnapshotRef.current = reconcileRunSnapshot
+
   const chatHandlersRef = useRef<{
     onToken: (payload: ChatTokenEvent) => void
     onReasoning: (payload: ChatReasoningEvent) => void
@@ -229,6 +404,7 @@ export function useChatStream({
     onError: (payload: ChatErrorEvent) => void
     onTrace: (payload: ChatTraceEvent) => void
     onInterrupted: (payload: ChatInterruptedEvent) => void
+    onRunStatus: (payload: ChatRunStatusEvent) => void
     onTitleUpdated: (payload: ChatTitleUpdatedEvent) => void
   } | null>(null)
 
@@ -265,50 +441,39 @@ export function useChatStream({
       onDone: (payload: ChatDoneEvent) => {
         if (payload.runId !== activeRunIdRef.current) return
         if (threadIdRef.current && payload.threadId !== threadIdRef.current) return
-        cancelledRef.current = false
-        if (rafIdRef.current != null) {
-          cancelAnimationFrame(rafIdRef.current)
-          rafIdRef.current = null
-        }
-        isSendingRef.current = false
-        activeRunIdRef.current = null
-        setActiveRunId(null)
-        retrySendRef.current = null
-        cancelledRunRef.current = null
-        setCanRetry(false)
-        resumeRetryRef.current = null
-        setMessages((prev) => [
-          ...prev,
-          localMessage(payload.threadId, 'assistant', payload.finalText)
-        ])
-        streamingTextRef.current = ''
-        streamingReasoningRef.current = ''
-        streamingStepOutputRef.current.clear()
-        setStreamingText('')
-        setStreamingReasoning('')
-        setStreaming(false)
-        pendingInterruptRef.current = null
-        setPendingInterrupt(null)
-        setActiveOcrDocumentId(null)
+        const status = cancelledRef.current || payload.finalText === CANCELLED_RESPONSE
+          ? 'cancelled'
+          : 'completed'
+        settleRun(payload.runId, {
+          status,
+          threadId: payload.threadId,
+          finalText: payload.finalText
+        })
       },
       onError: (payload: ChatErrorEvent) => {
         if (payload.runId !== activeRunIdRef.current) return
         if (threadIdRef.current && payload.threadId !== threadIdRef.current) return
-        if (rafIdRef.current != null) {
-          cancelAnimationFrame(rafIdRef.current)
-          rafIdRef.current = null
-        }
-        isSendingRef.current = false
         const resumeRetry = resumeRetryRef.current
         const failedResume = resumeRetry?.interrupt.runId === payload.runId ? resumeRetry : null
-        activeRunIdRef.current = failedResume?.interrupt.runId ?? null
-        setActiveRunId(failedResume?.interrupt.runId ?? null)
-        cancelledRef.current = false
-        cancelledRunRef.current = null
         if (failedResume) {
+          if (rafIdRef.current != null) {
+            cancelAnimationFrame(rafIdRef.current)
+            rafIdRef.current = null
+          }
+          isSendingRef.current = false
           pendingInterruptRef.current = failedResume.interrupt
           setPendingInterrupt(failedResume.interrupt)
-        } else if (retrySendRef.current) {
+          cancelledRef.current = false
+          cancelledRunRef.current = null
+          setCanRetry(true)
+          setError(payload.message)
+          setStreamingText(streamingTextRef.current)
+          setStreamingReasoning(streamingReasoningRef.current)
+          setStreaming(false)
+          setActiveOcrDocumentId(null)
+          return
+        }
+        if (retrySendRef.current) {
           retrySendRef.current = {
             ...retrySendRef.current,
             threadId: payload.threadId,
@@ -316,15 +481,12 @@ export function useChatStream({
             persisted: true
           }
         }
-        setCanRetry(failedResume !== null || retrySendRef.current !== null)
-        setError(payload.message)
-        streamingTextRef.current = ''
-        streamingReasoningRef.current = ''
-        streamingStepOutputRef.current.clear()
-        setStreamingText('')
-        setStreamingReasoning('')
-        setStreaming(false)
-        setActiveOcrDocumentId(null)
+        settleRun(payload.runId, {
+          status: 'failed',
+          threadId: payload.threadId,
+          partialText: payload.partialText,
+          error: payload.message
+        })
       },
       onTrace: (payload: ChatTraceEvent) => {
         if (payload.runId !== activeRunIdRef.current) return
@@ -355,6 +517,16 @@ export function useChatStream({
         setStreamingReasoning(streamingReasoningRef.current)
         setStreaming(false)
       },
+      onRunStatus: (payload: ChatRunStatusEvent) => {
+        if (payload.runId !== activeRunIdRef.current) return
+        if (threadIdRef.current && payload.threadId !== threadIdRef.current) return
+        if (payload.status === 'queued' || payload.status === 'running') {
+          isSendingRef.current = true
+          setStreaming(true)
+          return
+        }
+        void reconcileRunSnapshot(payload.runId, payload.threadId, payload.status)
+      },
       onTitleUpdated: (payload: ChatTitleUpdatedEvent) => {
         useWorkspaceStore.setState((s) => ({
           threads: s.threads.map((t2) =>
@@ -373,6 +545,7 @@ export function useChatStream({
     api.events.onAiChatError(h.onError)
     api.events.onAiChatTrace(h.onTrace)
     api.events.onAiChatInterrupted(h.onInterrupted)
+    api.events.onAiChatRunStatus(h.onRunStatus)
     api.events.onAiChatTitleUpdated(h.onTitleUpdated)
     return () => {
       api.events.off('ai:chat:token', h.onToken)
@@ -381,6 +554,7 @@ export function useChatStream({
       api.events.off('ai:chat:error', h.onError)
       api.events.off('ai:chat:trace', h.onTrace)
       api.events.off('ai:chat:interrupted', h.onInterrupted)
+      api.events.off('ai:chat:runStatus', h.onRunStatus)
       api.events.off('ai:chat:titleUpdated', h.onTitleUpdated)
     }
   }, [])
@@ -404,6 +578,15 @@ export function useChatStream({
   useEffect(() => {
     setChatStreaming(streaming)
   }, [streaming, setChatStreaming])
+
+  useEffect(() => {
+    if (!streaming || !activeRunId || !activeThreadId) return
+    const reconcile = () => {
+      void reconcileRunSnapshot(activeRunId, activeThreadId)
+    }
+    const timer = setInterval(reconcile, RUN_RECOVERY_POLL_MS)
+    return () => clearInterval(timer)
+  }, [streaming, activeRunId, activeThreadId, reconcileRunSnapshot])
 
   useEffect(() => {
     if (streaming) {

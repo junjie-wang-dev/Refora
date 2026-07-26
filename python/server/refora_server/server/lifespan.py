@@ -199,6 +199,22 @@ def create_lifespan(
                 getSearchMode=get_search_mode,
             ),
         )
+        agent_runs = repos.get("agentRuns")
+        reconcile_runs = (
+            agent_runs.get("reconcileRunning")
+            if isinstance(agent_runs, dict)
+            else None
+        )
+        if callable(reconcile_runs):
+            reconcile_runs("Python sidecar restarted before run completion")
+        agent_traces = repos.get("agentTraces")
+        reconcile_traces = (
+            agent_traces.get("reconcileRunning")
+            if isinstance(agent_traces, dict)
+            else None
+        )
+        if callable(reconcile_traces):
+            reconcile_traces("Python sidecar restarted before trace completion")
         events = create_event_bus()
         connector = create_connector_broker(events)
         server_loop = asyncio.get_running_loop()
@@ -585,20 +601,40 @@ def create_lifespan(
                 future.add_done_callback(_consume_future)
                 return {"status": "queued", "docId": document_id}
 
-            async def read_ocr_fulltext(document_id: str) -> str:
-                document = repos["documents"]["get"](document_id)
-                if document is None:
-                    raise RuntimeError(f"Document not found: {document_id}")
-                result = repos["documentOcr"]["getResult"](
-                    document_id, document.get("fileHash")
+            def read_paper_fulltext(document_id: str) -> str:
+                return run_on_server_loop(
+                    document_text["getOrExtract"](document_id),
+                    cancel_event,
                 )
-                if result is None or result.get("stale"):
-                    return ""
-                return await ocr["readMarkdown"](document_id, result["resultKey"])
 
-            async def prepare_paper_ocr(document_id: str) -> dict[str, Any]:
-                job_id = await ocr["startOcr"](document_id, "balanced")
-                return {"status": "queued", "jobId": job_id, "documentId": document_id}
+            def read_ocr_fulltext(document_id: str) -> dict[str, Any] | None:
+                return run_on_server_loop(
+                    ocr["readCachedForAgent"](document_id),
+                    cancel_event,
+                )
+
+            def prepare_paper_ocr(document_id: str) -> dict[str, Any]:
+                cached = run_on_server_loop(
+                    ocr["prepareForAgent"](document_id),
+                    cancel_event,
+                )
+                result = cached["result"]
+                markdown = cached["markdown"]
+                document = repos["documents"]["get"](document_id)
+                return {
+                    "status": "ready",
+                    "docId": document_id,
+                    "title": (
+                        document.get("title") or document.get("fileName")
+                        if document
+                        else document_id
+                    ),
+                    "source": "mineru_ocr",
+                    "profile": result["profile"],
+                    "resultKey": result["resultKey"],
+                    "totalChars": len(markdown),
+                    "message": "Balanced OCR cache is ready. Continue with read_paper_ocr_fulltext.",
+                }
 
             def open_paper(document_id: str) -> dict[str, Any]:
                 document = repos["documents"]["get"](document_id)
@@ -649,6 +685,14 @@ def create_lifespan(
                     events,
                     "workspace.items.changed",
                     {"workspaceId": workspace_id, "reason": reason},
+                    server_loop,
+                )
+
+            def report_created(report: dict[str, Any]) -> None:
+                _schedule_event(
+                    events,
+                    "ai.report.created",
+                    report,
                     server_loop,
                 )
 
@@ -797,6 +841,7 @@ def create_lifespan(
             tool_deps = {
                 "repos": repos,
                 "ai_summary": request_summary,
+                "read_paper_fulltext": read_paper_fulltext,
                 "read_ocr_fulltext": read_ocr_fulltext,
                 "open_paper": open_paper,
                 "find_related_papers": related,
@@ -821,6 +866,12 @@ def create_lifespan(
                 ),
                 "execute_sandbox": execute_sandbox,
                 "workspace_changed": workspace_changed,
+                "report_created": report_created,
+                "model": (
+                    request["provider"].get("model")
+                    if isinstance(request.get("provider"), dict)
+                    else None
+                ),
                 "academic": tool_academic,
             }
             tools = create_agent_tools(

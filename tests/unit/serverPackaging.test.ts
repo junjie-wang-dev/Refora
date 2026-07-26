@@ -20,7 +20,21 @@ describe('Python server packaging', () => {
     expect(script).toContain('pyinstaller')
     expect(script).toContain('TARGET_ARCH')
     expect(script).toContain('HOST_ARCH')
+    expect(script).toContain('--collect-all langchain_openai')
+    expect(script).toContain('--collect-all langgraph.checkpoint.sqlite')
+    expect(script).toContain('--copy-metadata langchain-openai')
+    expect(script).toContain('--copy-metadata langgraph-checkpoint-sqlite')
     expect(script).toContain('verify-server-sidecar.mjs')
+  })
+
+  it('runs offline artifact and server startup smoke checks', () => {
+    const script = readFileSync('scripts/verify-server-sidecar.mjs', 'utf8')
+
+    expect(script).toContain("['--verify-artifact']")
+    expect(script).toContain('/ready')
+    expect(script).toContain('/shutdown')
+    expect(script).toContain("'langchain-openai'")
+    expect(script).toContain("'langgraph-checkpoint-sqlite'")
   })
 
   it('uses separate native runners for arm64 and x64 packages', () => {

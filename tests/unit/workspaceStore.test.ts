@@ -580,16 +580,20 @@ describe('WorkspaceStore', () => {
 
       const summaryUpdated = mockOnAiSummaryUpdated.mock.calls[0][0] as (docId: string) => void
       const reportCreated = mockOnAiReportCreated.mock.calls[0][0] as (report: AiReport) => void
+      mockReportsList.mockResolvedValue([makeReport()])
       summaryUpdated('doc-1')
       reportCreated(makeReport())
 
       await vi.waitFor(() => {
         expect(mockWorkspaceItemsList).toHaveBeenCalledWith('ws-1')
+        expect(useWorkspaceStore.getState().reports).toHaveLength(1)
       })
-      expect(useWorkspaceStore.getState().reports).toHaveLength(1)
 
+      mockReportsList.mockResolvedValue([makeReport({ title: 'Updated report' })])
       reportCreated(makeReport({ title: 'Updated report' }))
-      expect(useWorkspaceStore.getState().reports[0].title).toBe('Updated report')
+      await vi.waitFor(() => {
+        expect(useWorkspaceStore.getState().reports[0].title).toBe('Updated report')
+      })
 
       useWorkspaceStore.getState().destroy()
       expect(mockEventsOff).toHaveBeenCalledWith('ai:summary:updated', summaryUpdated)
@@ -759,6 +763,9 @@ describe('WorkspaceStore', () => {
 
       await vi.waitFor(() => {
         expect(mockWorkspaceItemsList).toHaveBeenCalledWith('ws-1')
+        expect(mockReportsList).toHaveBeenCalledWith('ws-1')
+        expect(mockWorkspaceNotesList).toHaveBeenCalledWith('ws-1')
+        expect(mockWorkspaceAssetsList).toHaveBeenCalledWith('ws-1')
       })
     })
 

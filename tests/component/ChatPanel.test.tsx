@@ -12,6 +12,7 @@ import {
 import { StrictMode } from 'react'
 import type {
   AgentTraceStep,
+  AgentRun,
   AiProvider,
   AiReasoningEffort,
   ChatDoneEvent,
@@ -19,6 +20,7 @@ import type {
   ChatInterruptedEvent,
   ChatMessage,
   ChatReasoningEvent,
+  ChatRunStatusEvent,
   ChatSendRequest,
   ChatTokenEvent,
   ChatTraceEvent
@@ -58,6 +60,8 @@ const mockChatHistory = vi.fn()
 const mockChatSend = vi.fn()
 const mockChatCancel = vi.fn()
 const mockChatResume = vi.fn()
+const mockChatRun = vi.fn()
+const mockChatTraces = vi.fn()
 const mockOpenPdf = vi.fn()
 let chatDoneHandler: ((payload: ChatDoneEvent) => void) | undefined
 let chatErrorHandler: ((payload: ChatErrorEvent) => void) | undefined
@@ -65,6 +69,7 @@ let chatTokenHandler: ((payload: ChatTokenEvent) => void) | undefined
 let chatReasoningHandler: ((payload: ChatReasoningEvent) => void) | undefined
 let chatTraceHandler: ((payload: ChatTraceEvent) => void) | undefined
 let chatInterruptedHandler: ((payload: ChatInterruptedEvent) => void) | undefined
+let chatRunStatusHandler: ((payload: ChatRunStatusEvent) => void) | undefined
 
 const TEST_PROVIDER: AiProvider = {
   id: 'p1',
@@ -92,6 +97,25 @@ function makeMessage(content: string): ChatMessage {
     role: 'assistant',
     content,
     createdAt: Date.now()
+  }
+}
+
+function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
+  return {
+    id: 'run-1',
+    threadId: 'thread-1',
+    providerId: 'p1',
+    modelId: 'gpt-4o',
+    status: 'running',
+    checkpointBefore: null,
+    checkpointAfter: null,
+    replacesRunId: null,
+    userMessageId: null,
+    assistantMessageId: null,
+    startedAt: 1,
+    endedAt: null,
+    error: null,
+    ...overrides
   }
 }
 
@@ -123,6 +147,30 @@ function makeTodoStep(
   }
 }
 
+function makeRunStep(runId: string, status: AgentTraceStep['status']): AgentTraceStep {
+  return {
+    id: `step-${runId}`,
+    threadId: 'thread-1',
+    runId,
+    kind: 'run',
+    name: null,
+    input: null,
+    output: null,
+    status,
+    startedAt: 1,
+    endedAt: status === 'running' ? null : 2,
+    seq: 1,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    parentStepId: null,
+    agentName: null,
+    namespace: null,
+    depth: 0,
+    checkpointId: null
+  }
+}
+
 function setupApi(messages: ChatMessage[]): void {
   const w = window as unknown as { api: Record<string, Record<string, unknown>> }
   w.api.aiProviders.list = async () => [TEST_PROVIDER]
@@ -132,7 +180,8 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.ai.chatHistory = mockChatHistory
   w.api.ai.chatSend = mockChatSend
   w.api.ai.chatCancel = mockChatCancel
-  w.api.ai.chatTraces = async () => []
+  w.api.ai.chatRun = mockChatRun
+  w.api.ai.chatTraces = mockChatTraces
   w.api.ai.chatThreads = async () => []
   w.api.ai.chatPendingInterrupt = async () => null
   w.api.ai.chatResume = mockChatResume
@@ -155,12 +204,17 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.events.onAiChatInterrupted = (handler: (payload: ChatInterruptedEvent) => void) => {
     chatInterruptedHandler = handler
   }
+  w.api.events.onAiChatRunStatus = (handler: (payload: ChatRunStatusEvent) => void) => {
+    chatRunStatusHandler = handler
+  }
   mockChatHistory.mockResolvedValue(messages)
   mockChatSend.mockImplementation(async (req: ChatSendRequest) => ({
     threadId: req.threadId ?? 'thread-1',
     runId: req.runId ?? 'run-1'
   }))
   mockChatCancel.mockResolvedValue(undefined)
+  mockChatRun.mockImplementation(async (runId: string) => makeRun({ id: runId }))
+  mockChatTraces.mockResolvedValue([])
 }
 
 function setupStore(): void {
@@ -183,6 +237,8 @@ beforeEach(() => {
   mockChatSend.mockReset()
   mockChatCancel.mockReset()
   mockChatResume.mockReset().mockResolvedValue(undefined)
+  mockChatRun.mockReset()
+  mockChatTraces.mockReset()
   mockOpenPdf.mockReset()
   chatDoneHandler = undefined
   chatErrorHandler = undefined
@@ -190,6 +246,7 @@ beforeEach(() => {
   chatReasoningHandler = undefined
   chatTraceHandler = undefined
   chatInterruptedHandler = undefined
+  chatRunStatusHandler = undefined
   mockOpenPdf.mockResolvedValue(null)
   setupStore()
 })
@@ -533,6 +590,57 @@ describe('ChatPanel provider restoration', () => {
     window.dispatchEvent(new Event(AI_PROVIDERS_CHANGED_EVENT))
 
     await waitFor(() => expect(selector).toHaveTextContent('Ollama/Kimi2.6'))
+  })
+
+  it('uses a switched provider for a new run in the existing thread', async () => {
+    setupApi([makeMessage('Existing answer')])
+    const ollamaProvider: AiProvider = {
+      ...TEST_PROVIDER,
+      id: 'ollama-1',
+      presetId: 'ollama-local',
+      name: 'Ollama',
+      model: 'Kimi2.6',
+      baseModel: 'Kimi2.6',
+      hasKey: false
+    }
+    const startNewChat = vi.fn()
+    useWorkspaceStore.setState({
+      activeThreadId: 'thread-1',
+      threads: [{
+        id: 'thread-1',
+        workspaceId: 'ws-1',
+        providerId: TEST_PROVIDER.id,
+        createdAt: 1,
+        title: 'Existing thread',
+        headCheckpointId: null,
+        agentStateVersion: 1
+      }],
+      startNewChat
+    })
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.aiProviders.list = async () => [TEST_PROVIDER, ollamaProvider]
+
+    render(<ChatPanel />)
+
+    const selector = await screen.findByRole('button', {
+      name: 'workspace.chat.selectProvider'
+    })
+    await waitFor(() => expect(selector).toHaveTextContent('Test Provider/gpt-4o'))
+    fireEvent.click(selector)
+    fireEvent.click(screen.getByRole('option', { name: 'Ollama/Kimi2.6' }))
+    expect(await screen.findByText('workspace.chat.providerSwitchHint')).toBeInTheDocument()
+
+    const input = screen.getByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
+    fireEvent.change(input, { target: { value: 'Continue here' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false })
+
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalled())
+    expect(mockChatSend.mock.calls.at(-1)?.[0]).toMatchObject({
+      threadId: 'thread-1',
+      providerId: 'ollama-1',
+      model: 'Kimi2.6'
+    })
+    expect(startNewChat).not.toHaveBeenCalled()
   })
 })
 
@@ -1525,6 +1633,140 @@ describe('useChatStream lifecycle', () => {
     })
     expect(result.current.streaming).toBe(false)
     expect(result.current.messages.at(-1)?.content).toBe('[Response cancelled by user]')
+  })
+
+  it('preserves streamed text when a run is cancelled', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Draft a response', [], 'thread-1')
+    })
+    const runId = result.current.activeRunId!
+
+    act(() => {
+      chatTokenHandler?.({ threadId: 'thread-1', runId, token: 'Partial answer' })
+      result.current.handleCancel()
+      chatDoneHandler?.({
+        threadId: 'thread-1',
+        runId,
+        finalText: '[Response cancelled by user]'
+      })
+    })
+
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.messages.at(-1)?.content).toBe(
+      'Partial answer\n\n[Response cancelled by user]'
+    )
+  })
+
+  it('preserves streamed text when a run fails', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Draft a response', [], 'thread-1')
+    })
+    const runId = result.current.activeRunId!
+
+    act(() => {
+      chatTokenHandler?.({ threadId: 'thread-1', runId, token: 'Partial answer' })
+      chatErrorHandler?.({
+        threadId: 'thread-1',
+        runId,
+        message: 'Provider failed',
+        partialText: 'Partial answer'
+      })
+    })
+
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.messages.at(-1)?.content).toBe(
+      'Partial answer\n\nworkspace.chat.partialInterrupted'
+    )
+    const messageCount = result.current.messages.length
+    act(() => {
+      chatDoneHandler?.({
+        threadId: 'thread-1',
+        runId,
+        finalText: 'Partial answer'
+      })
+    })
+    expect(result.current.messages).toHaveLength(messageCount)
+    expect(result.current.messages.at(-1)?.content).toBe(
+      'Partial answer\n\nworkspace.chat.partialInterrupted'
+    )
+  })
+
+  it('reconciles a terminal run-status event from the persisted snapshot', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Draft a response', [], 'thread-1')
+    })
+    const runId = result.current.activeRunId!
+    mockChatRun.mockResolvedValueOnce(makeRun({
+      id: runId,
+      status: 'failed',
+      endedAt: 2,
+      error: 'Worker stopped'
+    }))
+
+    act(() => {
+      chatTokenHandler?.({ threadId: 'thread-1', runId, token: 'Recovered partial' })
+      chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'failed' })
+    })
+
+    await waitFor(() => expect(result.current.streaming).toBe(false))
+    expect(mockChatRun).toHaveBeenCalledWith(runId)
+    expect(result.current.messages.at(-1)?.content).toContain('Recovered partial')
+    expect(result.current.error).toBe('Worker stopped')
+  })
+
+  it('converges a reloaded running trace from the persisted run snapshot', async () => {
+    setupApi([])
+    const runId = 'run-reloaded'
+    const userMessage: ChatMessage = {
+      id: 'user-reloaded',
+      threadId: 'thread-1',
+      role: 'user',
+      content: 'Question before reload',
+      createdAt: 1
+    }
+    const assistantMessage: ChatMessage = {
+      id: 'assistant-reloaded',
+      threadId: 'thread-1',
+      role: 'assistant',
+      content: 'Persisted answer',
+      createdAt: 2
+    }
+    mockChatHistory
+      .mockReset()
+      .mockResolvedValueOnce([userMessage])
+      .mockResolvedValue([userMessage, assistantMessage])
+    mockChatTraces.mockResolvedValue([makeRunStep(runId, 'running')])
+    mockChatRun.mockResolvedValue(makeRun({
+      id: runId,
+      status: 'completed',
+      assistantMessageId: assistantMessage.id,
+      endedAt: 2
+    }))
+
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+
+    await waitFor(() => {
+      expect(result.current.loadingHistory).toBe(false)
+      expect(result.current.streaming).toBe(false)
+      expect(result.current.activeRunId).toBeNull()
+      expect(result.current.messages.at(-1)?.content).toBe('Persisted answer')
+    })
+    expect(mockChatRun).toHaveBeenCalledWith(runId)
   })
 })
 

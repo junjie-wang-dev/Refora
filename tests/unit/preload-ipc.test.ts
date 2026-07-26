@@ -138,7 +138,8 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.AiChatHistory, args: ['thread-1'], invoke: (value) => value.ai.chatHistory('thread-1') },
       { channel: IpcChannel.AiChatThreads, args: ['workspace-1'], invoke: (value) => value.ai.chatThreads('workspace-1') },
       { channel: IpcChannel.AiChatTraces, args: ['thread-1'], invoke: (value) => value.ai.chatTraces('thread-1') },
-      { channel: IpcChannel.AiChatCancel, args: ['thread-1'], invoke: (value) => value.ai.chatCancel('thread-1') },
+      { channel: IpcChannel.AiChatRun, args: ['run-1'], invoke: (value) => value.ai.chatRun('run-1') },
+      { channel: IpcChannel.AiChatCancel, args: ['run-1'], invoke: (value) => value.ai.chatCancel('run-1') },
       { channel: IpcChannel.AiChatDeleteThread, args: ['thread-1'], invoke: (value) => value.ai.chatDeleteThread('thread-1') },
       { channel: IpcChannel.AiChatRenameThread, args: ['thread-1', 'Title'], invoke: (value) => value.ai.renameThread('thread-1', 'Title') },
       { channel: IpcChannel.AiReportsList, args: ['workspace-1'], invoke: (value) => value.reports.list('workspace-1') },
@@ -200,6 +201,8 @@ describe('preload IPC bridge', () => {
       [IpcChannel.EventAiChatDone, (cb) => api.events.onAiChatDone(cb)],
       [IpcChannel.EventAiChatError, (cb) => api.events.onAiChatError(cb)],
       [IpcChannel.EventAiChatTrace, (cb) => api.events.onAiChatTrace(cb)],
+      [IpcChannel.EventAiChatInterrupted, (cb) => api.events.onAiChatInterrupted(cb)],
+      [IpcChannel.EventAiChatRunStatus, (cb) => api.events.onAiChatRunStatus(cb)],
       [IpcChannel.EventAiChatTitleUpdated, (cb) => api.events.onAiChatTitleUpdated(cb)],
       [IpcChannel.EventAiReportCreated, (cb) => api.events.onAiReportCreated(cb)],
       [IpcChannel.EventWorkspaceItemsChanged, (cb) => api.events.onWorkspaceItemsChanged(cb)]
@@ -230,14 +233,22 @@ describe('preload IPC bridge', () => {
       progressListener
     )
 
-    const first = vi.fn()
-    const second = vi.fn()
-    api.events.onAiChatToken(first)
-    const firstListener = electronMocks.on.mock.calls.at(-1)?.[1]
-    api.events.onAiChatToken(second)
-    expect(electronMocks.removeListener).toHaveBeenCalledWith(
-      IpcChannel.EventAiChatToken,
-      firstListener
-    )
+    const singleSubscriberCases: Array<[string, (cb: () => void) => void]> = [
+      [IpcChannel.EventAiChatToken, (cb) => api.events.onAiChatToken(cb)],
+      [IpcChannel.EventAiChatReasoning, (cb) => api.events.onAiChatReasoning(cb)],
+      [IpcChannel.EventAiChatDone, (cb) => api.events.onAiChatDone(cb)],
+      [IpcChannel.EventAiChatError, (cb) => api.events.onAiChatError(cb)],
+      [IpcChannel.EventAiChatTrace, (cb) => api.events.onAiChatTrace(cb)],
+      [IpcChannel.EventAiChatInterrupted, (cb) => api.events.onAiChatInterrupted(cb)],
+      [IpcChannel.EventAiChatRunStatus, (cb) => api.events.onAiChatRunStatus(cb)]
+    ]
+    for (const [channel, subscribe] of singleSubscriberCases) {
+      const first = vi.fn()
+      const second = vi.fn()
+      subscribe(first)
+      const firstListener = electronMocks.on.mock.calls.at(-1)?.[1]
+      subscribe(second)
+      expect(electronMocks.removeListener).toHaveBeenCalledWith(channel, firstListener)
+    }
   })
 })

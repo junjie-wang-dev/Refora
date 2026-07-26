@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { promisify } from 'node:util'
 import {
   architectures,
   canonicalSha256
@@ -41,6 +42,31 @@ if (
 const digest = await canonicalSha256(executable)
 if (manifest.canonicalSha256 !== digest) {
   throw new Error(`Sidecar checksum mismatch: ${manifestPath}`)
+}
+
+const runFile = promisify(execFile)
+const artifactCheck = await runFile(executable, ['--verify-artifact'], {
+  cwd: resolvedSidecarDirectory,
+  env: {
+    PATH: '/usr/bin:/bin',
+    PYTHONNOUSERSITE: '1',
+    PYTHONUTF8: '1'
+  },
+  timeout: 30000,
+  maxBuffer: 1024 * 1024
+})
+const artifact = JSON.parse(artifactCheck.stdout.trim().split('\n').at(-1))
+for (const distribution of [
+  'deepagents',
+  'langchain',
+  'langchain-core',
+  'langchain-openai',
+  'langgraph',
+  'langgraph-checkpoint-sqlite'
+]) {
+  if (!artifact.ok || typeof artifact.versions?.[distribution] !== 'string') {
+    throw new Error(`Sidecar artifact check failed for ${distribution}`)
+  }
 }
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'refora-sidecar-smoke-'))

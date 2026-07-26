@@ -153,7 +153,8 @@ never raise across the transport.
 | GET | `/ai/chat/threads` | required | `?workspaceId=` | `Thread[]` |
 | GET | `/ai/chat/threads/{threadId}/history` | required | — | `Message[]` |
 | GET | `/ai/chat/threads/{threadId}/traces` | required | — | `Trace[]` |
-| GET | `/ai/chat/threads/{threadId}/pending-interrupt` | required | — | `Interrupt\|null` |
+| GET | `/ai/chat/runs/{runId}` | required | — | `AgentRun` |
+| GET | `/ai/chat/runs/{runId}/pending-interrupt` | required | — | `Interrupt\|null` |
 | DELETE | `/ai/chat/threads/{threadId}` | required | — | `{ack:true}` |
 | PATCH | `/ai/chat/threads/{threadId}` | required | `{title:string}` | `Thread` |
 | GET | `/ai/chat/threads/{threadId}/memories` | required | — | `Memory[]` |
@@ -254,16 +255,14 @@ All events are JSON: `{event:"<name>", data:<...>}`.
 #### Agent / chat stream
 | Event | data |
 |---|---|
-| `ai.chat.token` | `{runId, threadId, delta:string}` |
-| `ai.chat.reasoning` | `{runId, threadId, delta:string}` |
-| `ai.chat.done` | `{runId, threadId, result, state}` |
-| `ai.chat.error` | `{runId, threadId, error:{code,message}}` |
-| `ai.chat.trace` | `{runId, name, parentIds[], data, tags[], metadata}` |
-| `ai.chat.interrupted` | `{runId, threadId}` |
-| `ai.chat.run-status` | `{runId, status:"running"\|"idle"\|"waiting"}` |
+| `ai.chat.token` | `{runId, threadId, stepId?, token:string}` |
+| `ai.chat.reasoning` | `{runId, threadId, stepId?, token:string}` |
+| `ai.chat.done` | `{runId, threadId, finalText:string}` |
+| `ai.chat.error` | `{runId, threadId, message:string, partialText?:string}` |
+| `ai.chat.trace` | `{runId, threadId, step:AgentTraceStep}` |
+| `ai.chat.interrupted` | `{runId, threadId, interrupt:AgentInterrupt}` |
+| `ai.chat.run-status` | `{runId, threadId, status:"queued"\|"running"\|"interrupted"\|"completed"\|"failed"\|"cancelled"}` |
 | `ai.chat.title-updated` | `{threadId, title}` |
-| `ai.chat.interrupt-request` | `{runId, question}` (server asks connector/UI to resolve tool approval) |
-| `ai.chat.interrupt-resolve` | `{runId, decision}` (connector/UI resolves; server-bound variant for completeness) |
 | `ai.summary.updated` | `{documentId, summaryId, delta}` |
 | `ai.summary.error` | `{documentId, error:{code,message}}` |
 | `ai.report.created` | `{reportId, workspaceId}` |
@@ -327,8 +326,10 @@ Server-side semantics:
 
 ---
 
-## `ProviderConfig` (per-request AI provider)
-Supplied on AI endpoints; never persisted by server:
+## Internal `ProviderConfig`
+The server assembles this from the selected persisted provider plus the
+request-only API key supplied by the Electron connector. Renderer requests
+must never send this object:
 ```
 {
   model: string,
@@ -342,25 +343,58 @@ Supplied on AI endpoints; never persisted by server:
 }
 ```
 
-## `AgentRequest` (POST /ai/chat/send)
+## `AgentTurnIntent` (`POST /ai/chat/send`)
 ```
 {
   runId: string,
-  threadId: string,
+  threadId?: string,
   workspaceId: string | null,
-  checkpointPath: string,
-  checkpointBefore: string | null,
-  provider: ProviderConfig,
-  systemPrompt: string,
-  messages?: object[],
-  decisions?: object[],
-  enabledToolNames: string[],
-  sandboxRoot: string | null,
-  memories: Record<string,string>,
-  includeResearchMemory: boolean,
-  recursionLimit: number
+  text: string,
+  providerId: string,
+  model?: string,
+  replaceLastExchange?: boolean,
+  replaceRunId?: string,
+  features?: {
+    deepThinking?: boolean,
+    reasoningEffort?: string
+  },
+  attachments?: Array<{ type: "document", docId: string }>
 }
 ```
+
+Checkpoint paths, provider credentials, prompts, messages, enabled tools,
+sandbox roots, memories, and recursion limits are server-owned fields and are
+rejected if supplied by a client.
+
+## Agent run and trace state
+
+`AgentRun.status` is one of `queued`, `running`, `interrupted`, `completed`,
+`failed`, or `cancelled`. HTTP run snapshots, WebSocket run-status events, the
+SQLite repository, and renderer types use these exact values.
+
+`AgentTraceStep.kind` is one of `llm`, `tool`, `reasoning`, `message`, `run`,
+`todo`, `subagent`, `approval`, or `checkpoint`. A trace step carries:
+
+```
+{
+  id, threadId, runId, kind, name, input, output, status,
+  startedAt, endedAt, seq,
+  inputTokens, outputTokens, totalTokens,
+  parentStepId, agentName, namespace, depth, checkpointId
+}
+```
+
+Trace status is one of `running`, `done`, `error`, `interrupted`, or
+`cancelled`. Streamed token and reasoning events carry the `stepId` of their
+owning trace when a model event supplies one.
+
+## Approval policy
+
+Read-only research tools and local Workspace mutations such as summaries,
+reports, adding documents, and connections run without approval in interactive
+mode. OCR, package installation, publishing, memory updates, and command
+execution require approval. Plan and discuss modes reject all consequential
+operations.
 
 ---
 

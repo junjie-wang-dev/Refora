@@ -8,9 +8,119 @@ from refora_server.agent.tools.registry import ToolGroup
 _TEXT = {"type": "string"}
 
 
+def _transaction(executor: Any, operation: Any) -> Any:
+    transaction = value(executor.repos, "transaction")
+    return transaction(operation) if callable(transaction) else operation()
+
+
 def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
-    return {"workspaceId": ws, "items": call(repo(executor.repos, "workspaceItems"), "list", ws), "connections": call(repo(executor.repos, "workspaceConnections"), "list", ws)}
+    reports = {
+        report["id"]: report
+        for report in call(repo(executor.repos, "aiReports"), "list", ws)
+    }
+    notes = {
+        note["id"]: note
+        for note in call(repo(executor.repos, "workspaceNotes"), "list", ws)
+    }
+    assets = {
+        asset["id"]: asset
+        for asset in call(repo(executor.repos, "workspaceAssets"), "list", ws)
+    }
+    context_items = []
+    for item in call(repo(executor.repos, "workspaceItems"), "list", ws):
+        context_item = {
+            "itemId": item["id"],
+            "kind": item["kind"],
+            "sortOrder": item["sortOrder"],
+        }
+        if item["kind"] == "document" and item.get("docId"):
+            document = call(
+                repo(executor.repos, "documents"), "get", item["docId"]
+            )
+            summary = call(
+                repo(executor.repos, "aiSummaries"),
+                "getSummary",
+                item["docId"],
+            )
+            context_item.update(
+                {
+                    "docId": item["docId"],
+                    "title": (
+                        document.get("title")
+                        or document.get("fileName")
+                        or item["docId"]
+                    )
+                    if document
+                    else item["docId"],
+                    "authors": document.get("authors") or "" if document else "",
+                    "year": document.get("year") or "" if document else "",
+                    "hasSummary": bool(summary and summary.get("content")),
+                    "unavailable": document is None,
+                }
+            )
+        elif item["kind"] == "report" and item.get("reportId"):
+            report = reports.get(item["reportId"])
+            context_item.update(
+                {
+                    "reportId": item["reportId"],
+                    "title": report.get("title") or item["reportId"]
+                    if report
+                    else item["reportId"],
+                    "sourceDocIds": report.get("sourceDocIds") or []
+                    if report
+                    else [],
+                    "unavailable": report is None,
+                }
+            )
+        elif item["kind"] == "note" and item.get("noteId"):
+            note = notes.get(item["noteId"])
+            context_item.update(
+                {
+                    "noteId": item["noteId"],
+                    "title": note.get("title") or item["noteId"]
+                    if note
+                    else item["noteId"],
+                    "noteType": note.get("noteType") if note else None,
+                    "unavailable": note is None,
+                }
+            )
+        elif item["kind"] == "asset" and item.get("assetId"):
+            asset = assets.get(item["assetId"])
+            context_item.update(
+                {
+                    "assetId": item["assetId"],
+                    "fileName": asset.get("fileName") or item["assetId"]
+                    if asset
+                    else item["assetId"],
+                    "mimeType": asset.get("mimeType") if asset else None,
+                    "previewKind": asset.get("previewKind") if asset else None,
+                    "fileMissing": asset.get("fileMissing", 1) if asset else 1,
+                    "unavailable": asset is None,
+                }
+            )
+        else:
+            context_item["unavailable"] = True
+        context_items.append(context_item)
+    connections = [
+        {
+            "connectionId": connection["id"],
+            "sourceItemId": connection["sourceItemId"],
+            "targetItemId": connection["targetItemId"],
+            "sourceAnchor": connection["sourceAnchor"],
+            "targetAnchor": connection["targetAnchor"],
+        }
+        for connection in call(
+            repo(executor.repos, "workspaceConnections"), "list", ws
+        )
+    ]
+    return {
+        "workspaceId": ws,
+        "itemCount": len(context_items),
+        "connectionCount": len(connections),
+        "items": context_items,
+        "connections": connections,
+    }
 
 
 def search_workspace_docs(executor: Any, args: dict[str, Any]) -> Any:
@@ -50,13 +160,48 @@ def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
 def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
     items = {item["id"] for item in call(repo(executor.repos, "workspaceItems"), "list", ws)}
-    created, errors = [], []
+    connections_repo = repo(executor.repos, "workspaceConnections")
+    existing = {
+        (connection["sourceItemId"], connection["targetItemId"])
+        for connection in call(connections_repo, "list", ws)
+    }
+    requested = set()
+    valid, errors = [], []
     for connection in args.get("connections", []):
         source, target = connection.get("sourceItemId"), connection.get("targetItemId")
-        if not source or not target or source == target or source not in items or target not in items:
-            errors.append({"connection": connection, "message": "Invalid workspace connection"})
+        error = None
+        if not source or not target or source not in items or target not in items:
+            error = "Connection endpoint is not in the current workspace."
+        elif source == target:
+            error = "A card cannot connect to itself."
+        elif (source, target) in existing or (source, target) in requested:
+            error = "Connection already exists."
+        if error is not None:
+            errors.append(
+                {
+                    "sourceItemId": source,
+                    "targetItemId": target,
+                    "message": error,
+                }
+            )
             continue
-        created.append(call(repo(executor.repos, "workspaceConnections"), "create", ws, source, target, connection.get("sourceAnchor", "right"), connection.get("targetAnchor", "left")))
+        requested.add((source, target))
+        valid.append(connection)
+    created = _transaction(
+        executor,
+        lambda: [
+            call(
+                connections_repo,
+                "create",
+                ws,
+                connection["sourceItemId"],
+                connection["targetItemId"],
+                connection.get("sourceAnchor", "right"),
+                connection.get("targetAnchor", "left"),
+            )
+            for connection in valid
+        ],
+    )
     if created and callable(value(executor.deps, "workspace_changed")):
         call(executor.deps, "workspace_changed", ws, "other")
     return {"created": created, "errors": errors}
@@ -64,11 +209,48 @@ def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
 
 def generate_report(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
-    report = call(repo(executor.repos, "aiReports"), "create", ws, args["title"], args["contentMd"], ids(args.get("sourceDocIds")))
-    call(repo(executor.repos, "workspaceItems"), "add", ws, "report", [report["id"]])
+    workspace_doc_ids = {
+        item["docId"]
+        for item in call(repo(executor.repos, "workspaceItems"), "list", ws)
+        if item.get("kind") == "document" and item.get("docId")
+    }
+    source_doc_ids = [
+        document_id
+        for document_id in ids(args.get("sourceDocIds"))
+        if document_id in workspace_doc_ids
+    ]
+
+    def create() -> Any:
+        created = call(
+            repo(executor.repos, "aiReports"),
+            "create",
+            ws,
+            args["title"],
+            args["contentMd"],
+            source_doc_ids,
+            value(executor.deps, "model"),
+        )
+        call(
+            repo(executor.repos, "workspaceItems"),
+            "add",
+            ws,
+            "report",
+            [created["id"]],
+        )
+        return created
+
+    report = _transaction(executor, create)
+    if callable(value(executor.deps, "report_created")):
+        call(executor.deps, "report_created", report)
     if callable(value(executor.deps, "workspace_changed")):
         call(executor.deps, "workspace_changed", ws, "other")
-    return report
+    return {
+        "created": True,
+        "reportId": report["id"],
+        "title": report["title"],
+        "workspaceId": ws,
+        "sourceDocIds": report["sourceDocIds"],
+    }
 
 
 def list_workspace_assets(executor: Any, args: dict[str, Any]) -> Any:

@@ -37,6 +37,22 @@ def test_plan_mode_allows_read_tools():
     assert not decision.needs_user
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "request_summary",
+        "generate_report",
+        "add_docs_to_workspace",
+        "create_workspace_connections",
+    ],
+)
+def test_interactive_mode_allows_refora_workspace_writes(tool_name):
+    decision = PermissionEngine().evaluate(tool_name, {})
+
+    assert decision.allowed
+    assert not decision.needs_user
+
+
 def test_shell_operators_do_not_bypass_command_allowlist():
     engine = PermissionEngine(allowed_commands=["python -m pytest"])
 
@@ -81,6 +97,13 @@ def test_classify_refora_tools():
         "list_workspace_notes": RiskClass.READ,
         "open_paper": RiskClass.READ,
         "write_todos": RiskClass.READ,
+        "ls": RiskClass.READ,
+        "read_file": RiskClass.READ,
+        "glob": RiskClass.READ,
+        "grep": RiskClass.READ,
+        "task": RiskClass.READ,
+        "write_file": RiskClass.WRITE_LOCAL,
+        "edit_file": RiskClass.WRITE_LOCAL,
         "request_summary": RiskClass.WRITE_LOCAL,
         "generate_report": RiskClass.WRITE_LOCAL,
         "add_docs_to_workspace": RiskClass.WRITE_LOCAL,
@@ -93,3 +116,14 @@ def test_classify_refora_tools():
     }
 
     assert {tool_name: classify(tool_name) for tool_name in expected} == expected
+
+
+@pytest.mark.parametrize("tool_name", ["write_file", "edit_file"])
+def test_interactive_mode_allows_sandbox_filesystem_writes(tool_name):
+    decision = PermissionEngine(sandbox_root="/tmp/refora-sandbox").evaluate(
+        tool_name,
+        {"file_path": "/outputs/report.md"},
+    )
+
+    assert decision.allowed
+    assert not decision.needs_user

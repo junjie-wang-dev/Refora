@@ -101,19 +101,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     aiReportCreatedCb[0] = (report: AiReport) => {
       if (report.workspaceId === get().activeWorkspaceId) {
-        set((s) => ({
-          reports: s.reports.some((current) => current.id === report.id)
-            ? s.reports.map((current) => current.id === report.id ? report : current)
-            : [...s.reports, report]
-        }))
-        void get().fetchItems()
+        void Promise.all([get().fetchReports(), get().fetchItems()])
       }
     }
     api.events.onAiReportCreated(aiReportCreatedCb[0])
 
     workspaceItemsChangedCb[0] = (payload: WorkspaceItemsChangedEvent) => {
       if (payload.workspaceId === get().activeWorkspaceId) {
-        void get().fetchItems()
+        void Promise.all([
+          get().fetchItems(),
+          get().fetchReports(),
+          get().fetchNotes(),
+          get().fetchAssets()
+        ])
       }
     }
     api.events.onWorkspaceItemsChanged(workspaceItemsChangedCb[0])

@@ -3,6 +3,7 @@ import { IpcChannel } from '../shared/ipc-channels'
 import type {
   AgentInterrupt,
   AgentResumeRequest,
+  AgentRun,
   AgentTraceStep,
   AiProvider,
   AiProviderInput,
@@ -103,6 +104,8 @@ const SINGLE_SUBSCRIBER_CHANNELS = new Set([
   'ai:chat:done',
   'ai:chat:error',
   'ai:chat:trace',
+  'ai:chat:interrupted',
+  'ai:chat:runStatus',
   'ai:chat:titleUpdated'
 ])
 
@@ -345,7 +348,8 @@ const api: ReforaApi = {
       invoke<ChatThread[]>(IpcChannel.AiChatThreads, workspaceId),
     chatTraces: (threadId: string) =>
       invoke<AgentTraceStep[]>(IpcChannel.AiChatTraces, threadId),
-    chatCancel: (threadId: string) => invoke<void>(IpcChannel.AiChatCancel, threadId),
+    chatRun: (runId: string) => invoke<AgentRun>(IpcChannel.AiChatRun, runId),
+    chatCancel: (runId: string) => invoke<void>(IpcChannel.AiChatCancel, runId),
     chatResume: (req: AgentResumeRequest) => invoke<void>(IpcChannel.AiChatResume, req),
     chatPendingInterrupt: (runId: string) =>
       invoke<AgentInterrupt | null>(IpcChannel.AiChatPendingInterrupt, runId),

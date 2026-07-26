@@ -15,7 +15,13 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     db = object()
     open_database = Mock(return_value=(db, object()))
     close_database = Mock()
-    repos = {"documents": object()}
+    reconcile_runs = Mock()
+    reconcile_traces = Mock()
+    repos = {
+        "documents": object(),
+        "agentRuns": {"reconcileRunning": reconcile_runs},
+        "agentTraces": {"reconcileRunning": reconcile_traces},
+    }
     create_repositories = Mock(return_value=repos)
     events = Mock(flush=AsyncMock())
     connector = Mock(cancel_pending=AsyncMock())
@@ -48,6 +54,12 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     events.flush.assert_awaited_once()
     runtime["destroy"].assert_awaited_once()
     close_database.assert_called_once_with(db)
+    reconcile_runs.assert_called_once_with(
+        "Python sidecar restarted before run completion"
+    )
+    reconcile_traces.assert_called_once_with(
+        "Python sidecar restarted before trace completion"
+    )
 
 
 async def test_lifespan_closes_runner_owned_database(monkeypatch) -> None:
@@ -282,7 +294,15 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             "prepare_paper_ocr",
         }
         assert agent_factory.call_args.kwargs["skills"] is None
-        assert agent_factory.call_args.kwargs["subagents"] == []
+        assert {
+            subagent["name"]
+            for subagent in agent_factory.call_args.kwargs["subagents"]
+        } == {
+            "general-purpose",
+            "researcher",
+            "analyst",
+            "data-analyst",
+        }
 
     runtime["destroy"].assert_awaited_once()
 

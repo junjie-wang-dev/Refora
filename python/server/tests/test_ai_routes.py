@@ -198,7 +198,15 @@ class FakeRepos:
             "threadId": "thread-1",
             "providerId": "provider-1",
             "modelId": "model-1",
+            "status": "interrupted",
             "checkpointBefore": None,
+            "checkpointAfter": "checkpoint-1",
+            "replacesRunId": None,
+            "userMessageId": "message-1",
+            "assistantMessageId": None,
+            "startedAt": 1,
+            "endedAt": 2,
+            "error": None,
         }
 
     def pending_interrupt(self, run_id: str) -> dict[str, Any] | None:
@@ -421,6 +429,7 @@ def test_chat_history_traces_interrupt_threads_and_memories() -> None:
     threads = request(client, "GET", "/ai/chat/threads", params={"workspaceId": "workspace-1"})
     history = request(client, "GET", "/ai/chat/threads/thread-1/history")
     traces = request(client, "GET", "/ai/chat/threads/thread-1/traces")
+    run = request(client, "GET", "/ai/chat/runs/run-1")
     interrupt = request(client, "GET", "/ai/chat/runs/run-1/pending-interrupt")
     renamed = request(client, "PATCH", "/ai/chat/threads/thread-1", json={"title": "Renamed"})
     memories = request(client, "GET", "/ai/memories", params={"workspaceId": "workspace-1"})
@@ -441,6 +450,7 @@ def test_chat_history_traces_interrupt_threads_and_memories() -> None:
     assert threads.json()["data"][0]["id"] == "thread-1"
     assert history.json()["data"][0]["content"] == "Hello"
     assert traces.json()["data"][0]["id"] == "trace-1"
+    assert run.json()["data"]["status"] == "interrupted"
     assert interrupt.json()["data"]["id"] == "interrupt-1"
     assert renamed.json()["data"]["title"] == "Renamed"
     assert memories.json()["data"][0]["content"] == "Before"
@@ -510,3 +520,24 @@ def test_chat_intent_rejects_internal_runtime_fields_and_returns_python_thread_i
     assert runtime.sent[-1]["enabledToolNames"]
     assert rejected.status_code == 400
     assert rejected.json()["error"]["code"] == "validation"
+
+
+def test_existing_thread_allows_provider_switch_for_new_run() -> None:
+    client, repos, _, _, runtime = make_client()
+
+    response = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-provider-switch",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Use another provider",
+            "providerId": "provider-2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.sent[-1]["providerId"] == "provider-2"
+    assert repos.threads["thread-1"]["providerId"] == "provider-1"

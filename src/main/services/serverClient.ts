@@ -5,6 +5,7 @@ import type { IpcError, Result } from '../../shared/ipc-types'
 import type {
   AiProvider,
   AiProviderInput,
+  AgentRun,
   AgentTurnIntent,
   AiReport,
   AiSummary,
@@ -393,6 +394,7 @@ export interface ServerHttp {
   aiChatThreads(query?: ChatThreadsQuery): Promise<ChatThread[]>
   aiChatHistory(threadId: string): Promise<ChatMessage[]>
   aiChatTraces(threadId: string): Promise<unknown[]>
+  aiChatRun(runId: string): Promise<AgentRun>
   aiChatPendingInterrupt(runId: string): Promise<unknown | null>
   aiChatDeleteThread(threadId: string): Promise<{ ack: boolean }>
   aiChatRenameThread(threadId: string, payload: RenameThreadPayload): Promise<ChatThread>
@@ -637,6 +639,7 @@ export function createServerClient(
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
     aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${id}/history`),
     aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${id}/traces`),
+    aiChatRun: (id) => get<AgentRun>(`/ai/chat/runs/${id}`),
     aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/runs/${id}/pending-interrupt`),
     aiChatDeleteThread: (id) => del<{ ack: boolean }>(`/ai/chat/threads/${id}`),
     aiChatRenameThread: (id, payload) => patch<ChatThread>(`/ai/chat/threads/${id}`, payload),

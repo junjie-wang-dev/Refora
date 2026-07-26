@@ -377,6 +377,19 @@ def create_ai_router(deps: Any) -> APIRouter:
             lambda: (_thread_scope(repos, thread_id), _value(_value(repos, "agentTraces"), "listByThread")(thread_id))[1],
         )
 
+    @router.get("/ai/chat/runs/{run_id}")
+    async def get_run(
+        run_id: str,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        def action() -> dict[str, Any]:
+            run = _value(_value(repos, "agentRuns"), "get")(run_id)
+            if run is None:
+                raise RouteError("not_found", f"run not found: {run_id}", 404)
+            return run
+
+        return await execute(authorization, action)
+
     @router.get("/ai/chat/runs/{run_id}/pending-interrupt")
     async def get_pending_interrupt(
         run_id: str,

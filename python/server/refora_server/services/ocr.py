@@ -465,6 +465,80 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
         except (OSError, UnicodeError) as error:
             raise RepoError("file_missing", "OCR markdown file is unavailable") from error
 
+    async def wait_for_job(job_id: str) -> dict[str, Any]:
+        current = document_ocr["getJob"](job_id)
+        if current is None:
+            raise RepoError("not_found", f"OCR job not found: {job_id}")
+        if current["status"] not in ACTIVE_STATUSES:
+            if current["status"] != "succeeded":
+                raise RuntimeError(
+                    current.get("errorMessage")
+                    or f"OCR job ended with status {current['status']}"
+                )
+            return current
+        running_task = state["running_task"]
+        if not running_task or running_task["jobId"] != job_id:
+            raise RuntimeError("OCR job is not running in this process")
+        await asyncio.shield(running_task["task"])
+        completed = document_ocr["getJob"](job_id)
+        if completed is None:
+            raise RepoError("not_found", f"OCR job not found: {job_id}")
+        if completed["status"] != "succeeded":
+            raise RuntimeError(
+                completed.get("errorMessage")
+                or f"OCR job ended with status {completed['status']}"
+            )
+        return completed
+
+    async def read_cached_for_agent(
+        document_id: str,
+    ) -> dict[str, Any] | None:
+        document = documents["get"](document_id)
+        if document is None:
+            raise RepoError("not_found", f"Document not found: {document_id}")
+        result = document_ocr["getResult"](document_id, document.get("fileHash"))
+        if result is None or result.get("stale"):
+            return None
+        return {
+            "result": result,
+            "markdown": await read_markdown(document_id, result["resultKey"]),
+        }
+
+    async def prepare_for_agent(document_id: str) -> dict[str, Any]:
+        cached = await read_cached_for_agent(document_id)
+        if cached is not None and cached["result"].get("profile") in {
+            "balanced",
+            "quality",
+        }:
+            return cached
+        active_job = document_ocr["getActiveJob"](document_id)
+        started_by_agent = False
+        if active_job is not None and active_job.get("profile") not in {
+            "balanced",
+            "quality",
+        }:
+            raise RepoError(
+                "busy",
+                f"MinerU is already processing this document with the {active_job['profile']} profile",
+            )
+        job_id = active_job["id"] if active_job is not None else None
+        if job_id is None:
+            job_id = await start_ocr(document_id, "balanced")
+            started_by_agent = True
+        try:
+            await wait_for_job(job_id)
+        except asyncio.CancelledError:
+            if started_by_agent:
+                await asyncio.shield(cancel_ocr(job_id))
+            raise
+        cached = await read_cached_for_agent(document_id)
+        if cached is None or cached["result"].get("profile") not in {
+            "balanced",
+            "quality",
+        }:
+            raise RuntimeError("Balanced OCR result is unavailable")
+        return cached
+
     async def prepare_document_delete(document_id: str) -> None:
         active = document_ocr["getActiveJob"](document_id)
         if active is not None:
@@ -489,6 +563,8 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
         "getOcrState": get_ocr_state,
         "getMarkdown": get_markdown,
         "readMarkdown": read_markdown,
+        "readCachedForAgent": read_cached_for_agent,
+        "prepareForAgent": prepare_for_agent,
         "prepareDocumentDelete": prepare_document_delete,
         "stopWorker": stop_worker,
         "destroy": destroy,

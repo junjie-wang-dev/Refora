@@ -9,25 +9,46 @@ from deepagents import (
     create_deep_agent,
     register_harness_profile,
 )
-from deepagents.backends import StateBackend
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
 
 from refora_server.agent.permissions import PermissionEngine
+from refora_server.agent.risk import RiskClass, classify
+from refora_server.agent.sandbox_backend import create_refora_filesystem_backend
 from refora_server.services.agent_memory import curated_memory_context
 
 
-_DISABLED_BUILTIN_TOOLS = frozenset(
-    {"task", "ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute"}
+_DISABLED_BUILTIN_TOOLS = frozenset({"execute"})
+_SUBAGENT_PROFILES = (
+    (
+        "general-purpose",
+        "Handle broad delegated research and synthesis tasks.",
+        "Complete the delegated task using read-only Refora tools and sandbox files.",
+    ),
+    (
+        "researcher",
+        "Find and evaluate relevant academic and Web evidence.",
+        "Research the delegated question, compare sources, and report evidence with identifiers.",
+    ),
+    (
+        "analyst",
+        "Analyze papers, claims, methods, and structured evidence.",
+        "Analyze the delegated material carefully and return a concise supported synthesis.",
+    ),
+    (
+        "data-analyst",
+        "Inspect and transform research data stored in sandbox files.",
+        "Analyze sandbox data with available file tools and return methods, findings, and limitations.",
+    ),
 )
 
 register_harness_profile(
     "openai",
     HarnessProfile(
         excluded_tools=_DISABLED_BUILTIN_TOOLS,
-        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=True),
     ),
 )
 
@@ -84,9 +105,12 @@ class AgentProviderConfig(TypedDict, total=False):
 
 
 def create_model(config: dict[str, Any]) -> ChatOpenAI:
+    api_key = config.get("apiKey")
+    if not isinstance(api_key, str) or not api_key:
+        api_key = "local-provider"
     options: dict[str, Any] = {
         "model": config["model"],
-        "api_key": config["apiKey"],
+        "api_key": api_key,
         "base_url": config["baseUrl"],
         "streaming": config.get("streaming", True) is not False,
         "use_responses_api": config.get("useResponsesApi", False),
@@ -103,6 +127,29 @@ def create_model(config: dict[str, Any]) -> ChatOpenAI:
 
 def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
     permission_engine = PermissionEngine(sandbox_root=request.get("sandboxRoot"))
+    backend = create_refora_filesystem_backend(request["sandboxRoot"])
+    refora_tools = [tool for tool in tools if tool.name != "write_todos"]
+    read_tools = [
+        tool for tool in refora_tools if classify(tool.name) is RiskClass.READ
+    ]
+    filesystem_permissions = [
+        FilesystemPermission(
+            operations=["read", "write"],
+            paths=["/**"],
+            mode="allow",
+        )
+    ]
+    subagents = [
+        {
+            "name": name,
+            "description": description,
+            "system_prompt": prompt,
+            "tools": read_tools,
+            "permissions": filesystem_permissions,
+            "interrupt_on": {},
+        }
+        for name, description, prompt in _SUBAGENT_PROFILES
+    ]
     memory_context = curated_memory_context(
         request.get("memories"),
         include_research=request.get("includeResearchMemory") is True,
@@ -129,22 +176,16 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
             "description": f"Tool execution requires approval: {tool.name}",
             "when": permission_required(tool.name),
         }
-        for tool in tools
+        for tool in refora_tools
     }
     return create_deep_agent(
         model=model,
-        tools=tools,
+        tools=refora_tools,
         system_prompt=system_prompt or None,
-        backend=StateBackend(),
+        backend=backend,
         skills=None,
-        subagents=[],
-        permissions=[
-            FilesystemPermission(
-                operations=["read", "write"],
-                paths=["/**"],
-                mode="deny",
-            )
-        ],
+        subagents=subagents,
+        permissions=filesystem_permissions,
         middleware=[PermissionMiddleware(permission_engine)],
         interrupt_on=interrupt_on,
     )

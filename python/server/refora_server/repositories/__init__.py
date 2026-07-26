@@ -1,3 +1,6 @@
+import sqlite3
+import threading
+import uuid
 from typing import Any, Callable
 
 from refora_server.repositories.agent_interrupts import createAgentInterruptsRepository
@@ -36,6 +39,38 @@ class RepositoryDeps:
 def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str, Any]:
     if deps is None:
         deps = RepositoryDeps()
+    transaction_lock = threading.RLock()
+
+    def transaction(operation: Callable[[], Any]) -> Any:
+        with transaction_lock:
+            nested = bool(getattr(db, "in_transaction", False))
+            savepoint = f"refora_{uuid.uuid4().hex}" if nested else None
+            try:
+                if savepoint is None:
+                    db.execute("BEGIN IMMEDIATE")
+                else:
+                    db.execute(f"SAVEPOINT {savepoint}")
+                result = operation()
+                if savepoint is None:
+                    db.execute("COMMIT")
+                else:
+                    db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                return result
+            except BaseException:
+                if savepoint is None:
+                    if bool(getattr(db, "in_transaction", False)):
+                        db.execute("ROLLBACK")
+                else:
+                    try:
+                        db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    except sqlite3.Error:
+                        pass
+                    try:
+                        db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    except sqlite3.Error:
+                        pass
+                raise
+
     documents = createDocumentsRepository(
         db,
         {
@@ -64,6 +99,7 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     agentToolEffects = createAgentToolEffectsRepository(db)
     agentMemories = createAgentMemoriesRepository(db)
     return {
+        "transaction": transaction,
         "documents": documents,
         "categories": categories,
         "settings": settings,

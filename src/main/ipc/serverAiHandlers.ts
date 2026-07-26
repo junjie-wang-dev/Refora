@@ -3,6 +3,7 @@ import { IpcChannel } from '../../shared/ipc-channels'
 import type {
   AgentInterrupt,
   AgentResumeRequest,
+  AgentRun,
   AgentTraceStep,
   AiReport,
   AiSummary,
@@ -78,6 +79,8 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       asyncWrap(() => http.aiChatThreads(workspaceId === null ? {} : { workspaceId })),
     [IpcChannel.AiChatTraces]: (threadId: string): Promise<Result<AgentTraceStep[]>> =>
       asyncWrap(async () => (await http.aiChatTraces(threadId)) as AgentTraceStep[]),
+    [IpcChannel.AiChatRun]: (runId: string): Promise<Result<AgentRun>> =>
+      asyncWrap(() => http.aiChatRun(runId)),
     [IpcChannel.AiChatPendingInterrupt]: (runId: string): Promise<Result<AgentInterrupt | null>> =>
       asyncWrap(async () => (await http.aiChatPendingInterrupt(runId)) as AgentInterrupt | null),
     [IpcChannel.AiChatRenameThread]: (

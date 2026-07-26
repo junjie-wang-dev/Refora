@@ -115,6 +115,7 @@ export const IpcChannel = {
   AiChatHistory: 'ai:chat:history',
   AiChatThreads: 'ai:chat:threads',
   AiChatTraces: 'ai:chat:traces',
+  AiChatRun: 'ai:chat:run',
   AiChatCancel: 'ai:chat:cancel',
   AiChatResume: 'ai:chat:resume',
   AiChatPendingInterrupt: 'ai:chat:pendingInterrupt',

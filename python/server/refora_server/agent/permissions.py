@@ -11,6 +11,16 @@ from refora_server.agent.risk import RiskClass, RiskOverrides, classify, is_cons
 
 
 _SHELL_OPERATORS = (";", "&", "|", ">", "<", "`", "$(", "(", "\n", "\r")
+_INTERACTIVE_LOCAL_TOOLS = frozenset(
+    {
+        "request_summary",
+        "generate_report",
+        "add_docs_to_workspace",
+        "create_workspace_connections",
+        "write_file",
+        "edit_file",
+    }
+)
 
 
 def _has_shell_operators(command: str) -> bool:
@@ -71,6 +81,9 @@ class PermissionEngine:
 
         if risk is RiskClass.READ:
             return Decision(True, "low risk")
+
+        if risk is RiskClass.WRITE_LOCAL and tool_name in _INTERACTIVE_LOCAL_TOOLS:
+            return Decision(True, "local workspace write")
 
         if risk is RiskClass.EXEC:
             command = arguments.get("command")
