@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -296,3 +297,118 @@ def test_content_to_text_from_parts():
     from refora_server.services.ai_summary import _content_to_text
 
     assert _content_to_text([{"text": "a"}, {"text": "b"}]) == "ab"
+
+
+async def test_summarize_concurrency_limited_to_two(db):
+    for i in range(3):
+        insert_doc(db, id=f"doc-{i}")
+    repos = _repos(db)
+
+    import threading
+    import time
+
+    sync_lock = threading.Lock()
+    current = {"value": 0}
+    high_water = {"value": 0}
+
+    def gen(req):
+        if req.get("combined"):
+            return json.dumps({"core": "core", "keyPoints": []})
+        return "chunk summary"
+
+    def tracked_gen(req):
+        with sync_lock:
+            current["value"] += 1
+            high_water["value"] = max(high_water["value"], current["value"])
+        time.sleep(0.05)
+        with sync_lock:
+            current["value"] -= 1
+        return gen(req)
+
+    deps = {"generate_summary": tracked_gen}
+    svc = createAiSummaryService(repos, deps)
+
+    tasks = [
+        asyncio.ensure_future(svc["summarize"](f"doc-{i}", _provider(text="document text body.")))
+        for i in range(3)
+    ]
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+
+    assert high_water["value"] <= 2
+    for i in range(3):
+        summary = repos["aiSummaries"]["getSummary"](f"doc-{i}")
+        assert summary is not None
+        assert summary["content"]["core"] == "core"
+
+
+async def test_summarize_third_job_waits_for_slot(db):
+    for i in range(3):
+        insert_doc(db, id=f"doc-{i}")
+    repos = _repos(db)
+
+    import threading
+    import time
+
+    started = {"value": 0}
+    finished = {"value": 0}
+    proceed = {"value": False}
+    sync_lock = threading.Lock()
+
+    def gen(req):
+        if req.get("combined"):
+            return json.dumps({"core": "core", "keyPoints": []})
+        return "chunk summary"
+
+    def blocked_gen(req):
+        with sync_lock:
+            started["value"] += 1
+        while not proceed["value"]:
+            time.sleep(0.01)
+        with sync_lock:
+            finished["value"] += 1
+        return gen(req)
+
+    deps = {"generate_summary": blocked_gen}
+    svc = createAiSummaryService(repos, deps)
+
+    tasks = [
+        asyncio.ensure_future(svc["summarize"](f"doc-{i}", _provider(text="document text body.")))
+        for i in range(3)
+    ]
+    await asyncio.sleep(0.2)
+    assert started["value"] == 2
+    assert finished["value"] == 0
+    proceed["value"] = True
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+    for i in range(3):
+        summary = repos["aiSummaries"]["getSummary"](f"doc-{i}")
+        assert summary is not None
+        assert summary["content"]["core"] == "core"
+
+
+def test_summary_chunk_prompt_carries_word_limit():
+    from refora_server.server.lifespan import _summary_prompt
+
+    prompt = _summary_prompt("excerpt text here", None)
+    assert "60 words" in prompt
+    assert "two essential facts" in prompt
+    assert "Extracted PDF text:\nexcerpt text here" in prompt
+
+
+def test_summary_final_prompt_carries_constraints():
+    from refora_server.server.lifespan import _summary_prompt
+
+    prompt = _summary_prompt(None, "combined notes here")
+    assert "3 to 5" in prompt
+    assert "20 words" in prompt
+    assert "primary language" in prompt
+    assert '"core"' in prompt
+    assert '"keyPoints"' in prompt
+    assert "Extracted PDF section notes:\ncombined notes here" in prompt
+
+
+def test_summary_prompt_raises_without_input():
+    from refora_server.server.lifespan import _summary_prompt
+
+    with pytest.raises(RuntimeError):
+        _summary_prompt(None, None)

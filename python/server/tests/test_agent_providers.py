@@ -413,3 +413,90 @@ def test_real_deep_agent_files_persist_and_cannot_escape_backend(tmp_path) -> No
     assert "approved directory" in tool_messages[1].content
     second = ReforaFilesystemBackend(root)
     assert second.read("/outputs/report.md").file_data["content"] == "persisted"
+
+
+def _make_streaming_model() -> Any:
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
+        model="gpt-4o",
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        streaming=True,
+    )
+
+
+def test_create_model_patches_streaming_role_normalizer() -> None:
+    model = providers.create_model(
+        {
+            "model": "gpt-4o",
+            "baseUrl": "https://example.test/v1",
+            "apiKey": "test-key",
+            "streaming": True,
+        }
+    )
+    assert callable(getattr(model, "_convert_chunk_to_generation_chunk", None))
+
+
+def test_streaming_role_patch_injects_assistant_when_role_missing() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    chunk = {"choices": [{"delta": {"content": "hello"}, "index": 0, "finish_reason": None}]}
+    generation = model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert generation is not None
+    assert isinstance(generation.message, AIMessageChunk)
+    assert generation.message.content == "hello"
+
+
+def test_streaming_role_patch_mutates_delta_to_assistant() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    delta = {"content": "world"}
+    chunk = {"choices": [{"delta": delta, "index": 0, "finish_reason": None}]}
+    model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert delta.get("role") == "assistant"
+
+
+def test_streaming_role_patch_preserves_explicit_role() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    delta = {"role": "assistant", "content": "keep"}
+    chunk = {"choices": [{"delta": delta, "index": 0, "finish_reason": None}]}
+    generation = model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert generation is not None
+    assert isinstance(generation.message, AIMessageChunk)
+    assert delta["role"] == "assistant"
+
+
+def test_streaming_role_patch_handles_chunk_without_choices() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    chunk = {"choices": []}
+    generation = model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert generation is not None
+
+
+def test_normalize_streaming_roles_safe_on_missing_method() -> None:
+    class NoConvert:
+        pass
+
+    target = NoConvert()
+    result = providers._normalize_compatible_streaming_roles(target)
+    assert result is target
+    assert not hasattr(target, "_convert_chunk_to_generation_chunk")

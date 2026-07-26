@@ -185,6 +185,28 @@ def _unavailable_agent_capability(*_args: Any, **_kwargs: Any) -> dict[str, str]
     }
 
 
+def _summary_prompt(text: str | None, combined: str | None) -> str:
+    if isinstance(text, str):
+        return (
+            "You are a research assistant reading text extracted from a PDF. "
+            "Capture at most two essential facts from this excerpt in no more than "
+            "60 words total. Be concise and factual; do not write a long "
+            "interpretation.\n\n"
+            f"Extracted PDF text:\n{text}"
+        )
+    if isinstance(combined, str):
+        return (
+            "You are a research assistant. Create a brief factual overview from the "
+            "extracted PDF section notes below. Respond in the paper's primary "
+            "language with ONLY a JSON object containing exactly two fields: "
+            '"core" (one or two short sentences, at most 80 words) and "keyPoints" '
+            "(an array of 3 to 5 concise strings, each at most 20 words). Do not add "
+            "methods, contribution, analysis, markdown, or commentary.\n\n"
+            f"Extracted PDF section notes:\n{combined}"
+        )
+    raise RuntimeError("AI summary input is unavailable")
+
+
 def create_lifespan(
     db_path: str,
     library_folder: str,
@@ -424,22 +446,7 @@ def create_lifespan(
             provider = payload.get("provider")
             if not isinstance(provider, dict):
                 raise RuntimeError("AI summary provider is unavailable")
-            text = payload.get("text")
-            combined = payload.get("combined")
-            if isinstance(text, str):
-                prompt = (
-                    "Summarize the following paper excerpt for a literature manager. "
-                    "Preserve concrete findings, methods, and limitations.\n\n"
-                    f"{text}"
-                )
-            elif isinstance(combined, str):
-                prompt = (
-                    "Combine the following excerpt summaries into JSON with exactly the keys "
-                    "core (string) and keyPoints (array of strings).\n\n"
-                    f"{combined}"
-                )
-            else:
-                raise RuntimeError("AI summary input is unavailable")
+            prompt = _summary_prompt(payload.get("text"), payload.get("combined"))
             response = create_model(provider).invoke(
                 [{"role": "user", "content": prompt}]
             )
