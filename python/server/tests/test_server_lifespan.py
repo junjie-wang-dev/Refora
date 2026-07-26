@@ -102,8 +102,8 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
     monkeypatch.setattr("refora_server.server.lifespan.createWorkspacesService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAgentRuntime", runtime_factory)
     monkeypatch.setattr("refora_server.server.lifespan.create_agent_tools", tool_factory)
-    monkeypatch.setattr("refora_server.server.lifespan.ChatOpenAI", model_factory)
-    monkeypatch.setattr("refora_server.server.lifespan.create_deep_agent", agent_factory)
+    monkeypatch.setattr("refora_server.agent.providers.ChatOpenAI", model_factory)
+    monkeypatch.setattr("refora_server.agent.providers.create_deep_agent", agent_factory)
 
     app = FastAPI(lifespan=create_lifespan("/tmp/refora.db", "/tmp/library", db))
     async with app.router.lifespan_context(app):

@@ -7,11 +7,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from deepagents import create_deep_agent
-from deepagents.backends import StateBackend
 from fastapi import FastAPI
-from langchain_openai import ChatOpenAI
 
+from refora_server.agent.providers import create_agent, create_model
 from refora_server.db.connection import close_database, get_search_mode, open_database
 from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
@@ -131,39 +129,6 @@ def _unavailable_ocr_service(reason: str) -> dict[str, Any]:
         "stopWorker": stop_worker,
         "destroy": destroy,
     }
-
-
-def _create_model(provider: dict[str, Any]) -> ChatOpenAI:
-    options: dict[str, Any] = {
-        "model": provider["model"],
-        "api_key": provider["apiKey"],
-        "base_url": provider["baseUrl"],
-        "streaming": True,
-        "use_responses_api": provider.get("useResponsesApi", False),
-        "model_kwargs": dict(provider.get("modelKwargs") or {}),
-    }
-    if provider.get("temperature") is not None:
-        options["temperature"] = provider["temperature"]
-    if provider.get("maxTokens") is not None:
-        options["max_completion_tokens"] = provider["maxTokens"]
-    if isinstance(provider.get("reasoning"), dict):
-        options["reasoning"] = provider["reasoning"]
-    return ChatOpenAI(**options)
-
-
-def _create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
-    return create_deep_agent(
-        model=model,
-        tools=tools,
-        system_prompt=request.get("systemPrompt") or None,
-        backend=StateBackend(),
-        interrupt_on={
-            "prepare_paper_ocr": True,
-            "publish_workspace_artifacts": True,
-            "install_runtime_packages": True,
-            "propose_workspace_memory_update": True,
-        },
-    )
 
 
 def _unavailable_agent_capability(*_args: Any, **_kwargs: Any) -> Any:
@@ -303,8 +268,8 @@ def create_lifespan(
                 "emit": events.broadcast,
                 "connector": connector,
                 "createTools": create_tools,
-                "createModel": _create_model,
-                "createAgent": _create_agent,
+                "createModel": create_model,
+                "createAgent": create_agent,
                 "generateTitle": services["threadTitle"].get("generateThreadTitle"),
             },
         )
