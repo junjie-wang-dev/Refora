@@ -686,90 +686,299 @@ def convert_arxiv_html_to_markdown(html: str, source_url: str) -> dict[str, Any]
     }
 
 
+_BLOCK_SKIP_TAGS = (
+    "script", "style", "nav", "form", "button", "input", "textarea",
+    "select", "noscript", "iframe", "object", "embed", "svg",
+)
+
+_TABLE_CELL_NEWLINE = re.compile(r"\s*\n\s*")
+
+
 def _turndown(root: Tag) -> str:
-    lines = _render_node(root, indent=0)
+    markdown = _render_node(root, indent=0)
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+    return markdown.strip()
+
+
+def _render_inline(node: Any) -> str:
+    from bs4 import NavigableString, Tag
+
+    if isinstance(node, NavigableString):
+        return re.sub(r"\s+", " ", str(node))
+    if not isinstance(node, Tag):
+        return ""
+    name = node.name.lower() if node.name else ""
+    if name == "br":
+        return "\n"
+    if name in _BLOCK_SKIP_TAGS:
+        return ""
+    if name == "img":
+        src = node.get("src") or ""
+        alt = (node.get("alt") or node.get("title") or "").strip()
+        return f"![{alt}]({src})" if src else ""
+    content = "".join(_render_inline(child) for child in node.children)
+    content = content.strip()
+    if not content:
+        return ""
+    if name == "a":
+        href = node.get("href") or ""
+        return f"[{content}]({href})" if href else content
+    if name in ("strong", "b"):
+        return f"**{content}**"
+    if name in ("em", "i"):
+        return f"*{content}*"
+    if name == "code":
+        return f"`{content}`"
+    if name == "sub":
+        return f"~{content}~"
+    if name == "sup":
+        return f"^{content}^"
+    return content
+
+
+def _render_list(node: Tag, ordered: bool, indent: int) -> str:
+    from bs4 import NavigableString, Tag
+
+    lines: list[str] = []
+    index = 0
+    for li in node.children:
+        if not isinstance(li, Tag) or li.name.lower() != "li":
+            continue
+        index += 1
+        marker = f"{index}. " if ordered else "- "
+        prefix = " " * indent + marker
+        block_parts: list[str] = []
+        inline_text_parts: list[str] = []
+        nested_lists: list[Tag] = []
+
+        for sub in li.children:
+            if isinstance(sub, NavigableString):
+                rendered = _render_inline(sub)
+                if rendered.strip():
+                    inline_text_parts.append(rendered)
+                continue
+            if not isinstance(sub, Tag):
+                continue
+            sub_name = sub.name.lower()
+            if sub_name in ("ul", "ol"):
+                nested_lists.append(sub)
+                continue
+            if sub_name in ("p", "div"):
+                text = _render_inline(sub).strip()
+                if text:
+                    block_parts.append(text)
+                continue
+            rendered = _render_inline(sub)
+            if rendered.strip():
+                inline_text_parts.append(rendered)
+
+        inline_text = re.sub(r"\s+", " ", " ".join(inline_text_parts)).strip()
+        if not block_parts:
+            lead = inline_text
+        else:
+            lead = " ".join([inline_text, *block_parts]).strip()
+
+        if lead:
+            lines.append(f"{prefix}{lead}")
+
+        for sub in nested_lists:
+            nested = _render_list(sub, sub.name.lower() == "ol", indent + len(marker))
+            if nested:
+                lines.append(nested)
+
     return "\n".join(lines)
 
 
-def _render_node(node: Any, indent: int) -> list[str]:
+def _render_table_cell(cell: Tag) -> str:
+    text = _render_inline(cell).strip()
+    text = _TABLE_CELL_NEWLINE.sub(" ", text)
+    return text.replace("|", "\\|")
+
+
+def _render_table(node: Tag) -> str:
+    from bs4 import Tag
+
+    header_cells: list[str] = []
+    rows: list[list[str]] = []
+
+    def collect_rows(parent: Tag) -> list[Tag]:
+        return [child for child in parent.children if isinstance(child, Tag) and child.name.lower() == "tr"]
+
+    thead = node.find("thead", recursive=False)
+    tbody_nodes = node.find_all("tbody", recursive=False)
+
+    header_row: Optional[Tag] = None
+    if thead is not None:
+        trs = collect_rows(thead)
+        if trs:
+            header_row = trs[0]
+
+    body_rows: list[Tag] = []
+    if tbody_nodes:
+        for tbody in tbody_nodes:
+            body_rows.extend(collect_rows(tbody))
+
+    if header_row is None and not body_rows:
+        all_rows = collect_rows(node)
+        if not all_rows:
+            return ""
+        header_row = all_rows[0]
+        body_rows = all_rows[1:]
+
+    if header_row is not None:
+        for cell in header_row.children:
+            if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                header_cells.append(_render_table_cell(cell))
+
+    body_rows = [tr for tr in body_rows if any(
+        isinstance(c, Tag) and c.name.lower() in ("th", "td") for c in tr.children
+    )]
+
+    if header_cells:
+        for tr in body_rows:
+            row_cells: list[str] = []
+            for cell in tr.children:
+                if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                    row_cells.append(_render_table_cell(cell))
+            if row_cells:
+                while len(row_cells) < len(header_cells):
+                    row_cells.append("")
+                rows.append(row_cells[: len(header_cells)])
+    else:
+        for tr in body_rows:
+            row_cells = []
+            for cell in tr.children:
+                if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                    row_cells.append(_render_table_cell(cell))
+            if row_cells:
+                rows.append(row_cells)
+
+    if not header_cells and not rows:
+        return ""
+
+    if not header_cells:
+        header_cells = rows[0] if rows else []
+        rows = rows[1:] if rows else []
+
+    width = max(len(header_cells), *(len(r) for r in rows)) if rows else len(header_cells)
+    while len(header_cells) < width:
+        header_cells.append("")
+    rows = [(r + [""] * (width - len(r)))[:width] for r in rows]
+
+    lines: list[str] = []
+    lines.append("| " + " | ".join(header_cells) + " |")
+    lines.append("| " + " | ".join("---" for _ in range(width)) + " |")
+    for row in rows:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+def _render_node(node: Any, indent: int) -> str:
     from bs4 import NavigableString, Tag
 
-    out: list[str] = []
+    parts: list[str] = []
     for child in node.children:
         if isinstance(child, NavigableString):
             text = str(child)
             if text.strip():
-                out.append(text.strip())
+                parts.append(text.strip())
             continue
         if not isinstance(child, Tag):
             continue
         name = child.name.lower() if child.name else ""
-        if name == "svg":
-            continue
-        if name in ("script", "style", "nav", "form", "button", "input", "textarea", "select", "noscript", "iframe", "object", "embed"):
+        if name in _BLOCK_SKIP_TAGS:
             continue
         if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
             level = int(name[1])
-            text = re.sub(r"\s+", " ", child.get_text()).strip()
+            text = _render_inline(child).strip()
             if text:
-                out.append(f"\n\n{'#' * level} {text}\n\n")
+                parts.append(f"\n\n{'#' * level} {text}\n\n")
             continue
-        if name in ("p", "section", "div", "article", "main", "figure"):
+        if name == "p":
+            text = _render_inline(child).strip()
+            if text:
+                parts.append("\n\n" + text + "\n\n")
+            continue
+        if name in ("section", "div", "article", "main", "figure"):
             inner = _render_node(child, indent)
-            if inner:
-                out.append("\n\n" + "\n".join(inner) + "\n\n")
+            if inner.strip():
+                parts.append("\n\n" + inner + "\n\n")
             continue
         if name in ("ul", "ol"):
-            items = []
-            for li in child.find_all("li", recursive=False):
-                text = re.sub(r"\s+", " ", li.get_text()).strip()
-                if text:
-                    items.append(f"- {text}")
-            if items:
-                out.append("\n\n" + "\n".join(items) + "\n\n")
+            rendered = _render_list(child, name == "ol", indent)
+            if rendered.strip():
+                parts.append("\n\n" + rendered + "\n\n")
             continue
         if name == "pre":
             code = child.get_text()
-            out.append(f"\n\n```\n{code}\n```\n\n")
+            parts.append(f"\n\n```\n{code}\n```\n\n")
             continue
-        if name in ("code",):
-            code = child.get_text()
-            out.append(f"`{code}`")
+        if name == "code":
+            code = _render_inline(child).strip()
+            if code:
+                parts.append(f"`{code}`")
             continue
-        if name in ("a",):
-            href = child.get("href") or ""
-            text = re.sub(r"\s+", " ", child.get_text()).strip()
-            if text and href:
-                out.append(f"[{text}]({href})")
-            elif text:
-                out.append(text)
+        if name == "img":
+            src = child.get("src") or ""
+            alt = (child.get("alt") or child.get("title") or "").strip()
+            if src:
+                parts.append(f"\n\n![{alt}]({src})\n\n")
             continue
-        if name in ("strong", "b"):
-            text = re.sub(r"\s+", " ", child.get_text()).strip()
+        if name == "hr":
+            parts.append("\n\n---\n\n")
+            continue
+        if name == "figcaption":
+            text = _render_inline(child).strip()
             if text:
-                out.append(f"**{text}**")
+                parts.append(f"\n\n*{text}*\n\n")
             continue
-        if name in ("em", "i"):
-            text = re.sub(r"\s+", " ", child.get_text()).strip()
-            if text:
-                out.append(f"*{text}*")
+        if name == "dl":
+            rendered = _render_dl(child)
+            if rendered.strip():
+                parts.append("\n\n" + rendered + "\n\n")
             continue
-        if name == "br":
-            out.append("\n")
+        if name == "blockquote":
+            inner = _render_node(child, indent).strip()
+            if inner:
+                parts.append(
+                    "\n\n" + "\n".join(f"> {line}" if line else ">" for line in inner.split("\n")) + "\n\n"
+                )
             continue
-        if name in ("blockquote",):
-            inner = _render_node(child, indent)
-            inner_text = "\n".join(inner).strip()
-            if inner_text:
-                out.append("\n\n" + "\n".join(f"> {line}" for line in inner_text.split("\n")) + "\n\n")
+        if name == "table":
+            rendered = _render_table(child)
+            if rendered:
+                parts.append("\n\n" + rendered + "\n\n")
             continue
-        if name in ("table",):
-            out.append("\n\n" + child.get_text() + "\n\n")
+        if name in ("a", "strong", "b", "em", "i", "span", "sub", "sup", "br"):
+            inline = _render_inline(child)
+            if inline:
+                parts.append(inline)
             continue
         inner = _render_node(child, indent)
-        if inner:
-            out.extend(inner)
-    return out
+        if inner.strip():
+            parts.append(inner)
+    return re.sub(r"\n{3,}", "\n\n", "".join(parts))
+
+
+def _render_dl(node: Tag) -> str:
+    from bs4 import Tag
+
+    lines: list[str] = []
+    current_term: Optional[str] = None
+    for child in node.children:
+        if not isinstance(child, Tag):
+            continue
+        name = child.name.lower()
+        if name == "dt":
+            text = _render_inline(child).strip()
+            if text:
+                current_term = text
+                lines.append(f"**{text}**")
+        elif name == "dd":
+            text = _render_inline(child).strip()
+            if text:
+                lines.append(f": {text}")
+    return "\n".join(lines)
 
 
 @dataclass

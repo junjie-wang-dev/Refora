@@ -335,6 +335,78 @@ class TestArxivHtmlToMarkdown:
         )
         assert result["warnings"] == ["A formula could not be converted to TeX."]
 
+    def test_renders_images_with_absolute_src(self) -> None:
+        result = convert_arxiv_html_to_markdown(
+            '<article><h1>Paper</h1><p>See <img src="fig1.png" alt="Figure 1"> here.</p></article>',
+            "https://arxiv.org/html/2401.12345",
+        )
+        assert "![Figure 1](https://arxiv.org/html/fig1.png)" in result["markdown"]
+
+    def test_renders_horizontal_rule(self) -> None:
+        result = convert_arxiv_html_to_markdown(
+            '<article><h1>Paper</h1><p>Intro</p><hr><p>After</p></article>',
+            "https://arxiv.org/html/2401.12345",
+        )
+        assert "\n\n---\n\n" in result["markdown"]
+
+    def test_renders_table_as_gfm_pipes(self) -> None:
+        result = convert_arxiv_html_to_markdown(
+            """<article><h1>Paper</h1><table>
+              <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+              <tbody>
+                <tr><td>Acc</td><td>95%</td></tr>
+                <tr><td>Acc|Err</td><td>x</td></tr>
+              </tbody>
+            </table></article>""",
+            "https://arxiv.org/html/2401.12345",
+        )
+        md = result["markdown"]
+        assert "| Metric | Value |" in md
+        assert "| --- | --- |" in md
+        assert "| Acc | 95% |" in md
+        assert "| Acc\\|Err | x |" in md
+
+    def test_renders_nested_unordered_and_ordered_lists(self) -> None:
+        result = convert_arxiv_html_to_markdown(
+            """<article><h1>Paper</h1>
+              <ul>
+                <li>First <strong>bold</strong> and <a href="/x">link</a></li>
+                <li>Nested
+                  <ul><li>sub a</li><li>sub b</li></ul>
+                </li>
+              </ul>
+              <ol>
+                <li>One</li>
+                <li>Two
+                  <ol><li>two.a</li><li>two.b</li></ol>
+                </li>
+              </ol>
+            </article>""",
+            "https://arxiv.org/html/2401.12345",
+        )
+        md = result["markdown"]
+        assert "- First **bold** and [link](https://arxiv.org/x)" in md
+        assert "- Nested" in md
+        assert "  - sub a" in md
+        assert "  - sub b" in md
+        assert "1. One" in md
+        assert "2. Two" in md
+        assert "   1. two.a" in md
+        assert "   2. two.b" in md
+
+    def test_renders_description_list_and_figcaption(self) -> None:
+        result = convert_arxiv_html_to_markdown(
+            """<article><h1>Paper</h1>
+              <dl><dt>Term</dt><dd>Definition here</dd></dl>
+              <figure><figcaption>The architecture</figcaption></figure>
+            </article>""",
+            "https://arxiv.org/html/2401.12345",
+        )
+        md = result["markdown"]
+        assert "**Term**" in md
+        assert ": Definition here" in md
+        assert "*The architecture*" in md
+
 
 class TestArxivPaperService:
     @pytest.mark.asyncio

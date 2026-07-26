@@ -137,6 +137,130 @@ def _absolute_url(value: str, source_url: str) -> str | None:
     return urlunsplit(parsed)
 
 
+_TABLE_CELL_NEWLINE = re.compile(r"\s*\n\s*")
+
+
+def _render_list_web(node: Tag, source_url: str, ordered: bool, indent: int) -> str:
+    lines: list[str] = []
+    index = 0
+    for li in node.children:
+        if not isinstance(li, Tag) or li.name.lower() != "li":
+            continue
+        index += 1
+        marker = f"{index}. " if ordered else "- "
+        prefix = " " * indent + marker
+        child_indent = indent + len(marker)
+        nested_lists: list[Tag] = []
+        inline_parts: list[str] = []
+
+        for sub in li.children:
+            if isinstance(sub, NavigableString):
+                rendered = _inline_markdown(sub, source_url)
+                if rendered.strip():
+                    inline_parts.append(rendered)
+                continue
+            if not isinstance(sub, Tag):
+                continue
+            sub_name = sub.name.lower()
+            if sub_name in {"ul", "ol"}:
+                nested_lists.append(sub)
+                continue
+            rendered = _inline_markdown(sub, source_url)
+            if rendered.strip():
+                inline_parts.append(rendered)
+
+        lead = re.sub(r"\s+", " ", " ".join(inline_parts)).strip()
+        if lead:
+            lines.append(f"{prefix}{lead}")
+        for sub in nested_lists:
+            nested = _render_list_web(sub, source_url, sub.name.lower() == "ol", child_indent)
+            if nested:
+                lines.append(nested)
+    return "\n".join(lines)
+
+
+def _render_table_cell_web(cell: Tag, source_url: str) -> str:
+    text = "".join(_inline_markdown(child, source_url) for child in cell.children)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = _TABLE_CELL_NEWLINE.sub(" ", text)
+    return text.replace("|", "\\|")
+
+
+def _render_table_web(node: Tag, source_url: str) -> str:
+    def collect_rows(parent: Tag) -> list[Tag]:
+        return [child for child in parent.children if isinstance(child, Tag) and child.name.lower() == "tr"]
+
+    header_cells: list[str] = []
+    rows: list[list[str]] = []
+
+    thead = node.find("thead", recursive=False)
+    tbody_nodes = node.find_all("tbody", recursive=False)
+
+    header_row: Tag | None = None
+    if thead is not None:
+        trs = collect_rows(thead)
+        if trs:
+            header_row = trs[0]
+
+    body_rows: list[Tag] = []
+    if tbody_nodes:
+        for tbody in tbody_nodes:
+            body_rows.extend(collect_rows(tbody))
+
+    if header_row is None and not body_rows:
+        all_rows = collect_rows(node)
+        if not all_rows:
+            return ""
+        header_row = all_rows[0]
+        body_rows = all_rows[1:]
+
+    if header_row is not None:
+        for cell in header_row.children:
+            if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                header_cells.append(_render_table_cell_web(cell, source_url))
+
+    body_rows = [tr for tr in body_rows if any(
+        isinstance(c, Tag) and c.name.lower() in ("th", "td") for c in tr.children
+    )]
+
+    if header_cells:
+        for tr in body_rows:
+            row_cells = []
+            for cell in tr.children:
+                if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                    row_cells.append(_render_table_cell_web(cell, source_url))
+            if row_cells:
+                while len(row_cells) < len(header_cells):
+                    row_cells.append("")
+                rows.append(row_cells[: len(header_cells)])
+    else:
+        for tr in body_rows:
+            row_cells = []
+            for cell in tr.children:
+                if isinstance(cell, Tag) and cell.name.lower() in ("th", "td"):
+                    row_cells.append(_render_table_cell_web(cell, source_url))
+            if row_cells:
+                rows.append(row_cells)
+
+    if not header_cells and not rows:
+        return ""
+
+    if not header_cells:
+        header_cells = rows[0] if rows else []
+        rows = rows[1:] if rows else []
+
+    width = max(len(header_cells), *(len(r) for r in rows)) if rows else len(header_cells)
+    while len(header_cells) < width:
+        header_cells.append("")
+    rows = [(r + [""] * (width - len(r)))[:width] for r in rows]
+
+    out = ["| " + " | ".join(header_cells) + " |"]
+    out.append("| " + " | ".join("---" for _ in range(width)) + " |")
+    for row in rows:
+        out.append("| " + " | ".join(row) + " |")
+    return "\n".join(out)
+
+
 def _inline_markdown(node: Any, source_url: str) -> str:
     if isinstance(node, NavigableString):
         return re.sub(r"\s+", " ", str(node))
@@ -150,6 +274,14 @@ def _inline_markdown(node: Any, source_url: str) -> str:
     if name == "pre":
         code = node.get_text("\n", strip=True)
         return f"\n```\n{code}\n```\n"
+    if name == "hr":
+        return "\n---\n\n"
+    if name in {"ul", "ol"}:
+        rendered = _render_list_web(node, source_url, name == "ol", 0)
+        return f"\n{rendered}\n\n" if rendered.strip() else ""
+    if name == "table":
+        rendered = _render_table_web(node, source_url)
+        return f"\n{rendered}\n\n" if rendered else ""
     content = "".join(_inline_markdown(child, source_url) for child in node.children)
     if name in {"strong", "b"}:
         return f"**{content.strip()}**" if content.strip() else ""
@@ -163,23 +295,16 @@ def _inline_markdown(node: Any, source_url: str) -> str:
         text = content.strip()
         return f"[{text}]({absolute})" if text and absolute else content
     if name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-        return f"\n{'#' * int(name[1])} {content.strip()}\n\n"
-    if name == "li":
-        return f"{content.strip()}\n"
-    if name in {"ul", "ol"}:
-        items = [child for child in node.children if isinstance(child, Tag) and child.name == "li"]
-        if not items:
-            return content
-        prefix = "- " if name == "ul" else None
-        rendered = []
-        for index, item in enumerate(items, 1):
-            marker = prefix or f"{index}. "
-            rendered.append(f"{marker}{_inline_markdown(item, source_url).strip()}")
-        return f"\n{'\n'.join(rendered)}\n\n"
+        text = re.sub(r"\s+", " ", content).strip()
+        return f"\n{'#' * int(name[1])} {text}\n\n" if text else ""
     if name == "blockquote":
         quote = content.strip()
-        return f"\n{'\n'.join(f'> {line}' for line in quote.splitlines() if line.strip())}\n\n" if quote else ""
-    if name in {"p", "div", "section", "article", "main", "header", "figure", "figcaption", "tr"}:
+        return (
+            "\n" + "\n".join(f"> {line}" for line in quote.splitlines() if line.strip()) + "\n\n"
+            if quote
+            else ""
+        )
+    if name in {"p", "div", "section", "article", "main", "header", "figure", "figcaption"}:
         return f"\n{content.strip()}\n\n" if content.strip() else ""
     return content
 
