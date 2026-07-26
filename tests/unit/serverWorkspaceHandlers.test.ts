@@ -92,6 +92,7 @@ function makeClient(): { client: ServerClient; http: Record<string, ReturnType<t
     workspaceItemsList: vi.fn().mockResolvedValue([item]),
     workspaceItemGet: vi.fn().mockResolvedValue(item),
     workspaceItemsCreate: vi.fn().mockResolvedValue(item),
+    workspaceItemsCreateBatch: vi.fn().mockResolvedValue([item, item]),
     workspaceItemsDelete: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemsReorder: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemResize: vi.fn().mockResolvedValue(item),
@@ -161,14 +162,9 @@ describe('server workspace IPC handlers', () => {
 
     expect(added).toEqual({ ok: true, data: [item, item] })
     expect(reordered).toEqual({ ok: true, data: [item] })
-    expect(http.workspaceItemsCreate).toHaveBeenNthCalledWith(1, workspace.id, {
+    expect(http.workspaceItemsCreateBatch).toHaveBeenCalledWith(workspace.id, {
       kind: 'document',
-      docId: 'document-1',
-      placement: { x: 5, y: 6 }
-    })
-    expect(http.workspaceItemsCreate).toHaveBeenNthCalledWith(2, workspace.id, {
-      kind: 'document',
-      docId: 'document-2',
+      ids: ['document-1', 'document-2'],
       placement: { x: 5, y: 6 }
     })
     expect(http.workspaceItemsDelete).toHaveBeenCalledWith(workspace.id, item.id)

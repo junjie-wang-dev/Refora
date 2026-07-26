@@ -45,6 +45,7 @@ CONNECTOR_EVENTS = (
     "connector.clipboard-write-file",
     "connector.encrypt-api-key",
     "connector.decrypt-api-key",
+    "connector.apply-proxy",
 )
 CLIENT_WEBSOCKET_EVENTS = (
     "subscribe",

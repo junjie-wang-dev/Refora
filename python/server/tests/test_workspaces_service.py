@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -142,6 +143,79 @@ class TestWorkspacesCrud:
         with pytest.raises(RepoError) as exc:
             await service["deleteWorkspace"]("nope")
         assert exc.value.code == "not_found"
+
+
+class TestWorkspaceSandboxAndCascade:
+    @pytest.mark.asyncio
+    async def test_create_with_sandbox_ensures_and_rolls_back_on_failure(
+        self, repos, tmp_path
+    ):
+        connector = _FakeConnector()
+        sandbox_roots: dict[str, str] = {}
+
+        def ensure(wid):
+            sandbox_roots[wid] = str(tmp_path / "sandboxes" / wid)
+            raise RepoError("invalid_path", "sandbox ensure failed")
+
+        svc = createWorkspacesService(
+            repos,
+            {
+                "connector": connector,
+                "sandbox": {"ensure": ensure},
+            },
+        )
+        with pytest.raises(RepoError) as exc:
+            await svc["createWorkspaceWithSandbox"]("Research")
+        assert exc.value.code == "invalid_path"
+        assert svc["listWorkspaces"]() == []
+        assert sandbox_roots
+
+    @pytest.mark.asyncio
+    async def test_delete_cleans_threads_sandbox_and_assets(
+        self, repos, db, tmp_path
+    ):
+        w = repos["workspaces"]["create"]("Research")
+        sandbox_root = tmp_path / "sandboxes" / w["id"]
+        sandbox_root.mkdir(parents=True)
+        connector = _FakeConnector()
+
+        deleted_threads: list[str] = []
+        deleted_frontiers: list[str] = []
+
+        class FakeRuntime:
+            async def deleteThread(self, thread_id):
+                deleted_threads.append(thread_id)
+
+        class FakeFrontier:
+            async def delete_thread(self, thread_id):
+                deleted_frontiers.append(thread_id)
+
+        chat = repos.get("chat")
+        if chat is None:
+            chat = {}
+            repos["chat"] = chat
+        chat["listThreads"] = lambda workspace_id: [
+            {"id": "thread-1", "workspaceId": workspace_id},
+            {"id": "thread-2", "workspaceId": workspace_id},
+        ]
+
+        svc = createWorkspacesService(
+            repos,
+            {
+                "connector": connector,
+                "getSandboxPath": lambda wid: str(sandbox_root),
+                "agentRuntime": {"deleteThread": FakeRuntime().deleteThread},
+                "academic": {"frontier": {"delete_thread": FakeFrontier().delete_thread}},
+            },
+        )
+        await svc["deleteWorkspace"](w["id"])
+
+        assert svc["listWorkspaces"]() == []
+        assert deleted_threads == ["thread-1", "thread-2"]
+        assert deleted_frontiers == ["thread-1", "thread-2"]
+        assert sandbox_root in [Path(p) for p in connector.trashed] or str(
+            sandbox_root
+        ) in connector.trashed
 
 
 class TestOpenSandbox:

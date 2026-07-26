@@ -194,7 +194,15 @@ def create_workspaces_router(deps: Any) -> APIRouter:
 
     @router.post("/workspaces")
     async def create_workspace(body: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
-        return await _invoke(lambda: workspaces["createWorkspace"](_string(_body(body), "name")))
+        create = workspaces.get("createWorkspaceWithSandbox", workspaces["createWorkspace"])
+
+        async def operation() -> Any:
+            value = create(_string(_body(body), "name"))
+            if inspect.isawaitable(value):
+                value = await value
+            return value
+
+        return await _invoke(operation)
 
     @router.patch("/workspaces/{workspace_id}")
     async def update_workspace(
@@ -248,6 +256,23 @@ def create_workspaces_router(deps: Any) -> APIRouter:
             if not isinstance(result, list) or len(result) != 1:
                 raise RuntimeError("Workspace item creation returned an invalid result")
             return result[0]
+
+        return await _invoke(operation)
+
+    @router.post("/workspaces/{workspace_id}/items/batch")
+    async def add_items_batch(
+        workspace_id: str, body: dict[str, Any] | None = Body(default=None)
+    ) -> JSONResponse:
+        def operation() -> list[dict[str, Any]]:
+            payload = _body(body)
+            kind = _string(payload, "kind")
+            ids = _string_list(payload, "ids")
+            result = workspaces["addItems"](
+                workspace_id, kind, ids, _placement(payload)
+            )
+            if not isinstance(result, list):
+                raise RuntimeError("Workspace item creation returned an invalid result")
+            return result
 
         return await _invoke(operation)
 

@@ -490,3 +490,39 @@ async def test_install_health_check_wrong_version_raises(tmp_path, monkeypatch):
     mgr = create_mineru_engine_manager(deps)
     with pytest.raises(RuntimeError, match="unexpected version"):
         await mgr["install"]()
+
+
+def _worker_script_path() -> str:
+    from refora_server.server.lifespan import _mineru_worker_path
+
+    return _mineru_worker_path()
+
+
+def test_mineru_worker_script_exists_and_resolves():
+    path = _worker_script_path()
+    assert os.path.isfile(path), f"MinerU worker script not found: {path}"
+
+
+def test_mineru_worker_script_protocol_constants():
+    import importlib.util
+
+    path = _worker_script_path()
+    assert os.path.isfile(path), f"MinerU worker script not found: {path}"
+    spec = importlib.util.spec_from_file_location("mineru_worker_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.PROTOCOL_VERSION == 1
+    assert callable(module.handle)
+    assert callable(module.parse_document)
+
+
+def test_mineru_worker_handle_rejects_unknown_methods():
+    import importlib.util
+
+    path = _worker_script_path()
+    spec = importlib.util.spec_from_file_location("mineru_worker_unknown", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="Unsupported worker method"):
+        module.handle({"id": "req-1", "method": "bogus"})

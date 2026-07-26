@@ -135,6 +135,8 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     logger = deps.get("logger")
     sandbox = deps.get("sandbox")
     get_sandbox_path = deps.get("getSandboxPath") or deps.get("get_sandbox_path")
+    agent_runtime = deps.get("agentRuntime")
+    academic = deps.get("academic") or {}
 
     async def _connector_call(name: str, *args: Any) -> Any:
         operation = _connector_method(connector, name)
@@ -192,11 +194,91 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     def list_workspaces() -> list[dict[str, Any]]:
         return repos["workspaces"]["list"]()
 
+    def _sandbox_root(workspace_id: str) -> str | None:
+        ensure = _sandbox_method(sandbox, "ensure")
+        if ensure is not None:
+            sandbox_paths = ensure(workspace_id)
+            return sandbox_paths["sandboxRoot"] if isinstance(sandbox_paths, dict) else None
+        if callable(get_sandbox_path):
+            sandbox_root = get_sandbox_path(workspace_id)
+            if isinstance(sandbox_root, str) and os.path.isabs(sandbox_root):
+                os.makedirs(sandbox_root, mode=0o700, exist_ok=True)
+                if os.path.islink(sandbox_root) or not os.path.isdir(sandbox_root):
+                    raise RepoError("invalid_path", "Agent sandbox path is invalid")
+                return sandbox_root
+        return None
+
+    async def _delete_sandbox(workspace_id: str) -> None:
+        ensure = _sandbox_method(sandbox, "ensure")
+        if ensure is not None:
+            paths = ensure(workspace_id)
+            sandbox_root = paths["sandboxRoot"] if isinstance(paths, dict) else None
+        elif callable(get_sandbox_path):
+            sandbox_root = get_sandbox_path(workspace_id)
+        else:
+            sandbox_root = None
+        if isinstance(sandbox_root, str) and os.path.isdir(sandbox_root):
+            await _connector_trash(sandbox_root)
+
+    async def _delete_workspace_threads(workspace_id: str) -> None:
+        chat_repo = repos.get("chat")
+        list_threads = chat_repo.get("listThreads") if isinstance(chat_repo, dict) else None
+        if not callable(list_threads):
+            return
+        threads = list_threads(workspace_id)
+        if not isinstance(threads, list):
+            return
+        delete_runtime_thread = (
+            agent_runtime.get("deleteThread")
+            if isinstance(agent_runtime, dict)
+            else None
+        )
+        frontier = academic.get("frontier") if isinstance(academic, dict) else None
+        delete_frontier_thread = (
+            frontier.get("delete_thread") if isinstance(frontier, dict) else None
+        )
+        for thread in threads:
+            thread_id = thread.get("id") if isinstance(thread, dict) else None
+            if not isinstance(thread_id, str):
+                continue
+            if callable(delete_runtime_thread):
+                try:
+                    result = delete_runtime_thread(thread_id)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    if logger is not None:
+                        logger.warn(f"agentRuntime:deleteThread-failed {thread_id}: {exc}")
+            if callable(delete_frontier_thread):
+                try:
+                    result = delete_frontier_thread(thread_id)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    if logger is not None:
+                        logger.warn(f"frontier:deleteThread-failed {thread_id}: {exc}")
+
     def create_workspace(name: str) -> dict[str, Any]:
         normalized = name.strip()
         if not normalized:
             raise RepoError("invalid_name", "workspace name cannot be empty")
         return repos["workspaces"]["create"](normalized)
+
+    async def ensure_workspace_sandbox(workspace_id: str) -> None:
+        _sandbox_root(workspace_id)
+
+    async def create_workspace_with_sandbox(name: str) -> dict[str, Any]:
+        workspace = create_workspace(name)
+        try:
+            await ensure_workspace_sandbox(workspace["id"])
+        except Exception:
+            try:
+                repos["workspaces"]["delete"](workspace["id"])
+            except Exception as exc:
+                if logger is not None:
+                    logger.warn(f"workspaces:rollback-failed {workspace['id']}: {exc}")
+            raise
+        return workspace
 
     def update_workspace(workspace_id: str, name: str) -> dict[str, Any]:
         normalized = name.strip()
@@ -205,6 +287,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         return repos["workspaces"]["rename"](workspace_id, normalized)
 
     async def delete_workspace(workspace_id: str) -> None:
+        await _delete_workspace_threads(workspace_id)
         assets = repos["workspaceAssets"]["list"](workspace_id)
         for asset in assets:
             try:
@@ -216,6 +299,11 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             if os.path.isdir(asset_directory):
                 await _connector_trash(asset_directory)
         repos["workspaces"]["delete"](workspace_id)
+        try:
+            await _delete_sandbox(workspace_id)
+        except Exception as exc:
+            if logger is not None:
+                logger.warn(f"agentSandbox:trash-failed {workspace_id}: {exc}")
 
     async def open_sandbox(workspace_id: str) -> None:
         _require_workspace(workspace_id)
@@ -493,6 +581,8 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     return {
         "listWorkspaces": list_workspaces,
         "createWorkspace": create_workspace,
+        "createWorkspaceWithSandbox": create_workspace_with_sandbox,
+        "ensureWorkspaceSandbox": ensure_workspace_sandbox,
         "updateWorkspace": update_workspace,
         "deleteWorkspace": delete_workspace,
         "openSandbox": open_sandbox,

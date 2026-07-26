@@ -109,7 +109,7 @@ class FakeRepos:
             "getRaw": lambda provider_id: {"id": provider_id} if provider_id == "provider-1" else None,
         }
         self.workspaces = {"list": lambda: [{"id": "workspace-1", "name": "Workspace"}]}
-        self.workspaceItems = {"list": lambda workspace_id: []}
+        self.workspaceItems = {"list": self.list_workspace_items}
         self.aiSummaries = {"getFullText": self.get_full_text, "getSummary": self.get_summary}
         self.chat = {
             "createThread": self.create_thread,
@@ -138,6 +138,13 @@ class FakeRepos:
     def get_document(self, document_id: str) -> dict[str, str] | None:
         self.calls.append(("documents.get", document_id))
         return {"id": document_id, "fileName": "Paper.pdf"} if document_id == "doc-1" else None
+
+    def list_workspace_items(self, workspace_id: str) -> list[dict[str, Any]]:
+        if workspace_id == "workspace-1":
+            return [
+                {"id": "item-1", "workspaceId": workspace_id, "kind": "document", "docId": "doc-1"},
+            ]
+        return []
 
     def create_thread(self, workspace_id: str | None, provider_id: str) -> dict[str, Any]:
         thread = {
@@ -171,7 +178,10 @@ class FakeRepos:
 
     def list_messages(self, thread_id: str) -> list[dict[str, Any]]:
         self.calls.append(("chat.listMessages", thread_id))
-        return [{"id": "message-1", "threadId": thread_id, "role": "user", "content": "Hello"}]
+        return [
+            {"id": "message-1", "threadId": thread_id, "role": "user", "content": "Hello"},
+            {"id": "message-tool", "threadId": thread_id, "role": "tool", "content": "tool output"},
+        ]
 
     def delete_thread(self, thread_id: str) -> None:
         self.calls.append(("chat.deleteThread", thread_id))
@@ -580,3 +590,63 @@ def test_replace_exchange_is_validated_before_runtime_mutation() -> None:
     assert wrong_run.status_code == 400
     assert runtime.sent == []
     assert repos.list_messages("thread-1")[0]["content"] == "Hello"
+
+
+def test_chat_history_filters_tool_messages() -> None:
+    client, _, _, _, _ = make_client()
+
+    history = request(client, "GET", "/ai/chat/threads/thread-1/history")
+
+    messages = history.json()["data"]
+    assert [message["role"] for message in messages] == ["user"]
+    assert all(message["role"] != "tool" for message in messages)
+
+
+def test_chat_send_validates_attachment_workspace_ownership() -> None:
+    client, _, _, _, runtime = make_client()
+
+    valid = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-attach",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Read this",
+            "providerId": "provider-1",
+            "attachments": [{"type": "document", "docId": "doc-1"}],
+        },
+    )
+    no_workspace = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-no-ws",
+            "text": "Read this",
+            "providerId": "provider-1",
+            "attachments": [{"type": "document", "docId": "doc-1"}],
+        },
+    )
+    foreign_doc = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-foreign",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Read this",
+            "providerId": "provider-1",
+            "attachments": [{"type": "document", "docId": "doc-missing"}],
+        },
+    )
+
+    assert valid.status_code == 200
+    assert valid.json()["data"]["runId"] == "run-attach"
+    assert no_workspace.status_code == 400
+    assert no_workspace.json()["error"]["code"] == "invalid_attachment"
+    assert foreign_doc.status_code == 400
+    assert foreign_doc.json()["error"]["code"] == "invalid_attachment"
+    assert [sent["runId"] for sent in runtime.sent] == ["run-attach"]

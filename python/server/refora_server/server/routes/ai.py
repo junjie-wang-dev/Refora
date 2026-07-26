@@ -270,7 +270,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 raise RouteError("validation", "features must be an object")
             if "attachments" in body:
                 attachments = body["attachments"]
-                if not isinstance(attachments, list) or any(
+                if not isinstance(attachments, list) or not attachments or any(
                     not isinstance(item, dict)
                     or item.get("type") != "document"
                     or not isinstance(item.get("docId"), str)
@@ -278,6 +278,21 @@ def create_ai_router(deps: Any) -> APIRouter:
                     for item in attachments
                 ):
                     raise RouteError("validation", "attachments must contain document references")
+                workspace_id = body.get("workspaceId")
+                if not workspace_id:
+                    raise RouteError("invalid_attachment", "Attachments require a workspace")
+                workspace_items = _value(_value(repos, "workspaceItems"), "list")(workspace_id)
+                ws_doc_ids = {
+                    item.get("docId")
+                    for item in workspace_items
+                    if item.get("kind") == "document" and isinstance(item.get("docId"), str)
+                }
+                for att in attachments:
+                    if att.get("docId") not in ws_doc_ids:
+                        raise RouteError(
+                            "invalid_attachment",
+                            "Attachment is not a valid document in this workspace",
+                        )
             if runtime is None:
                 raise RouteError("unavailable", "Agent runtime is unavailable", 503)
             assembled = await assemble_turn(
@@ -362,10 +377,12 @@ def create_ai_router(deps: Any) -> APIRouter:
         thread_id: str,
         authorization: JSONResponse | None = Depends(authorize),
     ) -> JSONResponse:
-        return await execute(
-            authorization,
-            lambda: (_thread_scope(repos, thread_id), _value(_value(repos, "chat"), "listMessages")(thread_id))[1],
-        )
+        def action() -> list[dict[str, Any]]:
+            _thread_scope(repos, thread_id)
+            messages = _value(_value(repos, "chat"), "listMessages")(thread_id)
+            return [message for message in messages if message.get("role") != "tool"]
+
+        return await execute(authorization, action)
 
     @router.get("/ai/chat/threads/{thread_id}/traces")
     async def get_traces(
