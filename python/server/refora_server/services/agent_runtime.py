@@ -41,10 +41,12 @@ from refora_server.agent.engine_schema import (
 )
 from refora_server.services.agent_memory import MAX_MEMORY_FILE_CHARS, normalize_memory_path
 from refora_server.services.chat_history import parseToolPayload
+from refora_server.services.thread_title import derive_thread_title
 
 
 _SECRET_KEYS = {"apiKey", "api_key", "authorization", "Authorization"}
 _ACADEMIC_TOOL_NAMES = frozenset(ACADEMIC_RESEARCH_TOOL_NAMES)
+_STREAMED_ACTIVITY_TOOL_NAMES = frozenset({"write_file", "edit_file", "write_todos"})
 ACADEMIC_PERSISTENCE_REDACTION = (
     "[Academic research data omitted from persistent agent state]"
 )
@@ -727,6 +729,26 @@ def _as_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _streamed_tool_call_previews(value: Any) -> list[tuple[int, str]]:
+    mapping = _as_mapping(value)
+    chunks = mapping.get("tool_call_chunks")
+    if not isinstance(chunks, list):
+        chunks = mapping.get("tool_calls")
+    if not isinstance(chunks, list):
+        return []
+
+    previews: list[tuple[int, str]] = []
+    for position, chunk in enumerate(chunks):
+        call = _as_mapping(chunk)
+        name = call.get("name")
+        if not isinstance(name, str) or name not in _STREAMED_ACTIVITY_TOOL_NAMES:
+            continue
+        index = call.get("index")
+        slot = index if isinstance(index, int) and not isinstance(index, bool) else position
+        previews.append((slot, name))
+    return previews
+
+
 def _serializable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -989,10 +1011,13 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             }
         )
 
-    def close_open_traces(run_id: str, status: str, message: str) -> None:
+    async def close_open_traces(
+        request: dict[str, Any], status: str, message: str
+    ) -> None:
+        run_id = request["runId"]
         for step in repos["agentTraces"]["listByRun"](run_id):
-            if step.get("status") == TRACE_STATUS_RUNNING:
-                repos["agentTraces"]["updateStep"](
+            if step.get("kind") != "run" and step.get("status") == TRACE_STATUS_RUNNING:
+                updated = repos["agentTraces"]["updateStep"](
                     step["id"],
                     {
                         "status": status,
@@ -1000,6 +1025,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         "endedAt": clock(),
                     },
                 )
+                if updated is not None:
+                    await emit_trace(request, updated)
 
     async def create_runtime_agent(request: dict[str, Any]) -> Any:
         if create_tools is None:
@@ -1087,7 +1114,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         trace_steps = repos["agentTraces"]["listByRun"](run_id)
         matched_actions: set[str] = set()
         for step in trace_steps:
-            if step.get("kind") != "tool" or step.get("status") != TRACE_STATUS_RUNNING:
+            if (
+                step.get("kind") not in {"tool", "todo"}
+                or step.get("status") != TRACE_STATUS_RUNNING
+            ):
                 continue
             updated = repos["agentTraces"]["updateStep"](
                 step["id"],
@@ -1149,6 +1179,11 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         partial: str = "",
     ) -> dict[str, Any]:
         run_id = request["runId"]
+        await close_open_traces(
+            request,
+            TRACE_STATUS_CANCELLED,
+            "Tool call did not start",
+        )
         text = _result_text(result) or partial or "No response generated."
         _persist_tool_history(
             repos,
@@ -1170,7 +1205,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             run_trace,
             trace_output=_truncate(text),
         )
-        title = None
+        title = request.get("_derivedThreadTitle")
         await emit_event(
             "ai.chat.done",
             {"runId": run_id, "threadId": request["threadId"], "finalText": text},
@@ -1178,7 +1213,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         await emit_status(run_id, RUN_STATUS_COMPLETED)
         title_source = deps.get("generateTitle") or deps.get("generate_title")
         thread = repos["chat"]["getThread"](request["threadId"])
-        if title_source is not None and thread and not thread.get("title"):
+        fallback_title = request.get("_derivedThreadTitle")
+        if (
+            title_source is not None
+            and isinstance(fallback_title, str)
+            and request.get("_isFirstExchange") is True
+            and thread
+            and thread.get("title") == fallback_title
+        ):
             async def generate_title() -> None:
                 try:
                     candidate = await _await(
@@ -1193,7 +1235,16 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         not isinstance(candidate, str)
                         or not candidate.strip()
                         or current_thread is None
-                        or current_thread.get("title")
+                        or current_thread.get("title") != fallback_title
+                        or len(
+                            [
+                                message
+                                for message in repos["chat"]["listMessages"](
+                                    request["threadId"]
+                                )
+                                if message.get("role") == "user"
+                            ]
+                        ) != 1
                         or current_run not in {None, run_id}
                     ):
                         return
@@ -1234,7 +1285,13 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         partial: str = "",
     ) -> dict[str, Any]:
         run_id = request["runId"]
-        close_open_traces(run_id, TRACE_STATUS_CANCELLED if status == RUN_STATUS_CANCELLED else TRACE_STATUS_ERROR, error)
+        await close_open_traces(
+            request,
+            TRACE_STATUS_CANCELLED
+            if status == RUN_STATUS_CANCELLED
+            else TRACE_STATUS_ERROR,
+            error,
+        )
         current = RUN_STATUS_RUNNING
         if run_trace is None:
             persisted = repos["agentRuns"]["get"](run_id)
@@ -1294,7 +1351,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         run_trace: dict[str, Any],
     ) -> dict[str, Any]:
         run_id = request["runId"]
-        close_open_traces(run_id, TRACE_STATUS_ERROR, error)
+        await close_open_traces(request, TRACE_STATUS_ERROR, error)
         run, _trace = state_machine.transition(
             run_id,
             RUN_STATUS_RUNNING,
@@ -1370,6 +1427,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         open_tool_traces: dict[str, str] = {}
         open_llm_traces: dict[str, str] = {}
         open_event_traces: dict[str, str] = {}
+        seen_streamed_tool_slots: set[str] = set()
+        pending_streamed_traces: dict[str, list[str]] = {}
         partial_text = (
             "".join(
                 step.get("output") or ""
@@ -1396,8 +1455,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
 
         try:
             if mode == "recover":
-                close_open_traces(
-                    run_id,
+                await close_open_traces(
+                    request,
                     TRACE_STATUS_CANCELLED,
                     "Python sidecar restarted; continuing from the latest checkpoint",
                 )
@@ -1453,6 +1512,17 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     transaction(persist_new_run)
                 else:
                     persist_new_run()
+                if user_message is not None and not thread.get("title"):
+                    fallback_title = derive_thread_title(user_content)
+                    repos["chat"]["updateTitle"](thread_id, fallback_title)
+                    request["_derivedThreadTitle"] = fallback_title
+                    request["_isFirstExchange"] = (
+                        len(repos["chat"]["listMessages"](thread_id)) <= 1
+                    )
+                    await emit_event(
+                        "ai.chat.title-updated",
+                        {"threadId": thread_id, "title": fallback_title},
+                    )
                 await emit_status(run_id, RUN_STATUS_QUEUED)
             persisted = repos["agentRuns"]["get"](run_id)
             current_status = persisted["status"] if persisted else RUN_STATUS_QUEUED
@@ -1474,6 +1544,33 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             state: dict[str, Any] = {}
             interrupted = False
             active_content: dict[str, Any] | None = None
+
+            async def observe_streamed_tool_calls(
+                value: Any, event: dict[str, Any]
+            ) -> None:
+                nonlocal seq
+                model_run_id = event.get("run_id")
+                model_key = model_run_id if isinstance(model_run_id, str) else "model"
+                for slot, name in _streamed_tool_call_previews(value):
+                    preview_key = f"{model_key}:slot:{slot}"
+                    if preview_key in seen_streamed_tool_slots:
+                        continue
+                    seen_streamed_tool_slots.add(preview_key)
+                    context = _trace_context(event, open_event_traces)
+                    step = add_trace(
+                        request,
+                        seq,
+                        "todo" if name == "write_todos" else "tool",
+                        name,
+                        TRACE_STATUS_RUNNING,
+                        parent_step_id=llm_step_id(event) or context["parentStepId"],
+                        agent_name=context["agentName"],
+                        namespace=context["namespace"],
+                        depth=context["depth"],
+                    )
+                    pending_streamed_traces.setdefault(name, []).append(step["id"])
+                    await emit_trace(request, step)
+                    seq += 1
 
             async def finish_active_content(
                 status: str = TRACE_STATUS_DONE,
@@ -1546,7 +1643,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     )
                 event = raw if isinstance(raw, dict) else {"event": "trace", "data": raw}
                 event_name = str(event.get("event") or event.get("type") or "")
-                if event_name in {"token", "on_chat_model_stream"}:
+                if event_name in {"token", "on_chat_model_stream", "on_tool_call_chunk"}:
+                    event_data = event.get("data")
+                    if isinstance(event_data, dict):
+                        await observe_streamed_tool_calls(
+                            event_data.get("chunk", event_data), event
+                        )
                     reasoning_delta = _event_delta(event, True)
                     if reasoning_delta:
                         step_id = await append_content(
@@ -1627,6 +1729,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     failed = event_name == "on_chat_model_error"
                     detail = event.get("error")
                     event_data = event.get("data")
+                    if isinstance(event_data, dict):
+                        await observe_streamed_tool_calls(event_data.get("output"), event)
                     if detail is None and isinstance(event_data, dict):
                         detail = event_data.get("error") or event_data.get("output")
                     event_key = _event_key(event, "llm")
@@ -1673,28 +1777,39 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     trace_input, _ = _tool_event_values(event)
                     context = _trace_context(event, open_event_traces)
                     is_subagent = name == "task"
-                    step = add_trace(
-                        request,
-                        seq,
-                        "subagent"
-                        if is_subagent
-                        else ("todo" if name == "write_todos" else "tool"),
-                        name,
-                        TRACE_STATUS_RUNNING,
-                        checkpoint=_checkpoint_id(event),
-                        input_data=trace_input,
-                        parent_step_id=context["parentStepId"],
-                        agent_name=_subagent_name(event)
-                        if is_subagent
-                        else context["agentName"],
-                        namespace=context["namespace"],
-                        depth=context["depth"],
-                    )
+                    pending = pending_streamed_traces.get(name or "")
+                    trace_id = pending.pop(0) if pending else None
+                    if pending is not None and not pending:
+                        pending_streamed_traces.pop(name or "", None)
+                    if trace_id is not None:
+                        step = repos["agentTraces"]["updateStep"](
+                            trace_id,
+                            {"input": _truncate(_without_secrets(trace_input))},
+                        )
+                    else:
+                        step = add_trace(
+                            request,
+                            seq,
+                            "subagent"
+                            if is_subagent
+                            else ("todo" if name == "write_todos" else "tool"),
+                            name,
+                            TRACE_STATUS_RUNNING,
+                            checkpoint=_checkpoint_id(event),
+                            input_data=trace_input,
+                            parent_step_id=context["parentStepId"],
+                            agent_name=_subagent_name(event)
+                            if is_subagent
+                            else context["agentName"],
+                            namespace=context["namespace"],
+                            depth=context["depth"],
+                        )
+                        seq += 1
                     event_key = _tool_event_key(event, name)
-                    open_tool_traces[event_key] = step["id"]
-                    open_event_traces[event_key] = step["id"]
-                    await emit_trace(request, step)
-                    seq += 1
+                    if step is not None:
+                        open_tool_traces[event_key] = step["id"]
+                        open_event_traces[event_key] = step["id"]
+                        await emit_trace(request, step)
                     continue
                 if event_name == "on_tool_end":
                     record = _tool_event_record(event)

@@ -1,7 +1,7 @@
 import pytest
 
 from conftest import insert_message, insert_thread, make_chat_repo, open_migrated_db
-from refora_server.services.thread_title import createThreadTitleService
+from refora_server.services.thread_title import createThreadTitleService, derive_thread_title
 
 
 @pytest.fixture
@@ -34,6 +34,23 @@ def _provider(**overrides):
 def _svc(chat_repo, generate_title):
     deps = {"generate_title": generate_title}
     return createThreadTitleService({"chat": chat_repo}, deps)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("   \n\t  ", "New chat"),
+        ("  Explain\nthis  ", "Explain this"),
+        (
+            "This first sentence is deliberately long. This second sentence is ignored.",
+            "This first sentence is deliberately long.",
+        ),
+        ("word " * 20, "word word word word word word word word word word…"),
+        ("汉" * 51, "汉" * 50 + "…"),
+    ],
+)
+def test_derive_thread_title(text, expected):
+    assert derive_thread_title(text) == expected
 
 
 def test_generate_title_returns_cleaned_title(chat_repo, db):

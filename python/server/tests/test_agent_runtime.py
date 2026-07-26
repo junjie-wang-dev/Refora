@@ -1484,6 +1484,89 @@ def test_llm_todo_and_failed_tool_traces_are_paired(repos, db):
     assert token["stepId"] == message_trace["id"]
 
 
+def test_streamed_tool_preview_is_reused_when_tool_starts(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-1",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-1",
+            "data": {
+                "chunk": {
+                    "tool_call_chunks": [
+                        {"name": "write_file", "args": '{"path":"/tmp/', "index": 0}
+                    ]
+                }
+            },
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-1",
+            "data": {
+                "chunk": {
+                    "tool_call_chunks": [
+                        {"args": 'result.md","content":"report"}', "index": 0}
+                    ]
+                }
+            },
+        }
+        yield {
+            "event": "on_tool_start",
+            "name": "write_file",
+            "run_id": "write-1",
+            "data": {"input": {"path": "/tmp/result.md", "content": "report"}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "write_file",
+            "run_id": "write-1",
+            "data": {"output": {"written": True}},
+        }
+        yield {"event": "complete", "result": "Answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    traces = repos["agentTraces"]["listByRun"]("run-1")
+    llm_trace = next(trace for trace in traces if trace["kind"] == "llm")
+    write_trace = [trace for trace in traces if trace["name"] == "write_file"]
+    assert len(write_trace) == 1
+    assert write_trace[0]["parentStepId"] == llm_trace["id"]
+    assert write_trace[0]["status"] == "done"
+    assert json.loads(write_trace[0]["input"]) == {
+        "path": "/tmp/result.md",
+        "content": "report",
+    }
+    trace_events = [
+        payload["step"]
+        for event, payload in seen
+        if event == "ai.chat.trace" and payload["step"]["name"] == "write_file"
+    ]
+    assert [step["id"] for step in trace_events] == [write_trace[0]["id"]] * 3
+    assert trace_events[0]["status"] == "running"
+    assert trace_events[0]["input"] is None
+    assert trace_events[1]["status"] == "running"
+    assert trace_events[2]["status"] == "done"
+
+
 def test_subagent_trace_preserves_delegation_hierarchy(repos, db):
     insert_thread(db)
 
@@ -1581,10 +1664,11 @@ def test_title_generation_does_not_delay_completed_run(repos, db):
         )
         result = await asyncio.wait_for(runtime["send"](request()), timeout=0.2)
         assert title_started.is_set()
-        assert repos["chat"]["getThread"]("thread-1")["title"] is None
+        assert repos["chat"]["getThread"]("thread-1")["title"] == "Explain this"
         release_title.set()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        assert repos["chat"]["getThread"]("thread-1")["title"] == "Generated title"
         return result
 
     result = asyncio.run(exercise())
