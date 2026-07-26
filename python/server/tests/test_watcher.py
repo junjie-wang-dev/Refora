@@ -1,9 +1,12 @@
 import asyncio
 import os
+import time
 
 import pytest
 
 from conftest import make_watch_folders_repo, open_migrated_db
+
+from refora_server.services import watcher as watcher_module
 
 
 def _make_watcher(
@@ -11,6 +14,8 @@ def _make_watcher(
     captured=None,
     poll_interval=0.05,
     library_folder="",
+    stability_threshold_ms=80,
+    debounce_ms=40,
 ):
     from refora_server.services.watcher import createWatcherService
 
@@ -25,8 +30,19 @@ def _make_watcher(
             "onNewPdf": on_new_pdf,
             "getLibraryFolder": lambda: library_folder,
             "pollInterval": poll_interval,
+            "stabilityThresholdMs": stability_threshold_ms,
+            "debounceMs": debounce_ms,
         },
     )
+
+
+def _wait_for(predicate, timeout=3.0, interval=0.02):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 def test_list_returns_repo_list():
@@ -188,7 +204,7 @@ def test_startScanning_invokes_onNewPdf(tmp_path):
 
         async def run():
             svc["startScanning"]()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
             svc["stopScanning"]()
 
         asyncio.run(run())
@@ -224,9 +240,359 @@ def test_startScanning_idempotent():
 
         async def run():
             svc["startScanning"]()
-            first_task = svc["_state"]["task"]
+            first_running = svc["_state"]["running"]
             svc["startScanning"]()
-            assert svc["_state"]["task"] is first_task
+            assert svc["_state"]["running"] is first_running
+            svc["stopScanning"]()
+
+        asyncio.run(run())
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Event-driven (watchdog) tests. These exercise the live filesystem.
+# ---------------------------------------------------------------------------
+
+
+def _watchdog_available() -> bool:
+    return watcher_module._WATCHDOG_AVAILABLE
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_detects_new_pdf(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.15)
+                (tmp_path / "new.pdf").write_bytes(b"%PDF-1.4")
+                await asyncio.sleep(0.6)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert any(
+            os.path.normpath(p) == os.path.normpath(str(tmp_path / "new.pdf"))
+            for p in captured
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_ignores_non_pdf(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.15)
+                (tmp_path / "notes.txt").write_text("hello")
+                (tmp_path / "image.png").write_bytes(b"\x89PNG")
+                await asyncio.sleep(0.5)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == []
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_ignores_hidden_and_managed_dirs(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.15)
+                hidden = tmp_path / ".hidden"
+                hidden.mkdir()
+                (hidden / "secret.pdf").write_bytes(b"%PDF")
+                asset = tmp_path / "refora-assets"
+                asset.mkdir()
+                (asset / "asset.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.5)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == []
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_await_write_finish(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(
+            repos,
+            captured=captured,
+            stability_threshold_ms=300,
+            debounce_ms=40,
+        )
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.15)
+                pdf = tmp_path / "big.pdf"
+                pdf.write_bytes(b"%PDF-1.4 partial")
+                await asyncio.sleep(0.15)
+                assert not captured, "import fired before write finished"
+                pdf.write_bytes(b"%PDF-1.4 complete")
+                await asyncio.sleep(0.7)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert any(
+            os.path.normpath(p) == os.path.normpath(str(tmp_path / "big.pdf"))
+            for p in captured
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_debounces_burst(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[list[str]] = []
+        from refora_server.services.watcher import createWatcherService
+
+        def on_new_pdf(paths):
+            captured.append(list(paths))
+            return None
+
+        svc = createWatcherService(
+            repos,
+            {
+                "onNewPdf": on_new_pdf,
+                "getLibraryFolder": lambda: "",
+                "stabilityThresholdMs": 60,
+                "debounceMs": 120,
+            },
+        )
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.15)
+                for i in range(5):
+                    (tmp_path / f"doc-{i}.pdf").write_bytes(b"%PDF")
+                    await asyncio.sleep(0.02)
+                await asyncio.sleep(0.8)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        total = sum(len(b) for b in captured)
+        assert total == 5, f"expected 5 imports, got {total}: {captured}"
+        assert len(captured) <= 2, f"expected debounce aggregation, got {len(captured)} batches"
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_add_starts_observer_dynamically(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.1)
+                wf = svc["add"](str(tmp_path))
+                assert wf["id"] in svc["_state"]["observers"]
+                await asyncio.sleep(0.15)
+                (tmp_path / "added.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.6)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert any(
+            os.path.normpath(p) == os.path.normpath(str(tmp_path / "added.pdf"))
+            for p in captured
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_remove_stops_observer(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+        wf = svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                assert wf["id"] in svc["_state"]["observers"]
+                svc["remove"](wf["id"])
+                assert wf["id"] not in svc["_state"]["observers"]
+                await asyncio.sleep(0.2)
+                (tmp_path / "after-remove.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.5)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == []
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_toggle_stops_and_starts_observer(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured)
+        wf = svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                svc["toggle"](wf["id"], False)
+                assert wf["id"] not in svc["_state"]["observers"]
+                await asyncio.sleep(0.15)
+                (tmp_path / "disabled.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.4)
+                assert captured == []
+                svc["toggle"](wf["id"], True)
+                assert wf["id"] in svc["_state"]["observers"]
+                await asyncio.sleep(0.15)
+                (tmp_path / "enabled.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.6)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert any(
+            os.path.normpath(p) == os.path.normpath(str(tmp_path / "enabled.pdf"))
+            for p in captured
+        )
+        assert not any("disabled.pdf" in p for p in captured)
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_library_reconcile_on_start(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        tracked = tmp_path / "tracked.pdf"
+        untracked = tmp_path / "untracked.pdf"
+        tracked.write_bytes(b"%PDF")
+        untracked.write_bytes(b"%PDF")
+        repos = {
+            "watchFolders": wf_repo,
+            "documents": {"list": lambda _filter: [{"filePath": str(tracked)}]},
+        }
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured, library_folder=str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.5)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert any(
+            os.path.normpath(p) == os.path.normpath(str(untracked))
+            for p in captured
+        )
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Fallback path: simulate watchdog unavailable.
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_uses_polling_when_watchdog_unavailable(tmp_path, monkeypatch):
+    db = open_migrated_db()
+    try:
+        monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", False)
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        captured: list[str] = []
+        svc = _make_watcher(repos, captured=captured, poll_interval=0.02)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.1)
+                (tmp_path / "poll.pdf").write_bytes(b"%PDF")
+                await asyncio.sleep(0.2)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert svc["_state"]["watchdog"] is False
+        assert any(p.lower().endswith(".pdf") for p in captured)
+    finally:
+        db.close()
+
+
+def test_fallback_no_observers_created(tmp_path, monkeypatch):
+    db = open_migrated_db()
+    try:
+        monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", False)
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        svc = _make_watcher(repos, poll_interval=0.2)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            assert svc["_state"]["observers"] == {}
             svc["stopScanning"]()
 
         asyncio.run(run())
