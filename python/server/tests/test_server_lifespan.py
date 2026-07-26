@@ -402,6 +402,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             {
                 "_sandboxRoot": "/tmp/library/.refora/sandboxes/default",
                 "_runId": "run-1",
+                "_workspaceId": None,
             },
         )
         assert tool_dependencies["install_runtime_packages"](

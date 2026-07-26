@@ -658,7 +658,7 @@ def create_lifespan(
                     "shared",
                 ),
                 db_path=db_path,
-                documents_repo=repos["documents"],
+                documents_repo=repos.get("documents"),
                 workspace_assets_repo={"list": list_readonly_workspace_assets},
             )
         )
