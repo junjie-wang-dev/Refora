@@ -101,6 +101,9 @@ class ConnectorBroker:
             {"apiKeyEnc": base64.b64encode(api_key_enc).decode("ascii")},
         )
 
+    async def apply_proxy(self, proxy_rules: str) -> Result:
+        return await self.send("connector.apply-proxy", {"proxyRules": proxy_rules})
+
     def decrypt_api_key_sync(self, api_key_enc: bytes, _provider: str | None = None) -> str:
         if not isinstance(api_key_enc, bytes) or not api_key_enc:
             raise ValueError("Encrypted API key must be non-empty bytes")

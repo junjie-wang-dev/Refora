@@ -22,8 +22,9 @@ from refora_server.library.bib_import import importFromBibtex
 from refora_server.library.file_hash import streamHash
 from refora_server.library.identifier_import import importByIdentifier
 from refora_server.library.json_import import importFromJson
-from refora_server.library.paths import resolveFromLibrary
+from refora_server.library.paths import containsLibrary, isInsideLibrary, resolveFromLibrary
 from refora_server.library.pdf_path import resolvePdfFilePath
+from refora_server.db.settings_seed import SETTING_KEYS
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.web.types import WEB_SEARCH_PROVIDERS
 
@@ -88,7 +89,7 @@ def _error(exc: Exception) -> JSONResponse:
     if code in {"unavailable", "dependency_unavailable", "connector_timeout"}:
         return JSONResponse(status_code=503, content={"ok": False, "error": {"code": "unavailable", "message": message}})
     if isinstance(exc, (ValueError, TypeError)) or code:
-        return JSONResponse(status_code=400, content={"ok": False, "error": {"code": "validation", "message": message}})
+        return JSONResponse(status_code=400, content={"ok": False, "error": {"code": code or "validation", "message": message}})
     return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": message}})
 
 
@@ -183,6 +184,33 @@ def _base64_blob(value: Any) -> bytes | None:
         return base64.b64decode(value, validate=True)
     except ValueError as error:
         raise _UnavailableError("Native encryption returned invalid base64") from error
+
+
+def _validate_proxy_url(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https", "socks5"}
+    except Exception:
+        return False
+
+
+async def _apply_proxy_rules(connector: Any, rules: str) -> None:
+    if rules and not _validate_proxy_url(rules):
+        return
+    apply = _value(connector, "applyProxy") or _value(connector, "apply_proxy")
+    if not callable(apply):
+        return
+    result = apply(rules)
+    if inspect.isawaitable(result):
+        result = await result
+    if isinstance(result, Mapping) and result.get("ok") is False:
+        error = result.get("error") or {}
+        code = error.get("code") if isinstance(error, Mapping) else "connector_error"
+        message = error.get("message") if isinstance(error, Mapping) else "Native proxy connector failed"
+        failure = RuntimeError(str(message))
+        failure.code = str(code)
+        raise failure
 
 
 def create_library_router(deps: Any) -> APIRouter:
@@ -894,7 +922,20 @@ def create_library_router(deps: Any) -> APIRouter:
 
     @router.post("/watch")
     async def add_watch(body: dict[str, Any]):
-        return await run(lambda: _call(watcher, "add", _absolute_directory(_string(_body_dict(body), "path"))))
+        async def action():
+            path = _absolute_directory(_string(_body_dict(body), "path"))
+            library_folder = _json_setting(settings, "libraryFolderPath", "")
+            if isinstance(library_folder, str) and library_folder:
+                if isInsideLibrary(path, library_folder):
+                    error = RuntimeError("Path cannot be inside the library folder.")
+                    error.code = "inside_library"
+                    raise error
+                if containsLibrary(path, library_folder):
+                    error = RuntimeError("Path cannot contain the library folder.")
+                    error.code = "contains_library"
+                    raise error
+            return await _call(watcher, "add", path)
+        return await run(action)
 
     @router.delete("/watch/{watch_id}")
     async def delete_watch(watch_id: str):
@@ -927,14 +968,29 @@ def create_library_router(deps: Any) -> APIRouter:
     async def patch_settings(body: dict[str, Any]):
         async def action():
             parsed = _body_dict(body)
+            proxy_changed = False
             for key, value in parsed.items():
                 if not isinstance(key, str) or not key:
                     raise ValueError("Settings keys must be non-empty strings")
+                if key not in SETTING_KEYS:
+                    error = RuntimeError(f"Unknown setting key: {key}")
+                    error.code = "forbidden_field"
+                    raise error
+                if key == "libraryFolderPath" and isinstance(value, str) and value:
+                    error = RuntimeError("Use library.switch to change the library folder")
+                    error.code = "use_library_switch"
+                    raise error
                 try:
                     json.dumps(value, allow_nan=False)
                 except (TypeError, ValueError) as error:
                     raise ValueError(f"Setting {key} is not JSON serializable") from error
                 await _call(settings, "set", key, value)
+                if key == "proxyUrl":
+                    proxy_changed = True
+            if proxy_changed:
+                proxy_value = _json_setting(settings, "proxyUrl", "")
+                proxy_rules = proxy_value.strip() if isinstance(proxy_value, str) else ""
+                await _apply_proxy_rules(connector, proxy_rules)
             values = await _call(settings, "list")
             return dict(values)
         return await run(action)

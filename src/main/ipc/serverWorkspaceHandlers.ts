@@ -33,14 +33,6 @@ async function wrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-function itemInput(kind: WorkspaceItemKind, id: string, placement?: WorkspaceItemPlacement) {
-  const input = { kind, placement }
-  if (kind === 'document') return { ...input, docId: id }
-  if (kind === 'report') return { ...input, reportId: id }
-  if (kind === 'note') return { ...input, noteId: id }
-  return { ...input, assetId: id }
-}
-
 export function createServerWorkspaceHandlers(serverClient: ServerClient) {
   const { http } = serverClient
 
@@ -89,7 +81,7 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
       kind: WorkspaceItemKind,
       ids: string[],
       placement?: WorkspaceItemPlacement
-    ) => wrap(() => Promise.all(ids.map((id) => http.workspaceItemsCreate(workspaceId, itemInput(kind, id, placement))))),
+    ) => wrap(() => http.workspaceItemsCreateBatch(workspaceId, { kind, ids, placement })),
     [IpcChannel.WorkspaceItemsRemove]: (itemId: string) =>
       wrap(async () => {
         await http.workspaceItemsDelete(await workspaceForItem(itemId), itemId)

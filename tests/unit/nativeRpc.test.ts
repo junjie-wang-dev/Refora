@@ -136,6 +136,7 @@ describe('nativeRpc', () => {
     safeStorage?: ReturnType<typeof makeSafeStorage>
     token?: string
     copyFileToClipboard?: (path: string) => void
+    setProxy?: (proxyRules: string) => Promise<void>
   } = {}) {
     const { factory, server } = createFakeHttpServer()
     const rpc = createNativeRpc({
@@ -143,6 +144,7 @@ describe('nativeRpc', () => {
       token: overrides.token ?? TOKEN,
       safeStorage: overrides.safeStorage ?? makeSafeStorage(),
       copyFileToClipboard: overrides.copyFileToClipboard,
+      setProxy: overrides.setProxy,
       createHttpServer: factory
     })
     const info = await rpc.start()
@@ -495,6 +497,35 @@ describe('nativeRpc', () => {
     )
     expect(status).toBe(400)
     expect(body).toMatchObject({ ok: false, error: { code: 'not_found' } })
+  })
+
+  it('applies proxy rules via the injected setProxy callback', async () => {
+    const setProxy = vi.fn().mockResolvedValue(undefined)
+    const { server } = await setup({ setProxy })
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/apply-proxy',
+      { proxyRules: 'http://proxy.example:8080' },
+      TOKEN
+    )
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, data: { applied: true } })
+    expect(setProxy).toHaveBeenCalledWith('http://proxy.example:8080')
+  })
+
+  it('returns proxy_failed when setProxy throws', async () => {
+    const setProxy = vi.fn().mockRejectedValue(new Error('boom'))
+    const { server } = await setup({ setProxy })
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/apply-proxy',
+      { proxyRules: 'http://proxy.example:8080' },
+      TOKEN
+    )
+    expect(status).toBe(400)
+    expect(body).toMatchObject({ ok: false, error: { code: 'proxy_failed' } })
   })
 
   it('stops the http server', async () => {

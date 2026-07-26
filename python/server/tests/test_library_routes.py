@@ -373,7 +373,7 @@ def test_missing_document_and_invalid_pdf_path_are_enveloped():
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"
     assert invalid_path.status_code == 400
-    assert invalid_path.json()["error"]["code"] == "validation"
+    assert invalid_path.json()["error"]["code"] == "invalid_path"
 
 
 def test_document_list_preserves_mode_category_and_sort():
@@ -525,6 +525,71 @@ def test_settings_roundtrip_uses_json_values():
     assert updated.json()["data"]["listColumnState"] == {"columns": []}
     assert fetched.json()["data"]["theme"] == "dark"
     assert fetched.json()["data"]["sidebarCollapsed"] is True
+
+
+def test_watch_rejects_paths_inside_or_containing_the_library(tmp_path):
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    library_folder = tmp_path / "parent" / "library"
+    library_folder.mkdir(parents=True)
+    inside_folder = library_folder / "watched"
+    inside_folder.mkdir()
+    parent_folder = tmp_path / "parent"
+    fakes.settings["set"]("libraryFolderPath", str(library_folder))
+
+    inside = client.post("/watch", headers=headers, json={"path": str(inside_folder)})
+    contains = client.post(
+        "/watch", headers=headers, json={"path": str(parent_folder)}
+    )
+
+    assert inside.status_code == 400
+    assert inside.json()["error"]["code"] == "inside_library"
+    assert contains.status_code == 400
+    assert contains.json()["error"]["code"] == "contains_library"
+
+
+def test_settings_rejects_unknown_keys_and_library_folder_path(tmp_path):
+    client, _ = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+
+    unknown = client.patch(
+        "/settings", headers=headers, json={"unknownKey": "value"}
+    )
+    library_switch = client.patch(
+        "/settings", headers=headers, json={"libraryFolderPath": str(tmp_path)}
+    )
+
+    assert unknown.status_code == 400
+    assert unknown.json()["error"]["code"] == "forbidden_field"
+    assert library_switch.status_code == 400
+    assert library_switch.json()["error"]["code"] == "use_library_switch"
+
+
+def test_settings_proxy_url_applies_proxy_rules_via_connector(tmp_path):
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    applied: list[str] = []
+
+    async def apply_proxy(rules: str):
+        applied.append(rules)
+        return {"ok": True, "data": {"applied": True}}
+
+    fakes.connector["applyProxy"] = apply_proxy
+
+    response = client.patch(
+        "/settings",
+        headers=headers,
+        json={"proxyUrl": "http://proxy.example:8080"},
+    )
+
+    assert response.status_code == 200
+    assert applied == ["http://proxy.example:8080"]
+
+    invalid = client.patch(
+        "/settings", headers=headers, json={"proxyUrl": "not-a-url"}
+    )
+    assert invalid.status_code == 200
+    assert applied == ["http://proxy.example:8080"]
 
 
 def test_web_search_keys_are_encrypted_and_can_be_cleared():

@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { shell, dialog, clipboard, type BrowserWindow } from 'electron'
+import { shell, dialog, clipboard, session as electronSession, type BrowserWindow } from 'electron'
 import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from './safeStorageProxy'
 import { logger } from './logger'
@@ -21,6 +21,7 @@ export interface NativeRpcDeps {
   safeStorage?: SafeStorageProxy
   createHttpServer?: typeof createServer
   copyFileToClipboard?: (path: string) => void
+  setProxy?: (proxyRules: string) => Promise<void>
 }
 
 export interface NativeRpc {
@@ -101,6 +102,9 @@ interface EncryptApiKeyBody {
 interface DecryptApiKeyBody {
   apiKeyEnc?: unknown
 }
+interface ApplyProxyBody {
+  proxyRules?: unknown
+}
 interface DialogOpenDirectoryBody {
   title?: unknown
 }
@@ -121,6 +125,9 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const safeStorage = deps.safeStorage ?? createSafeStorageProxy()
   const createHttpServer = deps.createHttpServer ?? createServer
   const copyFileToClipboard = deps.copyFileToClipboard ?? writeFileToClipboard
+  const setProxy =
+    deps.setProxy ??
+    ((proxyRules: string) => electronSession.defaultSession.setProxy({ proxyRules }))
   let server: Server | null = null
   let info: NativeRpcInfo | null = null
 
@@ -298,6 +305,17 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     }
   }
 
+  async function handleApplyProxy(body: ApplyProxyBody): Promise<Result<{ applied: boolean }>> {
+    const proxyRules = asString(body.proxyRules)
+    try {
+      await setProxy(proxyRules ?? '')
+      return ok({ applied: true })
+    } catch (e) {
+      logger.warn(`proxy:set failed: ${e instanceof Error ? e.message : String(e)}`)
+      return fail('proxy_failed', e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function route(
     path: string,
     body: unknown
@@ -323,6 +341,8 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
         return handleEncryptApiKey(body as EncryptApiKeyBody)
       case '/native/decrypt-api-key':
         return handleDecryptApiKey(body as DecryptApiKeyBody)
+      case '/native/apply-proxy':
+        return handleApplyProxy(body as ApplyProxyBody)
       default:
         return fail('not_found', `Unknown route: ${path}`)
     }

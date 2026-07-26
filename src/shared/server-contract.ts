@@ -1,6 +1,6 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "78026ee92e71b41bf352da69ea4769ec639f2955145cc5fe05b57192ff222745" as const
+export const SERVER_PROTOCOL_DIGEST = "224ad3de017e3a4f2cbe1d0f416516fd98d899bc8d43e6735f90216226cbfe5d" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -441,6 +441,10 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "POST",
+    "path": "/workspaces/{workspace_id}/items/batch"
+  },
+  {
+    "method": "POST",
     "path": "/workspaces/{workspace_id}/items/move"
   },
   {
@@ -504,7 +508,8 @@ export const CONNECTOR_EVENT_NAMES = [
   "connector.clipboard-write",
   "connector.clipboard-write-file",
   "connector.encrypt-api-key",
-  "connector.decrypt-api-key"
+  "connector.decrypt-api-key",
+  "connector.apply-proxy"
 ] as const
 
 export const CLIENT_WEBSOCKET_EVENT_NAMES = [

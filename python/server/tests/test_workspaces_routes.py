@@ -20,6 +20,12 @@ class FakeServices:
         self.workspaces = {
             "listWorkspaces": self._workspace("listWorkspaces", []),
             "createWorkspace": self._workspace("createWorkspace", {"id": "workspace-1"}),
+            "createWorkspaceWithSandbox": self._workspace(
+                "createWorkspaceWithSandbox", {"id": "workspace-1"}
+            ),
+            "ensureWorkspaceSandbox": self._workspace(
+                "ensureWorkspaceSandbox", None
+            ),
             "updateWorkspace": self._workspace("updateWorkspace", {"id": "workspace-1"}),
             "deleteWorkspace": self._workspace("deleteWorkspace", None),
             "openSandbox": self._workspace("openSandbox", None),
@@ -147,7 +153,7 @@ HEADERS = {"X-Refora-Token": "token"}
     ("method", "path", "payload", "call"),
     [
         ("get", "/workspaces", None, "listWorkspaces"),
-        ("post", "/workspaces", {"name": "Research"}, "createWorkspace"),
+        ("post", "/workspaces", {"name": "Research"}, "createWorkspaceWithSandbox"),
         ("patch", "/workspaces/workspace-1", {"name": "Updated"}, "updateWorkspace"),
         ("delete", "/workspaces/workspace-1", None, "deleteWorkspace"),
         ("post", "/workspaces/workspace-1/open-sandbox", None, "openSandbox"),
@@ -239,7 +245,7 @@ def test_raw_asset_routes_are_authenticated_and_served_by_python(
 def test_route_errors_use_result_envelopes(client: TestClient, services: FakeServices) -> None:
     services.workspaces["listWorkspaces"] = lambda: (_ for _ in ()).throw(RepoError("not_found", "missing"))
     missing = client.get("/workspaces", headers=HEADERS)
-    services.workspaces["createWorkspace"] = lambda name: (_ for _ in ()).throw(RepoError("duplicate", "exists"))
+    services.workspaces["createWorkspaceWithSandbox"] = lambda name: (_ for _ in ()).throw(RepoError("duplicate", "exists"))
     conflict = client.post("/workspaces", headers=HEADERS, json={"name": "Research"})
     services.mineru["getStatus"] = lambda: (_ for _ in ()).throw(RuntimeError("MinerU runtime unavailable"))
     unavailable = client.get("/mineru/status", headers=HEADERS)
@@ -337,3 +343,31 @@ def test_mineru_install_returns_immediate_acknowledgement(client: TestClient, se
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "data": {"ack": True}}
+
+
+def test_items_batch_endpoint_creates_all_items_in_single_call(
+    client: TestClient, services: FakeServices
+) -> None:
+    response = client.post(
+        "/workspaces/workspace-1/items/batch",
+        headers=HEADERS,
+        json={"kind": "document", "ids": ["doc-1", "doc-2"], "placement": {"x": 1, "y": 2}},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "data": [{"id": "item-1"}]}
+    assert services.calls[-1] == (
+        "addItems",
+        ("workspace-1", "document", ["doc-1", "doc-2"], {"x": 1.0, "y": 2.0}),
+    )
+
+
+def test_items_batch_rejects_missing_ids(client: TestClient) -> None:
+    response = client.post(
+        "/workspaces/workspace-1/items/batch",
+        headers=HEADERS,
+        json={"kind": "document"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "validation"

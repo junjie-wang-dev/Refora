@@ -185,6 +185,24 @@ def _unavailable_agent_capability(*_args: Any, **_kwargs: Any) -> dict[str, str]
     }
 
 
+class _LazyAgentRuntime(dict):
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    def _resolve(self) -> dict[str, Any]:
+        runtime = getattr(self._app.state, "agent_runtime", None)
+        return runtime if isinstance(runtime, dict) else {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._resolve().get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._resolve()[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._resolve()
+
+
 def create_lifespan(
     db_path: str,
     library_folder: str,
@@ -679,6 +697,8 @@ def create_lifespan(
                 {
                     "connector": connector,
                     "getSandboxPath": lambda workspace_id: f"{app.state.library_folder}/.refora/sandboxes/{workspace_id}",
+                    "agentRuntime": _LazyAgentRuntime(app),
+                    "academic": academic,
                 },
             ),
         }

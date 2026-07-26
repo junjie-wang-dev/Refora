@@ -263,6 +263,12 @@ export interface WorkspaceItemInput {
   placement?: WorkspaceItemPlacement
 }
 
+export interface WorkspaceItemsBatchInput {
+  kind: WorkspaceItemKind
+  ids: string[]
+  placement?: WorkspaceItemPlacement
+}
+
 export interface WorkspaceItemsReorderPayload {
   ids: string[]
 }
@@ -414,6 +420,7 @@ export interface ServerHttp {
   workspaceItemsList(workspaceId: string): Promise<WorkspaceItem[]>
   workspaceItemGet(itemId: string): Promise<WorkspaceItem>
   workspaceItemsCreate(workspaceId: string, input: WorkspaceItemInput): Promise<WorkspaceItem>
+  workspaceItemsCreateBatch(workspaceId: string, input: WorkspaceItemsBatchInput): Promise<WorkspaceItem[]>
   workspaceItemsDelete(workspaceId: string, itemId: string): Promise<{ ack: boolean }>
   workspaceItemsReorder(workspaceId: string, payload: WorkspaceItemsReorderPayload): Promise<{ ack: boolean }>
   workspaceItemResize(workspaceId: string, itemId: string, payload: WorkspaceItemSizePayload): Promise<WorkspaceItem>
@@ -664,6 +671,7 @@ export function createServerClient(
     workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${id}/items`),
     workspaceItemGet: (id) => get<WorkspaceItem>(`/workspace-items/${id}`),
     workspaceItemsCreate: (id, input) => post<WorkspaceItem>(`/workspaces/${id}/items`, input),
+    workspaceItemsCreateBatch: (id, input) => post<WorkspaceItem[]>(`/workspaces/${id}/items/batch`, input),
     workspaceItemsDelete: (id, itemId) => del<{ ack: boolean }>(`/workspaces/${id}/items/${itemId}`),
     workspaceItemsReorder: (id, payload) => post<{ ack: boolean }>(`/workspaces/${id}/items/reorder`, payload),
     workspaceItemResize: (id, itemId, payload) => patch<WorkspaceItem>(`/workspaces/${id}/items/${itemId}/size`, payload),
@@ -846,6 +854,10 @@ export function createServerClient(
       case 'connector.decrypt-api-key':
         route = '/native/decrypt-api-key'
         body = { apiKeyEnc: request.apiKeyEnc }
+        break
+      case 'connector.apply-proxy':
+        route = '/native/apply-proxy'
+        body = { proxyRules: request.proxyRules }
         break
       default:
         sendConnectorErrorImpl({ requestId, ok: false, error: { code: 'unknown_connector', message: `Unknown connector event: ${event}` } })
