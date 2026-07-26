@@ -2,9 +2,10 @@ import asyncio
 
 import pytest
 
-from conftest import insert_thread, open_migrated_db
+from conftest import insert_doc, insert_thread, make_workspaces_repo, open_migrated_db
 from refora_server.repositories import create_repositories
 from refora_server.services.agent_runtime import createAgentRuntime
+from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 
 
 @pytest.fixture
@@ -116,7 +117,7 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     assert repos["chat"]["getThread"]("thread-1")["headCheckpointId"] == "checkpoint-after"
     traces = repos["agentTraces"]["listByRun"]("run-1")
     assert [trace["kind"] for trace in traces] == ["run", "tool"]
-    assert traces[0]["status"] == "completed"
+    assert traces[0]["status"] == "done"
     assert "secret-api-key" not in str(seen)
     assert {event for event, _ in seen} >= {
         "ai.chat.token",
@@ -245,3 +246,94 @@ def test_interrupt_then_resume_resolves_decisions_and_completes(repos, db):
     assert repos["agentRuns"]["get"]("run-1")["checkpointAfter"] == "checkpoint-after"
     assert any(event == "ai.chat.interrupted" for event, _ in seen)
     assert any(event == "ai.chat.done" for event, _ in seen)
+
+    run_traces = repos["agentTraces"]["listByRun"]("run-1")
+    run_steps = [step for step in run_traces if step["kind"] == "run"]
+    assert [step["status"] for step in run_steps] == ["interrupted", "done"]
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "completed"
+
+
+def test_resume_replays_persisted_tool_effect_for_same_tool_call_id(repos, db):
+    insert_thread(db)
+    insert_doc(db, id="doc-1")
+    ws = make_workspaces_repo(db)["create"]("Research")
+    tool_call = {
+        "type": "tool_call",
+        "name": "add_docs_to_workspace",
+        "id": "call-replay",
+        "args": {"docIds": "doc-1"},
+    }
+
+    def create_tools(req):
+        return create_agent_tools(
+            AgentToolContext(run_id=req["runId"], workspace_id=ws["id"]),
+            {"repos": repos},
+        )
+
+    async def stream(agent, req, mode):
+        tools = agent if isinstance(agent, list) else []
+        tool = next((t for t in tools if t.name == "add_docs_to_workspace"), None)
+        if mode == "send":
+            if tool is not None:
+                tool.invoke(tool_call, {})
+            yield {
+                "event": "interrupted",
+                "state": {
+                    "config": {"configurable": {"checkpoint_id": "checkpoint-waiting"}},
+                    "tasks": [
+                        {
+                            "interrupts": [
+                                {
+                                    "value": {
+                                        "actionRequests": [{"name": "add_docs_to_workspace", "args": {"docIds": "doc-1"}}],
+                                        "reviewConfigs": [{"allowedDecisions": ["approve", "reject"]}],
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                },
+            }
+            return
+        if tool is not None:
+            tool.invoke(tool_call, {})
+        yield {
+            "event": "complete",
+            "result": {"messages": [{"content": "Done"}]},
+            "state": {"config": {"configurable": {"checkpoint_id": "checkpoint-after"}}},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": create_tools,
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: tools,
+            "stream": stream,
+        },
+    )
+
+    interrupted = asyncio.run(runtime["send"](request()))
+    persisted = repos["agentToolEffects"]["get"]("run-1", "call-replay")
+    assert persisted is not None
+    assert persisted["status"] == "done"
+
+    resumed = asyncio.run(
+        runtime["resume"](
+            {
+                "runId": "run-1",
+                "decisions": [{"type": "approve"}],
+                "provider": request()["provider"],
+            }
+        )
+    )
+
+    assert interrupted["status"] == "interrupted"
+    assert resumed["status"] == "completed"
+    replayed = repos["agentToolEffects"]["get"]("run-1", "call-replay")
+    assert replayed == persisted
+    rows = db.execute(
+        "SELECT COUNT(*) FROM agent_tool_effects WHERE runId = ? AND toolCallId = ?",
+        ["run-1", "call-replay"],
+    ).fetchone()
+    assert rows[0] == 1

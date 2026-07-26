@@ -6,6 +6,11 @@ import time
 import uuid
 from typing import Any
 
+from refora_server.agent.engine_schema import (
+    INTERRUPT_STATUS_PENDING,
+    INTERRUPT_STATUS_RESOLVED,
+)
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -49,13 +54,14 @@ def createAgentInterruptsRepository(db):
         db.execute(
             "INSERT INTO agent_interrupts "
             "(id, runId, threadId, checkpointId, payload, status, decision, createdAt, resolvedAt) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?, NULL)",
+            "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL)",
             [
                 id,
                 input["runId"],
                 input["threadId"],
                 input.get("checkpointId"),
                 json.dumps(input["actions"]),
+                INTERRUPT_STATUS_PENDING,
                 now,
             ],
         )
@@ -72,9 +78,9 @@ def createAgentInterruptsRepository(db):
     def getPendingByRun(runId: str) -> dict[str, Any] | None:
         cur = db.execute(
             "SELECT * FROM agent_interrupts "
-            "WHERE runId = ? AND status = 'pending' "
+            "WHERE runId = ? AND status = ? "
             "ORDER BY createdAt DESC LIMIT 1",
-            [runId],
+            [runId, INTERRUPT_STATUS_PENDING],
         )
         row = cur.fetchone()
         if row is None:
@@ -84,9 +90,9 @@ def createAgentInterruptsRepository(db):
     def resolve(id: str, decisions: list[Any]) -> dict[str, Any] | None:
         db.execute(
             "UPDATE agent_interrupts "
-            "SET status = 'resolved', decision = ?, resolvedAt = ? "
-            "WHERE id = ? AND status = 'pending'",
-            [json.dumps(decisions), _now_ms(), id],
+            "SET status = ?, decision = ?, resolvedAt = ? "
+            "WHERE id = ? AND status = ?",
+            [INTERRUPT_STATUS_RESOLVED, json.dumps(decisions), _now_ms(), id, INTERRUPT_STATUS_PENDING],
         )
         row = _fetch(id)
         if row is None:

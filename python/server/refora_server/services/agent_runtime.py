@@ -7,9 +7,24 @@ import time
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from typing import Any
 
+from refora_server.agent.engine import RunStateMachine
+from refora_server.agent.engine_schema import (
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_INTERRUPTED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    TRACE_STATUS_CANCELLED,
+    TRACE_STATUS_DONE,
+    TRACE_STATUS_ERROR,
+    TRACE_STATUS_RUNNING,
+    is_terminal_run,
+    protocol_status,
+)
+
 
 _SECRET_KEYS = {"apiKey", "api_key", "authorization", "Authorization"}
-_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
 
 def _now_ms() -> int:
@@ -175,6 +190,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     stream_factory = deps.get("stream")
     emit = deps.get("emit")
     logger = deps.get("logger")
+    state_machine = RunStateMachine(repos["agentRuns"], repos["agentTraces"], clock)
 
     async def emit_event(name: str, payload: dict[str, Any]) -> None:
         safe_payload = _without_secrets(payload)
@@ -195,8 +211,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 return
 
     async def emit_status(run_id: str, status: str) -> None:
-        protocol_status = "running" if status == "running" else "waiting" if status == "interrupted" else "idle"
-        await emit_event("ai.chat.run-status", {"runId": run_id, "status": protocol_status})
+        await emit_event("ai.chat.run-status", {"runId": run_id, "status": protocol_status(status)})
 
     async def emit_trace(request: dict[str, Any], event: dict[str, Any]) -> None:
         await emit_event(
@@ -222,7 +237,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 "output": _truncate(_without_secrets(data)),
                 "status": status,
                 "startedAt": clock(),
-                "endedAt": clock() if status != "running" else None,
+                "endedAt": clock() if status != TRACE_STATUS_RUNNING else None,
                 "seq": seq,
                 "checkpointId": checkpoint,
             }
@@ -230,7 +245,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
 
     def close_open_traces(run_id: str, status: str, message: str) -> None:
         for step in repos["agentTraces"]["listByRun"](run_id):
-            if step.get("status") == "running":
+            if step.get("status") == TRACE_STATUS_RUNNING:
                 repos["agentTraces"]["updateStep"](
                     step["id"], {"status": status, "output": _truncate(message), "endedAt": clock()}
                 )
@@ -268,19 +283,20 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         checkpoint = _checkpoint_id(state) or request.get("checkpointBefore")
         actions = _interrupt_actions(state)
         repos["chat"]["updateAgentState"](request["threadId"], checkpoint, int(deps.get("agentStateVersion", 1)))
-        repos["agentRuns"]["update"](
+        state_machine.transition(
             run_id,
-            {"status": "interrupted", "checkpointAfter": checkpoint, "endedAt": clock()},
+            RUN_STATUS_RUNNING,
+            RUN_STATUS_INTERRUPTED,
+            {"checkpointAfter": checkpoint, "endedAt": clock()},
+            run_trace,
+            trace_output="Interrupted",
         )
         interrupt = repos["agentInterrupts"]["create"](
             {"runId": run_id, "threadId": request["threadId"], "checkpointId": checkpoint, "actions": actions}
         )
-        repos["agentTraces"]["updateStep"](
-            run_trace["id"], {"status": "completed", "output": "Interrupted", "endedAt": clock()}
-        )
         await emit_event("ai.chat.interrupted", {"runId": run_id, "threadId": request["threadId"]})
-        await emit_status(run_id, "interrupted")
-        return {"runId": run_id, "status": "interrupted", "interrupt": interrupt, "state": state}
+        await emit_status(run_id, RUN_STATUS_INTERRUPTED)
+        return {"runId": run_id, "status": RUN_STATUS_INTERRUPTED, "interrupt": interrupt, "state": state}
 
     async def finish_completed(request: dict[str, Any], result: Any, state: dict[str, Any], run_trace: dict[str, Any]) -> dict[str, Any]:
         run_id = request["runId"]
@@ -290,17 +306,17 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         message = repos["chat"]["addMessage"](request["threadId"], "assistant", text)
         checkpoint = _checkpoint_id(state) or request.get("checkpointBefore")
         repos["chat"]["updateAgentState"](request["threadId"], checkpoint, int(deps.get("agentStateVersion", 1)))
-        run = repos["agentRuns"]["update"](
+        run, _trace = state_machine.transition(
             run_id,
+            RUN_STATUS_RUNNING,
+            RUN_STATUS_COMPLETED,
             {
-                "status": "completed",
                 "checkpointAfter": checkpoint,
                 "assistantMessageId": message["id"],
                 "endedAt": clock(),
             },
-        )
-        repos["agentTraces"]["updateStep"](
-            run_trace["id"], {"status": "completed", "output": _truncate(text), "endedAt": clock()}
+            run_trace,
+            trace_output=_truncate(text),
         )
         title = None
         title_source = deps.get("generateTitle") or deps.get("generate_title")
@@ -312,18 +328,25 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 repos["chat"]["updateTitle"](request["threadId"], title)
                 await emit_event("ai.chat.title-updated", {"threadId": request["threadId"], "title": title})
         await emit_event("ai.chat.done", {"runId": run_id, "threadId": request["threadId"], "result": _without_secrets(result), "state": _without_secrets(state)})
-        await emit_status(run_id, "completed")
-        return {"runId": run_id, "status": "completed", "run": run, "result": result, "state": state, "title": title}
+        await emit_status(run_id, RUN_STATUS_COMPLETED)
+        return {"runId": run_id, "status": RUN_STATUS_COMPLETED, "run": run, "result": result, "state": state, "title": title}
 
     async def terminalize(request: dict[str, Any], status: str, error: str, run_trace: dict[str, Any] | None) -> dict[str, Any]:
         run_id = request["runId"]
-        close_open_traces(run_id, "cancelled" if status == "cancelled" else "error", error)
-        run = repos["agentRuns"]["update"](run_id, {"status": status, "endedAt": clock(), "error": error})
-        if run_trace is not None:
-            repos["agentTraces"]["updateStep"](
-                run_trace["id"], {"status": "cancelled" if status == "cancelled" else "error", "output": _truncate(error), "endedAt": clock()}
-            )
-        if status == "failed":
+        close_open_traces(run_id, TRACE_STATUS_CANCELLED if status == RUN_STATUS_CANCELLED else TRACE_STATUS_ERROR, error)
+        current = RUN_STATUS_RUNNING
+        if run_trace is None:
+            persisted = repos["agentRuns"]["get"](run_id)
+            current = persisted["status"] if persisted else current
+        run, _trace = state_machine.transition(
+            run_id,
+            current,
+            status,
+            {"endedAt": clock(), "error": error},
+            run_trace,
+            trace_output=_truncate(error),
+        )
+        if status == RUN_STATUS_FAILED:
             await emit_event("ai.chat.error", {"runId": run_id, "threadId": request["threadId"], "error": {"code": "agent_failed", "message": error}})
         await emit_status(run_id, status)
         return {"runId": run_id, "status": status, "run": run, "error": error}
@@ -333,10 +356,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         run_id = request.get("runId")
         thread_id = request.get("threadId")
         if not isinstance(run_id, str) or not run_id or not isinstance(thread_id, str) or not thread_id:
-            return {"runId": run_id, "status": "failed", "error": "runId and threadId are required"}
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "runId and threadId are required"}
         thread = repos["chat"]["getThread"](thread_id)
         if thread is None:
-            return {"runId": run_id, "status": "failed", "error": "Thread not found"}
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Thread not found"}
         provider = request.get("provider") if isinstance(request.get("provider"), dict) else {}
         model = provider.get("model") if isinstance(provider.get("model"), str) else ""
         control = {"cancelled": False, "agent": None}
@@ -357,16 +380,18 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         "threadId": thread_id,
                         "providerId": thread["providerId"],
                         "modelId": model,
-                        "status": "queued",
+                        "status": RUN_STATUS_QUEUED,
                         "checkpointBefore": request.get("checkpointBefore"),
                         "userMessageId": user_message["id"] if user_message else None,
                         "startedAt": clock(),
                     }
                 )
-                await emit_status(run_id, "queued")
-            repos["agentRuns"]["update"](run_id, {"status": "running", "endedAt": None, "error": None})
-            await emit_status(run_id, "running")
-            run_trace = add_trace(request, 0, "run", "agent", "running", checkpoint=request.get("checkpointBefore"))
+                await emit_status(run_id, RUN_STATUS_QUEUED)
+            persisted = repos["agentRuns"]["get"](run_id)
+            current_status = persisted["status"] if persisted else RUN_STATUS_QUEUED
+            state_machine.transition(run_id, current_status, RUN_STATUS_RUNNING, {"endedAt": None, "error": None})
+            await emit_status(run_id, RUN_STATUS_RUNNING)
+            run_trace = add_trace(request, 0, "run", "agent", TRACE_STATUS_RUNNING, checkpoint=request.get("checkpointBefore"))
             agent = await create_runtime_agent(request)
             control["agent"] = agent
             stream = await event_stream(agent, request, mode)
@@ -382,7 +407,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             interrupted = False
             async for raw in events:
                 if control["cancelled"]:
-                    return await terminalize(request, "cancelled", "Cancelled", run_trace)
+                    return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
                 event = raw if isinstance(raw, dict) else {"event": "trace", "data": raw}
                 event_name = str(event.get("event") or event.get("type") or "")
                 if event_name in {"token", "on_chat_model_stream"}:
@@ -420,22 +445,22 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     continue
                 await emit_trace(request, event)
                 checkpoint = _checkpoint_id(event)
-                add_trace(request, seq, "tool" if "tool" in event_name else "model", event.get("name") if isinstance(event.get("name"), str) else event_name or "agent", "completed", event.get("data"), checkpoint)
+                add_trace(request, seq, "tool" if "tool" in event_name else "model", event.get("name") if isinstance(event.get("name"), str) else event_name or "agent", TRACE_STATUS_DONE, event.get("data"), checkpoint)
                 seq += 1
             if control["cancelled"]:
-                return await terminalize(request, "cancelled", "Cancelled", run_trace)
+                return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
             if interrupted or _interrupt_actions(state):
                 return await finish_interrupted(request, state, run_trace)
             return await finish_completed(request, result, state, run_trace)
         except asyncio.CancelledError:
-            return await terminalize(request, "cancelled", "Cancelled", run_trace)
+            return await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", run_trace)
         except Exception as error:
             message = _as_text(error)
             api_key = provider.get("apiKey") if isinstance(provider, dict) else None
             if isinstance(api_key, str) and api_key:
                 message = message.replace(api_key, "[redacted]")
             warn(f"agent runtime failed run={run_id}")
-            return await terminalize(request, "cancelled" if control["cancelled"] else "failed", message or "Agent execution failed", run_trace)
+            return await terminalize(request, RUN_STATUS_CANCELLED if control["cancelled"] else RUN_STATUS_FAILED, message or "Agent execution failed", run_trace)
         finally:
             active.pop(run_id, None)
 
@@ -445,18 +470,18 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     async def resume(request: dict[str, Any]) -> dict[str, Any]:
         run_id = request.get("runId")
         if not isinstance(run_id, str) or not run_id:
-            return {"runId": run_id, "status": "failed", "error": "runId is required"}
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "runId is required"}
         persisted = repos["agentRuns"]["get"](run_id)
         interrupt = repos["agentInterrupts"]["getPendingByRun"](run_id)
         if persisted is None or interrupt is None:
-            return {"runId": run_id, "status": "failed", "error": "No pending interrupt for run"}
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "No pending interrupt for run"}
         decisions = request.get("decisions")
         if not isinstance(decisions, list) or len(decisions) != len(interrupt["actions"]):
-            return {"runId": run_id, "status": "failed", "error": "Interrupt decisions do not match pending actions"}
+            return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Interrupt decisions do not match pending actions"}
         for decision, action in zip(decisions, interrupt["actions"]):
             decision_type = decision.get("type") if isinstance(decision, dict) else None
             if decision_type not in action.get("allowedDecisions", []):
-                return {"runId": run_id, "status": "failed", "error": "Interrupt decision is not allowed"}
+                return {"runId": run_id, "status": RUN_STATUS_FAILED, "error": "Interrupt decision is not allowed"}
         repos["agentInterrupts"]["resolve"](interrupt["id"], decisions)
         request = {**request, "threadId": persisted["threadId"], "checkpointBefore": interrupt.get("checkpointId") or persisted.get("checkpointAfter")}
         return await run(request, "resume", existing_run=True)
@@ -465,10 +490,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         control = active.get(run_id)
         if control is None:
             run = repos["agentRuns"]["get"](run_id)
-            if run is None or run.get("status") in _TERMINAL_STATUSES:
+            if run is None or is_terminal_run(run["status"]):
                 return {"runId": run_id, "cancelled": False}
             request = {"runId": run_id, "threadId": run["threadId"]}
-            await terminalize(request, "cancelled", "Cancelled", None)
+            await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", None)
             return {"runId": run_id, "cancelled": True}
         control["cancelled"] = True
         agent = control.get("agent")

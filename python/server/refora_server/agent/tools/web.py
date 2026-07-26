@@ -30,3 +30,7 @@ class WebTools(ToolGroup):
         "web_search": object_schema({"query": {"type": "string", "minLength": 1, "maxLength": 400}, "maxResults": {"type": "integer", "minimum": 1, "maximum": 10, "default": 8}, "timeRange": {"type": "string", "enum": ["day", "week", "month", "year"]}, "allowedDomains": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 253}, "maxItems": 10, "default": []}, "region": {"type": "string", "pattern": r"^[a-z]{2}-[a-z]{2}$"}}, ["query"]),
         "web_fetch": object_schema({"url": {"type": "string", "format": "uri", "maxLength": 2048}, "maxChars": {"type": "integer", "minimum": 1000, "maximum": 40000, "default": 20000}}, ["url"]),
     }
+
+
+def register(ctx: Any, deps: Any) -> type[WebTools]:
+    return WebTools

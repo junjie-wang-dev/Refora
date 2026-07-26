@@ -15,7 +15,15 @@ def prepare_paper_ocr(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def propose_workspace_memory_update(executor: Any, args: dict[str, Any]) -> Any:
-    return update_memory(executor.repos, workspace(executor), args["path"], args["content"], source_thread_id=executor.context.thread_id, source_run_id=executor.context.run_id)
+    context = value(executor, "context")
+    return update_memory(
+        value(executor, "repos"),
+        workspace(executor),
+        args["path"],
+        args["content"],
+        source_thread_id=value(context, "thread_id"),
+        source_run_id=value(context, "run_id"),
+    )
 
 
 class OcrMemoryTools(ToolGroup):
@@ -47,3 +55,9 @@ _OCR_MEMORY_SCHEMA = object_schema(
 )
 OcrMemoryTools.descriptions["propose_workspace_memory_update"] = _MEMORY_DESCRIPTION
 OcrMemoryTools.schemas["propose_workspace_memory_update"] = _OCR_MEMORY_SCHEMA
+
+
+def register(ctx: Any, deps: Any) -> dict[str, tuple[Any, dict[str, Any], str]]:
+    registry: dict[str, tuple[Any, dict[str, Any], str]] = {}
+    OcrMemoryTools.register(registry)
+    return registry

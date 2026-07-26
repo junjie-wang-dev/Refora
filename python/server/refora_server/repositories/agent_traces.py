@@ -5,6 +5,10 @@ import time
 import uuid
 from typing import Any
 
+from refora_server.agent.engine_schema import (
+    TRACE_STATUS_CANCELLED,
+    TRACE_STATUS_RUNNING,
+)
 from refora_server.repositories.errors import RepoError
 
 
@@ -155,9 +159,9 @@ def createAgentTracesRepository(db):
         ts = endedAt if endedAt is not None else _now_ms()
         cur = db.execute(
             "UPDATE agent_trace_steps "
-            "SET status = 'cancelled', output = COALESCE(output, ?), endedAt = ? "
-            "WHERE status = 'running'",
-            [output, ts],
+            "SET status = ?, output = COALESCE(output, ?), endedAt = ? "
+            "WHERE status = ?",
+            [TRACE_STATUS_CANCELLED, output, ts, TRACE_STATUS_RUNNING],
         )
         return cur.rowcount
 

@@ -17,7 +17,11 @@ def install_runtime_packages(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def execute_sandbox(executor: Any, args: dict[str, Any]) -> Any:
-    return call(value(executor, "deps"), "execute_sandbox", args.get("command", ""), args)
+    deps = value(executor, "deps")
+    runner = value(deps, "execute_sandbox")
+    if not callable(runner):
+        return {"error": {"code": "not_implemented", "message": "Sandbox code execution is not available yet."}}
+    return call(deps, "execute_sandbox", args.get("command", ""), args)
 
 
 class SandboxTools(ToolGroup):

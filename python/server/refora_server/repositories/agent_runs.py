@@ -5,6 +5,11 @@ import time
 import uuid
 from typing import Any
 
+from refora_server.agent.engine_schema import (
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+)
 from refora_server.repositories.errors import RepoError
 
 
@@ -51,7 +56,7 @@ def createAgentRunsRepository(db):
                 input["threadId"],
                 input["providerId"],
                 input["modelId"],
-                input.get("status") or "queued",
+                input.get("status") or RUN_STATUS_QUEUED,
                 input.get("checkpointBefore"),
                 input.get("replacesRunId"),
                 input.get("userMessageId"),
@@ -101,9 +106,15 @@ def createAgentRunsRepository(db):
     def reconcileRunning(error: str, endedAt: int | None = None) -> int:
         ts = endedAt if endedAt is not None else _now_ms()
         cur = db.execute(
-            "UPDATE agent_runs SET status = 'cancelled', endedAt = ?, error = ? "
-            "WHERE status IN ('queued', 'running')",
-            [ts, error],
+            "UPDATE agent_runs SET status = ?, endedAt = ?, error = ? "
+            "WHERE status IN (?, ?)",
+            [
+                RUN_STATUS_CANCELLED,
+                ts,
+                error,
+                RUN_STATUS_QUEUED,
+                RUN_STATUS_RUNNING,
+            ],
         )
         return cur.rowcount
 

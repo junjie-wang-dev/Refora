@@ -4,6 +4,8 @@ import sqlite3
 import time
 from typing import Any
 
+from refora_server.agent.engine_schema import TOOL_EFFECT_STATUS_RUNNING
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -41,12 +43,13 @@ def createAgentToolEffectsRepository(db):
         db.execute(
             "INSERT INTO agent_tool_effects "
             "(runId, toolCallId, toolName, workspaceId, status, result, createdAt, updatedAt) "
-            "VALUES (?, ?, ?, ?, 'running', NULL, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
             [
                 input["runId"],
                 input["toolCallId"],
                 input["toolName"],
                 input.get("workspaceId"),
+                TOOL_EFFECT_STATUS_RUNNING,
                 now,
                 now,
             ],

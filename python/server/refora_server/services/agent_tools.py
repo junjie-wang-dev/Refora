@@ -5,8 +5,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from langchain_core.runnables.config import RunnableConfig, ensure_config, patch_config
 from langchain_core.tools import StructuredTool
 
+from refora_server.agent.engine_schema import (
+    TOOL_EFFECT_STATUS_DONE,
+    TOOL_EFFECT_STATUS_ERROR,
+    TOOL_EFFECT_STATUS_RUNNING,
+)
 from refora_server.agent.risk import RiskClass, classify
 from refora_server.agent.tools.academic import AcademicTools
 from refora_server.agent.tools.common import value
@@ -24,6 +30,44 @@ class AgentToolContext:
     run_id: str
     thread_id: str | None = None
     workspace_id: str | None = None
+
+
+_TOOL_CALL_ID_CONFIG_KEY = "_refora_tool_call_id"
+
+
+def _with_tool_call_id(config: RunnableConfig | None, tool_call_id: str | None) -> RunnableConfig:
+    base = ensure_config(config)
+    if not tool_call_id:
+        return base
+    configurable = dict(base.get("configurable") or {})
+    configurable[_TOOL_CALL_ID_CONFIG_KEY] = tool_call_id
+    return patch_config(base, configurable=configurable)
+
+
+def _tool_call_id_from(input: Any, config: RunnableConfig | None) -> str | None:
+    if isinstance(input, dict) and input.get("type") == "tool_call" and isinstance(input.get("id"), str):
+        return input["id"]
+    configurable = (config or {}).get("configurable") or {}
+    value = configurable.get(_TOOL_CALL_ID_CONFIG_KEY)
+    return value if isinstance(value, str) else None
+
+
+class _ToolCallAwareTool(StructuredTool):
+    def invoke(  # type: ignore[override]
+        self,
+        input: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return super().invoke(input, _with_tool_call_id(config, _tool_call_id_from(input, config)), **kwargs)
+
+    async def ainvoke(  # type: ignore[override]
+        self,
+        input: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return await super().ainvoke(input, _with_tool_call_id(config, _tool_call_id_from(input, config)), **kwargs)
 
 
 _REGISTRY = collect_registry(
@@ -77,17 +121,17 @@ class AgentToolExecutor:
         _begin = value(effects, "begin")
         _finish = value(effects, "finish")
         existing = _get(self.context.run_id, tool_call_id)
-        if existing and existing["status"] == "done" and isinstance(existing.get("result"), str):
+        if existing and existing["status"] == TOOL_EFFECT_STATUS_DONE and isinstance(existing.get("result"), str):
             return existing["result"]
-        if existing and existing["status"] == "running":
+        if existing and existing["status"] == TOOL_EFFECT_STATUS_RUNNING:
             return _json({"error": "This tool call has an unknown outcome from an interrupted run."})
         _begin({"runId": self.context.run_id, "toolCallId": tool_call_id, "toolName": name, "workspaceId": self.context.workspace_id})
         try:
             result = _json(self._dispatch(name, arguments))
         except Exception as error:
-            _finish(self.context.run_id, tool_call_id, "error", str(error))
+            _finish(self.context.run_id, tool_call_id, TOOL_EFFECT_STATUS_ERROR, str(error))
             raise
-        _finish(self.context.run_id, tool_call_id, "done", result)
+        _finish(self.context.run_id, tool_call_id, TOOL_EFFECT_STATUS_DONE, result)
         return result
 
     def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
@@ -112,9 +156,10 @@ def create_agent_tools(context: AgentToolContext, deps: Any) -> list[StructuredT
     tools: list[StructuredTool] = []
     for name, (_handler, schema, description) in _REGISTRY.items():
         def make_tool(n: str = name) -> Any:
-            def invoke(**arguments: Any) -> str:
-                tool_call_id = arguments.pop("_refora_tool_call_id", None)
+            def invoke(config: RunnableConfig, **arguments: Any) -> str:
+                tool_call_id = _tool_call_id_from(arguments, config)
+                arguments.pop(_TOOL_CALL_ID_CONFIG_KEY, None)
                 return executor.execute(n, arguments, tool_call_id)
             return invoke
-        tools.append(StructuredTool(name=name, description=description, args_schema=schema, func=make_tool()))
+        tools.append(_ToolCallAwareTool(name=name, description=description, args_schema=schema, func=make_tool()))
     return tools

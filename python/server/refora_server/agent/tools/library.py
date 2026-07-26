@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from refora_server.agent.tools.common import call, ids, object_schema, repo, value
+from refora_server.agent.tools.common import call, object_schema, repo, value
 from refora_server.agent.tools.registry import ToolGroup
 
 _TEXT = {"type": "string"}
@@ -12,12 +12,12 @@ _CHUNK_LIMIT = {"type": "integer", "minimum": 500, "maximum": 12000, "default": 
 
 
 def search_library(executor: Any, args: dict[str, Any]) -> Any:
-    docs = call(executor.repos, "search", args.get("query", ""), 20) if hasattr(executor, "repos") else call(value(executor, "deps"), "search", args.get("query", ""), 20)
+    docs = call(repo(executor.repos, "documents"), "search", args.get("query", ""), 20)
     return [{"docId": doc["id"], "title": doc.get("title") or doc.get("fileName"), "authors": doc.get("authors"), "year": doc.get("year")} for doc in docs[:20]]
 
 
 def get_paper_metadata(executor: Any, args: dict[str, Any]) -> Any:
-    doc = call(executor.repos if hasattr(executor, "repos") else value(executor, "deps"), "get", args["docId"])
+    doc = call(repo(executor.repos, "documents"), "get", args["docId"])
     return doc or {"error": "Document not found."}
 
 
@@ -30,21 +30,20 @@ def read_paper_ocr_fulltext(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, Any]:
-    documents = executor.repos if hasattr(executor, "repos") else value(executor, "deps")
-    doc = call(documents, "get", args["docId"])
+    doc = call(repo(executor.repos, "documents"), "get", args["docId"])
     if not doc:
         return {"error": "Document not found."}
     if ocr:
-        text = call(value(executor, "deps"), "read_ocr_fulltext", args["docId"])
+        text = call(executor.deps, "read_ocr_fulltext", args["docId"])
     else:
-        entry = call(repo(executor.repos if hasattr(executor, "repos") else value(executor, "deps"), "aiSummaries"), "getFullText", args["docId"])
+        entry = call(repo(executor.repos, "aiSummaries"), "getFullText", args["docId"])
         text = entry.get("text", "") if entry else ""
     offset, limit = max(0, int(args.get("offset", 0))), min(12_000, max(500, int(args.get("limit", 8_000))))
     return {"docId": args["docId"], "title": doc.get("title") or doc.get("fileName"), "offset": offset, "limit": limit, "totalChars": len(text), "nextOffset": offset + limit if offset + limit < len(text) else None, "text": text[offset:offset + limit]}
 
 
 def get_paper_summary(executor: Any, args: dict[str, Any]) -> Any:
-    summary = call(repo(executor.repos if hasattr(executor, "repos") else value(executor, "deps"), "aiSummaries"), "getSummary", args["docId"])
+    summary = call(repo(executor.repos, "aiSummaries"), "getSummary", args["docId"])
     return summary["content"] if summary and summary.get("content") is not None else {"error": "No summary is available."}
 
 
@@ -57,11 +56,11 @@ def request_summary(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def open_paper(executor: Any, args: dict[str, Any]) -> Any:
-    return call(value(executor, "deps"), "open_paper", args["docId"])
+    return call(executor.deps, "open_paper", args["docId"])
 
 
 def find_related_papers(executor: Any, args: dict[str, Any]) -> Any:
-    return call(value(executor, "deps"), "find_related_papers", args["docId"], args.get("limit", 8))
+    return call(executor.deps, "find_related_papers", args["docId"], args.get("limit", 8))
 
 
 class LibraryTools(ToolGroup):
