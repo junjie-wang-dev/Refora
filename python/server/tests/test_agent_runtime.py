@@ -36,6 +36,7 @@ def request(**overrides):
         "runId": "run-1",
         "threadId": "thread-1",
         "workspaceId": None,
+        "providerId": "provider-1",
         "checkpointPath": "/tmp/checkpoints.sqlite",
         "checkpointBefore": "checkpoint-before",
         "provider": {
@@ -185,11 +186,18 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     }
     assert repos["chat"]["getThread"]("thread-1")["headCheckpointId"] == "checkpoint-after"
     traces = repos["agentTraces"]["listByRun"]("run-1")
-    assert [trace["kind"] for trace in traces] == ["run", "tool"]
+    assert [trace["kind"] for trace in traces] == [
+        "run",
+        "message",
+        "reasoning",
+        "tool",
+    ]
     assert traces[0]["status"] == "done"
-    assert traces[1]["status"] == "done"
-    assert traces[1]["input"] is not None
-    assert traces[1]["endedAt"] == 1000
+    assert traces[1]["output"] == "Hello "
+    assert traces[2]["output"] == "considering"
+    assert traces[3]["status"] == "done"
+    assert traces[3]["input"] is not None
+    assert traces[3]["endedAt"] == 1000
     assert "secret-api-key" not in str(seen)
     assert {event for event, _ in seen} >= {
         "ai.chat.token",
@@ -200,10 +208,17 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         "ai.chat.title-updated",
     }
     token = next(payload for event, payload in seen if event == "ai.chat.token")
-    assert token == {"runId": "run-1", "threadId": "thread-1", "token": "Hello "}
+    assert token["runId"] == "run-1"
+    assert token["threadId"] == "thread-1"
+    assert token["token"] == "Hello "
+    assert isinstance(token["stepId"], str)
     done = next(payload for event, payload in seen if event == "ai.chat.done")
     assert done == {"runId": "run-1", "threadId": "thread-1", "finalText": "Answer"}
-    trace = next(payload for event, payload in seen if event == "ai.chat.trace")
+    trace = next(
+        payload
+        for event, payload in seen
+        if event == "ai.chat.trace" and payload["step"]["kind"] == "tool"
+    )
     assert trace["threadId"] == "thread-1"
     assert trace["step"]["kind"] == "tool"
     statuses = [
@@ -212,6 +227,99 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         if event == "ai.chat.run-status"
     ]
     assert statuses == ["queued", "running", "completed"]
+
+
+def test_send_persists_the_provider_selected_for_this_run(repos, db):
+    insert_thread(db, providerId="provider-original")
+
+    async def stream(agent, req, mode):
+        yield {"event": "complete", "result": {"content": "Answer"}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+
+    result = asyncio.run(
+        runtime["send"](request(providerId="provider-selected"))
+    )
+
+    assert result["status"] == "completed"
+    assert repos["agentRuns"]["get"]("run-1")["providerId"] == "provider-selected"
+    assert repos["chat"]["getThread"]("thread-1")["providerId"] == "provider-original"
+
+
+def test_replace_exchange_is_committed_with_new_message_run_and_trace_cleanup(
+    repos, db
+):
+    insert_thread(db)
+    first_user = repos["chat"]["addMessage"]("thread-1", "user", "Old question")
+    repos["chat"]["addMessage"]("thread-1", "assistant", "Old answer")
+    repos["agentRuns"]["create"](
+        {
+            "id": "run-old",
+            "threadId": "thread-1",
+            "providerId": "provider-1",
+            "modelId": "test-model",
+            "status": "completed",
+            "checkpointBefore": "checkpoint-parent",
+            "userMessageId": first_user["id"],
+        }
+    )
+    repos["agentTraces"]["addStep"](
+        {
+            "threadId": "thread-1",
+            "runId": "run-old",
+            "kind": "run",
+            "name": "agent",
+            "status": "done",
+            "startedAt": 1,
+            "endedAt": 2,
+            "seq": 0,
+        }
+    )
+    repos["chat"]["updateAgentState"]("thread-1", "checkpoint-old", 2)
+
+    async def stream(agent, req, mode):
+        yield {"event": "complete", "result": {"content": "New answer"}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "agentStateVersion": 2,
+        },
+    )
+
+    result = asyncio.run(
+        runtime["send"](
+            request(
+                replaceLastExchange=True,
+                replaceRunId="run-old",
+                checkpointBefore="checkpoint-parent",
+                messages=[{"role": "user", "content": "New question"}],
+            )
+        )
+    )
+
+    assert result["status"] == "completed"
+    messages = repos["chat"]["listMessages"]("thread-1")
+    assert [(message["role"], message["content"]) for message in messages] == [
+        ("user", "New question"),
+        ("assistant", "New answer"),
+    ]
+    assert repos["agentTraces"]["listByRun"]("run-old") == []
+    replacement = repos["agentRuns"]["get"]("run-1")
+    assert replacement["replacesRunId"] == "run-old"
+    assert replacement["checkpointBefore"] == "checkpoint-parent"
 
 
 def test_checkpoint_serializer_redacts_academic_calls_and_outputs():
@@ -292,10 +400,94 @@ def test_native_langgraph_events_produce_tokens_result_and_checkpoint(repos, db,
     assert agent.version == "v2"
     assert repos["agentRuns"]["get"]("run-1")["checkpointAfter"] == "checkpoint-native"
     assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Native answer"
-    assert (
-        "ai.chat.token",
-        {"runId": "run-1", "threadId": "thread-1", "token": "Native "},
-    ) in seen
+    token = next(payload for event, payload in seen if event == "ai.chat.token")
+    assert token["runId"] == "run-1"
+    assert token["threadId"] == "thread-1"
+    assert token["token"] == "Native "
+    assert isinstance(token["stepId"], str)
+
+
+def test_recover_continues_existing_run_from_latest_checkpoint(repos, db, tmp_path):
+    insert_thread(db)
+    user_message = repos["chat"]["addMessage"](
+        "thread-1", "user", "Question before restart"
+    )
+    repos["agentRuns"]["create"](
+        {
+            "id": "run-1",
+            "threadId": "thread-1",
+            "providerId": "provider-1",
+            "modelId": "test-model",
+            "status": "running",
+            "checkpointBefore": "checkpoint-parent",
+            "userMessageId": user_message["id"],
+        }
+    )
+    old_trace = repos["agentTraces"]["addStep"](
+        {
+            "threadId": "thread-1",
+            "runId": "run-1",
+            "kind": "message",
+            "name": "assistant_message",
+            "output": "Partial ",
+            "status": "running",
+            "startedAt": 1,
+            "seq": 1,
+        }
+    )
+
+    class RecoverAgent:
+        invocation = "unset"
+        config = None
+
+        async def astream_events(self, invocation, *, config, version):
+            self.invocation = invocation
+            self.config = config
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": NativeMessage("continued")},
+            }
+            yield {
+                "event": "on_chain_end",
+                "name": "LangGraph",
+                "data": {"output": {"messages": [{"content": "Partial continued"}]}},
+            }
+
+        async def aget_state(self, config):
+            return NativeSnapshot()
+
+    agent = RecoverAgent()
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: agent,
+        },
+    )
+
+    result = asyncio.run(
+        runtime["recover"](
+            request(
+                checkpointPath=str(tmp_path / "checkpoints.sqlite"),
+                recoverLatestCheckpoint=True,
+                messages=[],
+            )
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert agent.invocation is None
+    assert agent.config["configurable"] == {"thread_id": "thread-1"}
+    recovered_traces = repos["agentTraces"]["listByRun"]("run-1")
+    recovered_old_trace = next(
+        trace for trace in recovered_traces if trace["id"] == old_trace["id"]
+    )
+    assert recovered_old_trace["status"] == "cancelled"
+    assert recovered_old_trace["endedAt"] is not None
+    assert recovered_old_trace["output"] == "Partial "
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "completed"
+    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Partial continued"
 
 
 def test_send_failure_persists_failed_run_and_error_event(repos, db):
@@ -1219,6 +1411,7 @@ def test_llm_todo_and_failed_tool_traces_are_paired(repos, db):
     assert [(trace["kind"], trace["status"]) for trace in traces] == [
         ("run", "done"),
         ("llm", "done"),
+        ("message", "done"),
         ("todo", "done"),
         ("tool", "error"),
     ]
@@ -1229,7 +1422,78 @@ def test_llm_todo_and_failed_tool_traces_are_paired(repos, db):
         llm_trace["totalTokens"],
     ) == (11, 7, 18)
     token = next(payload for event, payload in seen if event == "ai.chat.token")
-    assert token["stepId"] == llm_trace["id"]
+    message_trace = traces[2]
+    assert token["stepId"] == message_trace["id"]
+
+
+def test_subagent_trace_preserves_delegation_hierarchy(repos, db):
+    insert_thread(db)
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_tool_start",
+            "name": "task",
+            "run_id": "task-1",
+            "data": {
+                "input": {
+                    "subagent_type": "researcher",
+                    "description": "Inspect evidence",
+                }
+            },
+            "metadata": {"langgraph_checkpoint_ns": "root"},
+        }
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "child-llm",
+            "parent_ids": ["task-1"],
+            "metadata": {
+                "lc_agent_name": "researcher",
+                "langgraph_checkpoint_ns": "task:researcher",
+            },
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "child-llm",
+            "parent_ids": ["task-1"],
+            "metadata": {
+                "lc_agent_name": "researcher",
+                "langgraph_checkpoint_ns": "task:researcher",
+            },
+            "data": {"output": AIMessage(content="Evidence")},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "task",
+            "run_id": "task-1",
+            "data": {"output": "Evidence"},
+        }
+        yield {"event": "complete", "result": "Answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    traces = repos["agentTraces"]["listByRun"]("run-1")
+    delegation = next(trace for trace in traces if trace["kind"] == "subagent")
+    child = next(trace for trace in traces if trace["kind"] == "llm")
+    assert delegation["agentName"] == "researcher"
+    assert delegation["namespace"] == "root"
+    assert child["parentStepId"] == delegation["id"]
+    assert child["agentName"] == "researcher"
+    assert child["namespace"] == "task:researcher"
+    assert child["depth"] == 1
 
 
 def test_title_generation_does_not_delay_completed_run(repos, db):

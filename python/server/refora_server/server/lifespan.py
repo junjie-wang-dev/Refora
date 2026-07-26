@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,7 @@ from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
 from refora_server.services.agent_runtime import createAgentRuntime
+from refora_server.services.agent_intent import assemble_recovery
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
@@ -200,21 +202,12 @@ def create_lifespan(
             ),
         )
         agent_runs = repos.get("agentRuns")
-        reconcile_runs = (
-            agent_runs.get("reconcileRunning")
+        list_active_runs = (
+            agent_runs.get("listActive")
             if isinstance(agent_runs, dict)
             else None
         )
-        if callable(reconcile_runs):
-            reconcile_runs("Python sidecar restarted before run completion")
-        agent_traces = repos.get("agentTraces")
-        reconcile_traces = (
-            agent_traces.get("reconcileRunning")
-            if isinstance(agent_traces, dict)
-            else None
-        )
-        if callable(reconcile_traces):
-            reconcile_traces("Python sidecar restarted before trace completion")
+        startup_active_runs = list_active_runs() if callable(list_active_runs) else []
         events = create_event_bus()
         connector = create_connector_broker(events)
         server_loop = asyncio.get_running_loop()
@@ -934,6 +927,66 @@ def create_lifespan(
         app.state.connector = connector
         app.state.agent_runtime = agent_runtime
         app.state.cancel_agent_network = cancel_agent_network
+        recovery_task: asyncio.Task[Any] | None = None
+        if startup_active_runs:
+            async def recover_active_runs() -> None:
+                await events.wait_for_subscriber("connector.get-api-key")
+                for persisted_run in startup_active_runs:
+                    run_id = persisted_run.get("id")
+                    try:
+                        current = repos["agentRuns"]["get"](run_id)
+                        if current is None or current.get("status") not in {
+                            "queued",
+                            "running",
+                        }:
+                            continue
+                        assembled = await assemble_recovery(
+                            current,
+                            repos=repos,
+                            services=services,
+                            connector=connector,
+                            db_path=db_path,
+                            library_folder=app.state.library_folder,
+                        )
+                        await agent_runtime["startRecover"](assembled)
+                    except Exception as error:
+                        message = f"Failed to recover agent run after sidecar restart: {error}"
+                        repos["agentRuns"]["update"](
+                            run_id,
+                            {
+                                "status": "failed",
+                                "endedAt": int(time.time() * 1000),
+                                "error": message,
+                            },
+                        )
+                        for step in repos["agentTraces"]["listByRun"](run_id):
+                            if step.get("status") == "running":
+                                repos["agentTraces"]["updateStep"](
+                                    step["id"],
+                                    {
+                                        "status": "error",
+                                        "output": step.get("output") or message,
+                                        "endedAt": int(time.time() * 1000),
+                                    },
+                                )
+                        await events.broadcast(
+                            "ai.chat.error",
+                            {
+                                "runId": run_id,
+                                "threadId": persisted_run.get("threadId"),
+                                "message": message,
+                            },
+                        )
+                        await events.broadcast(
+                            "ai.chat.run-status",
+                            {
+                                "runId": run_id,
+                                "threadId": persisted_run.get("threadId"),
+                                "status": "failed",
+                            },
+                        )
+
+            recovery_task = asyncio.create_task(recover_active_runs())
         if hasattr(app.state, "require_token"):
             from refora_server.server.app import configure_app
 
@@ -941,6 +994,9 @@ def create_lifespan(
         try:
             yield
         finally:
+            if recovery_task is not None:
+                recovery_task.cancel()
+                await asyncio.gather(recovery_task, return_exceptions=True)
             await agent_runtime["destroy"]()
             await ocr["stopWorker"]()
             ocr["destroy"]()

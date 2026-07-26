@@ -15,12 +15,10 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     db = object()
     open_database = Mock(return_value=(db, object()))
     close_database = Mock()
-    reconcile_runs = Mock()
-    reconcile_traces = Mock()
     repos = {
         "documents": object(),
-        "agentRuns": {"reconcileRunning": reconcile_runs},
-        "agentTraces": {"reconcileRunning": reconcile_traces},
+        "agentRuns": {"listActive": Mock(return_value=[])},
+        "agentTraces": {},
     }
     create_repositories = Mock(return_value=repos)
     events = Mock(flush=AsyncMock())
@@ -54,12 +52,6 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     events.flush.assert_awaited_once()
     runtime["destroy"].assert_awaited_once()
     close_database.assert_called_once_with(db)
-    reconcile_runs.assert_called_once_with(
-        "Python sidecar restarted before run completion"
-    )
-    reconcile_traces.assert_called_once_with(
-        "Python sidecar restarted before trace completion"
-    )
 
 
 async def test_lifespan_closes_runner_owned_database(monkeypatch) -> None:
@@ -86,6 +78,103 @@ async def test_lifespan_closes_runner_owned_database(monkeypatch) -> None:
         assert app.state.db is db
 
     close_database.assert_not_called()
+    runtime["destroy"].assert_awaited_once()
+
+
+async def test_lifespan_recovers_active_runs_after_connector_subscription(
+    monkeypatch,
+) -> None:
+    db = object()
+    active_run = {
+        "id": "run-recover",
+        "threadId": "thread-1",
+        "providerId": "provider-1",
+        "modelId": "model-1",
+        "status": "running",
+    }
+    repos = {
+        "documents": object(),
+        "agentRuns": {
+            "listActive": Mock(return_value=[active_run]),
+            "get": Mock(return_value=active_run),
+            "update": Mock(),
+        },
+        "agentTraces": {
+            "listByRun": Mock(return_value=[]),
+            "updateStep": Mock(),
+        },
+    }
+    events = Mock(
+        flush=AsyncMock(),
+        broadcast=AsyncMock(),
+        wait_for_subscriber=AsyncMock(),
+    )
+    connector = Mock(cancel_pending=AsyncMock())
+    runtime = {
+        "destroy": AsyncMock(),
+        "startRecover": AsyncMock(),
+    }
+    assembled = {
+        "runId": "run-recover",
+        "threadId": "thread-1",
+    }
+    assemble = AsyncMock(return_value=assembled)
+
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_repositories",
+        Mock(return_value=repos),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_event_bus",
+        Mock(return_value=events),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_connector_broker",
+        Mock(return_value=connector),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createLibraryService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createAiProvidersService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createAiSummaryService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createChatHistoryService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createThreadTitleService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createWorkspacesService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createAgentRuntime",
+        Mock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.assemble_recovery",
+        assemble,
+    )
+
+    app = FastAPI(lifespan=create_lifespan("/tmp/refora.db", "/tmp/library", db))
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        events.wait_for_subscriber.assert_awaited_once_with(
+            "connector.get-api-key"
+        )
+        assemble.assert_awaited_once()
+        runtime["startRecover"].assert_awaited_once_with(assembled)
+
     runtime["destroy"].assert_awaited_once()
 
 
@@ -288,7 +377,10 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         agent_factory.assert_called_once()
         assert agent_factory.call_args.kwargs["model"] == "model"
         assert agent_factory.call_args.kwargs["tools"] == runtime_tools
-        assert agent_factory.call_args.kwargs["system_prompt"] == "Use the library."
+        assert agent_factory.call_args.kwargs["system_prompt"].startswith(
+            "Use the library."
+        )
+        assert "/memories/" in agent_factory.call_args.kwargs["system_prompt"]
         assert set(agent_factory.call_args.kwargs["interrupt_on"]) == {
             "search_library",
             "prepare_paper_ocr",

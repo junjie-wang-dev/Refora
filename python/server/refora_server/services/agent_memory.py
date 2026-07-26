@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+from fnmatch import fnmatch
 from collections.abc import Mapping
 from typing import Any
+
+from deepagents.backends.protocol import (
+    BackendProtocol,
+    EditResult,
+    FileDownloadResponse,
+    FileUploadResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
 
 MEMORY_PATHS = (
     "/brief.md",
@@ -101,49 +114,105 @@ def update_memory(
     )
 
 
-class ReadonlyMemoryBackend:
+class ReadonlyMemoryBackend(BackendProtocol):
     def __init__(self, files: Mapping[str, str]) -> None:
         self._files = {path if path.startswith("/") else f"/{path}": content for path, content in files.items()}
 
-    def ls(self, path: str) -> dict[str, Any]:
+    def ls(self, path: str) -> LsResult:
         if path not in {"/", "."}:
-            return {"error": "Memory paths are limited to /"}
-        return {"files": [{"path": path, "is_dir": False, "size": len(content)} for path, content in sorted(self._files.items())]}
+            return LsResult(error="Memory paths are limited to /")
+        return LsResult(
+            entries=[
+                {"path": path, "is_dir": False, "size": len(content)}
+                for path, content in sorted(self._files.items())
+            ]
+        )
 
-    def read(self, path: str, offset: int = 0, limit: int = 2000) -> dict[str, Any]:
+    def read(self, path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         content = self._files.get(path)
         if content is None:
-            return {"error": f"Memory file not found: {path}"}
+            return ReadResult(error=f"Memory file not found: {path}")
         start = max(0, offset)
         count = max(1, limit)
-        return {"content": "\n".join(f"{start + index + 1}: {line}" for index, line in enumerate(content.split("\n")[start:start + count])), "mimeType": "text/markdown"}
+        lines = content.splitlines(keepends=True)
+        if start >= len(lines) and lines:
+            return ReadResult(
+                error=f"Line offset {offset} exceeds file length ({len(lines)} lines)"
+            )
+        return ReadResult(
+            file_data={
+                "content": "".join(lines[start : start + count]),
+                "encoding": "utf-8",
+            }
+        )
 
-    def read_raw(self, path: str) -> dict[str, Any]:
-        content = self._files.get(path)
-        return {"data": {"content": content, "mimeType": "text/markdown"}} if content is not None else {"error": f"Memory file not found: {path}"}
-
-    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> dict[str, Any]:
-        matches = []
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        matches: list[dict[str, Any]] = []
         for name, content in self._files.items():
             if path and path not in {"/", ".", name}:
                 continue
-            matches.extend({"path": name, "line": index + 1, "text": line} for index, line in enumerate(content.split("\n")) if pattern in line)
-        return {"matches": matches}
+            if glob and not fnmatch(name.lstrip("/"), glob):
+                continue
+            matches.extend(
+                {
+                    "path": name,
+                    "line": index + 1,
+                    "text": line,
+                }
+                for index, line in enumerate(content.split("\n"))
+                if pattern in line
+            )
+        return GrepResult(matches=matches)
 
-    def glob(self, pattern: str, path: str | None = None) -> dict[str, Any]:
-        return {"files": [{"path": name, "is_dir": False, "size": len(content)} for name, content in sorted(self._files.items()) if pattern in {"*", "**/*", "*.md"} or pattern == name]}
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        if path not in {None, "/", "."}:
+            return GlobResult(error="Memory paths are limited to /", matches=[])
+        return GlobResult(
+            matches=[
+                {"path": name, "is_dir": False, "size": len(content)}
+                for name, content in sorted(self._files.items())
+                if fnmatch(name.lstrip("/"), pattern)
+                or fnmatch(name, pattern)
+                or pattern == "**/*"
+            ]
+        )
 
-    def write(self, path: str, content: str) -> dict[str, str]:
-        return {"error": "Workspace memory is read-only. Use propose_workspace_memory_update."}
+    def write(self, path: str, content: str) -> WriteResult:
+        return WriteResult(
+            error="Workspace memory is read-only. Use propose_workspace_memory_update."
+        )
 
-    def edit(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> dict[str, str]:
-        return {"error": "Workspace memory is read-only. Use propose_workspace_memory_update."}
+    def edit(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        return EditResult(
+            error="Workspace memory is read-only. Use propose_workspace_memory_update."
+        )
 
-    def delete(self, path: str) -> dict[str, str]:
-        return {"error": "Workspace memory is read-only. Manage memory from Refora settings."}
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes]],
+    ) -> list[FileUploadResponse]:
+        return [
+            FileUploadResponse(path=path, error="permission_denied")
+            for path, _ in files
+        ]
 
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list[dict[str, str]]:
-        return [{"path": path, "error": "permission_denied"} for path, _ in files]
-
-    def download_files(self, paths: list[str]) -> list[dict[str, Any]]:
-        return [{"path": path, "content": self._files[path].encode() if path in self._files else None, "error": None if path in self._files else "file_not_found"} for path in paths]
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return [
+            FileDownloadResponse(
+                path=path,
+                content=self._files[path].encode() if path in self._files else None,
+                error=None if path in self._files else "file_not_found",
+            )
+            for path in paths
+        ]

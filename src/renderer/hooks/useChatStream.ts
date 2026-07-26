@@ -57,6 +57,23 @@ function traceRunStatus(step: AgentTraceStep | null): AgentRunStatus | null {
   return null
 }
 
+function recoveredStreamContent(
+  steps: AgentTraceStep[],
+  runId: string,
+  kind: 'reasoning' | 'message'
+): string {
+  return steps
+    .filter((step) => step.runId === runId && step.kind === kind)
+    .sort((left, right) => left.seq - right.seq || left.startedAt - right.startedAt)
+    .map((step) => step.output ?? '')
+    .join('')
+}
+
+function reconcileStreamValue(current: string, recovered: string): string {
+  if (!recovered || current.startsWith(recovered)) return current
+  return recovered
+}
+
 function reviewedOcrDocumentId(context: ResumeRetryContext): string | null {
   if (context.decision === 'reject') return null
   const action = context.interrupt.actions.find((candidate) => candidate.name === 'prepare_paper_ocr')
@@ -346,19 +363,37 @@ export function useChatStream({
     hintedStatus?: AgentRunStatus
   ) => {
     try {
-      const run = await api.ai.chatRun(runId)
+      const [run, traces] = await Promise.all([
+        api.ai.chatRun(runId),
+        api.ai.chatTraces(threadId)
+      ])
       if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      setTraceSteps(traces)
+      for (const step of traces) {
+        if (
+          step.runId === runId &&
+          (step.kind === 'reasoning' || step.kind === 'message')
+        ) {
+          streamingStepOutputRef.current.set(step.id, step.output ?? '')
+        }
+      }
+      streamingTextRef.current = reconcileStreamValue(
+        streamingTextRef.current,
+        recoveredStreamContent(traces, runId, 'message')
+      )
+      streamingReasoningRef.current = reconcileStreamValue(
+        streamingReasoningRef.current,
+        recoveredStreamContent(traces, runId, 'reasoning')
+      )
+      setStreamingText(streamingTextRef.current)
+      setStreamingReasoning(streamingReasoningRef.current)
       if (run.status === 'queued' || run.status === 'running') {
         isSendingRef.current = true
         setStreaming(true)
         return
       }
-      const [history, traces] = await Promise.all([
-        api.ai.chatHistory(threadId),
-        api.ai.chatTraces(threadId)
-      ])
+      const history = await api.ai.chatHistory(threadId)
       if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
-      setTraceSteps(traces)
       if (run.status === 'interrupted') {
         const interrupt = await api.ai.chatPendingInterrupt(runId)
         if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return

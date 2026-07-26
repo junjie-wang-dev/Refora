@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from deepagents.backends import CompositeBackend
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import Field
@@ -202,8 +203,23 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
     for subagent in captured["subagents"]:
         assert [tool.name for tool in subagent["tools"]] == ["search_library"]
         assert subagent["interrupt_on"] == {}
-    assert isinstance(captured["backend"], ReforaFilesystemBackend)
-    permission = captured["permissions"][0]
+    assert isinstance(captured["backend"], CompositeBackend)
+    assert isinstance(captured["backend"].default, ReforaFilesystemBackend)
+    memory_backend = captured["backend"].routes["/memories/"]
+    assert (
+        memory_backend.read("/brief.md").file_data["content"]
+        == "Compare methods."
+    )
+    assert captured["memory"] == [
+        "/memories/brief.md",
+        "/memories/preferences.md",
+        "/memories/decisions.md",
+        "/memories/glossary.md",
+        "/memories/research.md",
+    ]
+    assert captured["permissions"][0].mode == "deny"
+    assert captured["permissions"][0].paths == ["/memories/**"]
+    permission = captured["permissions"][1]
     assert permission.operations == ["read", "write"]
     assert permission.paths == ["/**"]
     assert permission.mode == "allow"
@@ -233,8 +249,9 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
         "edit",
         "reject",
     ]
-    assert "Compare methods." in captured["system_prompt"]
-    assert "Follow the robustness lead." in captured["system_prompt"]
+    assert "/memories/" in captured["system_prompt"]
+    for subagent in captured["subagents"]:
+        assert "/memories/" in subagent["system_prompt"]
     assert policies["prepare_paper_ocr"]["when"](
         SimpleNamespace(tool_call={"args": {"docId": "doc-1"}})
     ) is True

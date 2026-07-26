@@ -81,6 +81,13 @@ def createAgentRunsRepository(db):
         rows = cur.fetchall()
         return [_map_run(r) for r in rows]
 
+    def listActive() -> list[dict[str, Any]]:
+        cur = db.execute(
+            "SELECT * FROM agent_runs WHERE status IN (?, ?) ORDER BY startedAt, id",
+            [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING],
+        )
+        return [_map_run(row) for row in cur.fetchall()]
+
     def update(id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         existing = get(id)
         if existing is None:
@@ -122,6 +129,7 @@ def createAgentRunsRepository(db):
         "create": create,
         "get": get,
         "listByThread": listByThread,
+        "listActive": listActive,
         "update": update,
         "reconcileRunning": reconcileRunning,
     }

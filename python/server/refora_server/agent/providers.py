@@ -9,6 +9,7 @@ from deepagents import (
     create_deep_agent,
     register_harness_profile,
 )
+from deepagents.backends import CompositeBackend
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
@@ -17,7 +18,11 @@ from langchain_openai import ChatOpenAI
 from refora_server.agent.permissions import PermissionEngine
 from refora_server.agent.risk import RiskClass, classify
 from refora_server.agent.sandbox_backend import create_refora_filesystem_backend
-from refora_server.services.agent_memory import curated_memory_context
+from refora_server.services.agent_memory import (
+    GLOBAL_MEMORY_PATHS,
+    MEMORY_PATHS,
+    ReadonlyMemoryBackend,
+)
 
 
 _DISABLED_BUILTIN_TOOLS = frozenset({"execute"})
@@ -127,12 +132,23 @@ def create_model(config: dict[str, Any]) -> ChatOpenAI:
 
 def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
     permission_engine = PermissionEngine(sandbox_root=request.get("sandboxRoot"))
-    backend = create_refora_filesystem_backend(request["sandboxRoot"])
+    filesystem_backend = create_refora_filesystem_backend(request["sandboxRoot"])
+    backend = CompositeBackend(
+        default=filesystem_backend,
+        routes={
+            "/memories/": ReadonlyMemoryBackend(request.get("memories") or {})
+        },
+    )
     refora_tools = [tool for tool in tools if tool.name != "write_todos"]
     read_tools = [
         tool for tool in refora_tools if classify(tool.name) is RiskClass.READ
     ]
     filesystem_permissions = [
+        FilesystemPermission(
+            operations=["write"],
+            paths=["/memories/**"],
+            mode="deny",
+        ),
         FilesystemPermission(
             operations=["read", "write"],
             paths=["/**"],
@@ -143,20 +159,27 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
         {
             "name": name,
             "description": description,
-            "system_prompt": prompt,
+            "system_prompt": (
+                f"{prompt} Curated user-approved context is available read-only "
+                "under /memories/. Read relevant memory files before making claims "
+                "about preferences, prior decisions, terminology, or research state."
+            ),
             "tools": read_tools,
             "permissions": filesystem_permissions,
             "interrupt_on": {},
         }
         for name, description, prompt in _SUBAGENT_PROFILES
     ]
-    memory_context = curated_memory_context(
-        request.get("memories"),
-        include_research=request.get("includeResearchMemory") is True,
-    )
     system_prompt = request.get("systemPrompt") or ""
-    if memory_context:
-        system_prompt = f"{system_prompt}\n\n{memory_context}" if system_prompt else memory_context
+    system_prompt = (
+        f"{system_prompt}\n\nCurated user-approved context is mounted read-only "
+        "under /memories/. Use propose_workspace_memory_update for changes."
+    )
+    memory_paths = (
+        MEMORY_PATHS
+        if request.get("includeResearchMemory") is True
+        else GLOBAL_MEMORY_PATHS
+    )
 
     def permission_required(tool_name: str):
         def evaluate(call: Any) -> bool:
@@ -184,6 +207,7 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
         system_prompt=system_prompt or None,
         backend=backend,
         skills=None,
+        memory=[f"/memories{path}" for path in memory_paths],
         subagents=subagents,
         permissions=filesystem_permissions,
         middleware=[PermissionMiddleware(permission_engine)],

@@ -317,6 +317,46 @@ def _event_key(event: dict[str, Any], name: str) -> str:
     return f"{name}:{event.get('name') or 'unknown'}"
 
 
+def _trace_context(
+    event: dict[str, Any],
+    open_event_traces: dict[str, str],
+) -> dict[str, Any]:
+    parent_ids = [
+        value
+        for value in event.get("parent_ids") or []
+        if isinstance(value, str)
+    ]
+    parent_step_id = next(
+        (
+            open_event_traces[parent_id]
+            for parent_id in reversed(parent_ids)
+            if parent_id in open_event_traces
+        ),
+        None,
+    )
+    metadata = event.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    agent_name = metadata.get("lc_agent_name")
+    namespace = metadata.get("langgraph_checkpoint_ns")
+    return {
+        "parentStepId": parent_step_id,
+        "agentName": agent_name if isinstance(agent_name, str) else None,
+        "namespace": namespace if isinstance(namespace, str) else None,
+        "depth": len(parent_ids),
+    }
+
+
+def _subagent_name(event: dict[str, Any]) -> str | None:
+    raw_input, _ = _tool_event_values(event)
+    if not isinstance(raw_input, dict):
+        return None
+    for key in ("subagent_type", "agent", "agent_name", "name"):
+        value = raw_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _tool_event_values(event: dict[str, Any]) -> tuple[Any, Any]:
     data = event.get("data")
     data = data if isinstance(data, dict) else {}
@@ -612,7 +652,11 @@ def _resume_decision(
 
 
 def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
-    keys = ("reasoning", "reasoning_content", "thinking", "delta") if reasoning else ("delta", "token", "content", "text")
+    keys = (
+        ("reasoning", "reasoning_content", "thinking")
+        if reasoning
+        else ("delta", "token", "content", "text")
+    )
     for key in keys:
         value = event.get(key)
         if isinstance(value, str):
@@ -630,14 +674,14 @@ def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
                 value = additional.get("reasoning_content")
                 if isinstance(value, str):
                     return value
-            return _message_text(chunk.get("content"))
+            return "" if reasoning else _message_text(chunk.get("content"))
         if chunk is not None:
             additional = getattr(chunk, "additional_kwargs", None)
             if reasoning and isinstance(additional, dict):
                 value = additional.get("reasoning_content")
                 if isinstance(value, str):
                     return value
-            return _message_text(chunk)
+            return "" if reasoning else _message_text(chunk)
     return ""
 
 
@@ -703,6 +747,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         data: Any = None,
         checkpoint: str | None = None,
         input_data: Any = None,
+        parent_step_id: str | None = None,
+        agent_name: str | None = None,
+        namespace: str | None = None,
+        depth: int = 0,
     ) -> dict[str, Any]:
         safe_data = (
             ACADEMIC_PERSISTENCE_REDACTION
@@ -726,6 +774,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 "startedAt": clock(),
                 "endedAt": clock() if status != TRACE_STATUS_RUNNING else None,
                 "seq": seq,
+                "parentStepId": parent_step_id,
+                "agentName": agent_name,
+                "namespace": namespace,
+                "depth": depth,
                 "checkpointId": checkpoint,
             }
         )
@@ -734,7 +786,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         for step in repos["agentTraces"]["listByRun"](run_id):
             if step.get("status") == TRACE_STATUS_RUNNING:
                 repos["agentTraces"]["updateStep"](
-                    step["id"], {"status": status, "output": _truncate(message), "endedAt": clock()}
+                    step["id"],
+                    {
+                        "status": status,
+                        "output": step.get("output") or _truncate(message),
+                        "endedAt": clock(),
+                    },
                 )
 
     async def create_runtime_agent(request: dict[str, Any]) -> Any:
@@ -750,7 +807,11 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     def runtime_config(request: dict[str, Any]) -> dict[str, Any]:
         configurable = {"thread_id": request["threadId"]}
         checkpoint = request.get("checkpointBefore")
-        if isinstance(checkpoint, str) and checkpoint:
+        if (
+            request.get("recoverLatestCheckpoint") is not True
+            and isinstance(checkpoint, str)
+            and checkpoint
+        ):
             configurable["checkpoint_id"] = checkpoint
         return {
             "configurable": configurable,
@@ -799,6 +860,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 invocation = Command(
                     resume={"decisions": request.get("decisions") or []}
                 )
+            elif mode == "recover":
+                invocation = None
             return agent.astream_events(
                 invocation, config=runtime_config(request), version="v2"
             )
@@ -1095,7 +1158,16 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         tool_history: list[dict[str, str | None]] = []
         open_tool_traces: dict[str, str] = {}
         open_llm_traces: dict[str, str] = {}
-        partial_text = ""
+        open_event_traces: dict[str, str] = {}
+        partial_text = (
+            "".join(
+                step.get("output") or ""
+                for step in repos["agentTraces"]["listByRun"](run_id)
+                if step.get("kind") == "message"
+            )
+            if mode == "recover"
+            else ""
+        )
 
         def is_current() -> bool:
             return active_by_thread.get(thread_id) == run_id
@@ -1112,31 +1184,64 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             return None
 
         try:
+            if mode == "recover":
+                close_open_traces(
+                    run_id,
+                    TRACE_STATUS_CANCELLED,
+                    "Python sidecar restarted; continuing from the latest checkpoint",
+                )
             if not existing_run:
                 resume_contexts[run_id] = {
                     key: value
                     for key, value in request.items()
                     if key not in {"messages", "decisions"}
                 }
+                user_content = ""
                 for message in reversed(request.get("messages") or []):
                     if isinstance(message, dict) and message.get("role") in {"user", "human"}:
-                        content = _message_text(message.get("content"))
-                        if content:
-                            user_message = repos["chat"]["addMessage"](thread_id, "user", content)
+                        user_content = _message_text(message.get("content"))
                         break
-                repos["agentRuns"]["create"](
-                    {
-                        "id": run_id,
-                        "threadId": thread_id,
-                        "providerId": thread["providerId"],
-                        "modelId": model,
-                        "status": RUN_STATUS_QUEUED,
-                        "checkpointBefore": request.get("checkpointBefore"),
-                        "replacesRunId": request.get("replaceRunId"),
-                        "userMessageId": user_message["id"] if user_message else None,
-                        "startedAt": clock(),
-                    }
-                )
+
+                def persist_new_run() -> None:
+                    nonlocal user_message
+                    if request.get("replaceLastExchange") is True:
+                        repos["chat"]["deleteLastExchange"](thread_id)
+                        replace_run_id = request.get("replaceRunId")
+                        if isinstance(replace_run_id, str) and replace_run_id:
+                            repos["agentTraces"]["deleteByRun"](
+                                thread_id, replace_run_id
+                            )
+                        repos["chat"]["updateAgentState"](
+                            thread_id,
+                            request.get("checkpointBefore"),
+                            int(deps.get("agentStateVersion", 1)),
+                        )
+                    if user_content:
+                        user_message = repos["chat"]["addMessage"](
+                            thread_id, "user", user_content
+                        )
+                    repos["agentRuns"]["create"](
+                        {
+                            "id": run_id,
+                            "threadId": thread_id,
+                            "providerId": request.get("providerId")
+                            or thread["providerId"],
+                            "modelId": model,
+                            "status": RUN_STATUS_QUEUED,
+                            "checkpointBefore": request.get("checkpointBefore"),
+                            "replacesRunId": request.get("replaceRunId"),
+                            "userMessageId": user_message["id"]
+                            if user_message
+                            else None,
+                            "startedAt": clock(),
+                        }
+                    )
+
+                transaction = repos.get("transaction")
+                if callable(transaction):
+                    transaction(persist_new_run)
+                else:
+                    persist_new_run()
                 await emit_status(run_id, RUN_STATUS_QUEUED)
             persisted = repos["agentRuns"]["get"](run_id)
             current_status = persisted["status"] if persisted else RUN_STATUS_QUEUED
@@ -1157,6 +1262,63 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             result: Any = None
             state: dict[str, Any] = {}
             interrupted = False
+            active_content: dict[str, Any] | None = None
+
+            async def finish_active_content(
+                status: str = TRACE_STATUS_DONE,
+            ) -> None:
+                nonlocal active_content
+                if active_content is None:
+                    return
+                step = repos["agentTraces"]["updateStep"](
+                    active_content["id"],
+                    {
+                        "status": status,
+                        "output": active_content["text"],
+                        "endedAt": clock(),
+                    },
+                )
+                if step is not None:
+                    await emit_trace(request, step)
+                active_content = None
+
+            async def append_content(
+                kind: str,
+                name: str,
+                delta: str,
+                event: dict[str, Any],
+            ) -> str:
+                nonlocal active_content, seq
+                if active_content is not None and active_content["kind"] != kind:
+                    await finish_active_content()
+                if active_content is None:
+                    context = _trace_context(event, open_event_traces)
+                    parent_step_id = llm_step_id(event) or context["parentStepId"]
+                    step = add_trace(
+                        request,
+                        seq,
+                        kind,
+                        name,
+                        TRACE_STATUS_RUNNING,
+                        parent_step_id=parent_step_id,
+                        agent_name=context["agentName"],
+                        namespace=context["namespace"],
+                        depth=context["depth"],
+                    )
+                    seq += 1
+                    active_content = {
+                        "id": step["id"],
+                        "kind": kind,
+                        "text": "",
+                    }
+                    await emit_trace(request, step)
+                active_content["text"] += delta
+                repos["agentTraces"]["updateStep"](
+                    active_content["id"],
+                    {"output": active_content["text"]},
+                )
+                return active_content["id"]
+
             async for raw in events:
                 if control["cancelled"]:
                     reason = (
@@ -1174,9 +1336,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 event = raw if isinstance(raw, dict) else {"event": "trace", "data": raw}
                 event_name = str(event.get("event") or event.get("type") or "")
                 if event_name in {"token", "on_chat_model_stream"}:
-                    step_id = llm_step_id(event)
                     reasoning_delta = _event_delta(event, True)
                     if reasoning_delta:
+                        step_id = await append_content(
+                            "reasoning",
+                            "model_reasoning",
+                            reasoning_delta,
+                            event,
+                        )
                         payload = {
                             "runId": run_id,
                             "threadId": thread_id,
@@ -1188,6 +1355,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     delta = _event_delta(event, False)
                     if delta:
                         partial_text += delta
+                        step_id = await append_content(
+                            "message",
+                            "assistant_message",
+                            delta,
+                            event,
+                        )
                         payload = {
                             "runId": run_id,
                             "threadId": thread_id,
@@ -1199,18 +1372,25 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     continue
                 if event_name in {"reasoning", "thinking"}:
                     delta = _event_delta(event, True)
+                    if not delta and isinstance(event.get("delta"), str):
+                        delta = event["delta"]
                     if delta:
+                        step_id = await append_content(
+                            "reasoning",
+                            "model_reasoning",
+                            delta,
+                            event,
+                        )
                         payload = {
                             "runId": run_id,
                             "threadId": thread_id,
                             "token": delta,
                         }
-                        step_id = llm_step_id(event)
-                        if step_id is not None:
-                            payload["stepId"] = step_id
+                        payload["stepId"] = step_id
                         await emit_event("ai.chat.reasoning", payload)
                     continue
                 if event_name == "on_chat_model_start":
+                    context = _trace_context(event, open_event_traces)
                     step = add_trace(
                         request,
                         seq,
@@ -1221,8 +1401,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         input_data=(event.get("data") or {}).get("input")
                         if isinstance(event.get("data"), dict)
                         else None,
+                        parent_step_id=context["parentStepId"],
+                        agent_name=context["agentName"],
+                        namespace=context["namespace"],
+                        depth=context["depth"],
                     )
-                    open_llm_traces[_event_key(event, "llm")] = step["id"]
+                    event_key = _event_key(event, "llm")
+                    open_llm_traces[event_key] = step["id"]
+                    open_event_traces[event_key] = step["id"]
                     await emit_trace(request, step)
                     seq += 1
                     continue
@@ -1232,7 +1418,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     event_data = event.get("data")
                     if detail is None and isinstance(event_data, dict):
                         detail = event_data.get("error") or event_data.get("output")
-                    trace_id = open_llm_traces.pop(_event_key(event, "llm"), None)
+                    event_key = _event_key(event, "llm")
+                    trace_id = open_llm_traces.pop(event_key, None)
+                    open_event_traces.pop(event_key, None)
                     patch = {
                         "status": TRACE_STATUS_ERROR if failed else TRACE_STATUS_DONE,
                         "output": _truncate(detail),
@@ -1272,16 +1460,28 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 if event_name == "on_tool_start":
                     name = _tool_event_name(event)
                     trace_input, _ = _tool_event_values(event)
+                    context = _trace_context(event, open_event_traces)
+                    is_subagent = name == "task"
                     step = add_trace(
                         request,
                         seq,
-                        "todo" if name == "write_todos" else "tool",
+                        "subagent"
+                        if is_subagent
+                        else ("todo" if name == "write_todos" else "tool"),
                         name,
                         TRACE_STATUS_RUNNING,
                         checkpoint=_checkpoint_id(event),
                         input_data=trace_input,
+                        parent_step_id=context["parentStepId"],
+                        agent_name=_subagent_name(event)
+                        if is_subagent
+                        else context["agentName"],
+                        namespace=context["namespace"],
+                        depth=context["depth"],
                     )
-                    open_tool_traces[_tool_event_key(event, name)] = step["id"]
+                    event_key = _tool_event_key(event, name)
+                    open_tool_traces[event_key] = step["id"]
+                    open_event_traces[event_key] = step["id"]
                     await emit_trace(request, step)
                     seq += 1
                     continue
@@ -1298,10 +1498,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     )
                     failed = _tool_output_failed(trace_output)
                     status = TRACE_STATUS_ERROR if failed else TRACE_STATUS_DONE
-                    trace_id = open_tool_traces.pop(
-                        _tool_event_key(event, name),
-                        None,
-                    )
+                    event_key = _tool_event_key(event, name)
+                    trace_id = open_tool_traces.pop(event_key, None)
+                    open_event_traces.pop(event_key, None)
                     if trace_id is not None:
                         step = repos["agentTraces"]["updateStep"](
                             trace_id,
@@ -1315,7 +1514,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         step = add_trace(
                             request,
                             seq,
-                            "todo" if name == "write_todos" else "tool",
+                            "subagent"
+                            if name == "task"
+                            else ("todo" if name == "write_todos" else "tool"),
                             name,
                             status,
                             trace_output,
@@ -1337,10 +1538,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         if name in _ACADEMIC_TOOL_NAMES
                         else _without_secrets(detail)
                     )
-                    trace_id = open_tool_traces.pop(
-                        _tool_event_key(event, name),
-                        None,
-                    )
+                    event_key = _tool_event_key(event, name)
+                    trace_id = open_tool_traces.pop(event_key, None)
+                    open_event_traces.pop(event_key, None)
                     if trace_id is not None:
                         step = repos["agentTraces"]["updateStep"](
                             trace_id,
@@ -1354,7 +1554,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         step = add_trace(
                             request,
                             seq,
-                            "todo" if name == "write_todos" else "tool",
+                            "subagent"
+                            if name == "task"
+                            else ("todo" if name == "write_todos" else "tool"),
                             name,
                             TRACE_STATUS_ERROR,
                             detail,
@@ -1382,6 +1584,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         await emit_event("ai.chat.title-updated", {"threadId": thread_id, "title": title.strip()[:100]})
                     continue
                 checkpoint = _checkpoint_id(event)
+                context = _trace_context(event, open_event_traces)
                 step = add_trace(
                     request,
                     seq,
@@ -1392,6 +1595,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     TRACE_STATUS_DONE,
                     event.get("data"),
                     checkpoint,
+                    parent_step_id=context["parentStepId"],
+                    agent_name=context["agentName"],
+                    namespace=context["namespace"],
+                    depth=context["depth"],
                 )
                 await emit_trace(request, step)
                 seq += 1
@@ -1435,7 +1642,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     request.get("resolveInterruptDecisions") or [],
                 )
             if interrupted or _interrupt_actions(state):
+                await finish_active_content()
                 return await finish_interrupted(request, state, run_trace)
+            await finish_active_content()
             return await finish_completed(
                 request,
                 result,
@@ -1584,6 +1793,26 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         await asyncio.sleep(0)
         return {"runId": run_id}
 
+    async def recover(request: dict[str, Any]) -> dict[str, Any]:
+        mode = (
+            "recover"
+            if request.get("recoverLatestCheckpoint") is True
+            else "restart"
+        )
+        return await run(request, mode, existing_run=True)
+
+    async def start_recover(request: dict[str, Any]) -> dict[str, Any]:
+        run_id = request["runId"]
+        if run_id in background_tasks and not background_tasks[run_id].done():
+            raise ValueError("Run is already active")
+        task = asyncio.create_task(recover(request))
+        background_tasks[run_id] = task
+        task.add_done_callback(
+            lambda completed, rid=run_id: background_tasks.pop(rid, None)
+        )
+        await asyncio.sleep(0)
+        return {"runId": run_id, "threadId": request["threadId"]}
+
     async def cancel(run_id: str) -> dict[str, Any]:
         if cancel_run is not None:
             try:
@@ -1688,6 +1917,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         "run": run,
         "resume": resume,
         "startResume": start_resume,
+        "recover": recover,
+        "startRecover": start_recover,
         "cancel": cancel,
         "deleteThread": delete_thread,
         "destroy": destroy,

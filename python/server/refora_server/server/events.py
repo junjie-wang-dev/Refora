@@ -68,6 +68,13 @@ class EventBus:
     async def publish(self, event: str, data: Any) -> None:
         await self.broadcast(event, data)
 
+    async def wait_for_subscriber(self, topic: str) -> None:
+        while True:
+            async with self._lock:
+                if self._topics.get(topic):
+                    return
+            await asyncio.sleep(0.05)
+
     async def flush(self) -> None:
         await asyncio.sleep(0)
 

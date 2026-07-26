@@ -42,9 +42,9 @@ def test_memory_validation_rejects_invalid_scope_path_and_size():
 def test_readonly_memory_backend_line_numbers_and_rejects_writes():
     backend = ReadonlyMemoryBackend({"brief.md": "one\ntwo"})
 
-    assert backend.read("/brief.md", offset=1)["content"] == "2: two"
-    assert backend.write("/brief.md", "changed")["error"]
-    assert backend.upload_files([("/new.md", b"x")])[0]["error"] == "permission_denied"
+    assert backend.read("/brief.md", offset=1).file_data["content"] == "two"
+    assert backend.write("/brief.md", "changed").error
+    assert backend.upload_files([("/new.md", b"x")])[0].error == "permission_denied"
 
 
 def test_curated_memory_context_is_readonly_and_research_is_workspace_only():

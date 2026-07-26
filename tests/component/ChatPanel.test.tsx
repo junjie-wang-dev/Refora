@@ -1768,6 +1768,59 @@ describe('useChatStream lifecycle', () => {
     })
     expect(mockChatRun).toHaveBeenCalledWith(runId)
   })
+
+  it('backfills missed live text and reasoning from persisted traces', async () => {
+    setupApi([])
+    const runId = 'run-recovered-stream'
+    const runStep = makeRunStep(runId, 'running')
+    const reasoningStep: AgentTraceStep = {
+      ...runStep,
+      id: 'reasoning-recovered',
+      kind: 'reasoning',
+      name: 'model_reasoning',
+      output: 'Recovered reasoning',
+      seq: 1
+    }
+    const messageStep: AgentTraceStep = {
+      ...runStep,
+      id: 'message-recovered',
+      kind: 'message',
+      name: 'assistant_message',
+      output: 'Recovered answer',
+      seq: 2
+    }
+    mockChatTraces
+      .mockReset()
+      .mockResolvedValueOnce([runStep])
+      .mockResolvedValue([runStep, reasoningStep, messageStep])
+    mockChatRun.mockResolvedValue(makeRun({
+      id: runId,
+      status: 'running',
+      endedAt: null
+    }))
+
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+
+    await waitFor(() => {
+      expect(result.current.streaming).toBe(true)
+      expect(result.current.streamingText).toBe('Recovered answer')
+      expect(result.current.streamingReasoning).toBe('Recovered reasoning')
+    })
+    expect(result.current.traceSteps).toEqual([
+      runStep,
+      reasoningStep,
+      messageStep
+    ])
+  })
 })
 
 describe('AgentTracePanel structure', () => {

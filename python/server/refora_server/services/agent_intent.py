@@ -155,6 +155,13 @@ def _turn_messages(
     return [*truncateHistoryByTokens(history), user_message]
 
 
+def _without_last_exchange(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for index in range(len(history) - 1, -1, -1):
+        if history[index].get("role") == "user":
+            return history[:index]
+    return history
+
+
 async def _api_key(connector: Any, provider_id: str) -> str:
     getter = _value(connector, "get_api_key")
     if not callable(getter):
@@ -252,6 +259,11 @@ async def assemble_turn(
         features=intent.get("features") if isinstance(intent.get("features"), Mapping) else None,
     )
     requested_thread_id = intent.get("threadId")
+    replace_last = intent.get("replaceLastExchange") is True
+    if replace_last and not (
+        isinstance(requested_thread_id, str) and requested_thread_id.strip()
+    ):
+        raise ValueError("Cannot replace an exchange without a thread")
     if isinstance(requested_thread_id, str) and requested_thread_id.strip():
         thread = _value(repos.get("chat"), "getThread")(requested_thread_id)
         if thread is None:
@@ -262,10 +274,6 @@ async def assemble_turn(
         thread = _value(repos.get("chat"), "createThread")(workspace_id, provider_id)
 
     thread_id = thread["id"]
-    replace_last = intent.get("replaceLastExchange") is True
-    if replace_last:
-        _value(repos.get("chat"), "deleteLastExchange")(thread_id)
-
     replace_run_id = intent.get("replaceRunId")
     replaced_run = None
     if isinstance(replace_run_id, str) and replace_run_id.strip():
@@ -274,7 +282,10 @@ async def assemble_turn(
             raise ValueError("replaceRunId does not belong to this thread")
 
     ensure_memory_files(repos, workspace_id)
-    history = historyToMessages(_value(repos.get("chat"), "listMessages")(thread_id))
+    history_rows = _value(repos.get("chat"), "listMessages")(thread_id)
+    if replace_last:
+        history_rows = _without_last_exchange(history_rows)
+    history = historyToMessages(history_rows)
     text = intent["text"]
     attachments = intent.get("attachments")
     if workspace_id and isinstance(attachments, list) and attachments:
@@ -305,6 +316,7 @@ async def assemble_turn(
         "threadId": thread_id,
         "workspaceId": workspace_id,
         "providerId": provider_id,
+        "replaceLastExchange": replace_last,
         "replaceRunId": replace_run_id if isinstance(replace_run_id, str) else None,
         "checkpointPath": _checkpoint_path(db_path),
         "checkpointBefore": checkpoint_before,
@@ -357,6 +369,57 @@ async def assemble_resume(
         "systemPrompt": "\n\n".join(prompt_parts),
         "enabledToolNames": list(agent_tool_names()),
         "checkpointPath": _checkpoint_path(db_path),
+        "sandboxRoot": _sandbox_root(library_folder, workspace_id),
+        "memories": read_memories(repos, workspace_id),
+        "includeResearchMemory": workspace_id is not None,
+        "recursionLimit": MAX_RECURSION_LIMIT,
+    }
+
+
+async def assemble_recovery(
+    run: Mapping[str, Any],
+    *,
+    repos: Mapping[str, Any],
+    services: Mapping[str, Any],
+    connector: Any,
+    db_path: str,
+    library_folder: str,
+) -> dict[str, Any]:
+    thread = _value(repos.get("chat"), "getThread")(run["threadId"])
+    if thread is None:
+        raise ValueError("Thread not found")
+    provider = await provider_config(
+        services,
+        connector,
+        run["providerId"],
+        model=run.get("modelId"),
+    )
+    workspace_id = thread.get("workspaceId")
+    ensure_memory_files(repos, workspace_id)
+    prompt_parts = [SYSTEM_PROMPT]
+    if workspace_id:
+        prompt_parts.extend(
+            (WORKSPACE_SYSTEM_PROMPT, _workspace_context(repos, workspace_id))
+        )
+    user_message_id = run.get("userMessageId")
+    messages = [
+        {"role": "user", "content": message["content"]}
+        for message in _value(repos.get("chat"), "listMessages")(thread["id"])
+        if message.get("id") == user_message_id and message.get("role") == "user"
+    ]
+    recover_latest = run.get("status") == "running"
+    return {
+        "runId": run["id"],
+        "threadId": thread["id"],
+        "workspaceId": workspace_id,
+        "providerId": run["providerId"],
+        "provider": provider,
+        "systemPrompt": "\n\n".join(prompt_parts),
+        "messages": [] if recover_latest else messages,
+        "enabledToolNames": list(agent_tool_names()),
+        "checkpointPath": _checkpoint_path(db_path),
+        "checkpointBefore": run.get("checkpointBefore"),
+        "recoverLatestCheckpoint": recover_latest,
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
         "memories": read_memories(repos, workspace_id),
         "includeResearchMemory": workspace_id is not None,

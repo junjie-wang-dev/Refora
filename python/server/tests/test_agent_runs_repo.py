@@ -109,6 +109,30 @@ def test_list_by_thread_empty(thread, db):
     assert repo["listByThread"](thread["id"]) == []
 
 
+def test_list_active_returns_only_queued_and_running_runs(thread, db):
+    repo = make_agent_runs_repo(db)
+    for run_id, status in (
+        ("queued", "queued"),
+        ("running", "running"),
+        ("completed", "completed"),
+        ("failed", "failed"),
+    ):
+        repo["create"](
+            {
+                "id": run_id,
+                "threadId": thread["id"],
+                "providerId": "p1",
+                "modelId": "m1",
+                "status": status,
+            }
+        )
+
+    assert [run["id"] for run in repo["listActive"]()] == [
+        "queued",
+        "running",
+    ]
+
+
 def test_list_by_thread_isolates_by_thread(thread, db):
     repo = make_agent_runs_repo(db)
     other = insert_thread(db, id="thread-2", providerId="p1")

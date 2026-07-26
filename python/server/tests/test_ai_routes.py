@@ -541,3 +541,39 @@ def test_existing_thread_allows_provider_switch_for_new_run() -> None:
     assert response.status_code == 200
     assert runtime.sent[-1]["providerId"] == "provider-2"
     assert repos.threads["thread-1"]["providerId"] == "provider-1"
+
+
+def test_replace_exchange_is_validated_before_runtime_mutation() -> None:
+    client, repos, _, _, runtime = make_client()
+
+    missing_thread = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-replace-new",
+            "workspaceId": None,
+            "text": "Retry",
+            "providerId": "provider-1",
+            "replaceLastExchange": True,
+        },
+    )
+    wrong_run = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-replace-invalid",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Retry",
+            "providerId": "provider-1",
+            "replaceLastExchange": True,
+            "replaceRunId": "run-other",
+        },
+    )
+
+    assert missing_thread.status_code == 400
+    assert wrong_run.status_code == 400
+    assert runtime.sent == []
+    assert repos.list_messages("thread-1")[0]["content"] == "Hello"
