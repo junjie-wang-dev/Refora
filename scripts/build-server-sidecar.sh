@@ -46,6 +46,7 @@ UV_CACHE_DIR=${UV_CACHE_DIR:-"${TMPDIR:-/tmp}/refora-uv-cache"} uv run \
   --collect-all langchain_openai \
   --collect-all langgraph \
   --collect-all langgraph.checkpoint.sqlite \
+  --copy-metadata aiosqlite \
   --copy-metadata deepagents \
   --copy-metadata langchain \
   --copy-metadata langchain-core \

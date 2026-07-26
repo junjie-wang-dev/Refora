@@ -189,6 +189,12 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
         provider["apiKey"] = key
         return provider
 
+    def getEncryptedApiKey(providerId: str) -> bytes | None:
+        raw = repos["aiProviders"]["getRaw"](providerId)
+        if raw is None:
+            raise RepoError("not_found", f"provider not found: {providerId}")
+        return raw.get("apiKeyEnc")
+
     return {
         "list": list,
         "getProvider": getProvider,
@@ -196,6 +202,7 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
         "listModels": listModels,
         "resolveProvider": resolveProvider,
         "buildProviderConfig": buildProviderConfig,
+        "getEncryptedApiKey": getEncryptedApiKey,
     }
 
 

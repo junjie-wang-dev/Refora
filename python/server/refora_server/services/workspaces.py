@@ -378,6 +378,9 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         content = data[:length].decode("utf-8", errors="replace")
         return {"content": content, "truncated": truncated}
 
+    def resolve_asset_file(asset_id: str) -> tuple[dict[str, Any], str]:
+        return _require_workspace_asset_file(repos, asset_id)
+
     async def open_asset(workspace_id: str, asset_id: str) -> None:
         _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
         _, file_path = _require_workspace_asset_file(repos, asset_id)
@@ -504,6 +507,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "getAsset": get_asset,
         "importAssets": import_assets,
         "previewAsset": preview_asset,
+        "resolveAssetFile": resolve_asset_file,
         "openAsset": open_asset,
         "revealAsset": reveal_asset,
         "deleteAsset": delete_asset,

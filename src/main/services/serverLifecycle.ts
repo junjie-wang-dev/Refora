@@ -23,8 +23,10 @@ export interface ServerLifecycleDeps {
   serverModule?: string
   executablePath?: string
   stateDir: string
+  userDataDir: string
   dbPath: string
   libraryFolder: string
+  language?: 'zh' | 'en'
   environment?: NodeJS.ProcessEnv
   maxRestarts?: number
   startupTimeoutMs?: number
@@ -125,10 +127,14 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       '127.0.0.1',
       '--state-dir',
       deps.stateDir,
+      '--user-data-dir',
+      deps.userDataDir,
       '--db-path',
       deps.dbPath,
       '--library-folder',
-      deps.libraryFolder
+      deps.libraryFolder,
+      '--language',
+      deps.language ?? 'en'
     ]
     const spawned = spawnChild(command, args, {
       cwd: deps.stateDir,

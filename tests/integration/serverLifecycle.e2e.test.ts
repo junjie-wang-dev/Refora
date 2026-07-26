@@ -58,7 +58,7 @@ describe('managed Python server lifecycle', () => {
     const stateDir = join(root, 'state')
     const libraryFolder = join(root, 'library')
     await Promise.all([mkdir(stateDir), mkdir(libraryFolder)])
-    lifecycle = createServerLifecycle({ pythonPath: python, serverModule: 'refora_server.server.run', stateDir, dbPath: join(root, 'refora.db'), libraryFolder, environment: { ...process.env, PYTHONPATH: serverRoot, PYTHONNOUSERSITE: '1' }, healthIntervalMs: 60_000 })
+    lifecycle = createServerLifecycle({ pythonPath: python, serverModule: 'refora_server.server.run', stateDir, userDataDir: root, dbPath: join(root, 'refora.db'), libraryFolder, environment: { ...process.env, PYTHONPATH: serverRoot, PYTHONNOUSERSITE: '1' }, healthIntervalMs: 60_000 })
     const connection = await lifecycle.start()
     const state = JSON.parse(await readFile(join(stateDir, 'server.token'), 'utf8')) as { port: number; token: string }
     expect(connection).toMatchObject(state)

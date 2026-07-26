@@ -539,26 +539,6 @@ describe('serverClient', () => {
       })
     })
 
-    it('forwards connector.get-api-key to native get-api-key route', async () => {
-      const { ws, nativeCalls } = await connectWithClient(() => makeResponse({ apiKey: 'sk-123' }))
-
-      ws.message({
-        event: 'connector.get-api-key',
-        data: { requestId: 'req3', providerId: 'openai' }
-      })
-      await vi.waitFor(() => {
-        expect(nativeCalls).toHaveLength(1)
-      })
-
-      expect(nativeCalls[0].url).toBe(`http://127.0.0.1:${NATIVE_PORT}/native/get-api-key`)
-      expect(JSON.parse(nativeCalls[0].body as string)).toEqual({ providerId: 'openai' })
-      await vi.waitFor(() => {
-        const reply = JSON.parse(ws.sent[ws.sent.length - 1])
-        expect(reply.event).toBe('connector.result')
-        expect(reply.data.data).toEqual({ apiKey: 'sk-123' })
-      })
-    })
-
     it('forwards connector.decrypt-api-key to native decrypt-api-key route', async () => {
       const { ws, nativeCalls } = await connectWithClient(() => makeResponse({ apiKey: 'search-secret' }))
 

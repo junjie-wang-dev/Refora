@@ -405,30 +405,6 @@ describe('nativeRpc', () => {
     expect(body).toEqual({ ok: true, data: { written: true } })
   })
 
-  it('decrypts and returns an API key without logging it', async () => {
-    const encBuffer = Buffer.from('encrypted-key')
-    const decrypt = vi.fn(() => 'sk-decrypted')
-    const getRaw = vi.fn(() => ({
-      id: 'p1',
-      presetId: 'openai',
-      apiKeyEnc: encBuffer
-    }))
-    const { server } = await setup({
-      repos: makeRepos({ getRaw }),
-      safeStorage: makeSafeStorage({ decrypt })
-    })
-    const { status, body } = await dispatch(
-      server,
-      'POST',
-      '/native/get-api-key',
-      { providerId: 'p1' },
-      TOKEN
-    )
-    expect(status).toBe(200)
-    expect(decrypt).toHaveBeenCalledWith(encBuffer, false)
-    expect(body).toEqual({ ok: true, data: { apiKey: 'sk-decrypted' } })
-  })
-
   it('encrypts an API key and returns base64 ciphertext', async () => {
     const safeStorage = makeSafeStorage()
     safeStorage.encrypt.mockReturnValue(Buffer.from('encrypted-key'))
@@ -475,19 +451,6 @@ describe('nativeRpc', () => {
     )
     expect(status).toBe(400)
     expect(body).toMatchObject({ ok: false, error: { code: 'invalid_input' } })
-  })
-
-  it('returns not_found when the provider does not exist', async () => {
-    const { server } = await setup()
-    const { status, body } = await dispatch(
-      server,
-      'POST',
-      '/native/get-api-key',
-      { providerId: 'missing' },
-      TOKEN
-    )
-    expect(status).toBe(400)
-    expect(body).toMatchObject({ ok: false, error: { code: 'not_found' } })
   })
 
   it('validates required path argument on trash-item', async () => {

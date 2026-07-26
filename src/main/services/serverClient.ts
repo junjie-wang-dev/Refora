@@ -75,7 +75,6 @@ export type WsEventName =
   | 'window.focus-changed'
   | 'import.progress'
   | 'import.toast'
-  | 'metadata.enqueue'
   | 'workspace.items.changed'
   | 'mineru.install-progress'
   | 'ocr.progress'
@@ -92,7 +91,6 @@ export type WsEventName =
   | 'connector.dialog-choose'
   | 'connector.clipboard-write'
   | 'connector.clipboard-write-file'
-  | 'connector.get-api-key'
   | 'connector.encrypt-api-key'
   | 'connector.decrypt-api-key'
 
@@ -835,10 +833,6 @@ export function createServerClient(
       case 'connector.clipboard-write-file':
         route = '/native/clipboard-write-file'
         body = { path: request.path }
-        break
-      case 'connector.get-api-key':
-        route = '/native/get-api-key'
-        body = { providerId: request.providerId }
         break
       case 'connector.encrypt-api-key':
         route = '/native/encrypt-api-key'

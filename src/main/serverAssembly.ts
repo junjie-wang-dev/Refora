@@ -1,6 +1,5 @@
-import { ipcMain, type BrowserWindow } from 'electron'
-import type { Repositories } from './db/repositories'
-import type { Document, LibrarySwitchResult } from '../shared/ipc-types'
+import { ipcMain, net, type BrowserWindow } from 'electron'
+import type { LibrarySwitchResult } from '../shared/ipc-types'
 import { createServerAppHandlers } from './ipc/serverAppHandlers'
 import { createServerAiHandlers } from './ipc/serverAiHandlers'
 import { createServerEventBridge, type ServerEventBridge } from './ipc/serverEventBridge'
@@ -12,20 +11,15 @@ import type { ServerLifecycle } from './services/serverLifecycle'
 
 export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
-  repos: Repositories
   getWin: () => BrowserWindow | null
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
-  metadataService?: {
-    enqueue(documentId: string): void
-    updateVerifiedArxivId(documentId: string, input: string): Promise<Document>
-    refreshMetadata(documentId: string): void
-    bulkRefreshMetadata(documentIds: string[]): void
-  }
 }
 
 export interface ServerAssembly {
   start(): Promise<void>
   stop(): Promise<void>
+  getClient(): ServerClient
+  fetchResource(path: string, headers?: Headers): Promise<Response>
 }
 
 export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
@@ -37,7 +31,6 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
   async function start(): Promise<void> {
     const connection = await deps.lifecycle.start()
     nativeRpc = createNativeRpc({
-      repos: deps.repos,
       token: connection.token,
       getWin: deps.getWin
     })
@@ -46,8 +39,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     await serverClient.ws.connect()
     eventBridge = createServerEventBridge({
       serverClient,
-      getWin: deps.getWin,
-      enqueueMetadata: (documentId) => deps.metadataService?.enqueue(documentId)
+      getWin: deps.getWin
     })
     eventBridge.start()
 
@@ -55,8 +47,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
       ...createServerAppHandlers(serverClient),
       ...createServerLibraryHandlers({
         serverClient,
-        switchLibraryFolder: deps.switchLibraryFolder,
-        metadataService: deps.metadataService
+        switchLibraryFolder: deps.switchLibraryFolder
       }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient })
@@ -78,5 +69,21 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     await deps.lifecycle.stop()
   }
 
-  return { start, stop }
+  function getClient(): ServerClient {
+    if (!serverClient) throw new Error('Server client is not ready')
+    return serverClient
+  }
+
+  async function fetchResource(path: string, headers?: Headers): Promise<Response> {
+    if (!path.startsWith('/')) throw new Error('Server resource path must be absolute')
+    const connection = await deps.lifecycle.getServerBaseUrl()
+    return net.fetch(`${connection.baseUrl}${path}`, {
+      headers: {
+        ...Object.fromEntries(new Headers(headers).entries()),
+        'X-Refora-Token': connection.token
+      }
+    })
+  }
+
+  return { start, stop, getClient, fetchResource }
 }

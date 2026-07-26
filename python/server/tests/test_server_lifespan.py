@@ -19,7 +19,7 @@ class EventSocket:
         self.messages.append(message)
 
 
-async def test_lifespan_starts_watcher_and_requests_metadata_for_imports(
+async def test_lifespan_starts_watcher_and_processes_metadata_in_python(
     tmp_path,
 ) -> None:
     library = tmp_path / "library"
@@ -37,25 +37,25 @@ async def test_lifespan_starts_watcher_and_requests_metadata_for_imports(
     async with app.router.lifespan_context(app):
         await app.state.event_bus.subscribe(
             socket,
-            ["import.progress", "metadata.enqueue"],
+            ["import.progress"],
         )
         result = app.state.services["importer"]["importFiles"]([str(source)])
         await asyncio.sleep(0.01)
 
         assert app.state.services["watcher"]["_state"]["running"] is True
         assert len(result["imported"]) == 1
-        assert {
-            message["event"]
-            for message in socket.messages
-        } == {"import.progress", "metadata.enqueue"}
-        metadata_event = next(
-            message
-            for message in socket.messages
-            if message["event"] == "metadata.enqueue"
-        )
-        assert metadata_event["data"] == {
-            "documentIds": result["imported"]
+        assert {message["event"] for message in socket.messages} == {
+            "import.progress"
         }
+        document = app.state.repos["documents"]["get"](result["imported"][0])
+        for _ in range(100):
+            if document["metadataStatus"] != "pending":
+                break
+            await asyncio.sleep(0.01)
+            document = app.state.repos["documents"]["get"](
+                result["imported"][0]
+            )
+        assert document["metadataStatus"] in {"failed", "done"}
 
     assert app.state.services["watcher"]["_state"]["running"] is False
 
@@ -219,7 +219,7 @@ async def test_lifespan_recovers_active_runs_after_connector_subscription(
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         events.wait_for_subscriber.assert_awaited_once_with(
-            "connector.get-api-key"
+            "connector.decrypt-api-key"
         )
         assemble.assert_awaited_once()
         runtime["startRecover"].assert_awaited_once_with(assembled)

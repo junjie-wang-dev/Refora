@@ -129,7 +129,7 @@ def configure_app(app: FastAPI) -> None:
         "ai_providers_repo": repos["aiProviders"],
         "exporter": services["export"],
         "connector": connector,
-        "metadata": {},
+        "metadata": services["metadata"],
     }
     workspace_deps = {
         "require_token": require_token,

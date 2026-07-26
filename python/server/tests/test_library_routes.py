@@ -19,6 +19,7 @@ class Fakes:
         self.imported_file_paths = []
         self.document_overrides = {}
         self.last_read_at = {}
+        self.metadata_refreshes = []
         self.documents = {
             "list": self.list_documents,
             "counts": lambda: {
@@ -89,8 +90,23 @@ class Fakes:
         }
         self.web_search["getConfig"] = self.get_web_search_config
         self.ai_providers = {"list": lambda: [], "testProvider": lambda _id, _key: {"ok": True}, "listModels": lambda _id, _key: {"ok": True, "models": []}}
-        self.ai_providers_repo = {"create": self.create_provider, "update": lambda _id, patch: patch, "delete": lambda _id: None}
+        self.ai_providers_repo = {
+            "create": self.create_provider,
+            "update": lambda _id, patch: patch,
+            "delete": lambda _id: None,
+            "getRaw": lambda provider_id: {
+                "id": provider_id,
+                "apiKeyEnc": b"encrypted:stored-key",
+            },
+        }
         self.exporter = {"exportJson": lambda _ids, _workspace: {}, "exportBibtex": lambda _ids: {}, "getBibtexString": lambda _ids: {"bibtex": ""}}
+        self.metadata = {
+            "refresh": self.refresh_metadata,
+            "updateVerifiedArxivId": lambda document_id, arxiv_id: {
+                "id": document_id,
+                "arxivId": arxiv_id,
+            },
+        }
         self.connector = {
             "trashItem": self.trash,
             "openPath": lambda _path: None,
@@ -105,7 +121,7 @@ class Fakes:
                 "ok": True,
                 "data": {"canceled": True, "path": None, "paths": []},
             },
-            "getApiKey": lambda _provider_id: {
+            "decryptApiKey": lambda _encrypted: {
                 "ok": True,
                 "data": {"apiKey": "stored-key"},
             },
@@ -172,6 +188,10 @@ class Fakes:
     def set_last_read_at(self, document_id: str, timestamp: int):
         self.last_read_at[document_id] = timestamp
         self.document_overrides[document_id]["lastReadAt"] = timestamp
+
+    def refresh_metadata(self, document_id: str):
+        self.metadata_refreshes.append(document_id)
+        return {"id": document_id, "metadataStatus": "pending"}
 
     def trash(self, path: str):
         self.trashed.append(path)
@@ -248,6 +268,19 @@ def test_document_delete_uses_token_connector_and_result_envelope():
     assert response.status_code == 200
     assert response.json() == {"ok": True, "data": {"ack": True}}
     assert fakes.trashed == ["/tmp/source.pdf"]
+
+
+def test_bulk_metadata_refresh_only_enqueues_work():
+    client, fakes = make_client()
+
+    response = client.post(
+        "/documents/bulk-refresh-metadata",
+        headers={"X-Refora-Token": "test-token"},
+        json={"ids": ["doc-1", "doc-2", "doc-3"]},
+    )
+
+    assert response.json() == {"ok": True, "data": {"ack": True}}
+    assert fakes.metadata_refreshes == ["doc-1", "doc-2", "doc-3"]
     assert fakes.token_calls == 1
 
 

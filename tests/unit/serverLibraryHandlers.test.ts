@@ -144,20 +144,12 @@ describe('createServerLibraryHandlers', () => {
     })
   })
 
-  it('routes metadata refresh work to the retained local service', async () => {
+  it('routes metadata refresh and arxiv verification to Python', async () => {
     const { client, methods } = createClient()
-    const metadataService = {
-      enqueue: vi.fn(),
-      updateVerifiedArxivId: vi.fn().mockResolvedValue({ id: 'doc-1', arxivId: '2401.12345' }),
-      refreshMetadata: vi.fn(),
-      bulkRefreshMetadata: vi.fn()
-    }
-    void client.http.documentsGet
-    methods.get('documentsGet')?.mockResolvedValue({ id: 'doc-1', metadataStatus: 'pending' })
-    const handlers = createServerLibraryHandlers({
-      serverClient: client,
-      metadataService
-    }) as Record<string, (...args: unknown[]) => Promise<unknown>>
+    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
 
     await handlers[IpcChannel.DocumentsRefreshMetadata]('doc-1')
     await handlers[IpcChannel.DocumentsBulkRefreshMetadata](['doc-1', 'doc-2'])
@@ -166,16 +158,14 @@ describe('createServerLibraryHandlers', () => {
       title: 'Verified'
     })
 
-    expect(metadataService.refreshMetadata).toHaveBeenCalledWith('doc-1')
-    expect(metadataService.bulkRefreshMetadata).toHaveBeenCalledWith(['doc-1', 'doc-2'])
-    expect(metadataService.updateVerifiedArxivId).toHaveBeenCalledWith(
+    expect(methods.get('documentsRefreshMetadata')).toHaveBeenCalledWith('doc-1')
+    expect(methods.get('documentsBulkRefreshMetadata')).toHaveBeenCalledWith([
       'doc-1',
-      'https://arxiv.org/abs/2401.12345'
-    )
+      'doc-2'
+    ])
     expect(methods.get('documentsUpdate')).toHaveBeenCalledWith('doc-1', {
+      arxivId: 'https://arxiv.org/abs/2401.12345',
       title: 'Verified'
     })
-    expect(methods.get('documentsRefreshMetadata')).toBeUndefined()
-    expect(methods.get('documentsBulkRefreshMetadata')).toBeUndefined()
   })
 })

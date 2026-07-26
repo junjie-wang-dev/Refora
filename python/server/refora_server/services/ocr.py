@@ -465,6 +465,35 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
         except (OSError, UnicodeError) as error:
             raise RepoError("file_missing", "OCR markdown file is unavailable") from error
 
+    def resolve_asset(document_id: str, result_key: str, asset_path: str) -> str:
+        result = document_ocr["getResultByKey"](document_id, result_key)
+        if result is None:
+            raise RepoError("not_found", "OCR result not found")
+        relative_root = result.get("relativeRoot")
+        if (
+            not isinstance(relative_root, str)
+            or not isinstance(asset_path, str)
+            or not asset_path
+            or os.path.isabs(asset_path)
+        ):
+            raise RepoError("invalid_path", "OCR asset path is invalid")
+        result_root = os.path.realpath(
+            os.path.join(deps.getLibraryFolder(), relative_root)
+        )
+        candidate_relative = os.path.join(relative_root, "assets", asset_path)
+        candidate = resolve_ocr_result_file(
+            deps.getLibraryFolder(), candidate_relative
+        )
+        try:
+            inside = os.path.commonpath(
+                [result_root, os.path.realpath(candidate)]
+            ) == result_root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise RepoError("invalid_path", "OCR asset path is invalid")
+        return candidate
+
     async def wait_for_job(job_id: str) -> dict[str, Any]:
         current = document_ocr["getJob"](job_id)
         if current is None:
@@ -563,6 +592,7 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
         "getOcrState": get_ocr_state,
         "getMarkdown": get_markdown,
         "readMarkdown": read_markdown,
+        "resolveAsset": resolve_asset,
         "readCachedForAgent": read_cached_for_agent,
         "prepareForAgent": prepare_for_agent,
         "prepareDocumentDelete": prepare_document_delete,

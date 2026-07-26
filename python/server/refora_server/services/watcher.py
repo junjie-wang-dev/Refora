@@ -13,16 +13,27 @@ def _isPdf(path: str) -> bool:
     return path.lower().endswith(".pdf")
 
 
-def _listPdfsRecursive(folder: str) -> list[str]:
+_MANAGED_DIRECTORIES = {"refora-assets", ".refora-agent", ".refora"}
+
+
+def _listPdfsRecursive(folder: str, skip_managed: bool = False) -> list[str]:
     found: list[str] = []
     try:
         with os.scandir(folder) as entries:
             for entry in entries:
                 try:
+                    if (
+                        skip_managed
+                        and (
+                            entry.name in _MANAGED_DIRECTORIES
+                            or entry.name.startswith(".")
+                        )
+                    ):
+                        continue
                     if entry.is_dir(follow_symlinks=False):
-                        found.extend(_listPdfsRecursive(entry.path))
+                        found.extend(_listPdfsRecursive(entry.path, skip_managed))
                     elif entry.is_file(follow_symlinks=False) and _isPdf(entry.name):
-                        found.append(entry.path)
+                        found.append(os.path.normpath(os.path.abspath(entry.path)))
                 except OSError:
                     continue
     except OSError:
@@ -30,8 +41,9 @@ def _listPdfsRecursive(folder: str) -> list[str]:
     return found
 
 
-class WatcherRepos(TypedDict):
+class WatcherRepos(TypedDict, total=False):
     watchFolders: Any
+    documents: Any
 
 
 OnNewPdf = Callable[[list[str]], Awaitable[None] | None]
@@ -52,7 +64,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     state: dict[str, Any] = {
         "task": None,
         "running": False,
-        "seen": set[str](),
+        "seen": {},
     }
 
     def list_() -> list[dict[str, Any]]:
@@ -78,23 +90,54 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     def toggle(watchId: str, enabled: bool) -> dict[str, Any]:
         return repos["watchFolders"]["toggle"](watchId, enabled)
 
-    def _scanFolderOnce(path: str) -> list[str]:
+    def _scanFolderOnce(
+        path: str,
+        *,
+        known: set[str] | None = None,
+        skip_managed: bool = False,
+    ) -> list[str]:
         if not os.path.isdir(path):
             return []
-        new_paths: list[str] = []
-        for pdf in _listPdfsRecursive(path):
-            if pdf not in state["seen"]:
-                state["seen"].add(pdf)
-                new_paths.append(pdf)
-        return new_paths
+        root = os.path.normpath(os.path.abspath(path))
+        current = set(_listPdfsRecursive(root, skip_managed))
+        previous = state["seen"].get(root)
+        if previous is None:
+            previous = known or set()
+        state["seen"][root] = current
+        return sorted(current - previous)
+
+    def _knownLibraryFiles() -> set[str]:
+        documents = repos.get("documents")
+        list_documents = documents.get("list") if isinstance(documents, dict) else None
+        if not callable(list_documents):
+            return set()
+        return {
+            os.path.normpath(os.path.abspath(document["filePath"]))
+            for document in list_documents({"mode": "all"})
+            if isinstance(document, dict)
+            and isinstance(document.get("filePath"), str)
+            and document["filePath"]
+        }
+
+    def _scanAll() -> list[str]:
+        batch: list[str] = []
+        for wf in repos["watchFolders"]["getEnabled"]():
+            batch.extend(_scanFolderOnce(wf["path"]))
+        library_folder = get_library_folder()
+        if library_folder:
+            batch.extend(
+                _scanFolderOnce(
+                    library_folder,
+                    known=_knownLibraryFiles(),
+                    skip_managed=True,
+                )
+            )
+        return batch
 
     async def _scanLoop() -> None:
         while state["running"]:
             try:
-                enabled = repos["watchFolders"]["getEnabled"]()
-                batch: list[str] = []
-                for wf in enabled:
-                    batch.extend(_scanFolderOnce(wf["path"]))
+                batch = _scanAll()
                 if batch:
                     result = on_new_pdf(batch)
                     if inspect.isawaitable(result):
@@ -107,7 +150,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         if state["running"]:
             return
         state["running"] = True
-        state["seen"] = set[str]()
+        state["seen"] = {}
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -124,10 +167,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 task.cancel()
 
     def scanOnce() -> list[str]:
-        batch: list[str] = []
-        for wf in repos["watchFolders"]["getEnabled"]():
-            batch.extend(_scanFolderOnce(wf["path"]))
-        return batch
+        return _scanAll()
 
     return {
         "list": list_,

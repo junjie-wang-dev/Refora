@@ -309,7 +309,6 @@ All carry `requestId` for correlation. Client must reply with a
 | `connector.show-in-folder` | `{requestId, path:string}` | `{requestId, ok:true}` — `shell.showItemInFolder` |
 | `connector.dialog-open-directory` | `{requestId, title?:string}` | `{requestId, ok:true, data:{path:string\|null}}` — `dialog.showOpenDialog` |
 | `connector.clipboard-write` | `{requestId, text:string}` | `{requestId, ok:true}` — `clipboard.writeText` |
-| `connector.get-api-key` | `{requestId, providerId:string}` | `{requestId, ok:true, data:{apiKey:string\|null}}` — fetches from Electron secure store; **server must not persist or log the returned key** |
 
 ### Client → Server (connector replies)
 | Event | Payload |
@@ -399,7 +398,7 @@ operations.
 ---
 
 ## Startup handshake
-1. TS spawns `python -m refora_server.server.run --port <p> --host 127.0.0.1 --state-dir <dir>`.
+1. TS spawns `python -m refora_server.server.run --port <p> --host 127.0.0.1 --state-dir <dir> --user-data-dir <dir> --db-path <path> --library-folder <path>`.
 2. Server selects the port (0 => OS-assigned), generates a token, writes
    `<state-dir>/server.token` (mode `0o600`) containing `{"port":<p>,"token":"..."}`.
 3. Server prints exactly one line to stdout: `LISTENING <port>`.

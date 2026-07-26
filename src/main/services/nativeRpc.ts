@@ -1,10 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { shell, dialog, clipboard, type BrowserWindow } from 'electron'
-import type { Repositories } from '../db/repositories'
 import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from './safeStorageProxy'
-import { providerRequiresApiKey } from '../../shared/providerCatalog'
 import { logger } from './logger'
 import { writeFileToClipboard } from './clipboard'
 
@@ -18,7 +16,6 @@ export interface NativeRpcInfo {
 }
 
 export interface NativeRpcDeps {
-  repos: Repositories
   token: string
   getWin?: () => BrowserWindow | null
   safeStorage?: SafeStorageProxy
@@ -97,9 +94,6 @@ interface ClipboardWriteBody {
 }
 interface ClipboardWriteFileBody {
   path?: unknown
-}
-interface GetApiKeyBody {
-  providerId?: unknown
 }
 interface EncryptApiKeyBody {
   apiKey?: unknown
@@ -275,22 +269,6 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     }
   }
 
-  async function handleGetApiKey(
-    body: GetApiKeyBody
-  ): Promise<Result<{ apiKey: string }>> {
-    const providerId = asString(body.providerId)
-    if (!providerId) return fail('invalid_input', 'providerId is required')
-    try {
-      const raw = deps.repos.aiProviders.getRaw(providerId)
-      if (!raw) return fail('not_found', `provider not found: ${providerId}`)
-      const allowEmpty = !providerRequiresApiKey(raw.presetId)
-      const apiKey = safeStorage.decrypt(raw.apiKeyEnc, allowEmpty)
-      return ok({ apiKey })
-    } catch (e) {
-      return fail('decryption_failed', e instanceof Error ? e.message : String(e))
-    }
-  }
-
   async function handleEncryptApiKey(
     body: EncryptApiKeyBody
   ): Promise<Result<{ apiKeyEnc: string | null }>> {
@@ -341,8 +319,6 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
         return handleClipboardWrite(body as ClipboardWriteBody)
       case '/native/clipboard-write-file':
         return handleClipboardWriteFile(body as ClipboardWriteFileBody)
-      case '/native/get-api-key':
-        return handleGetApiKey(body as GetApiKeyBody)
       case '/native/encrypt-api-key':
         return handleEncryptApiKey(body as EncryptApiKeyBody)
       case '/native/decrypt-api-key':

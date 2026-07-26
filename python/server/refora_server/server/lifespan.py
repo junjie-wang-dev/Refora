@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import AsyncIterator
@@ -22,6 +23,7 @@ from refora_server.academic import (
 from refora_server.academic.arxiv import FetchResponse
 from refora_server.agent.providers import create_agent, create_model
 from refora_server.db.connection import close_database, get_search_mode, open_database
+from refora_server.db.settings_seed import seed_default_settings
 from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
@@ -37,6 +39,7 @@ from refora_server.services.academic_serializer import (
 )
 from refora_server.services.chat_history import createChatHistoryService
 from refora_server.services.document_text import createDocumentTextService
+from refora_server.services.document_presence import create_document_presence_service
 from refora_server.services.export import createExportService
 from refora_server.services.library import createLibraryService
 from refora_server.services.mineru import (
@@ -45,6 +48,7 @@ from refora_server.services.mineru import (
     create_mineru_engine_manager,
     create_mineru_worker_process,
 )
+from refora_server.services.metadata import create_metadata_service
 from refora_server.services.ocr import OcrServiceDeps, create_ocr_service
 from refora_server.services.related_papers import find_related_papers
 from refora_server.services.sandbox import SandboxOptions, createSandboxService
@@ -184,6 +188,10 @@ def create_lifespan(
     db_path: str,
     library_folder: str,
     db: Any | None = None,
+    *,
+    state_dir: str | None = None,
+    user_data_dir: str | None = None,
+    language: str = "en",
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -191,6 +199,13 @@ def create_lifespan(
         owns_database = database is None
         if database is None:
             database, _ = open_database(db_path)
+        if callable(getattr(database, "execute", None)):
+            seed_default_settings(database, "zh" if language == "zh" else "en")
+        if library_folder and callable(getattr(database, "execute", None)):
+            database.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                ("libraryFolderPath", json.dumps(library_folder)),
+            )
         app.state.db = database
         app.state.db_path = db_path
         app.state.library_folder = library_folder
@@ -253,7 +268,11 @@ def create_lifespan(
         emit = events.broadcast
         mineru = create_mineru_engine_manager(
             MineruEngineManagerDeps(
-                userDataDir=os.path.dirname(os.path.abspath(db_path)),
+                userDataDir=(
+                    user_data_dir
+                    or state_dir
+                    or os.path.dirname(os.path.abspath(db_path))
+                ),
                 downloadFile=_download_mineru_file,
                 trashItem=lambda path: _trash_mineru_path(connector, path),
                 emitProgress=lambda progress: _schedule_event(
@@ -267,6 +286,7 @@ def create_lifespan(
         watcher = {}
         exporter = {}
         web_search = {}
+        metadata_service: dict[str, Any] = {}
         library = createLibraryService(
             repos,
             {
@@ -307,12 +327,10 @@ def create_lifespan(
                     if isinstance(value, str) and value
                 ]
                 if document_ids:
-                    _schedule_event(
-                        events,
-                        "metadata.enqueue",
-                        {"documentIds": document_ids},
-                        server_loop,
-                    )
+                    enqueue = metadata_service.get("enqueue")
+                    if callable(enqueue):
+                        for document_id in document_ids:
+                            enqueue(document_id)
 
             importer["onComplete"](enqueue_imported_metadata)
             watcher = createWatcherService(
@@ -322,7 +340,6 @@ def create_lifespan(
                     "onNewPdf": lambda paths: importer["importFiles"](paths, True),
                 },
             )
-            watcher["startScanning"]()
             exporter = createExportService(repos)
             async def decrypt_search_key(
                 api_key_enc: bytes, _provider: str | None = None
@@ -562,7 +579,41 @@ def create_lifespan(
                 )
             )
         )
+        if isinstance(repos.get("documents"), dict):
+            metadata_service = create_metadata_service(
+                repos,
+                academic=academic,
+                emit=events.broadcast,
+                proxy=proxy_url,
+            )
+        else:
+            async def destroy_metadata() -> None:
+                return None
+
+            metadata_service = {
+                "resumeOnStartup": lambda: None,
+                "destroy": destroy_metadata,
+            }
+        metadata_service["resumeOnStartup"]()
+        start_watcher = watcher.get("startScanning")
+        if callable(start_watcher):
+            start_watcher()
+        if isinstance(repos.get("documents"), dict):
+            document_presence = create_document_presence_service(
+                repos,
+                emit=events.broadcast,
+            )
+        else:
+            async def destroy_document_presence() -> None:
+                return None
+
+            document_presence = {
+                "start": lambda: None,
+                "destroy": destroy_document_presence,
+            }
+        document_presence["start"]()
         services = {
+            "repos": repos,
             "library": library,
             "importer": importer,
             "watcher": watcher,
@@ -573,6 +624,8 @@ def create_lifespan(
             "aiProviders": createAiProvidersService(repos),
             "aiSummary": summary_service,
             "documentText": document_text,
+            "documentPresence": document_presence,
+            "metadata": metadata_service,
             "academic": academic,
             "sandbox": sandbox,
             "chatHistory": createChatHistoryService(repos),
@@ -959,7 +1012,7 @@ def create_lifespan(
         recovery_task: asyncio.Task[Any] | None = None
         if startup_active_runs:
             async def recover_active_runs() -> None:
-                await events.wait_for_subscriber("connector.get-api-key")
+                await events.wait_for_subscriber("connector.decrypt-api-key")
                 for persisted_run in startup_active_runs:
                     run_id = persisted_run.get("id")
                     try:
@@ -1027,6 +1080,8 @@ def create_lifespan(
                 recovery_task.cancel()
                 await asyncio.gather(recovery_task, return_exceptions=True)
             await agent_runtime["destroy"]()
+            await metadata_service["destroy"]()
+            await document_presence["destroy"]()
             stop_watcher = watcher.get("stopScanning")
             if callable(stop_watcher):
                 stop_watcher()

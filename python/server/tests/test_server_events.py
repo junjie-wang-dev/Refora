@@ -64,9 +64,9 @@ async def test_send_failure_removes_connection():
 async def test_wait_for_subscriber_unblocks_after_topic_subscription():
     events = EventBus()
     socket = Socket()
-    waiter = asyncio.create_task(events.wait_for_subscriber("connector.get-api-key"))
+    waiter = asyncio.create_task(events.wait_for_subscriber("connector.decrypt-api-key"))
 
     await asyncio.sleep(0)
     assert not waiter.done()
-    await events.subscribe(socket, ["connector.get-api-key"])
+    await events.subscribe(socket, ["connector.decrypt-api-key"])
     await asyncio.wait_for(waiter, timeout=0.2)

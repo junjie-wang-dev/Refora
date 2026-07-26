@@ -32,6 +32,17 @@ class FakeServices:
             "moveItem": self._workspace("moveItem", {"id": "item-1"}),
             "listAssets": self._workspace("listAssets", []),
             "getAsset": self._workspace("getAsset", {"id": "asset-1"}),
+            "resolveAssetFile": self._workspace(
+                "resolveAssetFile",
+                (
+                    {
+                        "id": "asset-1",
+                        "previewKind": "image",
+                        "mimeType": "image/png",
+                    },
+                    __file__,
+                ),
+            ),
             "importAssets": self._workspace("importAssets", {"imported": [], "errors": []}),
             "previewAsset": self._workspace("previewAsset", {"content": "preview", "truncated": False}),
             "openAsset": self._workspace("openAsset", None),
@@ -61,6 +72,7 @@ class FakeServices:
             "cancelOcr": self._workspace("cancelOcr", {"id": "job-1", "status": "cancelled"}),
             "getState": self._workspace("getState", {"activeJob": None, "result": None}),
             "readMarkdown": self._workspace("readMarkdown", "# OCR"),
+            "resolveAsset": self._workspace("resolveAsset", __file__),
             "stopWorker": self._workspace("stopWorker", None),
         }
 
@@ -200,6 +212,28 @@ def test_routes_require_token(client: TestClient) -> None:
     response = client.get("/workspaces")
 
     assert response.status_code == 401
+
+
+def test_raw_asset_routes_are_authenticated_and_served_by_python(
+    client: TestClient, services: FakeServices
+) -> None:
+    workspace_asset = client.get(
+        "/workspace-assets/asset-1/content",
+        headers=HEADERS,
+    )
+    ocr_asset = client.get(
+        "/ocr/documents/document-1/results/result-1/assets/page.png",
+        headers=HEADERS,
+    )
+
+    assert workspace_asset.status_code == 200
+    assert workspace_asset.headers["content-type"] == "image/png"
+    assert ocr_asset.status_code == 200
+    assert ("resolveAssetFile", ("asset-1",)) in services.calls
+    assert (
+        "resolveAsset",
+        ("document-1", "result-1", "page.png"),
+    ) in services.calls
 
 
 def test_route_errors_use_result_envelopes(client: TestClient, services: FakeServices) -> None:

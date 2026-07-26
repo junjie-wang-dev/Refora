@@ -5,7 +5,7 @@ import inspect
 from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, Body, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from refora_server.repositories.errors import RepoError
 
@@ -331,6 +331,20 @@ def create_workspaces_router(deps: Any) -> APIRouter:
             lambda: workspaces["previewAsset"](workspace_id, asset_id)
         )
 
+    @router.get("/workspace-assets/{asset_id}/content")
+    async def workspace_asset_content(asset_id: str):
+        try:
+            asset, path = workspaces["resolveAssetFile"](asset_id)
+            if asset.get("previewKind") not in {"image", "audio", "video"}:
+                return _failure(415, "preview_not_supported", "Preview is not supported")
+            return FileResponse(
+                path,
+                media_type=asset.get("mimeType") or "application/octet-stream",
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+        except RepoError as error:
+            return _failure(_repo_status(error.code), error.code, str(error))
+
     @router.post("/workspaces/{workspace_id}/assets/{asset_id}/open")
     async def open_asset(workspace_id: str, asset_id: str) -> JSONResponse:
         async def operation() -> dict[str, bool]:
@@ -579,6 +593,18 @@ def create_workspaces_router(deps: Any) -> APIRouter:
             return {"markdown": value}
 
         return await _invoke(operation)
+
+    @router.get(
+        "/ocr/documents/{document_id}/results/{result_key}/assets/{asset_path:path}"
+    )
+    async def ocr_asset(document_id: str, result_key: str, asset_path: str):
+        try:
+            return FileResponse(
+                ocr["resolveAsset"](document_id, result_key, asset_path),
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+        except RepoError as error:
+            return _failure(_repo_status(error.code), error.code, str(error))
 
     return router
 

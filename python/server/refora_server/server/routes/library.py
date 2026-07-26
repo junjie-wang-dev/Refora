@@ -135,7 +135,6 @@ async def _connector(connector: Any, operation: str, *args: Any) -> Any:
         "dialog_directory": ("dialogOpenDirectory", "dialog_open_directory"),
         "dialog_file": ("dialogOpenFile", "dialog_open_file"),
         "dialog_choose": ("dialogChoose", "dialog_choose"),
-        "get_api_key": ("getApiKey", "get_api_key"),
         "encrypt_api_key": ("encryptApiKey", "encrypt_api_key"),
         "decrypt_api_key": ("decryptApiKey", "decrypt_api_key"),
     }[operation]
@@ -255,7 +254,20 @@ def create_library_router(deps: Any) -> APIRouter:
         )
 
     async def provider_api_key(provider_id: str) -> str:
-        data = await _connector(connector, "get_api_key", provider_id)
+        encrypted_getter = _value(providers, "getEncryptedApiKey")
+        raw_getter = _value(provider_repo, "getRaw")
+        if callable(encrypted_getter):
+            encrypted = await _call(providers, "getEncryptedApiKey", provider_id)
+        elif callable(raw_getter):
+            raw = await _call(provider_repo, "getRaw", provider_id)
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"Provider not found: {provider_id}")
+            encrypted = raw.get("apiKeyEnc")
+        else:
+            raise _UnavailableError("Provider key repository is unavailable")
+        if encrypted is None:
+            return ""
+        data = await _connector(connector, "decrypt_api_key", encrypted)
         if not isinstance(data, Mapping) or not isinstance(data.get("apiKey"), str):
             raise _UnavailableError("Native key storage returned an invalid payload")
         return data["apiKey"]
@@ -453,7 +465,22 @@ def create_library_router(deps: Any) -> APIRouter:
 
     @router.patch("/documents/{document_id}")
     async def patch_document(document_id: str, body: dict[str, Any]):
-        return await run(lambda: _call(documents, "update", document_id, _body_dict(body)))
+        async def action():
+            patch = _body_dict(body)
+            arxiv_id = patch.pop("arxivId", None)
+            if arxiv_id is not None:
+                if not isinstance(arxiv_id, str):
+                    raise ValueError("arxivId must be a string")
+                if metadata is None:
+                    raise _UnavailableError("Metadata service is unavailable")
+                item = await _call(
+                    metadata, "updateVerifiedArxivId", document_id, arxiv_id
+                )
+                if not patch:
+                    return item
+            return await _call(documents, "update", document_id, patch)
+
+        return await run(action)
 
     @router.post("/documents/{document_id}/starred")
     async def set_document_starred(document_id: str, body: dict[str, Any]):

@@ -2,6 +2,7 @@ import { type BrowserWindow, utilityProcess } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { join, resolve as resolvePath } from 'node:path'
 import type { Repositories } from '../db/repositories'
+import type { Document } from '../../shared/ipc-types'
 import { RepoError } from '../db/repositories/errors'
 import { newId } from '../db/repositories/documents'
 import { logger } from './logger'
@@ -38,7 +39,7 @@ const WORKER_IDLE_TIMEOUT_MS = 60_000
 const MAX_WORKERS = 3
 
 export function createPdfTextService(
-  repos: Repositories,
+  repos: Repositories | null,
   _win: BrowserWindow | (() => BrowserWindow | null)
 ) {
   let destroyed = false
@@ -154,6 +155,7 @@ export function createPdfTextService(
 
   async function getOrExtract(docId: string): Promise<string> {
     if (destroyed) throw new Error('PDF text service destroyed')
+    if (!repos) throw new Error('PDF text extraction repository is unavailable')
 
     const doc = repos.documents.get(docId)
     if (!doc) throw new RepoError('not_found', `Document ${docId} not found`)
@@ -205,14 +207,14 @@ export function createPdfTextService(
     }
   }
 
-  async function getPreview(docId: string): Promise<Uint8Array> {
+  async function getPreviewForDocument(
+    doc: Pick<Document, 'id' | 'filePath' | 'fileName' | 'fileHash'>,
+    configuredLibrary: string
+  ): Promise<Uint8Array> {
     if (destroyed) throw new Error('PDF text service destroyed')
-    const doc = repos.documents.get(docId)
-    if (!doc) throw new RepoError('not_found', `Document ${docId} not found`)
     const filePath = resolvePdfFilePath(doc.filePath)
-    const configuredLibrary = repos.settings.get<string>('libraryFolderPath', '').trim()
-    const libraryFolder = resolvePath(configuredLibrary)
-    if (!configuredLibrary || !existsSync(libraryFolder) || !statSync(libraryFolder).isDirectory()) {
+    const libraryFolder = resolvePath(configuredLibrary.trim())
+    if (!configuredLibrary.trim() || !existsSync(libraryFolder) || !statSync(libraryFolder).isDirectory()) {
       throw new RepoError('invalid_library', 'Library folder is not configured or unavailable')
     }
     const sourceStats = statSync(filePath)
@@ -231,6 +233,16 @@ export function createPdfTextService(
     })
     previewRequests.set(cachePath, request)
     return request
+  }
+
+  async function getPreview(docId: string): Promise<Uint8Array> {
+    if (!repos) throw new Error('PDF preview repository is unavailable')
+    const doc = repos.documents.get(docId)
+    if (!doc) throw new RepoError('not_found', `Document ${docId} not found`)
+    return getPreviewForDocument(
+      doc,
+      repos.settings.get<string>('libraryFolderPath', '')
+    )
   }
 
   function destroy(): void {
@@ -254,7 +266,7 @@ export function createPdfTextService(
     }
   }
 
-  return { getOrExtract, getPreview, destroy }
+  return { getOrExtract, getPreview, getPreviewForDocument, destroy }
 }
 
 export type PdfTextService = ReturnType<typeof createPdfTextService>

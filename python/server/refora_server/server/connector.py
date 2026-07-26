@@ -18,7 +18,6 @@ CONNECTOR_EVENTS = frozenset(
         "connector.dialog-choose",
         "connector.clipboard-write",
         "connector.clipboard-write-file",
-        "connector.get-api-key",
         "connector.encrypt-api-key",
         "connector.decrypt-api-key",
     }
@@ -106,9 +105,6 @@ class ConnectorBroker:
 
     async def clipboard_write_file(self, path: str) -> Result:
         return await self.send("connector.clipboard-write-file", {"path": path})
-
-    async def get_api_key(self, provider_id: str) -> Result:
-        return await self.send("connector.get-api-key", {"providerId": provider_id})
 
     async def encrypt_api_key(self, api_key: str) -> Result:
         return await self.send("connector.encrypt-api-key", {"apiKey": api_key})

@@ -10,7 +10,6 @@ describe('server event bridge', () => {
   let unsubscribe: ReturnType<typeof vi.fn>
   let send: ReturnType<typeof vi.fn>
   let isDestroyed: ReturnType<typeof vi.fn>
-  let enqueueMetadata: ReturnType<typeof vi.fn>
   let bridge: ReturnType<typeof createServerEventBridge>
 
   beforeEach(() => {
@@ -23,7 +22,6 @@ describe('server event bridge', () => {
     unsubscribe = vi.fn()
     send = vi.fn()
     isDestroyed = vi.fn(() => false)
-    enqueueMetadata = vi.fn()
     bridge = createServerEventBridge({
       serverClient: {
         ws: { on, subscribe, unsubscribe }
@@ -31,8 +29,7 @@ describe('server event bridge', () => {
       getWin: () => ({
         isDestroyed,
         webContents: { isDestroyed, send }
-      }) as never,
-      enqueueMetadata
+      }) as never
     })
   })
 
@@ -40,7 +37,7 @@ describe('server event bridge', () => {
     bridge.start()
     bridge.start()
 
-    expect(on).toHaveBeenCalledTimes(23)
+    expect(on).toHaveBeenCalledTimes(22)
     expect(subscribe).toHaveBeenCalledTimes(1)
     expect(subscribe).toHaveBeenCalledWith(expect.arrayContaining([
       'ai.chat.token',
@@ -49,11 +46,9 @@ describe('server event bridge', () => {
       'document.updated',
       'library.scanning',
       'import.progress',
-      'metadata.enqueue',
       'workspace.items.changed',
       'mineru.install-progress',
       'ocr.error',
-      'connector.get-api-key',
       'connector.encrypt-api-key',
       'connector.decrypt-api-key'
     ]))
@@ -62,18 +57,12 @@ describe('server event bridge', () => {
     listeners.get('ai.chat.token')?.(payload)
     listeners.get('workspace.items.changed')?.({ workspaceId: 'workspace-1' })
     listeners.get('ocr.completed')?.({ jobId: 'job-1' })
-    listeners.get('metadata.enqueue')?.({
-      documentIds: ['document-1', null, 'document-2']
-    })
 
     expect(send).toHaveBeenNthCalledWith(1, IpcChannel.EventAiChatToken, payload)
     expect(send).toHaveBeenNthCalledWith(2, IpcChannel.EventWorkspaceItemsChanged, {
       workspaceId: 'workspace-1'
     })
     expect(send).toHaveBeenNthCalledWith(3, IpcChannel.EventOcrCompleted, { jobId: 'job-1' })
-    expect(enqueueMetadata).toHaveBeenCalledTimes(2)
-    expect(enqueueMetadata).toHaveBeenNthCalledWith(1, 'document-1')
-    expect(enqueueMetadata).toHaveBeenNthCalledWith(2, 'document-2')
   })
 
   it('stops forwarding and unsubscribes every event topic', () => {
@@ -87,7 +76,6 @@ describe('server event bridge', () => {
       expect.arrayContaining([
         'ai.chat.done',
         'ocr.progress',
-        'metadata.enqueue',
         'connector.decrypt-api-key'
       ])
     )

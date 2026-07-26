@@ -72,12 +72,14 @@ for (const distribution of [
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'refora-sidecar-smoke-'))
 const stateDirectory = join(temporaryDirectory, 'state')
+const userDataDirectory = join(temporaryDirectory, 'user-data')
 const databasePath = join(temporaryDirectory, 'refora.sqlite')
 const libraryDirectory = join(temporaryDirectory, 'library')
 const child = spawn(executable, [
   '--port', '0',
   '--host', '127.0.0.1',
   '--state-dir', stateDirectory,
+  '--user-data-dir', userDataDirectory,
   '--db-path', databasePath,
   '--library-folder', libraryDirectory
 ], {

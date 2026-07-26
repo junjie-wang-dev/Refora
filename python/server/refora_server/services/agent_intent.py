@@ -162,11 +162,21 @@ def _without_last_exchange(history: list[dict[str, Any]]) -> list[dict[str, Any]
     return history
 
 
-async def _api_key(connector: Any, provider_id: str) -> str:
-    getter = _value(connector, "get_api_key")
-    if not callable(getter):
+async def _api_key(
+    providers: Any,
+    connector: Any,
+    provider_id: str,
+) -> str:
+    encrypted_key = _value(providers, "getEncryptedApiKey")
+    if not callable(encrypted_key):
+        raise ValueError("Provider key repository is unavailable")
+    encrypted = encrypted_key(provider_id)
+    if encrypted is None:
+        return ""
+    decrypt = _value(connector, "decrypt_api_key")
+    if not callable(decrypt):
         raise ValueError("Native API key connector is unavailable")
-    result = await _resolve(getter(provider_id))
+    result = await _resolve(decrypt(encrypted))
     if not isinstance(result, dict) or result.get("ok") is not True:
         error = result.get("error") if isinstance(result, dict) else None
         message = error.get("message") if isinstance(error, dict) else "Failed to resolve API key"
@@ -192,7 +202,7 @@ async def provider_config(
     if not callable(get_provider) or not callable(build_config):
         raise ValueError("AI provider service is unavailable")
     provider = get_provider(provider_id)
-    api_key = await _api_key(connector, provider_id)
+    api_key = await _api_key(providers, connector, provider_id)
     return build_config(
         provider_id,
         api_key,
@@ -210,7 +220,7 @@ async def resolved_provider(
     resolve_provider = _value(providers, "resolveProvider")
     if not callable(resolve_provider):
         return await provider_config(services, connector, provider_id)
-    api_key = await _api_key(connector, provider_id)
+    api_key = await _api_key(providers, connector, provider_id)
     return resolve_provider(provider_id, api_key)
 
 

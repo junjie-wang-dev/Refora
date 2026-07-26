@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -12,6 +13,30 @@ from refora_server.db.connection import close_database, open_database
 
 from .app import create_app, generate_token
 from .lifespan import create_lifespan
+
+
+def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
+    configured = os.path.abspath(library_folder) if library_folder else ""
+    if configured:
+        return db_path, configured
+    if not os.path.isfile(db_path):
+        return db_path, ""
+    try:
+        uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as database:
+            row = database.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                ("libraryFolderPath",),
+            ).fetchone()
+        value = json.loads(row[0]) if row and isinstance(row[0], str) else ""
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return db_path, ""
+    if not isinstance(value, str) or not value:
+        return db_path, ""
+    resolved = os.path.abspath(value)
+    if not os.path.isdir(resolved):
+        return db_path, ""
+    return os.path.join(resolved, os.path.basename(db_path)), resolved
 
 
 def _bind_port(host: str, port: int) -> int:
@@ -43,8 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     port = 0
     host = "127.0.0.1"
     state_dir: str | None = None
+    user_data_dir: str | None = None
     db_path: str | None = None
     library_folder = ""
+    language = "en"
     i = 0
     while i < len(args):
         arg = args[i]
@@ -54,10 +81,14 @@ def main(argv: list[str] | None = None) -> int:
             host = args[i + 1]; i += 2
         elif arg == "--state-dir":
             state_dir = args[i + 1]; i += 2
+        elif arg == "--user-data-dir":
+            user_data_dir = args[i + 1]; i += 2
         elif arg == "--db-path":
             db_path = args[i + 1]; i += 2
         elif arg == "--library-folder":
             library_folder = args[i + 1]; i += 2
+        elif arg == "--language":
+            language = args[i + 1]; i += 2
         else:
             i += 1
 
@@ -71,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     if db_path is None:
         print("ERROR --db-path is required", file=sys.stderr)
         return 2
+    if user_data_dir is None:
+        print("ERROR --user-data-dir is required", file=sys.stderr)
+        return 2
+
+    db_path, library_folder = resolve_startup_paths(db_path, library_folder)
 
     chosen_port = _bind_port(host, port)
     token = generate_token()
@@ -83,7 +119,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         close_database(db)
         raise
-    app.router.lifespan_context = create_lifespan(db_path, library_folder, db)
+    app.router.lifespan_context = create_lifespan(
+        db_path,
+        library_folder,
+        db,
+        state_dir=state_dir,
+        user_data_dir=user_data_dir,
+        language=language,
+    )
     app.state.state_dir = state_dir
     app.state.host = host
     app.state.port = chosen_port

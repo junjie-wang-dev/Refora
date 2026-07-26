@@ -76,6 +76,7 @@ describe('serverLifecycle', () => {
       pythonPath: '/usr/bin/python3',
       serverModule: 'refora_server.server.run',
       stateDir: '/tmp/refora-server',
+      userDataDir: '/tmp/refora-user-data',
       dbPath: '/tmp/refora-server.sqlite',
       libraryFolder: '/tmp/refora-library',
       spawnChild: spawn,
@@ -114,6 +115,24 @@ describe('serverLifecycle', () => {
       '/Applications/Refora.app/Contents/Resources/python-server/refora-server',
       expect.not.arrayContaining(['-m', 'refora_server.server.run']),
       expect.objectContaining({ cwd: '/tmp/refora-server' })
+    )
+  })
+
+  it('passes the stable user data directory separately from server state', async () => {
+    const deps = makeDeps()
+    const lifecycle = createServerLifecycle(deps)
+
+    await lifecycle.start()
+
+    expect(deps.spawnChild).toHaveBeenCalledWith(
+      '/usr/bin/python3',
+      expect.arrayContaining([
+        '--state-dir',
+        '/tmp/refora-server',
+        '--user-data-dir',
+        '/tmp/refora-user-data'
+      ]),
+      expect.any(Object)
     )
   })
 

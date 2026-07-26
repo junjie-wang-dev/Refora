@@ -315,8 +315,11 @@ def make_client(runtime: FakeRuntime | None = None):
         def resolveProvider(self, provider_id: str, api_key: str) -> dict[str, Any]:
             return {**provider(), "id": provider_id, "apiKey": api_key}
 
+        def getEncryptedApiKey(self, provider_id: str) -> bytes:
+            return f"encrypted:{provider_id}".encode()
+
     class FakeConnector:
-        async def get_api_key(self, provider_id: str) -> dict[str, Any]:
+        async def decrypt_api_key(self, encrypted: bytes) -> dict[str, Any]:
             return {"ok": True, "data": {"apiKey": "request-only-secret"}}
 
     connector = FakeConnector()

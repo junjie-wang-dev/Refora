@@ -6,7 +6,12 @@ import pytest
 from conftest import make_watch_folders_repo, open_migrated_db
 
 
-def _make_watcher(repos, captured=None, poll_interval=0.05):
+def _make_watcher(
+    repos,
+    captured=None,
+    poll_interval=0.05,
+    library_folder="",
+):
     from refora_server.services.watcher import createWatcherService
 
     def on_new_pdf(paths):
@@ -18,7 +23,7 @@ def _make_watcher(repos, captured=None, poll_interval=0.05):
         repos,
         {
             "onNewPdf": on_new_pdf,
-            "getLibraryFolder": lambda: "",
+            "getLibraryFolder": lambda: library_folder,
             "pollInterval": poll_interval,
         },
     )
@@ -122,6 +127,51 @@ def test_scanOnce_skips_nonexistent_path():
         svc = _make_watcher(repos)
         wf_repo["add"]("/does/not/exist")
         assert svc["scanOnce"]() == []
+    finally:
+        db.close()
+
+
+def test_scan_once_reconciles_untracked_library_pdfs(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        tracked = tmp_path / "tracked.pdf"
+        untracked = tmp_path / "untracked.pdf"
+        managed = tmp_path / ".refora" / "derived.pdf"
+        tracked.write_bytes(b"%PDF")
+        untracked.write_bytes(b"%PDF")
+        managed.parent.mkdir()
+        managed.write_bytes(b"%PDF")
+        repos = {
+            "watchFolders": wf_repo,
+            "documents": {
+                "list": lambda _filter: [{"filePath": str(tracked)}],
+            },
+        }
+        svc = _make_watcher(repos, library_folder=str(tmp_path))
+
+        assert svc["scanOnce"]() == [str(untracked)]
+        assert svc["scanOnce"]() == []
+    finally:
+        db.close()
+
+
+def test_library_scan_detects_recreated_pdf(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        pdf = tmp_path / "paper.pdf"
+        repos = {
+            "watchFolders": wf_repo,
+            "documents": {"list": lambda _filter: []},
+        }
+        svc = _make_watcher(repos, library_folder=str(tmp_path))
+        pdf.write_bytes(b"%PDF")
+        assert svc["scanOnce"]() == [str(pdf)]
+        pdf.unlink()
+        assert svc["scanOnce"]() == []
+        pdf.write_bytes(b"%PDF")
+        assert svc["scanOnce"]() == [str(pdf)]
     finally:
         db.close()
 
