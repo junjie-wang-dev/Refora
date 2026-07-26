@@ -3,9 +3,9 @@ from __future__ import annotations
 import importlib
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
+from refora_server.db.migrations import SCHEMA_FILE
 
 settings_mod = importlib.import_module("refora_server.repositories.settings")
 SettingsRepository = settings_mod.SettingsRepository
@@ -16,19 +16,10 @@ SETTING_KEYS = seed_mod.SETTING_KEYS
 default_settings = seed_mod.default_settings
 seed_default_settings = seed_mod.seed_default_settings
 
-SCHEMA_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "main"
-    / "db"
-    / "schema.sql"
-)
-
-
 @pytest.fixture()
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
     return conn
 
 
@@ -52,17 +43,17 @@ def test_set_and_get_roundtrip(repo: SettingsRepository, db: sqlite3.Connection)
     assert repo.get("libraryFolderPath") == "/Users/other/Library"
 
 
-def test_set_stores_raw_string_without_extra_serialization(
+def test_set_json_serializes_values_once(
     repo: SettingsRepository, db: sqlite3.Connection
 ) -> None:
-    json_value = json.dumps({"a": 1, "b": [2, 3]})
-    repo.set("libraryDuplicateFileCache", json_value)
+    value = {"a": 1, "b": [2, 3]}
+    repo.set("libraryDuplicateFileCache", value)
     db.commit()
     raw = db.execute(
         "SELECT value FROM settings WHERE key = ?", ("libraryDuplicateFileCache",)
     ).fetchone()[0]
-    assert raw == json_value
-    assert repo.get("libraryDuplicateFileCache") == json_value
+    assert raw == json.dumps(value)
+    assert repo.get("libraryDuplicateFileCache") == value
 
 
 def test_delete_removes_key(repo: SettingsRepository, db: sqlite3.Connection) -> None:
@@ -155,27 +146,27 @@ def test_seed_preserves_user_overrides(
 ) -> None:
     seed_default_settings(db, "en")
     db.commit()
-    assert repo.get("language") == json.dumps("en")
+    assert repo.get("language") == "en"
 
-    repo.set("language", json.dumps("zh"))
+    repo.set("language", "zh")
     db.commit()
 
     seed_default_settings(db, "en")
     db.commit()
 
-    assert repo.get("language") == json.dumps("zh")
+    assert repo.get("language") == "zh"
 
 
 def test_seed_does_not_overwrite_existing_values(
     db: sqlite3.Connection, repo: SettingsRepository
 ) -> None:
-    repo.set("libraryFolderPath", json.dumps("/custom/path"))
+    repo.set("libraryFolderPath", "/custom/path")
     db.commit()
 
     seed_default_settings(db, "en")
     db.commit()
 
-    assert repo.get("libraryFolderPath") == json.dumps("/custom/path")
+    assert repo.get("libraryFolderPath") == "/custom/path"
 
 
 def test_default_settings_matches_ts_defaults() -> None:

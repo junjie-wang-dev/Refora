@@ -2,9 +2,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_SQL = REPO_ROOT / "src" / "main" / "db" / "schema.sql"
-MIGRATIONS_DIR = REPO_ROOT / "src" / "main" / "db" / "migrations"
+DB_RESOURCES = Path(__file__).resolve().parents[1] / "refora_server" / "db"
+SCHEMA_SQL = DB_RESOURCES / "schema.sql"
+MIGRATIONS_DIR = DB_RESOURCES / "migrations"
 
 DOCUMENT_COLUMN_MIGRATIONS = [
     "0004_add_pages_issue.sql",

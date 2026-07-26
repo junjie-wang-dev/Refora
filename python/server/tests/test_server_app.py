@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from refora_server.server.app import create_app_with_token
+from refora_server.server.contract import source_contract
 
 
 def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tmp_path: Path) -> None:
@@ -11,7 +12,14 @@ def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tm
         assert client.get("/health").json() == {"ok": True, "data": {"status": "ok"}}
         assert client.get("/ready").status_code == 401
         headers = {"X-Refora-Token": "test-token"}
-        assert client.get("/ready", headers=headers).json() == {"ok": True, "data": {"status": "ready"}}
+        assert client.get("/ready", headers=headers).json() == {
+            "ok": True,
+            "data": {
+                "status": "ready",
+                "protocolVersion": source_contract()["protocolVersion"],
+                "protocolDigest": source_contract()["protocolDigest"],
+            },
+        }
         assert client.get("/documents", headers=headers).json() == {"ok": True, "data": []}
         mineru = client.get("/mineru/status", headers=headers)
         assert mineru.json()["data"]["state"] == "notInstalled"

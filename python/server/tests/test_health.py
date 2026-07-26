@@ -46,7 +46,10 @@ def test_ready_accepted_with_valid_token(client_with_token):
     client, token = client_with_token
     resp = client.get("/ready", headers={"X-Refora-Token": token})
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "data": {"status": "ready"}}
+    data = resp.json()["data"]
+    assert data["status"] == "ready"
+    assert data["protocolVersion"] == 1
+    assert len(data["protocolDigest"]) == 64
 
 
 def test_ready_rejected_with_wrong_token(client_with_token):

@@ -15,7 +15,7 @@ import {
   dbPathForLibraryFolder,
   dbExistsInLibraryFolder,
   dbRelatedFiles
-} from '../../src/main/db/dbPath'
+} from '../../src/main/services/dbPath'
 
 describe('dbPath helpers', () => {
   beforeEach(() => {

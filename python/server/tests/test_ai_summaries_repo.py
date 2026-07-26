@@ -21,7 +21,7 @@ def db():
 def _read_migration(name: str) -> str:
     from pathlib import Path
 
-    migrations_dir = Path(__file__).resolve().parents[3] / "src" / "main" / "db" / "migrations"
+    migrations_dir = Path(__file__).resolve().parents[1] / "refora_server" / "db" / "migrations"
     return (migrations_dir / name).read_text(encoding="utf-8")
 
 

@@ -3,10 +3,70 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 import pytest
 
 import refora_server.services.metadata as metadata_module
 from refora_server.services.metadata import create_metadata_service
+
+
+def test_crossref_mapping_preserves_complete_metadata() -> None:
+    fields = metadata_module._crossref_fields(
+        {
+            "title": ["Paper"],
+            "author": [
+                {
+                    "name": "The Consortium",
+                    "affiliation": [{"name": "Example University"}],
+                },
+                {
+                    "family": "Lovelace",
+                    "given": "Ada",
+                    "affiliation": [{"name": "Example University"}],
+                },
+            ],
+            "published-online": {"date-parts": [[2025, 1, 1]]},
+            "container-title": [
+                "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition"
+            ],
+            "subject": ["Computer Vision", "Machine Learning"],
+            "DOI": "10.1000/example",
+        }
+    )
+
+    assert fields["authors"] == "Consortium, The; Lovelace, Ada"
+    assert fields["affiliations"] == "Example University"
+    assert fields["keywords"] == "Computer Vision, Machine Learning"
+    assert fields["venue"] == "CVPR"
+    assert fields["year"] == "2025"
+
+
+def test_arxiv_verification_requires_a_second_signal() -> None:
+    candidate = {
+        "arxivId": "2401.12345",
+        "title": "A Reliable Paper Title",
+        "authors": ["Ada Lovelace"],
+        "year": 2025,
+    }
+
+    assert metadata_module._is_arxiv_candidate_verified(
+        {
+            "title": "A Reliable Paper Title",
+            "authors": "Lovelace, Ada",
+        },
+        candidate,
+    )
+    assert not metadata_module._is_arxiv_candidate_verified(
+        {"title": "A Reliable Paper Title"},
+        candidate,
+    )
+    assert metadata_module._is_arxiv_candidate_verified(
+        {
+            "title": "A Reliable Paper Title",
+            "doi": "10.48550/arXiv.2401.12345",
+        },
+        candidate,
+    )
 
 
 class FakeDocuments:
@@ -288,4 +348,242 @@ async def test_title_fallback_preserves_edit_made_during_network_lookup(
     assert documents.document["year"] == "2026"
     assert documents.remote_values is not None
     assert documents.remote_values["title"]["value"] == "Reliable Paper Title"
+    await service["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_doi_metadata_stays_primary_and_verified_arxiv_is_supplemented(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = FakeDocuments()
+    documents.document["title"] = None
+    documents.document["editedFields"] = []
+    monkeypatch.setattr(
+        metadata_module,
+        "extractMetadataFromPdf",
+        lambda _path, _pages: {
+            "info": {},
+            "text": "A Reliable Paper Title",
+            "titleCandidate": "A Reliable Paper Title",
+        },
+    )
+    monkeypatch.setattr(metadata_module, "isReliableTitle", lambda _title, _text: True)
+    monkeypatch.setattr(
+        metadata_module,
+        "extractDoiFromText",
+        lambda _text: "10.1000/example",
+    )
+    monkeypatch.setattr(
+        metadata_module,
+        "extractArxivFromText",
+        lambda _text: "2401.12345",
+    )
+    monkeypatch.setattr(metadata_module, "extractDoiFromInfo", lambda _info: None)
+    monkeypatch.setattr(metadata_module, "extractAffiliationsFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractAbstractFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractVenueFromText", lambda _text: None)
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "message": {
+                    "title": ["A Reliable Paper Title"],
+                    "author": [{"family": "Lovelace", "given": "Ada"}],
+                    "published-online": {"date-parts": [[2025]]},
+                    "container-title": ["CVPR"],
+                    "volume": "1",
+                    "DOI": "10.1000/example",
+                }
+            }
+
+    class Client:
+        def __init__(self, **_options: Any) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, _url: str, **_options: Any) -> Response:
+            return Response()
+
+    monkeypatch.setattr(metadata_module.httpx, "AsyncClient", Client)
+
+    async def get_by_id(_arxiv_id: str) -> dict[str, Any]:
+        return {
+            "arxivId": "2401.12345",
+            "title": "A Reliable Paper Title",
+            "authors": ["Ada Lovelace"],
+            "year": 2025,
+            "doi": "10.1000/example",
+        }
+
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={"arxiv": {"getById": get_by_id}},
+        emit=lambda _name, _data: None,
+    )
+    service["refresh"]("doc-1")
+    for _ in range(100):
+        if documents.document["metadataStatus"] == "done":
+            break
+        await asyncio.sleep(0.01)
+
+    assert documents.document["metadataSource"] == "crossref"
+    assert documents.document["title"] == "A Reliable Paper Title"
+    assert documents.document["arxivId"] == "2401.12345"
+    assert documents.remote_values is not None
+    assert documents.remote_values["arxivId"]["source"] == "arxiv"
+    await service["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_metadata_network_failure_remains_retriable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = FakeDocuments()
+    documents.document["title"] = None
+    documents.document["editedFields"] = []
+    monkeypatch.setattr(
+        metadata_module,
+        "extractMetadataFromPdf",
+        lambda _path, _pages: {
+            "info": {},
+            "text": "A Reliable Paper Title",
+            "titleCandidate": "A Reliable Paper Title",
+        },
+    )
+    monkeypatch.setattr(metadata_module, "isReliableTitle", lambda _title, _text: True)
+    monkeypatch.setattr(metadata_module, "extractDoiFromInfo", lambda _info: None)
+    monkeypatch.setattr(metadata_module, "extractDoiFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractArxivFromText", lambda _text: None)
+
+    class Client:
+        def __init__(self, **_options: Any) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, _url: str, **_options: Any) -> None:
+            raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(metadata_module.httpx, "AsyncClient", Client)
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={},
+        emit=lambda _name, _data: None,
+    )
+    service["refresh"]("doc-1")
+    for _ in range(100):
+        if documents.document["metadataStatus"] == "failed":
+            break
+        await asyncio.sleep(0.01)
+
+    assert documents.document["metadataStatus"] == "failed"
+    assert documents.document["metadataAttempts"] == 1
+    await service["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_doi_result_gets_verified_arxiv_id_in_background(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = FakeDocuments()
+    documents.document["title"] = None
+    documents.document["editedFields"] = []
+    monkeypatch.setattr(
+        metadata_module,
+        "extractMetadataFromPdf",
+        lambda _path, _pages: {
+            "info": {},
+            "text": "A Reliable Paper Title",
+            "titleCandidate": "A Reliable Paper Title",
+        },
+    )
+    monkeypatch.setattr(metadata_module, "isReliableTitle", lambda _title, _text: True)
+    monkeypatch.setattr(
+        metadata_module,
+        "extractDoiFromText",
+        lambda _text: "10.1000/example",
+    )
+    monkeypatch.setattr(metadata_module, "extractDoiFromInfo", lambda _info: None)
+    monkeypatch.setattr(metadata_module, "extractArxivFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractAffiliationsFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractAbstractFromText", lambda _text: None)
+    monkeypatch.setattr(metadata_module, "extractVenueFromText", lambda _text: None)
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "message": {
+                    "title": ["A Reliable Paper Title"],
+                    "author": [{"family": "Lovelace", "given": "Ada"}],
+                    "published-online": {"date-parts": [[2025]]},
+                    "container-title": ["CVPR"],
+                    "volume": "1",
+                    "DOI": "10.1000/example",
+                }
+            }
+
+    class Client:
+        def __init__(self, **_options: Any) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, _url: str, **_options: Any) -> Response:
+            return Response()
+
+    monkeypatch.setattr(metadata_module.httpx, "AsyncClient", Client)
+
+    async def search_title(_title: str, _page_size: int) -> dict[str, Any]:
+        return {
+            "papers": [
+                {
+                    "arxivId": "2401.12345",
+                    "title": "A Reliable Paper Title",
+                    "authors": ["Ada Lovelace"],
+                    "year": 2025,
+                    "doi": "10.1000/example",
+                }
+            ]
+        }
+
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={"arxiv": {"searchTitle": search_title}},
+        emit=lambda _name, _data: None,
+    )
+    service["refresh"]("doc-1")
+    for _ in range(100):
+        if documents.document.get("arxivId") == "2401.12345":
+            break
+        await asyncio.sleep(0.01)
+
+    assert documents.document["arxivId"] == "2401.12345"
+    assert documents.remote_values is not None
+    assert documents.remote_values["arxivId"]["source"] == "arxiv"
     await service["destroy"]()

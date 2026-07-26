@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from refora_server.academic.arxiv import base_arxiv_id
 from refora_server.academic.types import ArxivSearchInput
-from refora_server.library.bib_import import importBibtex
+from refora_server.library.bib_import import importFromBibtex
 from refora_server.library.file_hash import streamHash
 from refora_server.library.identifier_import import importByIdentifier
 from refora_server.library.json_import import importFromJson
@@ -155,13 +155,7 @@ async def _connector(connector: Any, operation: str, *args: Any) -> Any:
 
 
 def _json_setting(settings: Any, key: str, default: Any) -> Any:
-    raw = _method(settings, "get")(key, None)
-    if raw is None:
-        return default
-    try:
-        return json.loads(raw)
-    except (TypeError, ValueError):
-        return default
+    return _method(settings, "get")(key, default)
 
 
 def _absolute_regular_file(value: str, extensions: set[str], max_bytes: int) -> str:
@@ -494,11 +488,20 @@ def create_library_router(deps: Any) -> APIRouter:
 
     async def trash_documents(ids: list[str]):
         for document_id in ids:
-            item = await document(document_id)
-            path = item.get("filePath")
-            if not isinstance(path, str) or not os.path.isabs(path) or not path.lower().endswith(".pdf"):
-                raise ValueError("Document has an invalid PDF path")
-            await _connector(connector, "trash", path)
+            item = await _call(documents, "get", document_id)
+            if isinstance(item, Mapping) and item.get("fileMissing") != 1:
+                path = item.get("filePath")
+                if (
+                    isinstance(path, str)
+                    and os.path.isabs(path)
+                    and path.lower().endswith(".pdf")
+                    and not os.path.islink(path)
+                    and os.path.isfile(path)
+                ):
+                    try:
+                        await _connector(connector, "trash", path)
+                    except Exception:
+                        pass
             await _call(documents, "delete", document_id)
         return {"ack": True}
 
@@ -626,6 +629,10 @@ def create_library_router(deps: Any) -> APIRouter:
     async def open_document_pdf(document_id: str):
         async def action():
             item = await document(document_id)
+            if item.get("fileMissing") == 1:
+                error = RuntimeError(f"PDF file is missing for document: {document_id}")
+                error.code = "file_missing"
+                raise error
             path = resolvePdfFilePath(item["filePath"])
             await _connector(connector, "open", path)
             await _call(documents, "setLastReadAt", document_id, int(time.time() * 1000))
@@ -749,13 +756,19 @@ def create_library_router(deps: Any) -> APIRouter:
         total_added = 0
         total_skipped = 0
         errors: list[dict[str, str]] = []
+        verify_arxiv = _value(metadata, "updateVerifiedArxivId")
+        source_name = "zotero" if name == "importZotero" else "mendeley"
         for raw_path in selected_paths:
             file_path = _absolute_regular_file(
                 raw_path, {".bib", ".bibtex"}, 50 * 1024 * 1024
             )
-            with open(file_path, encoding="utf-8") as source:
-                result = importBibtex(repos, source.read())
-            total_added += len(result.get("imported", []))
+            result = await importFromBibtex(
+                repos,
+                file_path,
+                source_name,
+                verify_arxiv if callable(verify_arxiv) else None,
+            )
+            total_added += len(result.get("added", []))
             total_skipped += len(result.get("skipped", []))
             errors.extend(result.get("errors", []))
         return {"added": total_added, "skipped": total_skipped, "errors": errors}
@@ -819,6 +832,12 @@ def create_library_router(deps: Any) -> APIRouter:
                     "metadataSource": "arxiv",
                 }
 
+            async def fetch_doi_metadata(doi: str) -> dict[str, Any] | None:
+                operation = _value(metadata, "fetchDoiMetadata")
+                if not callable(operation):
+                    return None
+                return await _call(metadata, "fetchDoiMetadata", doi)
+
             document_id = await importByIdentifier(
                 repos,
                 _string(_body_dict(body), "identifier"),
@@ -828,6 +847,7 @@ def create_library_router(deps: Any) -> APIRouter:
                     ),
                     "academicIdentityService": identity,
                     "fetchArxivMetadata": fetch_arxiv_metadata,
+                    "fetchDoiMetadata": fetch_doi_metadata,
                 },
             )
             return {"documentId": document_id}
@@ -900,13 +920,7 @@ def create_library_router(deps: Any) -> APIRouter:
     async def get_settings():
         async def action():
             values = await _call(settings, "list")
-            decoded: dict[str, Any] = {}
-            for key, value in values:
-                try:
-                    decoded[key] = json.loads(value)
-                except (TypeError, ValueError):
-                    decoded[key] = value
-            return decoded
+            return dict(values)
         return await run(action)
 
     @router.patch("/settings")
@@ -917,18 +931,12 @@ def create_library_router(deps: Any) -> APIRouter:
                 if not isinstance(key, str) or not key:
                     raise ValueError("Settings keys must be non-empty strings")
                 try:
-                    encoded = json.dumps(value, allow_nan=False)
+                    json.dumps(value, allow_nan=False)
                 except (TypeError, ValueError) as error:
                     raise ValueError(f"Setting {key} is not JSON serializable") from error
-                await _call(settings, "set", key, encoded)
+                await _call(settings, "set", key, value)
             values = await _call(settings, "list")
-            decoded: dict[str, Any] = {}
-            for key, value in values:
-                try:
-                    decoded[key] = json.loads(value)
-                except (TypeError, ValueError):
-                    decoded[key] = value
-            return decoded
+            return dict(values)
         return await run(action)
 
     @router.get("/settings/web-search")

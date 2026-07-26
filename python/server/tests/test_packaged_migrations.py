@@ -1,13 +1,8 @@
-from pathlib import Path
-
-from refora_server.db.migrations import _schema_dir
+from refora_server.db.migrations import MIGRATIONS_DIR, SCHEMA_FILE
 
 
-def test_schema_dir_uses_packaged_resources_when_available(tmp_path: Path) -> None:
-    package = tmp_path / "Resources" / "python-server" / "refora_server" / "db"
-    package.mkdir(parents=True)
-    (tmp_path / "Resources" / "python-server" / "db").mkdir()
-    (tmp_path / "Resources" / "python-server" / "db" / "schema.sql").write_text("SELECT 1;", encoding="utf-8")
-    module_path = package / "migrations.py"
-
-    assert _schema_dir(module_path) == tmp_path / "Resources" / "python-server" / "db"
+def test_database_resources_are_owned_by_the_python_package() -> None:
+    assert SCHEMA_FILE.parent.name == "db"
+    assert SCHEMA_FILE.is_file()
+    assert MIGRATIONS_DIR.parent == SCHEMA_FILE.parent
+    assert len(tuple(MIGRATIONS_DIR.glob("*.sql"))) >= 25

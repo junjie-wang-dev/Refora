@@ -26,9 +26,7 @@ vi.mock('node:fs', () => ({
 
 import {
   readLibraryFolderPath,
-  readMineruInstallRoot,
-  writeLibraryFolderPath,
-  writeMineruInstallRoot
+  writeLibraryFolderPath
 } from '../../src/main/services/prefs'
 
 describe('prefs helpers', () => {
@@ -73,24 +71,5 @@ describe('prefs helpers', () => {
     mockExistsSync.mockReturnValue(false)
     writeLibraryFolderPath('/ud', '/my/lib')
     expect(mockMkdirSync).toHaveBeenCalled()
-  })
-
-  it('keeps the Library and MinerU paths when either preference changes', () => {
-    mockExistsSync.mockReturnValue(true)
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      libraryFolderPath: '/my/lib',
-      mineruInstallRoot: '/models'
-    }))
-    writeLibraryFolderPath('/ud', '/new/lib')
-    expect(JSON.parse(mockWriteFileSync.mock.calls[0][1] as string)).toMatchObject({
-      libraryFolderPath: '/new/lib',
-      mineruInstallRoot: '/models'
-    })
-    writeMineruInstallRoot('/ud', '/new/models')
-    expect(JSON.parse(mockWriteFileSync.mock.calls[1][1] as string)).toMatchObject({
-      libraryFolderPath: '/my/lib',
-      mineruInstallRoot: '/new/models'
-    })
-    expect(readMineruInstallRoot('/ud')).toBe('/models')
   })
 })

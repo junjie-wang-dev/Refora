@@ -13,6 +13,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from refora_server.agent.sandbox_backend import ReforaFilesystemBackend
+from refora_server.db.migrations import MIGRATIONS_DIR, SCHEMA_FILE
 
 REQUIRED_MODULES: Final[tuple[str, ...]] = (
     "deepagents",
@@ -54,6 +55,8 @@ def verify_artifact() -> dict[str, Any]:
         distribution: version(distribution)
         for distribution in REQUIRED_DISTRIBUTIONS
     }
+    if not SCHEMA_FILE.is_file() or not any(MIGRATIONS_DIR.glob("*.sql")):
+        raise RuntimeError("Database schema resources are missing")
 
     async def verify_checkpointer() -> None:
         connection = await aiosqlite.connect(":memory:")

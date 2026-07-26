@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock
+from urllib.parse import unquote_plus
 
 import pytest
 
@@ -226,6 +227,33 @@ class TestArxivClient:
         assert len(calls) == 1
         assert "sortBy=submittedDate" in calls[0]
         assert "max_results=1" in calls[0]
+
+    @pytest.mark.asyncio
+    async def test_exact_id_and_title_search_use_provider_specific_queries(
+        self,
+        cache_dir: Path,
+        rate_limiter: Any,
+    ) -> None:
+        calls: list[str] = []
+        fetch = _make_recording_fetch(
+            calls,
+            FEED,
+            headers={"content-type": "application/atom+xml"},
+        )
+        client = create_arxiv_client(
+            fetch,
+            create_academic_cache(str(cache_dir)),
+            rate_limiter=rate_limiter,
+        )
+
+        paper = await client.get_by_id("2401.12345")
+        result = await client.search_title("A useful paper", 5)
+
+        assert paper is not None
+        assert paper.arxivId == "2401.12345v2"
+        assert "id_list=2401.12345" in unquote_plus(calls[0])
+        assert 'search_query=ti:"A useful paper"' in unquote_plus(calls[1])
+        assert result.papers[0].title == "A useful paper"
 
     @pytest.mark.asyncio
     async def test_fetch_html_accepts_official_arxiv_html(self, cache_dir: Path, rate_limiter: Any) -> None:

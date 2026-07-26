@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from fastapi import FastAPI
+from pypdf import PdfWriter
 import pytest
 
 from refora_server.server.connector import ConnectorBroker
@@ -25,7 +26,9 @@ async def test_lifespan_starts_watcher_and_processes_metadata_in_python(
     library = tmp_path / "library"
     library.mkdir()
     source = tmp_path / "paper.pdf"
-    source.write_bytes(b"%PDF-1.4\n")
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.write(str(source))
     app = FastAPI(
         lifespan=create_lifespan(
             str(tmp_path / "refora.sqlite"),
@@ -39,7 +42,7 @@ async def test_lifespan_starts_watcher_and_processes_metadata_in_python(
             socket,
             ["import.progress"],
         )
-        result = app.state.services["importer"]["importFiles"]([str(source)])
+        result = await app.state.services["importer"]["importFiles"]([str(source)])
         await asyncio.sleep(0.01)
 
         assert app.state.services["watcher"]["_state"]["running"] is True
@@ -58,6 +61,34 @@ async def test_lifespan_starts_watcher_and_processes_metadata_in_python(
         assert document["metadataStatus"] in {"failed", "done"}
 
     assert app.state.services["watcher"]["_state"]["running"] is False
+
+
+async def test_import_errors_are_forwarded_as_toast_events(tmp_path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    source = tmp_path / "broken.pdf"
+    source.write_bytes(b"%PDF-1.4\nbroken")
+    app = FastAPI(
+        lifespan=create_lifespan(
+            str(tmp_path / "refora.sqlite"),
+            str(library),
+        )
+    )
+    socket = EventSocket()
+
+    async with app.router.lifespan_context(app):
+        await app.state.event_bus.subscribe(socket, ["import.toast"])
+        result = await app.state.services["importer"]["importFiles"]([str(source)])
+        await asyncio.sleep(0.01)
+
+        assert result["imported"] == []
+        assert result["errors"]
+        assert socket.messages == [
+            {
+                "event": "import.toast",
+                "data": result["errors"][0]["message"],
+            }
+        ]
 
 
 async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:

@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   wsConnect: vi.fn(),
   wsDisconnect: vi.fn(),
   bridgeStart: vi.fn(),
-  bridgeStop: vi.fn()
+  bridgeStop: vi.fn(),
+  ready: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -25,6 +26,9 @@ vi.mock('../../src/main/services/nativeRpc', () => ({
 
 vi.mock('../../src/main/services/serverClient', () => ({
   createServerClient: vi.fn(() => ({
+    http: {
+      systemReady: mocks.ready
+    },
     ws: {
       connect: mocks.wsConnect,
       disconnect: mocks.wsDisconnect
@@ -63,6 +67,10 @@ import { createServerAppHandlers } from '../../src/main/ipc/serverAppHandlers'
 import { createServerLibraryHandlers } from '../../src/main/ipc/serverLibraryHandlers'
 import { createServerWorkspaceHandlers } from '../../src/main/ipc/serverWorkspaceHandlers'
 import { createServerAiHandlers } from '../../src/main/ipc/serverAiHandlers'
+import {
+  SERVER_PROTOCOL_DIGEST,
+  SERVER_PROTOCOL_VERSION
+} from '../../src/shared/server-contract'
 
 describe('main process server assembly', () => {
   beforeEach(() => {
@@ -92,6 +100,14 @@ describe('main process server assembly', () => {
     mocks.ipcRemoveHandler.mockImplementation(() => {
       mocks.calls.push('ipc.removeHandler')
     })
+    mocks.ready.mockImplementation(async () => {
+      mocks.calls.push('http.ready')
+      return {
+        status: 'ready',
+        protocolVersion: SERVER_PROTOCOL_VERSION,
+        protocolDigest: SERVER_PROTOCOL_DIGEST
+      }
+    })
   })
 
   it('starts services and registers all server handler maps in order', async () => {
@@ -107,7 +123,6 @@ describe('main process server assembly', () => {
     }
     const assembly = createServerAssembly({
       lifecycle,
-      repos: {} as never,
       getWin: () => null
     })
 
@@ -116,6 +131,7 @@ describe('main process server assembly', () => {
     expect(mocks.calls).toEqual([
       'lifecycle.start',
       'native.start',
+      'http.ready',
       'ws.connect',
       'bridge.start',
       'ipc.handle',
@@ -142,7 +158,6 @@ describe('main process server assembly', () => {
     }
     const assembly = createServerAssembly({
       lifecycle,
-      repos: {} as never,
       getWin: () => null
     })
     await assembly.start()
@@ -160,5 +175,29 @@ describe('main process server assembly', () => {
       'native.stop',
       'lifecycle.stop'
     ])
+  })
+
+  it('rejects a mismatched Python protocol and releases startup resources', async () => {
+    mocks.ready.mockResolvedValueOnce({
+      status: 'ready',
+      protocolVersion: SERVER_PROTOCOL_VERSION + 1,
+      protocolDigest: 'mismatch'
+    })
+    const lifecycle = {
+      start: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8123', token: 'token', port: 8123 })),
+      getServerBaseUrl: vi.fn(),
+      stop: vi.fn(async () => {
+        mocks.calls.push('lifecycle.stop')
+      })
+    }
+    const assembly = createServerAssembly({
+      lifecycle,
+      getWin: () => null
+    })
+
+    await expect(assembly.start()).rejects.toThrow('Python server protocol mismatch')
+    expect(mocks.nativeStop).toHaveBeenCalledOnce()
+    expect(lifecycle.stop).toHaveBeenCalledOnce()
+    expect(mocks.wsConnect).not.toHaveBeenCalled()
   })
 })

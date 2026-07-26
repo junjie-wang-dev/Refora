@@ -149,44 +149,59 @@ def importFromJson(
     documents = repos["documents"]
     categories = repos["categories"]
     library_folder = _library_folder(repos, options)
-    if mode == "replace":
-        documents["deleteAll"]()
-        for category in categories["list"]():
-            categories["delete"](category["id"])
-    category_ids: dict[str, str] = {}
-    known_names = {category["name"]: category["id"] for category in categories["list"]()}
-    for category in data["categories"]:
-        if not isinstance(category, dict):
-            continue
-        old_id = category.get("id")
-        name = category.get("name")
-        if not isinstance(old_id, str) or not isinstance(name, str) or not name or old_id in category_ids:
-            continue
-        category_ids[old_id] = known_names.get(name) or categories["create"](name)["id"]
-        known_names[name] = category_ids[old_id]
-    inserted: set[str] = set()
-    count = 0
-    for raw_document in data["documents"]:
-        document = sanitizeImportedDoc(raw_document, library_folder)
-        if document is None or documents["get"](document["id"]) is not None:
-            continue
-        try:
-            documents["insert"](document)
-        except Exception:
-            continue
-        inserted.add(document["id"])
-        count += 1
-    for link in data["documentCategories"]:
-        if not isinstance(link, dict):
-            continue
-        document_id = link.get("documentId")
-        category_id = link.get("categoryId")
-        if not isinstance(document_id, str) or not isinstance(category_id, str):
-            continue
-        new_category_id = category_ids.get(category_id)
-        if document_id in inserted and new_category_id:
-            try:
-                categories["assign"](document_id, new_category_id)
-            except Exception:
+    sanitized_documents = [
+        document
+        for raw_document in data["documents"]
+        if (document := sanitizeImportedDoc(raw_document, library_folder)) is not None
+    ]
+
+    def operation() -> dict[str, int]:
+        if mode == "replace":
+            documents["deleteAll"]()
+            for category in categories["list"]():
+                categories["delete"](category["id"])
+        category_ids: dict[str, str] = {}
+        known_names = {category["name"]: category["id"] for category in categories["list"]()}
+        for category in data["categories"]:
+            if not isinstance(category, dict):
                 continue
-    return {"imported": count}
+            old_id = category.get("id")
+            name = category.get("name")
+            if not isinstance(old_id, str) or not isinstance(name, str) or not name or old_id in category_ids:
+                continue
+            category_ids[old_id] = known_names.get(name) or categories["create"](name)["id"]
+            known_names[name] = category_ids[old_id]
+        inserted: set[str] = set()
+        count = 0
+        for document in sanitized_documents:
+            if mode == "merge" and documents["get"](document["id"]) is not None:
+                continue
+            if mode == "merge":
+                try:
+                    documents["insert"](document)
+                except Exception:
+                    continue
+            else:
+                documents["insert"](document)
+            inserted.add(document["id"])
+            count += 1
+        for link in data["documentCategories"]:
+            if not isinstance(link, dict):
+                continue
+            document_id = link.get("documentId")
+            category_id = link.get("categoryId")
+            if not isinstance(document_id, str) or not isinstance(category_id, str):
+                continue
+            new_category_id = category_ids.get(category_id)
+            if document_id in inserted and new_category_id:
+                if mode == "merge":
+                    try:
+                        categories["assign"](document_id, new_category_id)
+                    except Exception:
+                        continue
+                else:
+                    categories["assign"](document_id, new_category_id)
+        return {"imported": count}
+
+    transaction = repos.get("transaction")
+    return transaction(operation) if callable(transaction) else operation()

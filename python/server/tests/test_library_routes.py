@@ -1,5 +1,4 @@
 import base64
-import json
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -12,6 +11,7 @@ class Fakes:
     def __init__(self):
         self.token_calls = 0
         self.trashed = []
+        self.deleted_documents = []
         self.created_provider = None
         self.document_filter = None
         self.listed_documents = []
@@ -58,12 +58,12 @@ class Fakes:
         }
         self.library = {"switchLibrary": lambda _path: {"ack": True}}
         settings_values = {
-            "language": json.dumps("en"),
-            "sidebarCollapsed": json.dumps("0"),
-            "libraryFolderPath": json.dumps(""),
-            "windowBounds": json.dumps(None),
-            "listColumnState": json.dumps(None),
-            "theme": json.dumps("dark"),
+            "language": "en",
+            "sidebarCollapsed": "0",
+            "libraryFolderPath": "",
+            "windowBounds": None,
+            "listColumnState": None,
+            "theme": "dark",
         }
         self.settings = {
             "list": lambda: sorted(settings_values.items()),
@@ -155,8 +155,8 @@ class Fakes:
         self.document_filter = filter_
         return self.listed_documents
 
-    def delete_document(self, _document_id: str):
-        return None
+    def delete_document(self, document_id: str):
+        self.deleted_documents.append(document_id)
 
     def import_files(self, paths: list[str]):
         self.imported_file_paths.extend(paths)
@@ -262,12 +262,70 @@ def test_registers_every_library_domain_protocol_route():
     assert expected <= routes
 
 
-def test_document_delete_uses_token_connector_and_result_envelope():
+def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):
     client, fakes = make_client()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": str(source),
+        "fileMissing": 0,
+    }
     response = client.delete("/documents/doc-1", headers={"X-Refora-Token": "test-token"})
     assert response.status_code == 200
     assert response.json() == {"ok": True, "data": {"ack": True}}
-    assert fakes.trashed == ["/tmp/source.pdf"]
+    assert fakes.trashed == [str(source)]
+    assert fakes.deleted_documents == ["doc-1"]
+
+
+def test_bulk_delete_removes_records_when_files_are_missing_or_trash_fails(tmp_path):
+    client, fakes = make_client()
+    present = tmp_path / "present.pdf"
+    present.write_bytes(b"%PDF-1.4\n")
+    fakes.document_overrides.update(
+        {
+            "missing-file": {
+                "id": "missing-file",
+                "filePath": str(tmp_path / "gone.pdf"),
+                "fileMissing": 1,
+            },
+            "trash-fails": {
+                "id": "trash-fails",
+                "filePath": str(present),
+                "fileMissing": 0,
+            },
+        }
+    )
+
+    def fail_trash(_path: str):
+        raise RuntimeError("trash unavailable")
+
+    fakes.connector["trashItem"] = fail_trash
+    response = client.post(
+        "/documents/bulk-delete",
+        headers={"X-Refora-Token": "test-token"},
+        json={"ids": ["missing-file", "trash-fails"]},
+    )
+
+    assert response.json() == {"ok": True, "data": {"ack": True}}
+    assert fakes.deleted_documents == ["missing-file", "trash-fails"]
+
+
+def test_open_missing_pdf_returns_not_found():
+    client, fakes = make_client()
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": "/tmp/gone.pdf",
+        "fileMissing": 1,
+    }
+
+    response = client.post(
+        "/documents/doc-1/open-pdf",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
 
 
 def test_bulk_metadata_refresh_only_enqueues_work():

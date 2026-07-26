@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServerLifecycle, type ServerLifecycle } from '../../src/main/services/serverLifecycle'
 import { createServerClient } from '../../src/main/services/serverClient'
+import {
+  SERVER_PROTOCOL_DIGEST,
+  SERVER_PROTOCOL_VERSION
+} from '../../src/shared/server-contract'
 
 vi.mock('electron', () => ({ net: { fetch: globalThis.fetch } }))
 vi.mock('../../src/main/services/logger', () => ({ logger: { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
@@ -66,7 +70,11 @@ describe('managed Python server lifecycle', () => {
     expect((await eventually(() => fetch(`${connection.baseUrl}/health`))).ok).toBe(true)
     expect((await fetch(`${connection.baseUrl}/ready`)).status).toBe(401)
     client = createServerClient(lifecycle, { start: vi.fn(), stop: vi.fn() }, { fetchImpl: fetch, WebSocketCtor: WebSocket, requestTimeoutMs: 2_000, wsReconnectMaxAttempts: 0 })
-    await expect(eventually(() => client!.http.systemReady())).resolves.toEqual({ status: 'ready' })
+    await expect(eventually(() => client!.http.systemReady())).resolves.toEqual({
+      status: 'ready',
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      protocolDigest: SERVER_PROTOCOL_DIGEST
+    })
     const subscribed = new Promise<unknown>((resolve) => client!.ws.on('subscribed', resolve))
     await client.ws.connect()
     client.ws.subscribe(['ocr.progress'])

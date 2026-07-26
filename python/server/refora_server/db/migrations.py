@@ -5,15 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-def _schema_dir(module_path: Path) -> Path:
-    resolved = module_path.resolve()
-    packaged = resolved.parents[2] / "db"
-    if (packaged / "schema.sql").is_file():
-        return packaged
-    return resolved.parents[4] / "src" / "main" / "db"
-
-
-SCHEMA_DIR = _schema_dir(Path(__file__))
+SCHEMA_DIR = Path(__file__).resolve().parent
 SCHEMA_FILE = SCHEMA_DIR / "schema.sql"
 MIGRATIONS_DIR = SCHEMA_DIR / "migrations"
 

@@ -8,6 +8,10 @@ import { createServerWorkspaceHandlers } from './ipc/serverWorkspaceHandlers'
 import { createNativeRpc, type NativeRpc } from './services/nativeRpc'
 import { createServerClient, type ServerClient } from './services/serverClient'
 import type { ServerLifecycle } from './services/serverLifecycle'
+import {
+  SERVER_PROTOCOL_DIGEST,
+  SERVER_PROTOCOL_VERSION
+} from '../shared/server-contract'
 
 export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
@@ -30,33 +34,53 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
 
   async function start(): Promise<void> {
     const connection = await deps.lifecycle.start()
-    nativeRpc = createNativeRpc({
-      token: connection.token,
-      getWin: deps.getWin
-    })
-    await nativeRpc.start()
-    serverClient = createServerClient(deps.lifecycle, nativeRpc)
-    await serverClient.ws.connect()
-    eventBridge = createServerEventBridge({
-      serverClient,
-      getWin: deps.getWin
-    })
-    eventBridge.start()
-
-    const handlers = {
-      ...createServerAppHandlers(serverClient),
-      ...createServerLibraryHandlers({
+    try {
+      nativeRpc = createNativeRpc({
+        token: connection.token,
+        getWin: deps.getWin
+      })
+      await nativeRpc.start()
+      serverClient = createServerClient(deps.lifecycle, nativeRpc)
+      const ready = await serverClient.http.systemReady()
+      if (
+        ready.protocolVersion !== SERVER_PROTOCOL_VERSION ||
+        ready.protocolDigest !== SERVER_PROTOCOL_DIGEST
+      ) {
+        throw new Error(
+          `Python server protocol mismatch: expected ${SERVER_PROTOCOL_VERSION}/${SERVER_PROTOCOL_DIGEST}, received ${ready.protocolVersion}/${ready.protocolDigest}`
+        )
+      }
+      await serverClient.ws.connect()
+      eventBridge = createServerEventBridge({
         serverClient,
-        switchLibraryFolder: deps.switchLibraryFolder
-      }),
-      ...createServerWorkspaceHandlers(serverClient),
-      ...createServerAiHandlers({ serverClient })
-    }
-    handlerChannels = Object.keys(handlers)
-    for (const [channel, handler] of Object.entries(handlers)) {
-      ipcMain.handle(channel, (_event, ...args) =>
-        (handler as (...handlerArgs: unknown[]) => unknown)(...args)
-      )
+        getWin: deps.getWin
+      })
+      eventBridge.start()
+
+      const handlers = {
+        ...createServerAppHandlers(serverClient),
+        ...createServerLibraryHandlers({
+          serverClient,
+          switchLibraryFolder: deps.switchLibraryFolder
+        }),
+        ...createServerWorkspaceHandlers(serverClient),
+        ...createServerAiHandlers({ serverClient })
+      }
+      handlerChannels = Object.keys(handlers)
+      for (const [channel, handler] of Object.entries(handlers)) {
+        ipcMain.handle(channel, (_event, ...args) =>
+          (handler as (...handlerArgs: unknown[]) => unknown)(...args)
+        )
+      }
+    } catch (error) {
+      eventBridge?.stop()
+      serverClient?.ws.disconnect()
+      await nativeRpc?.stop()
+      await deps.lifecycle.stop()
+      eventBridge = null
+      serverClient = null
+      nativeRpc = null
+      throw error
     }
   }
 

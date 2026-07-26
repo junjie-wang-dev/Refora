@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+import os
 import re
+import shutil
 import time
 import uuid
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+
+from refora_server.library.paths import isInsideLibrary
 
 
 FIELD_MAP = {
@@ -22,6 +31,7 @@ FIELD_MAP = {
     "doi": "doi",
     "note": "note",
 }
+MAX_BIBTEX_BYTES = 50 * 1024 * 1024
 
 
 def _now_ms() -> int:
@@ -216,6 +226,276 @@ def extractMetadataFromEntry(entry: dict[str, Any]) -> dict[str, str]:
     if prefix == "arxiv" and eprint:
         result["arxivId"] = eprint
     return result
+
+
+def extractAttachmentPaths(raw: str) -> list[str]:
+    paths: list[str] = []
+    for part in raw.split(";"):
+        candidate = part.strip()
+        pdf_end = candidate.lower().find(".pdf")
+        if pdf_end >= 0:
+            candidate = candidate[: pdf_end + 4]
+        file_url_index = candidate.lower().find("file://")
+        if file_url_index >= 0:
+            parsed = urlparse(candidate[file_url_index:])
+            if parsed.scheme == "file":
+                candidate = unquote(parsed.path)
+                if parsed.netloc and parsed.netloc != "localhost":
+                    candidate = f"//{parsed.netloc}{candidate}"
+            else:
+                candidate = ""
+        else:
+            descriptor_end = candidate.find(":")
+            if descriptor_end >= 0:
+                described_path = candidate[descriptor_end + 1 :].strip()
+                if ".pdf" in described_path.lower():
+                    candidate = described_path
+        if candidate:
+            paths.append(candidate)
+    return paths
+
+
+def _validate_pdf_path(raw: str, base_dir: str) -> str | None:
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(base_dir) / path
+    if path.suffix.lower() != ".pdf":
+        return None
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return str(path.resolve(strict=True))
+    except OSError:
+        return None
+
+
+def _find_pdf_from_entry(entry: dict[str, Any], source: str, base_dir: str) -> str | None:
+    fields = entry["fields"]
+    candidates: list[str] = []
+    if source == "zotero":
+        for number in range(1, 10):
+            raw = fields.get(f"file{number}")
+            if raw:
+                candidates.extend(extractAttachmentPaths(raw))
+        raw = fields.get("file")
+        if raw:
+            candidates.extend(extractAttachmentPaths(raw))
+    elif source == "mendeley":
+        for name in ("file", "files"):
+            raw = fields.get(name)
+            if raw:
+                candidates.extend(extractAttachmentPaths(raw))
+    else:
+        raise ValueError("source must be zotero or mendeley")
+    for candidate in candidates:
+        valid = _validate_pdf_path(candidate, base_dir)
+        if valid:
+            return valid
+    return None
+
+
+def _hash_pdf(file_path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _copy_to_library(source: str, library_folder: str) -> str:
+    folder = Path(library_folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    source_path = Path(source)
+    destination = folder / source_path.name
+    number = 1
+    while destination.exists():
+        destination = folder / f"{source_path.stem} ({number}){source_path.suffix}"
+        number += 1
+    shutil.copy2(source_path, destination)
+    return str(destination.resolve())
+
+
+def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
+    getter = deps.get("getLibraryFolder")
+    if callable(getter):
+        value = getter()
+    else:
+        settings = repos.get("settings")
+        value = settings.get("libraryFolderPath", "") if settings is not None else ""
+    if not isinstance(value, str):
+        return ""
+    try:
+        decoded = json.loads(value)
+        if isinstance(decoded, str):
+            return decoded
+    except json.JSONDecodeError:
+        pass
+    return value
+
+
+def _base_document(
+    metadata: dict[str, str],
+    citekey: str,
+    now_ms: Any,
+    make_id: Any,
+) -> dict[str, Any]:
+    now = now_ms()
+    return {
+        "id": make_id(),
+        "title": metadata.get("title"),
+        "authors": metadata.get("authors"),
+        "affiliations": None,
+        "year": metadata.get("year"),
+        "venue": metadata.get("venue"),
+        "volume": metadata.get("volume"),
+        "issue": metadata.get("issue"),
+        "pages": metadata.get("pages"),
+        "abstract": metadata.get("abstract"),
+        "keywords": metadata.get("keywords"),
+        "url": metadata.get("url"),
+        "doi": metadata.get("doi"),
+        "arxivId": None,
+        "note": citekey or None,
+        "starred": 0,
+        "addedAt": now,
+        "lastReadAt": None,
+        "updatedAt": now,
+        "metadataSource": "manual",
+        "metadataStatus": "done",
+        "metadataAttempts": 0,
+        "editedFields": [],
+        "remoteValues": None,
+        "fileMissing": 0,
+    }
+
+
+def _apply_metadata_to_existing(
+    documents: dict[str, Any],
+    document_id: str,
+    metadata: dict[str, str],
+    citekey: str,
+) -> None:
+    document = documents["get"](document_id)
+    if document is None:
+        return
+    edited_fields = document.get("editedFields", [])
+    patch: dict[str, str] = {}
+    remote_values = dict(document.get("remoteValues") or {})
+    for field, value in metadata.items():
+        if not value:
+            continue
+        if field in edited_fields:
+            remote_values[field] = {"value": value, "source": "manual"}
+        else:
+            patch[field] = value
+    if citekey and not document.get("note") and "note" not in edited_fields:
+        patch["note"] = citekey
+    if patch:
+        documents["update"](document_id, patch)
+    if remote_values or document.get("remoteValues") is not None:
+        documents["setRemoteValues"](document_id, remote_values)
+
+
+async def importFromBibtex(
+    repos: dict[str, Any],
+    file_path: str,
+    source: str,
+    verifyArxivId: Any = None,
+    deps: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    options = deps or {}
+    path = Path(file_path)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ValueError("BibTeX path is not a file")
+    if path.stat().st_size > MAX_BIBTEX_BYTES:
+        raise ValueError("BibTeX file exceeds the 50 MB limit")
+    entries = parseBibtex(path.read_text(encoding="utf-8"))
+    documents = repos["documents"]
+    now_ms = options.get("nowMs", _now_ms)
+    make_id = options.get("newId", _new_id)
+    hash_pdf = options.get("hashPdf", _hash_pdf)
+    copy_to_library = options.get("copyToLibrary", _copy_to_library)
+    library_folder = _library_folder(repos, options)
+    added: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    async def apply_arxiv(document_id: str, arxiv_id: str | None, key: str) -> None:
+        if not arxiv_id:
+            return
+        if not callable(verifyArxivId):
+            errors.append({"key": key, "message": "arXiv verification service is unavailable"})
+            return
+        try:
+            result = verifyArxivId(document_id, arxiv_id)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as error:
+            errors.append({"key": key, "message": str(error)})
+
+    for number, entry in enumerate(entries, start=1):
+        key = entry["citekey"] or f"entry-{number}"
+        try:
+            metadata = extractMetadataFromEntry(entry)
+            arxiv_id = metadata.pop("arxivId", None)
+            pdf_path = _find_pdf_from_entry(entry, source, str(path.parent))
+            if pdf_path:
+                existing = documents["findByPath"](pdf_path)
+                file_hash: str | None = None
+                if existing is None:
+                    file_hash = hash_pdf(pdf_path)
+                    if file_hash:
+                        existing = documents["findByHash"](file_hash)
+                if existing is not None:
+                    _apply_metadata_to_existing(documents, existing["id"], metadata, entry["citekey"])
+                    await apply_arxiv(existing["id"], arxiv_id, key)
+                    skipped.append(existing["id"])
+                    continue
+                stat = os.stat(pdf_path)
+                base = _base_document(metadata, entry["citekey"], now_ms, make_id)
+                document = documents["insert"](
+                    {
+                        **base,
+                        "filePath": pdf_path,
+                        "originalFolderPath": str(Path(pdf_path).parent),
+                        "fileName": Path(pdf_path).name,
+                        "fileSize": stat.st_size,
+                        "fileHash": file_hash,
+                    }
+                )
+                if library_folder and not isInsideLibrary(pdf_path, library_folder):
+                    try:
+                        copied_path = copy_to_library(pdf_path, library_folder)
+                        documents["updateFilePath"](
+                            document["id"], copied_path, Path(copied_path).name
+                        )
+                    except Exception:
+                        pass
+                added.append(document["id"])
+                await apply_arxiv(document["id"], arxiv_id, key)
+                continue
+            base = _base_document(metadata, entry["citekey"], now_ms, make_id)
+            document = documents["insert"](
+                {
+                    **base,
+                    "filePath": "",
+                    "originalFolderPath": "",
+                    "fileName": entry["citekey"] or "",
+                    "fileSize": None,
+                    "fileHash": None,
+                    "fileMissing": 1,
+                }
+            )
+            added.append(document["id"])
+            await apply_arxiv(document["id"], arxiv_id, key)
+        except Exception as error:
+            errors.append({"key": key, "message": str(error)})
+    return {"added": added, "skipped": skipped, "errors": errors}
 
 
 def importBibtex(repos: dict[str, Any], content: str, deps: dict[str, Any] | None = None) -> dict[str, Any]:

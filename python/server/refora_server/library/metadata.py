@@ -146,6 +146,20 @@ NOISE_TITLE_PATTERNS = re.compile(
 )
 
 TRAILING_PUNCT = re.compile(r"[.,;)\]]+$")
+PDF_TITLE_NOISE = re.compile(
+    r"^(published as a|formatting instructions|instructions for authors|"
+    r"this (is an? )?(open access|article)|\d{4}\s*(©|\(c\))|copyright\b|"
+    r"vol\.?\b|article\b|contents\b|journal homepage\b|preliminary version|"
+    r"do not cite|work in progress|draft version|preprint version|under review)\b",
+    re.IGNORECASE,
+)
+PDF_ARXIV_HEADER = re.compile(r"^arxiv:\s*\d", re.IGNORECASE)
+PDF_CITED_BY_HEADER = re.compile(r"^cited by\b", re.IGNORECASE)
+PDF_JOURNAL_HEADER_NOISE = re.compile(
+    r"^(contents lists available|journal homepage|www\.|http|sciencedirect|"
+    r"elsevier|springer)\b",
+    re.IGNORECASE,
+)
 
 
 def _nonEmptyString(value: Any) -> Optional[str]:
@@ -650,6 +664,97 @@ def normalizeAuthors(raw: Optional[str]) -> Optional[str]:
     return "; ".join(out)
 
 
+def _isPdfTitleNoise(text: str) -> bool:
+    return bool(
+        PDF_TITLE_NOISE.search(text)
+        or TITLE_NOISE_ANYWHERE.search(text)
+        or PDF_ARXIV_HEADER.search(text)
+        or PDF_CITED_BY_HEADER.search(text)
+        or PDF_JOURNAL_HEADER_NOISE.search(text)
+        or re.search(
+            r"\b(abstract|introduction|acknowledg|references|bibliography)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def extractTitleCandidate(lines: list[dict[str, float | str]]) -> Optional[str]:
+    candidates = [
+        line
+        for line in lines
+        if isinstance(line.get("text"), str)
+        and str(line["text"]).strip()
+        and isinstance(line.get("size"), (int, float))
+        and float(line["size"]) > 0
+    ]
+    valid = [line for line in candidates if not _isPdfTitleNoise(str(line["text"]))]
+    if not valid:
+        return None
+    max_size = max(float(line["size"]) for line in valid)
+    threshold = max(max_size * 0.85, 11)
+    group = sorted(
+        [line for line in valid if float(line["size"]) >= threshold],
+        key=lambda line: float(line.get("y", 0)),
+        reverse=True,
+    )
+    if len(group) > 1:
+        filtered = []
+        for line in group:
+            y = float(line.get("y", 0))
+            above = any(
+                y + 1 < float(candidate.get("y", 0)) < y + 32
+                and PDF_JOURNAL_HEADER_NOISE.search(str(candidate["text"]))
+                for candidate in candidates
+            )
+            below = any(
+                y - 32 < float(candidate.get("y", 0)) < y - 1
+                and PDF_JOURNAL_HEADER_NOISE.search(str(candidate["text"]))
+                for candidate in candidates
+            )
+            if not (above and below):
+                filtered.append(line)
+        if filtered:
+            group = filtered
+    if not group:
+        return None
+    chosen = [group[0]]
+    start_y = float(group[0].get("y", 0))
+    for line in [item for item in group if float(item.get("y", 0)) < start_y - 1]:
+        gap = abs(start_y - float(line.get("y", 0)))
+        next_gap = abs(
+            float(chosen[-1].get("y", 0)) - float(line.get("y", 0))
+        )
+        if gap > 40 or next_gap > 40:
+            break
+        chosen.append(line)
+    chosen.sort(key=lambda line: float(line.get("y", 0)), reverse=True)
+    title = re.sub(
+        r"\s+",
+        " ",
+        " ".join(str(line["text"]) for line in chosen),
+    ).strip()
+    return title if len(title) >= 8 else None
+
+
+def _pdfLinesFromFragments(
+    fragments: list[dict[str, float | str]],
+) -> list[dict[str, float | str]]:
+    lines: list[dict[str, float | str]] = []
+    for fragment in fragments:
+        text = re.sub(r"\s+", " ", str(fragment["text"])).strip()
+        if not text:
+            continue
+        y = float(fragment.get("y", 0))
+        size = float(fragment.get("size", 0))
+        if lines and abs(float(lines[-1]["y"]) - y) <= 2:
+            lines[-1]["text"] = f"{lines[-1]['text']}{text}"
+            lines[-1]["size"] = max(float(lines[-1]["size"]), size)
+        else:
+            lines.append({"text": text, "y": y, "size": size})
+    return lines
+
+
 def extractMetadataFromPdf(filePath: str, maxPages: int = 5) -> dict[str, Any]:
     try:
         from pypdf import PdfReader
@@ -683,7 +788,32 @@ def extractMetadataFromPdf(filePath: str, maxPages: int = 5) -> dict[str, Any]:
 
     for i in range(pageCount):
         try:
-            pageText = reader.pages[i].extract_text() or ""
+            if i == 0:
+                fragments: list[dict[str, float | str]] = []
+
+                def visitor(
+                    text: str,
+                    _cm: list[float],
+                    tm: list[float],
+                    _font: dict[str, Any] | None,
+                    font_size: float,
+                ) -> None:
+                    for value in text.splitlines():
+                        if value.strip():
+                            fragments.append(
+                                {
+                                    "text": value,
+                                    "y": tm[5] if len(tm) > 5 else 0,
+                                    "size": font_size,
+                                }
+                            )
+
+                pageText = reader.pages[i].extract_text(visitor_text=visitor) or ""
+                titleCandidate = extractTitleCandidate(
+                    _pdfLinesFromFragments(fragments)
+                )
+            else:
+                pageText = reader.pages[i].extract_text() or ""
             textParts.append(pageText)
         except Exception:
             textParts.append("")

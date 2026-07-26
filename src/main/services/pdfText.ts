@@ -1,10 +1,9 @@
-import { type BrowserWindow, utilityProcess } from 'electron'
+import { randomUUID } from 'node:crypto'
+import { utilityProcess } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { join, resolve as resolvePath } from 'node:path'
-import type { Repositories } from '../db/repositories'
 import type { Document } from '../../shared/ipc-types'
-import { RepoError } from '../db/repositories/errors'
-import { newId } from '../db/repositories/documents'
+import { MainProcessError } from './errors'
 import { logger } from './logger'
 import {
   pdfPreviewCachePath,
@@ -38,10 +37,7 @@ const WORKER_TIMEOUT_MS = 120_000
 const WORKER_IDLE_TIMEOUT_MS = 60_000
 const MAX_WORKERS = 3
 
-export function createPdfTextService(
-  repos: Repositories | null,
-  _win: BrowserWindow | (() => BrowserWindow | null)
-) {
+export function createPdfTextService() {
   let destroyed = false
   const previewRequests = new Map<string, Promise<Uint8Array>>()
   const pool: WorkerSlot[] = Array.from({ length: MAX_WORKERS }, () => ({
@@ -140,9 +136,9 @@ export function createPdfTextService(
   function requestWorker(
     slot: WorkerSlot,
     filePath: string,
-    payload: { action: 'extract'; maxPages: number } | { action: 'preview' }
+    payload: { action: 'preview' }
   ): Promise<WorkerResponse> {
-    const correlationId = newId()
+    const correlationId = randomUUID()
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         slot.pending.delete(correlationId)
@@ -153,44 +149,6 @@ export function createPdfTextService(
     })
   }
 
-  async function getOrExtract(docId: string): Promise<string> {
-    if (destroyed) throw new Error('PDF text service destroyed')
-    if (!repos) throw new Error('PDF text extraction repository is unavailable')
-
-    const doc = repos.documents.get(docId)
-    if (!doc) throw new RepoError('not_found', `Document ${docId} not found`)
-
-    const cached = repos.aiSummaries.getFullText(docId)
-    if (cached !== null) {
-      const docHash = doc.fileHash ?? null
-      if (docHash === null || cached.hash === null || cached.hash === docHash) {
-        return cached.text
-      }
-    }
-
-    const filePath = resolvePath(doc.filePath)
-    if (!filePath.toLowerCase().endsWith('.pdf')) {
-      throw new RepoError('invalid_path', `Not a PDF file: ${filePath}`)
-    }
-
-    const slot = acquireSlot()
-    slot.active++
-    try {
-      const response = await requestWorker(slot, filePath, { action: 'extract', maxPages: 0 })
-      if (response.error) {
-        throw new Error(response.error.message)
-      }
-      const text = response.text ?? ''
-      repos.aiSummaries.setFullText(docId, text, doc.fileHash ?? null)
-      return text
-    } finally {
-      slot.active--
-      if (slot.active === 0 && slot.pending.size === 0) {
-        scheduleIdleKill(slot)
-      }
-    }
-  }
-
   async function renderPreview(filePath: string, fileName: string): Promise<Uint8Array> {
     const slot = acquireSlot()
     slot.active++
@@ -198,7 +156,7 @@ export function createPdfTextService(
       const response = await requestWorker(slot, filePath, { action: 'preview' })
       if (response.error) throw new Error(response.error.message)
       if (!response.preview || response.preview.length === 0) {
-        throw new RepoError('preview_unavailable', `Unable to preview PDF: ${fileName}`)
+        throw new MainProcessError('preview_unavailable', `Unable to preview PDF: ${fileName}`)
       }
       return response.preview
     } finally {
@@ -215,7 +173,7 @@ export function createPdfTextService(
     const filePath = resolvePdfFilePath(doc.filePath)
     const libraryFolder = resolvePath(configuredLibrary.trim())
     if (!configuredLibrary.trim() || !existsSync(libraryFolder) || !statSync(libraryFolder).isDirectory()) {
-      throw new RepoError('invalid_library', 'Library folder is not configured or unavailable')
+      throw new MainProcessError('invalid_library', 'Library folder is not configured or unavailable')
     }
     const sourceStats = statSync(filePath)
     const sourceIdentity = `${doc.fileHash ?? 'unhashed'}:${sourceStats.size}:${sourceStats.mtimeMs}`
@@ -233,16 +191,6 @@ export function createPdfTextService(
     })
     previewRequests.set(cachePath, request)
     return request
-  }
-
-  async function getPreview(docId: string): Promise<Uint8Array> {
-    if (!repos) throw new Error('PDF preview repository is unavailable')
-    const doc = repos.documents.get(docId)
-    if (!doc) throw new RepoError('not_found', `Document ${docId} not found`)
-    return getPreviewForDocument(
-      doc,
-      repos.settings.get<string>('libraryFolderPath', '')
-    )
   }
 
   function destroy(): void {
@@ -266,7 +214,7 @@ export function createPdfTextService(
     }
   }
 
-  return { getOrExtract, getPreview, getPreviewForDocument, destroy }
+  return { getPreviewForDocument, destroy }
 }
 
 export type PdfTextService = ReturnType<typeof createPdfTextService>

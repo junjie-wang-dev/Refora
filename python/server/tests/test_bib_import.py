@@ -1,5 +1,12 @@
+import pytest
+
 from conftest import make_docs_repo, open_migrated_db
-from refora_server.library.bib_import import importBibtex, parseBibtex
+from refora_server.library.bib_import import (
+    extractAttachmentPaths,
+    importBibtex,
+    importFromBibtex,
+    parseBibtex,
+)
 
 
 def test_parse_bibtex_handles_nested_values_and_ignored_entries() -> None:
@@ -46,3 +53,108 @@ def test_import_bibtex_creates_missing_document_and_skips_same_doi() -> None:
     assert document["fileMissing"] == 1
     assert second["imported"] == []
     assert second["skipped"] == [document["id"]]
+
+
+def test_extract_attachment_paths_handles_descriptors_and_file_urls(tmp_path) -> None:
+    first = tmp_path / "first paper.pdf"
+    second = tmp_path / "second.pdf"
+
+    assert extractAttachmentPaths(
+        f"First:{first}:application/pdf;file://{second}:application/pdf"
+    ) == [str(first), str(second)]
+
+
+@pytest.mark.asyncio
+async def test_import_from_bibtex_restores_zotero_pdf_and_arxiv_support(tmp_path) -> None:
+    source_folder = tmp_path / "zotero"
+    source_folder.mkdir()
+    pdf = source_folder / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\npaper")
+    bib = source_folder / "library.bib"
+    bib.write_text(
+        """
+        @article{smith2024,
+          title = {Attached Paper},
+          author = {Smith, Jane},
+          archiveprefix = {arXiv},
+          eprint = {2401.01234},
+          file = {Paper:paper.pdf:application/pdf}
+        }
+        """,
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    documents = make_docs_repo(open_migrated_db(), str(library))
+    verified: list[tuple[str, str]] = []
+
+    async def verify(document_id: str, arxiv_id: str) -> None:
+        verified.append((document_id, arxiv_id))
+
+    result = await importFromBibtex(
+        {"documents": documents},
+        str(bib),
+        "zotero",
+        verify,
+        {"getLibraryFolder": lambda: str(library)},
+    )
+
+    assert len(result["added"]) == 1
+    document = documents["get"](result["added"][0])
+    assert document["title"] == "Attached Paper"
+    assert document["authors"] == "Smith, Jane"
+    assert document["fileMissing"] == 0
+    assert document["filePath"] == str(library / "paper.pdf")
+    assert (library / "paper.pdf").read_bytes() == pdf.read_bytes()
+    assert verified == [(document["id"], "2401.01234")]
+
+
+@pytest.mark.asyncio
+async def test_bibtex_duplicate_hash_preserves_edited_fields_as_remote_values(tmp_path) -> None:
+    source_folder = tmp_path / "mendeley"
+    source_folder.mkdir()
+    pdf = source_folder / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsame")
+    bib = source_folder / "library.bib"
+    bib.write_text(
+        f"""
+        @article{{paper,
+          title = {{Imported Title}},
+          file = {{{pdf}}}
+        }}
+        """,
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    documents = make_docs_repo(open_migrated_db(), str(library))
+    first = await importFromBibtex(
+        {"documents": documents},
+        str(bib),
+        "mendeley",
+        deps={"getLibraryFolder": lambda: str(library)},
+    )
+    document_id = first["added"][0]
+    documents["update"](document_id, {"title": "My Title"})
+    bib.write_text(
+        f"""
+        @article{{paper,
+          title = {{New Imported Title}},
+          file = {{{pdf}}}
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    second = await importFromBibtex(
+        {"documents": documents},
+        str(bib),
+        "mendeley",
+        deps={"getLibraryFolder": lambda: str(library)},
+    )
+
+    document = documents["get"](document_id)
+    assert second["skipped"] == [document_id]
+    assert document["title"] == "My Title"
+    assert document["remoteValues"]["title"] == {
+        "value": "New Imported Title",
+        "source": "manual",
+    }

@@ -359,7 +359,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         db.execute(f"DELETE FROM documents WHERE id IN ({placeholders})", ids)
 
     def deleteAll() -> None:
-        db.executescript("DELETE FROM documents")
+        db.execute("DELETE FROM documents")
 
     def setStarred(id: str, value: bool) -> None:
         db.execute(

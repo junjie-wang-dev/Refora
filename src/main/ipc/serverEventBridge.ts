@@ -1,8 +1,12 @@
 import type { BrowserWindow } from 'electron'
 import { IpcChannel } from '../../shared/ipc-channels'
 import type { ServerClient, WsEventName } from '../services/serverClient'
+import {
+  CONNECTOR_EVENT_NAMES,
+  type ServerEventName
+} from '../../shared/server-contract'
 
-type EventForward = readonly [WsEventName, (typeof IpcChannel)[keyof typeof IpcChannel]]
+type EventForward = readonly [ServerEventName, (typeof IpcChannel)[keyof typeof IpcChannel]]
 
 const eventForwards: readonly EventForward[] = [
   ['ai.chat.token', IpcChannel.EventAiChatToken],
@@ -29,18 +33,7 @@ const eventForwards: readonly EventForward[] = [
   ['ocr.error', IpcChannel.EventOcrError]
 ]
 
-const connectorEvents: readonly WsEventName[] = [
-  'connector.trash-item',
-  'connector.open-path',
-  'connector.show-in-folder',
-  'connector.dialog-open-directory',
-  'connector.dialog-open-file',
-  'connector.dialog-choose',
-  'connector.clipboard-write',
-  'connector.clipboard-write-file',
-  'connector.encrypt-api-key',
-  'connector.decrypt-api-key'
-]
+const connectorEvents: readonly WsEventName[] = CONNECTOR_EVENT_NAMES
 
 export interface ServerEventBridgeDeps {
   serverClient: ServerClient

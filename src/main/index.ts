@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
 import { createPdfTextService } from './services/pdfText'
 import type { PdfTextService } from './services/pdfText'
-import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './db/dbPath'
+import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './services/dbPath'
 import { readLibraryFolderPath, writeLibraryFolderPath } from './services/prefs'
 import { IpcChannel } from '../shared/ipc-channels'
 import type { LibrarySwitchResult } from '../shared/ipc-types'
@@ -531,7 +531,7 @@ void app.whenReady().then(async () => {
       )
     }
   })
-  pdfTextService = createPdfTextService(null, () => win)
+  pdfTextService = createPdfTextService()
 
   if (isDev) {
     const devIconPath = join(__dirname, '../../build/icon.png')

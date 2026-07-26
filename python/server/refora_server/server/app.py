@@ -87,7 +87,19 @@ def _make_app(
 
     @app.get("/ready")
     async def ready(request: Request, _: None = Depends(require_token)) -> JSONResponse:
-        return JSONResponse({"ok": True, "data": {"status": "ready"}})
+        from refora_server.server.contract import runtime_contract
+
+        contract = runtime_contract(request.app)
+        return JSONResponse(
+            {
+                "ok": True,
+                "data": {
+                    "status": "ready",
+                    "protocolVersion": contract["protocolVersion"],
+                    "protocolDigest": contract["protocolDigest"],
+                },
+            }
+        )
 
     @app.post("/shutdown")
     async def shutdown(_: None = Depends(require_token)) -> JSONResponse:

@@ -1,9 +1,10 @@
 # Refora Server Protocol Contract
 
-This document is the canonical contract for the Refora Python server. All
-endpoint and WebSocket event definitions here are the input contract for every
-parallel migration task. Any change to this file must be coordinated across
-task packages.
+The machine-readable contract exported by
+`refora_server.server.contract` is canonical. This document explains that
+contract for maintainers. Run `npm run generate:server-contract` after changing
+HTTP routes or WebSocket event declarations; CI checks that the generated
+TypeScript artifact is current.
 
 ## Conventions
 
@@ -14,9 +15,8 @@ task packages.
   `<state-dir>/server.token` (mode `0o600`, owner-only).
 - WebSocket connections authenticate the token via query string
   `?token=<token>` on the upgrade request.
-- API keys (provider keys) are **never persisted** by the server and **never
-  logged**. They are supplied per-request by the TS client from the Electron
-  secure store.
+- API keys are encrypted and decrypted only through the Electron native
+  connector. Python persists encrypted bytes and never logs plaintext keys.
 
 ### Response envelope
 All HTTP responses use the `Result<T>` envelope:

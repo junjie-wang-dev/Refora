@@ -2,18 +2,18 @@
 
 ## Project overview
 - Refora is a local-first macOS Electron application for managing, reading, and discussing PDF literature.
-- The stack is Electron + electron-vite + React + TypeScript + SQLite (`better-sqlite3`).
+- The stack is Electron + electron-vite + React + TypeScript with a Python 3.12 FastAPI + SQLite sidecar.
 - Keep user data and source PDFs local unless an existing, user-configured AI provider is explicitly involved.
 
 ## Platform
 macOS only.
 
 ## Repository map
-- `src/main/`: Electron main process, filesystem/database access, IPC handlers, and background services.
+- `src/main/`: Electron main process, native macOS integration, IPC handlers, and Python sidecar lifecycle.
 - `src/preload/`: the isolated, typed bridge exposed to the renderer.
 - `src/shared/`: IPC channels, request/response types, and cross-process domain types.
 - `src/renderer/`: React UI, Zustand stores, hooks, styles, theme tokens, and localization.
-- `src/main/db/migrations/`: ordered SQLite migrations; add a new numbered migration instead of rewriting an applied one.
+- `python/server/refora_server/db/migrations/`: ordered SQLite migrations; add a new numbered migration instead of rewriting an applied one.
 - `tests/unit/` and `tests/component/`: Vitest coverage for services, stores, hooks, and renderer components.
 - `build/`: application icons and packaging resources that are intentionally checked in.
 - `.github/workflows/`: macOS CI and tag-driven release automation.
@@ -57,7 +57,7 @@ A task's own Verification assertions must also pass. Do not mark a task done unt
 
 ## Toolchain notes
 - Use the Node.js 24 line locally and in automation.
-- Native module `better-sqlite3` is rebuilt for Electron's ABI via `@electron/rebuild` (`postinstall` + `npm run rebuild`). Rebuilding compiles from source and requires Xcode Command Line Tools (accept the license: `sudo xcodebuild -license accept`).
+- SQLite is owned by the Python sidecar and uses Python's standard `sqlite3` module.
 - `tsc -b` (typecheck) uses project references and **excludes test files**; tests are run by vitest only.
 
 ## CI and release automation

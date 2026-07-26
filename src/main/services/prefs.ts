@@ -5,7 +5,6 @@ import { logger } from './logger'
 
 interface UserPrefs {
   libraryFolderPath?: string
-  mineruInstallRoot?: string
 }
 
 function prefsPath(userDataDir: string): string {
@@ -46,12 +45,4 @@ export function readLibraryFolderPath(userDataDir: string): string {
 
 export function writeLibraryFolderPath(userDataDir: string, folder: string): void {
   updatePrefs(userDataDir, { libraryFolderPath: folder })
-}
-
-export function readMineruInstallRoot(userDataDir: string): string {
-  return readPrefs(userDataDir).mineruInstallRoot ?? ''
-}
-
-export function writeMineruInstallRoot(userDataDir: string, folder: string): void {
-  updatePrefs(userDataDir, { mineruInstallRoot: folder })
 }

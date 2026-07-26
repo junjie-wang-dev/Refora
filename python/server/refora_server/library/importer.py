@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
+import json
 import os
 import shutil
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from refora_server.library.paths import isInsideLibrary
 
@@ -41,6 +47,21 @@ def validatePdfPath(raw: str) -> str | None:
         return None
 
 
+def validatePdfContents(path: str) -> dict[str, str] | None:
+    try:
+        reader = PdfReader(path, strict=False)
+        if reader.is_encrypted and reader.decrypt("") == 0:
+            return {"type": "encrypted", "message": "Password required"}
+        len(reader.pages)
+        return None
+    except PdfReadError as error:
+        message = str(error)
+        kind = "encrypted" if "password" in message.lower() else "corrupted"
+        return {"type": kind, "message": message}
+    except Exception as error:
+        return {"type": "corrupted", "message": str(error)}
+
+
 def _copy_to_library(source: str, library_folder: str) -> str:
     folder = Path(library_folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -62,7 +83,12 @@ def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
     settings = repos.get("settings")
     if settings is not None:
         value = settings.get("libraryFolderPath", "")
-        return value if isinstance(value, str) else ""
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+                return decoded if isinstance(decoded, str) else value
+            except json.JSONDecodeError:
+                return value
     return ""
 
 
@@ -74,15 +100,31 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
     make_id = options.get("newId", _new_id)
     now_ms = options.get("nowMs", _now_ms)
     hash_pdf = options.get("hashPdf", hashPdf)
+    validate_pdf = options.get("validatePdf", validatePdfContents)
     extract_metadata = options.get("extractPdfMetadata")
+    confirm_duplicate = options.get("confirmDuplicate")
     complete_callbacks: list[Callable[[dict[str, Any]], None]] = []
+    import_lock = asyncio.Lock()
+    destroyed = False
 
     def complete(result: dict[str, Any]) -> dict[str, Any]:
         for callback in complete_callbacks:
             callback(result)
         return result
 
-    def importFiles(paths: list[str], isWatch: bool = False) -> dict[str, Any]:
+    async def call_work(function: Any, *args: Any) -> Any:
+        if inspect.iscoroutinefunction(function):
+            return await function(*args)
+        return await asyncio.to_thread(function, *args)
+
+    async def importFiles(paths: list[str], isWatch: bool = False) -> dict[str, Any]:
+        nonlocal destroyed
+        async with import_lock:
+            if destroyed:
+                return {"imported": [], "skipped": [], "errors": []}
+            return await run_import_files(paths, isWatch)
+
+    async def run_import_files(paths: list[str], isWatch: bool) -> dict[str, Any]:
         imported: list[str] = []
         skipped: list[str] = []
         errors: list[dict[str, str]] = []
@@ -99,6 +141,8 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
         for index, raw in enumerate(paths, start=1):
             copied_path: str | None = None
             try:
+                if destroyed:
+                    return {"imported": imported, "skipped": skipped, "errors": errors}
                 path = validatePdfPath(raw)
                 if path is None:
                     skipped.append(raw)
@@ -106,17 +150,39 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                 if documents["findByPath"](path) is not None:
                     skipped.append(path)
                     continue
-                file_hash = hash_pdf(path)
-                if documents["findByHash"](file_hash) is not None:
-                    skipped.append(path)
+                validation = await call_work(validate_pdf, path)
+                if isinstance(validation, dict):
+                    file_name = Path(path).name
+                    if validation.get("type") == "encrypted":
+                        message = f"Skipping encrypted PDF: {file_name} (password-protected)."
+                    elif validation.get("type") == "corrupted":
+                        message = f"Could not read: {file_name} (file may be corrupted)."
+                    else:
+                        message = str(validation.get("message") or "Unable to read PDF")
+                    errors.append({"path": path, "message": message})
                     continue
+                file_hash = await call_work(hash_pdf, path)
+                if file_hash and documents["findByHash"](file_hash) is not None:
+                    if isWatch or not callable(confirm_duplicate):
+                        skipped.append(path)
+                        continue
+                    should_skip = confirm_duplicate(Path(path).name)
+                    if inspect.isawaitable(should_skip):
+                        should_skip = await should_skip
+                    if should_skip is not False:
+                        skipped.append(path)
+                        continue
                 stored_path = path
                 if not isInsideLibrary(path, library_folder):
-                    copied_path = copy_to_library(path, library_folder)
+                    copied_path = await call_work(copy_to_library, path, library_folder)
                     stored_path = copied_path
                 stat = os.stat(path)
                 now = now_ms()
-                extracted = extract_metadata(path) if callable(extract_metadata) else None
+                extracted = (
+                    await call_work(extract_metadata, path)
+                    if callable(extract_metadata)
+                    else None
+                )
                 metadata = extracted if isinstance(extracted, dict) else {}
                 document = documents["insert"](
                     {
@@ -162,18 +228,20 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     emit_progress({"current": index, "total": total, "path": raw})
         return complete({"imported": imported, "skipped": skipped, "errors": errors})
 
-    def importFolder(path: str, recursive: bool = False) -> dict[str, Any]:
+    async def importFolder(path: str, recursive: bool = False) -> dict[str, Any]:
         folder = Path(path)
         if not folder.is_absolute() or not folder.exists() or folder.is_symlink() or not folder.is_dir():
             return complete({"imported": [], "skipped": [path], "errors": []})
         iterator = folder.rglob("*") if recursive else folder.glob("*")
         paths = [str(item.resolve()) for item in iterator if item.suffix.lower() == ".pdf"]
-        return importFiles(sorted(paths))
+        return await importFiles(sorted(paths))
 
     def onComplete(callback: Callable[[dict[str, Any]], None]) -> None:
         complete_callbacks.append(callback)
 
     def destroy() -> None:
+        nonlocal destroyed
+        destroyed = True
         complete_callbacks.clear()
 
     return {

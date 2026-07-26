@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import http.client
 import inspect
 import ipaddress
 import os
 import re
 import shutil
 import socket
+import ssl
 import tempfile
 import time
 import uuid
@@ -15,14 +17,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse
 
-import httpx
-
 from refora_server.academic.arxiv import base_arxiv_id, normalize_arxiv_id
 from refora_server.academic.types import PaperLocator
 
 
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_REDIRECTS = 5
+DNS_TIMEOUT_SECONDS = 3
+CONNECT_TIMEOUT_SECONDS = 15
+DOWNLOAD_IDLE_TIMEOUT_SECONDS = 60
 PDF_MAGIC = b"%PDF"
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-zA-Z0-9+]+$")
 
@@ -101,67 +104,152 @@ def _is_public_ip(address: str) -> bool:
 
 async def isSafeUrl(value: str) -> bool:
     try:
-        parsed = urlparse(value)
-        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
-            return False
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        normalized = hostname.rstrip(".").lower()
-        if normalized == "localhost" or normalized.endswith(".localhost"):
-            return False
-        try:
-            ipaddress.ip_address(normalized)
-            return _is_public_ip(normalized)
-        except ValueError:
-            pass
-        addresses = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: socket.getaddrinfo(normalized, None, type=socket.SOCK_STREAM),
-        )
-        return bool(addresses) and all(_is_public_ip(entry[4][0]) for entry in addresses)
-    except (OSError, ValueError):
+        await resolvePublicAddress(value)
+        return True
+    except (OSError, ValueError, asyncio.TimeoutError):
         return False
+
+
+async def resolvePublicAddress(value: str) -> tuple[str, int]:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+        raise ValueError("Download URL is invalid")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Download URL is invalid")
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        raise ValueError("Download URL resolves to a private address")
+    try:
+        address = ipaddress.ip_address(normalized)
+        if not _is_public_ip(normalized):
+            raise ValueError("Download URL resolves to a private address")
+        return normalized, 4 if address.version == 4 else 6
+    except ValueError as error:
+        if "private address" in str(error):
+            raise
+    addresses = await asyncio.wait_for(
+        asyncio.to_thread(
+            socket.getaddrinfo,
+            normalized,
+            None,
+            0,
+            socket.SOCK_STREAM,
+        ),
+        DNS_TIMEOUT_SECONDS,
+    )
+    if not addresses:
+        raise ValueError("Download URL could not be resolved")
+    resolved = [(entry[4][0], entry[0]) for entry in addresses]
+    if any(not _is_public_ip(address) for address, _family in resolved):
+        raise ValueError("Download URL resolves to a private address")
+    address, family = resolved[0]
+    return address, 4 if family == socket.AF_INET else 6
+
+
+class _PinnedHttpConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, port: int, address: str) -> None:
+        super().__init__(host, port, timeout=CONNECT_TIMEOUT_SECONDS)
+        self._address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHttpsConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, port: int, address: str) -> None:
+        super().__init__(
+            host,
+            port,
+            timeout=CONNECT_TIMEOUT_SECONDS,
+            context=ssl.create_default_context(),
+        )
+        self._address = address
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection(
+            (self._address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+
+
+def _pinned_request(
+    url: str,
+    address: str,
+    destination: Path,
+) -> tuple[int, str | None, str | None]:
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Download URL is invalid")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    connection_type = _PinnedHttpsConnection if parsed.scheme == "https" else _PinnedHttpConnection
+    connection = connection_type(hostname, port, address)
+    target = parsed.path or "/"
+    if parsed.query:
+        target += f"?{parsed.query}"
+    try:
+        connection.request("GET", target, headers={"User-Agent": "Refora/0.1"})
+        response = connection.getresponse()
+        status = response.status
+        if 300 <= status < 400:
+            return status, response.getheader("location"), None
+        if status < 200 or status >= 300:
+            return status, None, f"Download failed: HTTP {status}"
+        length = response.getheader("content-length")
+        if length and length.isdigit() and int(length) > MAX_DOWNLOAD_BYTES:
+            return status, None, "Download failed: PDF exceeds the 512 MB limit"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            return status, None, "Download destination already exists"
+        downloaded = 0
+        try:
+            if connection.sock is not None:
+                connection.sock.settimeout(DOWNLOAD_IDLE_TIMEOUT_SECONDS)
+            with destination.open("xb") as output:
+                while chunk := response.read(64 * 1024):
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_BYTES:
+                        raise ValueError("Download failed: PDF exceeds the 512 MB limit")
+                    output.write(chunk)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        if downloaded < 100:
+            destination.unlink(missing_ok=True)
+            return status, None, "Downloaded file is too small to be a valid PDF"
+        return status, None, None
+    finally:
+        connection.close()
 
 
 async def downloadPdf(url: str, destination_dir: str, file_name: str) -> str:
     current_url = url
-    for _ in range(MAX_REDIRECTS + 1):
-        if not await isSafeUrl(current_url):
-            raise ValueError("The download URL is not allowed (must be a public http(s) address).")
-        async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(60, connect=15)) as client:
-            async with client.stream("GET", current_url, headers={"User-Agent": "Refora/0.1"}) as response:
-                if 300 <= response.status_code < 400:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise ValueError(f"Redirect response {response.status_code} has no location")
-                    current_url = urljoin(current_url, location)
-                    continue
-                if response.status_code < 200 or response.status_code >= 300:
-                    raise ValueError(f"Download failed: HTTP {response.status_code}")
-                length = response.headers.get("content-length")
-                if length and length.isdigit() and int(length) > MAX_DOWNLOAD_BYTES:
-                    raise ValueError("Download failed: PDF exceeds the 512 MB limit")
-                folder = Path(destination_dir)
-                folder.mkdir(parents=True, exist_ok=True)
-                destination = folder / file_name
-                if destination.exists():
-                    raise ValueError("Download destination already exists")
-                downloaded = 0
-                try:
-                    with destination.open("xb") as output:
-                        async for chunk in response.aiter_bytes():
-                            downloaded += len(chunk)
-                            if downloaded > MAX_DOWNLOAD_BYTES:
-                                raise ValueError("Download failed: PDF exceeds the 512 MB limit")
-                            output.write(chunk)
-                except Exception:
-                    destination.unlink(missing_ok=True)
-                    raise
-                if downloaded < 100:
-                    destination.unlink(missing_ok=True)
-                    raise ValueError("Downloaded file is too small to be a valid PDF")
-                return str(destination.resolve())
+    destination = Path(destination_dir) / file_name
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        address, _family = await resolvePublicAddress(current_url)
+        status, location, error = await asyncio.to_thread(
+            _pinned_request,
+            current_url,
+            address,
+            destination,
+        )
+        if 300 <= status < 400:
+            if not location:
+                raise ValueError(f"Redirect response {status} has no location")
+            if redirect_count == MAX_REDIRECTS:
+                raise ValueError("Too many redirects")
+            current_url = urljoin(current_url, location)
+            continue
+        if error:
+            raise ValueError(error)
+        return str(destination.resolve())
     raise ValueError("Too many redirects")
 
 

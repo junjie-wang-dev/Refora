@@ -7,21 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from refora_server.server.events import EventBus
-
-CONNECTOR_EVENTS = frozenset(
-    {
-        "connector.trash-item",
-        "connector.open-path",
-        "connector.show-in-folder",
-        "connector.dialog-open-directory",
-        "connector.dialog-open-file",
-        "connector.dialog-choose",
-        "connector.clipboard-write",
-        "connector.clipboard-write-file",
-        "connector.encrypt-api-key",
-        "connector.decrypt-api-key",
-    }
-)
+from refora_server.server.contract import CONNECTOR_EVENTS
 
 Result = dict[str, Any]
 

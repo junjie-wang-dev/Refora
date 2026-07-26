@@ -1,0 +1,2 @@
+ALTER TABLE documents ADD COLUMN issue TEXT;
+ALTER TABLE documents ADD COLUMN pages TEXT;

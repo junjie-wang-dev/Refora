@@ -47,6 +47,15 @@ import type {
 } from '../../shared/webSearch'
 import type { ServerConnection } from './serverLifecycle'
 import { logger } from './logger'
+import {
+  CONNECTOR_EVENT_NAMES,
+  SERVER_EVENT_NAMES,
+  SERVER_HTTP_ROUTES,
+  SERVER_WEBSOCKET_EVENT_NAMES,
+  type ConnectorEventName,
+  type ServerEventName,
+  type ServerWebsocketEventName
+} from '../../shared/server-contract'
 
 const TOKEN_HEADER = 'X-Refora-Token'
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
@@ -55,44 +64,31 @@ const WS_RECONNECT_MAX_MS = 15_000
 const WS_RECONNECT_MAX_ATTEMPTS = 10
 const CONNECTOR_DEFAULT_TIMEOUT_MS = 30_000
 
-export type WsEventName =
-  | 'ai.chat.token'
-  | 'ai.chat.reasoning'
-  | 'ai.chat.done'
-  | 'ai.chat.error'
-  | 'ai.chat.trace'
-  | 'ai.chat.interrupted'
-  | 'ai.chat.run-status'
-  | 'ai.chat.title-updated'
-  | 'ai.chat.interrupt-request'
-  | 'ai.chat.interrupt-resolve'
-  | 'ai.summary.updated'
-  | 'ai.summary.error'
-  | 'ai.report.created'
-  | 'document.updated'
-  | 'library.scanning'
-  | 'library.switched'
-  | 'window.focus-changed'
-  | 'import.progress'
-  | 'import.toast'
-  | 'workspace.items.changed'
-  | 'mineru.install-progress'
-  | 'ocr.progress'
-  | 'ocr.completed'
-  | 'ocr.error'
-  | 'subscribed'
-  | 'unsubscribed'
-  | 'pong'
-  | 'connector.trash-item'
-  | 'connector.open-path'
-  | 'connector.show-in-folder'
-  | 'connector.dialog-open-directory'
-  | 'connector.dialog-open-file'
-  | 'connector.dialog-choose'
-  | 'connector.clipboard-write'
-  | 'connector.clipboard-write-file'
-  | 'connector.encrypt-api-key'
-  | 'connector.decrypt-api-key'
+export type WsEventName = ServerEventName | ConnectorEventName | ServerWebsocketEventName
+
+const serverEventNames = new Set<string>(SERVER_EVENT_NAMES)
+const connectorEventNames = new Set<string>(CONNECTOR_EVENT_NAMES)
+const serverWebsocketEventNames = new Set<string>(SERVER_WEBSOCKET_EVENT_NAMES)
+const routeMatchers = SERVER_HTTP_ROUTES.map(({ method, path }) => {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const withPathParameters = escaped
+    .replace(/\\\{[^}:]+:path\\\}/g, '.+')
+    .replace(/\\\{[^}]+\\\}/g, '[^/]+')
+  return { method, expression: new RegExp(`^${withPathParameters}$`) }
+})
+
+function assertServerRoute(method: string, path: string): void {
+  if (routeMatchers.some((route) => route.method === method && route.expression.test(path))) return
+  throw makeError('contract_error', `Request is not declared by the server contract: ${method} ${path}`)
+}
+
+function isWsEventName(event: string): event is WsEventName {
+  return (
+    serverEventNames.has(event) ||
+    connectorEventNames.has(event) ||
+    serverWebsocketEventNames.has(event)
+  )
+}
 
 export type WsEventListener = (data: unknown) => void
 
@@ -327,7 +323,11 @@ export interface ProviderConfig {
 }
 
 export interface ServerHttp {
-  systemReady(): Promise<{ status: string }>
+  systemReady(): Promise<{
+    status: string
+    protocolVersion: number
+    protocolDigest: string
+  }>
   systemShutdown(): Promise<{ ack: boolean }>
   appBootstrap(): Promise<BootstrapData>
   globalSearch(query: string): Promise<GlobalSearchResult>
@@ -516,6 +516,7 @@ export function createServerClient(
     path: string,
     options: { body?: unknown; query?: Record<string, string | number | boolean | undefined> } = {}
   ): Promise<T> {
+    assertServerRoute(method, path)
     const conn = await getConnection()
     const url = `${conn.baseUrl}${path}${buildQuery(options.query ?? {})}`
     const controller = new AbortController()
@@ -572,7 +573,11 @@ export function createServerClient(
   }
 
   const http: ServerHttp = {
-    systemReady: () => get<{ status: string }>('/ready'),
+    systemReady: () => get<{
+      status: string
+      protocolVersion: number
+      protocolDigest: string
+    }>('/ready'),
     systemShutdown: () => post<{ ack: boolean }>('/shutdown'),
     appBootstrap: () => get<BootstrapData>('/app/bootstrap'),
     globalSearch: (query) => get<GlobalSearchResult>('/search/global', { q: query }),
@@ -864,7 +869,11 @@ export function createServerClient(
     }
     const eventName = message.event
     if (!eventName) return
-    const event = eventName as WsEventName
+    if (!isWsEventName(eventName)) {
+      logger.warn(`serverClient:unknown-event ${eventName}`)
+      return
+    }
+    const event = eventName
     const data = message.data ?? (
       (event === 'subscribed' || event === 'unsubscribed') && Array.isArray(message.topics)
         ? { topics: message.topics }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { RepoError } from '../db/repositories/errors'
+import { MainProcessError } from './errors'
 
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10]
 
@@ -12,13 +12,13 @@ function hashSegment(value: string): string {
 
 function requireManagedDirectory(libraryFolder: string, documentId: string): string {
   if (!libraryFolder || !isAbsolute(libraryFolder)) {
-    throw new RepoError('invalid_library', 'Library folder must be an absolute path')
+    throw new MainProcessError('invalid_library', 'Library folder must be an absolute path')
   }
   let current = resolve(libraryFolder)
   for (const segment of ['.refora', 'derived', 'pdf-previews', hashSegment(documentId)]) {
     current = join(current, segment)
     if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
-      throw new RepoError('invalid_path', 'PDF preview cache directories cannot be symbolic links')
+      throw new MainProcessError('invalid_path', 'PDF preview cache directories cannot be symbolic links')
     }
   }
   return current
@@ -39,7 +39,7 @@ export async function readPdfPreviewCache(filePath: string): Promise<Uint8Array 
   if (!existsSync(filePath)) return null
   const entry = lstatSync(filePath)
   if (entry.isSymbolicLink() || !entry.isFile()) {
-    throw new RepoError('invalid_path', 'PDF preview cache must be a regular file')
+    throw new MainProcessError('invalid_path', 'PDF preview cache must be a regular file')
   }
   const content = new Uint8Array(await readFile(filePath))
   if (!PNG_SIGNATURE.every((byte, index) => content[index] === byte)) return null

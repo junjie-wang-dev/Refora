@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { clipboard } from 'electron'
-import { RepoError } from '../db/repositories/errors'
+import { MainProcessError } from './errors'
 
 const CLIPBOARD_FILE_FORMAT = 'NSFilenamesPboardType'
 
@@ -18,17 +18,17 @@ function escapeXml(value: string): string {
 
 function requireRegularFile(rawPath: string): string {
   if (!rawPath || !isAbsolute(rawPath)) {
-    throw new RepoError('invalid_path', 'Clipboard file path must be absolute')
+    throw new MainProcessError('invalid_path', 'Clipboard file path must be absolute')
   }
   const filePath = resolvePath(rawPath)
-  if (!existsSync(filePath)) throw new RepoError('file_missing', `Clipboard file not found: ${filePath}`)
+  if (!existsSync(filePath)) throw new MainProcessError('file_missing', `Clipboard file not found: ${filePath}`)
   try {
     if (lstatSync(filePath).isSymbolicLink() || !statSync(filePath).isFile()) {
-      throw new RepoError('invalid_path', 'Clipboard target must be a regular file')
+      throw new MainProcessError('invalid_path', 'Clipboard target must be a regular file')
     }
   } catch (error) {
-    if (error instanceof RepoError) throw error
-    throw new RepoError('invalid_path', `Unable to inspect clipboard file: ${filePath}`)
+    if (error instanceof MainProcessError) throw error
+    throw new MainProcessError('invalid_path', `Unable to inspect clipboard file: ${filePath}`)
   }
   return filePath
 }
@@ -57,7 +57,7 @@ export function writeFileToClipboard(rawPath: string): void {
 
 export function writeMarkdownFileToClipboard(title: string, content: string): string {
   if (typeof title !== 'string' || typeof content !== 'string') {
-    throw new RepoError('invalid_clipboard_content', 'Markdown clipboard content must be text')
+    throw new MainProcessError('invalid_clipboard_content', 'Markdown clipboard content must be text')
   }
   const directory = join(tmpdir(), 'refora-clipboard', randomUUID())
   mkdirSync(directory, { recursive: true })
@@ -69,7 +69,7 @@ export function writeMarkdownFileToClipboard(title: string, content: string): st
 
 export function writeTextToClipboard(text: string): void {
   if (typeof text !== 'string') {
-    throw new RepoError('invalid_clipboard_content', 'Clipboard content must be text')
+    throw new MainProcessError('invalid_clipboard_content', 'Clipboard content must be text')
   }
   clipboard.writeText(text)
 }

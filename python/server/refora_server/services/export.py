@@ -126,6 +126,11 @@ def lookupVenue(venue: str) -> dict[str, str] | None:
     return None
 
 
+def normalizeVenue(venue: str) -> str:
+    info = lookupVenue(venue)
+    return info["canonical"] if info is not None else venue
+
+
 def venueType(venue: str) -> str | None:
     info = lookupVenue(venue)
     if info is not None:

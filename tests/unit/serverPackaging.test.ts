@@ -22,9 +22,11 @@ describe('Python server packaging', () => {
     expect(script).toContain('HOST_ARCH')
     expect(script).toContain('--collect-all langchain_openai')
     expect(script).toContain('--collect-all langgraph.checkpoint.sqlite')
+    expect(script).toContain('--collect-all refora_server')
     expect(script).toContain('--copy-metadata langchain-openai')
     expect(script).toContain('--copy-metadata langgraph-checkpoint-sqlite')
     expect(script).toContain('verify-server-sidecar.mjs')
+    expect(script).not.toContain('src/main/db')
   })
 
   it('runs offline artifact and server startup smoke checks', () => {

@@ -10,6 +10,7 @@ from refora_server.library.metadata import (
     extractDoiFromInfo,
     extractDoiFromText,
     extractMetadataFromPdf,
+    extractTitleCandidate,
     extractTitleFromText,
     extractVenueFromText,
     isReliableTitle,
@@ -391,6 +392,17 @@ def test_normalizeAuthors_none():
 
 def test_normalizeAuthors_single():
     assert normalizeAuthors("John Smith") == "Smith, John"
+
+
+def test_extractTitleCandidate_uses_largest_non_noise_lines():
+    assert extractTitleCandidate(
+        [
+            {"text": "Journal homepage", "y": 780, "size": 18},
+            {"text": "A Reliable Paper", "y": 720, "size": 24},
+            {"text": "Title", "y": 695, "size": 23},
+            {"text": "Abstract", "y": 650, "size": 14},
+        ]
+    ) == "A Reliable Paper Title"
 
 
 def test_extractMetadataFromPdf_blank_pdf(tmp_path):

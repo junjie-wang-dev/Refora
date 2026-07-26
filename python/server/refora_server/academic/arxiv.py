@@ -402,6 +402,60 @@ class ArxivClient:
             "sortOrder": "descending",
         }
         url = f"https://export.arxiv.org/api/query?{urlencode(params)}"
+        return await self._search_url(url, start, signal)
+
+    async def get_by_id(
+        self,
+        value: str,
+        signal: Optional[asyncio.Event] = None,
+    ) -> Optional[ArxivSearchPaper]:
+        arxiv_id = normalize_arxiv_id(value)
+        if not arxiv_id:
+            raise ArxivClientError("invalid_arxiv_id", "Invalid arXiv ID")
+        params = {"id_list": arxiv_id, "max_results": "1"}
+        result = await self._search_url(
+            f"https://export.arxiv.org/api/query?{urlencode(params)}",
+            0,
+            signal,
+        )
+        target = base_arxiv_id(arxiv_id).lower()
+        return next(
+            (
+                paper
+                for paper in result.papers
+                if base_arxiv_id(paper.arxivId).lower() == target
+            ),
+            None,
+        )
+
+    async def search_title(
+        self,
+        title: str,
+        page_size: int = 5,
+        signal: Optional[asyncio.Event] = None,
+    ) -> ArxivSearchResult:
+        query = _escape_search_term(title)
+        if not query:
+            raise ArxivClientError("invalid_arxiv_response", "Search query is empty")
+        params = {
+            "search_query": f'ti:"{query}"',
+            "start": "0",
+            "max_results": str(min(50, max(1, page_size))),
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        }
+        return await self._search_url(
+            f"https://export.arxiv.org/api/query?{urlencode(params)}",
+            0,
+            signal,
+        )
+
+    async def _search_url(
+        self,
+        url: str,
+        start: int,
+        signal: Optional[asyncio.Event],
+    ) -> ArxivSearchResult:
         cache_key = url
         cached = await self._cache.get_json("arxiv-search", cache_key)
         if cached:

@@ -34,6 +34,7 @@ from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
 from refora_server.services.academic_serializer import (
     serialize_arxiv_search_response,
+    serialize_paper,
     serialize_paper_fulltext_response,
     serialize_semantic_recommendations_response,
 )
@@ -299,7 +300,9 @@ def create_lifespan(
         def proxy_url() -> str:
             settings_repo = repos.get("settings")
             get_setting = (
-                settings_repo.get("get")
+                settings_repo.get
+                if callable(getattr(settings_repo, "get", None))
+                else settings_repo.get("get")
                 if isinstance(settings_repo, dict)
                 else None
             )
@@ -307,10 +310,24 @@ def create_lifespan(
             return value.strip() if isinstance(value, str) else ""
 
         if complete_repos:
+            async def confirm_duplicate(file_name: str) -> bool:
+                result = await connector.dialog_choose(
+                    "Duplicate File",
+                    f'"{file_name}" has the same content as a file already in your library. Skip this file?',
+                    ["Skip", "Import Anyway"],
+                    0,
+                    0,
+                )
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    return True
+                data = result.get("data")
+                return not isinstance(data, dict) or data.get("response") != 1
+
             importer = createImporter(
                 repos,
                 {
                     "getLibraryFolder": lambda: app.state.library_folder,
+                    "confirmDuplicate": confirm_duplicate,
                     "emitProgress": lambda data: _schedule_event(
                         events, "import.progress", data, server_loop
                     ),
@@ -318,6 +335,16 @@ def create_lifespan(
             )
 
             def enqueue_imported_metadata(result: dict[str, Any]) -> None:
+                errors = result.get("errors")
+                if isinstance(errors, list):
+                    for error in errors:
+                        if isinstance(error, dict) and isinstance(error.get("message"), str):
+                            _schedule_event(
+                                events,
+                                "import.toast",
+                                error["message"],
+                                server_loop,
+                            )
                 imported = result.get("imported")
                 if not isinstance(imported, list):
                     return
@@ -542,6 +569,17 @@ def create_lifespan(
             async def search_arxiv(request: Any) -> dict[str, Any]:
                 return serialize_arxiv_search_response(await arxiv_client.search(request))
 
+            async def get_arxiv_by_id(arxiv_id: str) -> dict[str, Any] | None:
+                paper = await arxiv_client.get_by_id(arxiv_id)
+                return serialize_paper(paper, "arxiv") if paper is not None else None
+
+            async def search_arxiv_title(
+                title: str, page_size: int = 5
+            ) -> dict[str, Any]:
+                return serialize_arxiv_search_response(
+                    await arxiv_client.search_title(title, page_size)
+                )
+
             async def get_arxiv_paper(
                 arxiv_id: str,
                 section_id: str | None = None,
@@ -560,7 +598,11 @@ def create_lifespan(
                 )
 
             academic = {
-                "arxiv": {"search": search_arxiv},
+                "arxiv": {
+                    "search": search_arxiv,
+                    "getById": get_arxiv_by_id,
+                    "searchTitle": search_arxiv_title,
+                },
                 "arxiv_papers": {"get_paper": get_arxiv_paper},
                 "identity": academic_identity,
                 "graph": {

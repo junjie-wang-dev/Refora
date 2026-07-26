@@ -53,7 +53,6 @@ UV_CACHE_DIR=${UV_CACHE_DIR:-"${TMPDIR:-/tmp}/refora-uv-cache"} uv run \
   --copy-metadata langchain-openai \
   --copy-metadata langgraph \
   --copy-metadata langgraph-checkpoint-sqlite \
-  --add-data "$ROOT_DIR/src/main/db:db" \
   "$ENTRYPOINT"
 
 mv "$WORK_DIR/dist/refora-server/refora-server" "$OUTPUT_DIR/refora-server"
