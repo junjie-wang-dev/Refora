@@ -186,16 +186,14 @@ def create_ai_router(deps: Any) -> APIRouter:
                 connector or _value(request.app.state, "connector"),
                 provider_id,
             )
-            if document_text_service is None:
-                raise RouteError("unavailable", "Document text service is unavailable", 503)
-            text = await _resolve(
-                _value(document_text_service, "getOrExtract")(document_id)
+            queue_summary = _value(summary_service, "queueSummary")
+            summarize_document = (
+                queue_summary
+                if callable(queue_summary)
+                else _value(summary_service, "summarize")
             )
             summary_id = await _resolve(
-                _value(summary_service, "summarize")(
-                    document_id,
-                    {**summary_provider, "__text": text},
-                )
+                summarize_document(document_id, summary_provider)
             )
             return {"summaryId": summary_id if isinstance(summary_id, str) else document_id}
 

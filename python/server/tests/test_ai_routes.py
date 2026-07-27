@@ -38,7 +38,7 @@ class FakeSummaryService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def summarize(self, document_id: str, provider: dict[str, Any]) -> str:
+    def queueSummary(self, document_id: str, provider: dict[str, Any]) -> str:
         self.calls.append((document_id, provider))
         return "summary-1"
 
@@ -400,9 +400,8 @@ def test_document_text_summary_and_request_only_provider_key() -> None:
     assert existing.json()["data"]["content"] == {"core": "Core"}
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"
-    assert text.calls == ["doc-1", "doc-1"]
+    assert text.calls == ["doc-1"]
     assert summary.calls[0][0] == "doc-1"
-    assert summary.calls[0][1]["__text"] == "Extracted document text"
     assert summary.calls[0][1]["apiKey"] == "request-only-secret"
     assert "request-only-secret" not in repr(repos.calls)
 

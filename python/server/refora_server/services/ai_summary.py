@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from typing import Any, Awaitable, Callable
@@ -209,9 +210,8 @@ def build_provider_config(
     model = (model_id or "").strip() or (provider.get("model") or "")
     capabilities = inferModelCapabilities(provider.get("presetId") or "custom", model)
     supports_reasoning = capabilities.get("supportsReasoning") is True
-    reasoning_provider = provider
     reasoning_options = build_provider_reasoning_options(
-        reasoning_provider, supports_reasoning if supports_reasoning else deep_thinking
+        provider, deep_thinking if supports_reasoning else None
     )
     final_temperature = (
         temperature if temperature is not None else provider.get("temperature")
@@ -240,6 +240,7 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
     emit_delta: Callable[[str, str | None], Any] | None = deps.get("emit_delta")
     emit_error: Callable[[str, str], Any] | None = deps.get("emit_error")
     sleep_fn: Callable[[float], Awaitable[None]] | None = deps.get("sleep")
+    load_text: Callable[[str], Any] | None = deps.get("load_text")
     loop = deps.get("loop")
 
     destroyed = {"value": False}
@@ -248,6 +249,7 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
     lock = asyncio.Lock() if loop is None else None
     semaphore: asyncio.Semaphore | None = None
     inflight: set[asyncio.Task[Any]] = set()
+    queued: dict[str, asyncio.Task[Any]] = {}
 
     def _info(message: str) -> None:
         if logger is not None:
@@ -335,6 +337,9 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
         )
         provider_config["streaming"] = False
         text = provider.get("__text")
+        if not text and load_text is not None:
+            loaded_text = load_text(doc_id)
+            text = await loaded_text if inspect.isawaitable(loaded_text) else loaded_text
         if not text:
             full_text = repos["aiSummaries"]["getFullText"](doc_id)
             text = full_text["text"] if full_text else ""
@@ -379,6 +384,34 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
 
         return await _run_job(_job)
 
+    def queue_summary(documentId: str, provider: dict[str, Any]) -> str | None:
+        if destroyed["value"]:
+            return None
+        existing = queued.get(documentId)
+        if existing is not None and not existing.done():
+            return documentId
+
+        async def _queued_job() -> str | None:
+            try:
+                return await summarize(documentId, provider)
+            except asyncio.CancelledError:
+                return None
+            except Exception as error:
+                message = str(error)
+                _warn(f"aiSummary:failed id={documentId}: {message}")
+                _emit_error(documentId, f"Summary generation failed: {message}")
+                return None
+
+        task = asyncio.create_task(_queued_job())
+        queued[documentId] = task
+
+        def _remove(completed: asyncio.Task[Any]) -> None:
+            if queued.get(documentId) is completed:
+                queued.pop(documentId, None)
+
+        task.add_done_callback(_remove)
+        return documentId
+
     async def _run_job(job: Callable[..., Awaitable[str | None]]) -> str | None:
         nonlocal semaphore
         if destroyed["value"]:
@@ -412,12 +445,16 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
     def destroy() -> None:
         destroyed["value"] = True
         job_queue.clear()
+        for task in list(queued.values()):
+            task.cancel()
+        queued.clear()
         for task in list(inflight):
             task.cancel()
         inflight.clear()
 
     return {
         "summarize": summarize,
+        "queueSummary": queue_summary,
         "processSummary": process_summary,
         "destroy": destroy,
     }

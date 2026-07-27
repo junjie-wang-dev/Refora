@@ -128,6 +128,20 @@ def test_build_provider_config_basic():
     assert config["model"] == "gpt-5.6-terra"
     assert config["baseUrl"] == "https://api.openai.com/v1"
     assert config["apiKey"] == "sk-test"
+    assert "reasoning" not in config
+
+
+def test_build_provider_config_disables_compatible_thinking():
+    config = build_provider_config(
+        _provider(
+            presetId="deepseek",
+            apiProtocol="openai-compatible",
+            reasoningControl="thinking",
+            model="deepseek-v4-flash",
+        ),
+        deep_thinking=False,
+    )
+    assert config["modelKwargs"]["thinking"] == {"type": "disabled"}
 
 
 async def test_summarize_persists_summary(db):
@@ -270,6 +284,77 @@ async def test_summarize_uses_cached_full_text(db):
     await svc["summarize"]("doc-1", _provider())
     assert captured
     assert captured[0] == "cached extracted text"
+
+
+async def test_queued_summary_loads_text_in_background(db):
+    insert_doc(db, id="doc-1")
+    repos = _repos(db)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def load_text(doc_id):
+        assert doc_id == "doc-1"
+        started.set()
+        await release.wait()
+        return "loaded document text"
+
+    def gen(req):
+        if req.get("combined"):
+            return json.dumps({"core": "queued summary", "keyPoints": []})
+        return "chunk summary"
+
+    svc = createAiSummaryService(
+        repos,
+        {"generate_summary": gen, "load_text": load_text},
+    )
+    result = svc["queueSummary"]("doc-1", _provider())
+
+    assert result == "doc-1"
+    assert repos["aiSummaries"]["getSummary"]("doc-1") is None
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+
+    async def wait_for_summary():
+        while repos["aiSummaries"]["getSummary"]("doc-1") is None:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait_for_summary(), timeout=1)
+    assert repos["aiSummaries"]["getSummary"]("doc-1")["content"]["core"] == "queued summary"
+
+
+async def test_queued_summary_deduplicates_active_document(db):
+    insert_doc(db, id="doc-1")
+    repos = _repos(db)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    loads = {"count": 0}
+
+    async def load_text(_doc_id):
+        loads["count"] += 1
+        started.set()
+        await release.wait()
+        return "loaded document text"
+
+    def gen(req):
+        if req.get("combined"):
+            return json.dumps({"core": "done", "keyPoints": []})
+        return "chunk summary"
+
+    svc = createAiSummaryService(
+        repos,
+        {"generate_summary": gen, "load_text": load_text},
+    )
+    assert svc["queueSummary"]("doc-1", _provider()) == "doc-1"
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert svc["queueSummary"]("doc-1", _provider()) == "doc-1"
+    assert loads["count"] == 1
+    release.set()
+
+    async def wait_for_summary():
+        while repos["aiSummaries"]["getSummary"]("doc-1") is None:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait_for_summary(), timeout=1)
 
 
 async def test_summarize_destroy_prevents_persistence(db):

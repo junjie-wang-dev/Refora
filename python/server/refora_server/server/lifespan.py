@@ -475,6 +475,7 @@ def create_lifespan(
             repos,
             {
                 "generate_summary": generate_summary,
+                "load_text": document_text["getOrExtract"],
                 "emit_delta": lambda document_id, _summary_id: _schedule_event(
                     events, "ai.summary.updated", document_id, server_loop
                 ),
@@ -754,11 +755,9 @@ def create_lifespan(
                 provider = request.get("provider")
                 if not isinstance(provider, dict):
                     return _unavailable_agent_capability()
-                future = asyncio.run_coroutine_threadsafe(
-                    summary_service["summarize"](document_id, provider),
-                    server_loop,
+                server_loop.call_soon_threadsafe(
+                    summary_service["queueSummary"], document_id, provider
                 )
-                future.add_done_callback(_consume_future)
                 return {"status": "queued", "docId": document_id}
 
             def read_paper_fulltext(document_id: str) -> str:
