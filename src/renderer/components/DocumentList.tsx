@@ -6,7 +6,7 @@ import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
 import { useDocumentStore } from '../store/documentStore'
 import { api } from '../ipc'
-import { formatDate, formatFilePath } from '../utils/format'
+import { formatAuthors, formatDate, formatFilePath } from '../utils/format'
 import { Button as UiButton, EmptyState, PanelTabHeader } from './ui'
 import type { Document, ColumnId, SortField, ListColumn, Category } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
@@ -21,7 +21,7 @@ function renderCell(doc: Document, col: ColumnId): string {
     case 'title':
       return doc.title || doc.fileName
     case 'authors':
-      return doc.authors || '\u2014'
+      return formatAuthors(doc.authors) || '\u2014'
     case 'year':
       return doc.year || '\u2014'
     case 'venue':

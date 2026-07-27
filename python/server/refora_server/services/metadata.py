@@ -4,6 +4,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
+from html import unescape
 from typing import Any
 from urllib.parse import quote
 
@@ -19,6 +20,8 @@ from refora_server.library.metadata import (
     extractAbstractFromText,
     extractAffiliationsFromText,
     extractArxivFromText,
+    extractArxivFromFileName,
+    extractAuthorsFromText,
     extractDoiFromInfo,
     extractDoiFromText,
     extractMetadataFromPdf,
@@ -62,8 +65,26 @@ def _value(target: Any, name: str, default: Any = None) -> Any:
 def _clean(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    normalized = re.sub(r"\s+", " ", value).strip()
+    normalized = re.sub(r"\s+", " ", unescape(value)).strip()
     return normalized or None
+
+
+def _clean_affiliation(value: Any) -> str | None:
+    cleaned = _clean(value)
+    if cleaned is None:
+        return None
+    return re.sub(r",(?=\S)", ", ", cleaned)
+
+
+def _title_candidate_is_in_head(candidate: str, text: str) -> bool:
+    candidate_key = re.sub(r"[\W_]+", "", candidate, flags=re.UNICODE).casefold()
+    head = " ".join(
+        line.strip()
+        for line in text.splitlines()[:12]
+        if line.strip()
+    )
+    head_key = re.sub(r"[\W_]+", "", head, flags=re.UNICODE).casefold()
+    return bool(candidate_key and candidate_key in head_key)
 
 
 def _titles_match(left: str | None, right: str | None) -> bool:
@@ -287,7 +308,7 @@ def _crossref_fields(message: Mapping[str, Any]) -> dict[str, str]:
             else []
         )
         for value in [
-            _clean(raw_affiliation.get("name"))
+            _clean_affiliation(raw_affiliation.get("name"))
             if isinstance(raw_affiliation, Mapping)
             else None
         ]
@@ -748,7 +769,11 @@ def create_metadata_service(
                 if info_title and isTemplateNoiseTitle(info_title):
                     info_title = None
                 title_candidate = _clean(parsed.get("titleCandidate"))
-                if not isReliableTitle(title_candidate, text):
+                if (
+                    not title_candidate
+                    or not isReliableTitle(title_candidate, text)
+                    or not _title_candidate_is_in_head(title_candidate, text)
+                ):
                     title_candidate = None
                 text_title = (
                     info_title
@@ -764,7 +789,10 @@ def create_metadata_service(
                     else file_name_title or text_title
                 )
                 doi = extractDoiFromInfo(dict(info)) or extractDoiFromText(text)
-                arxiv_id = extractArxivFromText(text)
+                arxiv_id = (
+                    extractArxivFromText(text)
+                    or extractArxivFromFileName(document["fileName"])
+                )
                 derived_doi = (
                     deriveDoiFromArxivId(arxiv_id)
                     if arxiv_id and not doi
@@ -774,7 +802,7 @@ def create_metadata_service(
                     info.get("/Author")
                     or info.get("Author")
                     or info.get("author")
-                )
+                ) or extractAuthorsFromText(text, text_title)
                 fetched: dict[str, str] | None = None
                 field_sources: dict[str, str] = {}
                 source = "pdf"
@@ -898,7 +926,7 @@ def create_metadata_service(
 
                 if not fetched:
                     fetched = {}
-                    final_title = file_name_title or fallback_title
+                    final_title = fallback_title or file_name_title
                     if final_title:
                         fetched["title"] = final_title
                         field_sources["title"] = "pdf"
@@ -919,9 +947,16 @@ def create_metadata_service(
                 except (httpx.HTTPError, ValueError):
                     pass
 
-                if not fetched.get("affiliations"):
-                    affiliations = extractAffiliationsFromText(text)
-                    if affiliations:
+                affiliations = extractAffiliationsFromText(text)
+                if affiliations:
+                    fetched_affiliations = _clean(fetched.get("affiliations"))
+                    pdf_count = len(affiliations.split(";"))
+                    fetched_count = (
+                        len(fetched_affiliations.split(";"))
+                        if fetched_affiliations
+                        else 0
+                    )
+                    if not fetched_affiliations or pdf_count > fetched_count:
                         fetched["affiliations"] = affiliations
                         field_sources["affiliations"] = "pdf"
                 if not fetched.get("abstract"):

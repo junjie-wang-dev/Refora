@@ -1,4 +1,5 @@
 import type { AiSummary, Document } from '../../shared/ipc-types'
+import { formatAuthors } from './format'
 
 const BOARD_PREVIEW_MAX_CHARS = 1800
 const BOARD_PREVIEW_MAX_LINES = 28
@@ -32,7 +33,7 @@ export function markdownCardContent(title: string, content: string): string {
 export function paperCardMarkdown(doc: Document, summary: AiSummary | null): string {
   const title = doc.title || doc.fileName
   const metadata = [
-    ['Authors', doc.authors],
+    ['Authors', formatAuthors(doc.authors)],
     ['Year', doc.year],
     ['Venue', doc.venue],
     ['DOI', doc.doi],

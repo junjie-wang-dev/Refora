@@ -139,7 +139,7 @@ beforeEach(() => {
   mockOpenInFinder.mockResolvedValue(undefined)
   mockDelete.mockResolvedValue(undefined)
   mockBulkDelete.mockResolvedValue(undefined)
-  mockRefreshMetadata.mockImplementation(async (id: string) => makeDoc({ id, metadataStatus: 'success' }))
+  mockRefreshMetadata.mockImplementation(async (id: string) => makeDoc({ id, metadataStatus: 'done' }))
   mockBulkRefreshMetadata.mockResolvedValue(undefined)
   mockBulkCategorize.mockResolvedValue(undefined)
   mockUpdate.mockImplementation(async (id: string, patch: Partial<Document>) => makeDoc({ id, ...patch }))
@@ -625,7 +625,7 @@ describe('DocumentStore', () => {
       expect(mockOpenInFinder).toHaveBeenCalledWith('doc-1')
 
       expect(await useDocumentStore.getState().refreshMetadata('doc-1')).toBe(true)
-      expect(useDocumentStore.getState().documents[0].metadataStatus).toBe('success')
+      expect(useDocumentStore.getState().documents[0].metadataStatus).toBe('done')
 
       const updated = await useDocumentStore.getState().updateDocument('doc-1', { title: 'Updated' })
       expect(updated.title).toBe('Updated')

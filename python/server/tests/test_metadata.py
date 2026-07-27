@@ -6,7 +6,9 @@ from refora_server.library.metadata import (
     deriveDoiFromArxivId,
     extractAbstractFromText,
     extractAffiliationsFromText,
+    extractArxivFromFileName,
     extractArxivFromText,
+    extractAuthorsFromText,
     extractDoiFromInfo,
     extractDoiFromText,
     extractMetadataFromPdf,
@@ -112,6 +114,12 @@ def test_extractArxivFromText_none():
     assert extractArxivFromText("") is None
 
 
+def test_extractArxivFromFileName():
+    assert extractArxivFromFileName("2412.16776v1.pdf") == "2412.16776v1"
+    assert extractArxivFromFileName("arxiv-1910.05653.pdf") == "1910.05653"
+    assert extractArxivFromFileName("paper3.pdf") is None
+
+
 def test_deriveDoiFromArxivId_modern():
     assert deriveDoiFromArxivId("2106.01234") == "10.48550/arXiv.2106.01234"
     assert deriveDoiFromArxivId("2106.01234v1") == "10.48550/arXiv.2106.01234"
@@ -214,6 +222,104 @@ def test_extractAffiliationsFromText_superscript_markers():
     assert result is not None
     assert "Department of Computer Science, MIT" in result
     assert "Google Research" in result
+
+
+def test_extractAffiliationsFromText_removes_inline_numeric_markers():
+    text = (
+        "Title\nAuthors\n"
+        "1 Southwest Jiaotong University2 University of Leeds3 City University of Hong Kong\n"
+        "4 NVIDIA 5 The University of California, Merced6 Yonsei University\n"
+        "Abstract\nWe study large scenes.\n"
+    )
+    result = extractAffiliationsFromText(text)
+    assert result == (
+        "Southwest Jiaotong University; University of Leeds; City University of Hong Kong; "
+        "NVIDIA; The University of California, Merced; Yonsei University"
+    )
+
+
+def test_extractAffiliationsFromText_removes_numeric_line_prefixes():
+    text = (
+        "Title\nAuthors\n"
+        "1 ShanghaiTech University\n"
+        "2 The Chinese University of Hong Kong\n"
+        "3 Shanghai AI Laboratory\n"
+        "Abstract\nWe study occupancy.\n"
+    )
+    result = extractAffiliationsFromText(text)
+    assert result == (
+        "ShanghaiTech University; The Chinese University of Hong Kong; Shanghai AI Laboratory"
+    )
+
+
+def test_extractAffiliationsFromText_removes_attached_numeric_prefixes():
+    text = (
+        "Towards Model-Agnostic Cooperative Perception\n"
+        "Junjie Wang1, Tomas Nordstr ¨om1,2\n"
+        "1Department of Applied Physics and Electronics, Ume ˚a University\n"
+        "2RISE Research Institutes of Sweden\n"
+        "Abstract—We study cooperative perception.\n"
+    )
+    assert extractAffiliationsFromText(text) == (
+        "Department of Applied Physics and Electronics, Umeå University; "
+        "RISE Research Institutes of Sweden"
+    )
+
+
+def test_extractAffiliationsFromText_splits_inline_symbol_markers():
+    text = (
+        "Title\nAuthors\n"
+        "∗Aalto University †Naver Labs Europe\n"
+        "Abstract\nWe study geometry.\n"
+    )
+    assert extractAffiliationsFromText(text) == "Aalto University; Naver Labs Europe"
+
+
+def test_extractAffiliationsFromText_supports_acronym_institutions():
+    text = (
+        "Title\nAuthor One\n"
+        "ETH Zurich, Switzerland\n"
+        "Author Two\n"
+        "EPFL, Switzerland\n"
+        "Abstract\nWe study fusion.\n"
+    )
+    assert extractAffiliationsFromText(text) == "ETH Zurich, Switzerland; EPFL, Switzerland"
+
+
+def test_extractAffiliationsFromText_supports_physics_front_matter():
+    text = (
+        "A Physics Paper\n"
+        "Author One1, Author Two2\n"
+        "1Key Laboratory of Physics, Example University\n"
+        "2College of Physics, Example University\n"
+        "(Dated: January 6, 2026)\n"
+        "The scattering phase shift is computed.\n"
+        "I. INTRODUCTION\n"
+    )
+    assert extractAffiliationsFromText(text) == (
+        "Key Laboratory of Physics, Example University; "
+        "College of Physics, Example University"
+    )
+
+
+def test_extractAffiliationsFromText_preserves_internal_building_number():
+    text = (
+        "Title\nAuthors\n"
+        "Building 3 Research Institute\n"
+        "Abstract\nWe study research facilities.\n"
+    )
+    assert extractAffiliationsFromText(text) == "Building 3 Research Institute"
+
+
+def test_extractAuthorsFromText_reads_numbered_pdf_author_line():
+    text = (
+        "Towards Model-Agnostic Cooperative Perception\n"
+        "Junjie Wang1, Tomas Nordstr ¨om1,2\n"
+        "1Department of Applied Physics and Electronics, Ume ˚a University\n"
+        "2RISE Research Institutes of Sweden\n"
+        "Abstract—We study cooperative perception.\n"
+    )
+    assert extractAuthorsFromText(text) == "Junjie Wang; Tomas Nordström"
 
 
 def test_extractAffiliationsFromText_plain_line():
@@ -376,12 +482,12 @@ def test_titleFromFileName_empty():
     assert titleFromFileName("   .pdf") is None
 
 
-def test_normalizeAuthors_plain_to_comma():
-    assert normalizeAuthors("John Smith; Jane Doe") == "Smith, John; Doe, Jane"
+def test_normalizeAuthors_keeps_given_name_first():
+    assert normalizeAuthors("John Smith; Jane Doe") == "John Smith; Jane Doe"
 
 
 def test_normalizeAuthors_already_comma():
-    assert normalizeAuthors("Smith, John; Doe, Jane") == "Smith, John; Doe, Jane"
+    assert normalizeAuthors("Smith, John; Doe, Jane") == "John Smith; Jane Doe"
 
 
 def test_normalizeAuthors_none():
@@ -391,7 +497,19 @@ def test_normalizeAuthors_none():
 
 
 def test_normalizeAuthors_single():
-    assert normalizeAuthors("John Smith") == "Smith, John"
+    assert normalizeAuthors("John Smith") == "John Smith"
+
+
+def test_normalizeAuthors_removes_dblp_disambiguation_suffixes():
+    assert normalizeAuthors(
+        "Sanghyun Son 0003; Matheus Gadelha; Yang Zhou 0009; Yi Zhou 0023"
+    ) == "Sanghyun Son; Matheus Gadelha; Yang Zhou; Yi Zhou"
+
+
+def test_normalizeAuthors_repairs_dblp_disambiguation_prefixes():
+    assert normalizeAuthors(
+        "0003, Sanghyun Son; 0009, Yang Zhou; 0023, Yi Zhou"
+    ) == "Sanghyun Son; Yang Zhou; Yi Zhou"
 
 
 def test_extractTitleCandidate_uses_largest_non_noise_lines():

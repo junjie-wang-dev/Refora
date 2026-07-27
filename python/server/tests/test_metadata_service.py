@@ -34,11 +34,54 @@ def test_crossref_mapping_preserves_complete_metadata() -> None:
         }
     )
 
-    assert fields["authors"] == "Consortium, The; Lovelace, Ada"
+    assert fields["authors"] == "The Consortium; Ada Lovelace"
     assert fields["affiliations"] == "Example University"
     assert fields["keywords"] == "Computer Vision, Machine Learning"
     assert fields["venue"] == "CVPR"
     assert fields["year"] == "2025"
+
+
+def test_crossref_mapping_decodes_and_spaces_affiliations() -> None:
+    fields = metadata_module._crossref_fields(
+        {
+            "title": ["Paper"],
+            "author": [
+                {
+                    "family": "Wang",
+                    "given": "Junjie",
+                    "affiliation": [
+                        {
+                            "name": (
+                                "Ume&#x00E5; University,"
+                                "Department of Applied Physics and Electronics"
+                            )
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert fields["affiliations"] == (
+        "Umeå University, Department of Applied Physics and Electronics"
+    )
+
+
+def test_title_candidate_must_appear_in_pdf_head() -> None:
+    text = (
+        "Limitations of Neural Collapse\n"
+        "for Understanding Generalization in Deep Learning\n"
+        "Like Hui\n"
+        "Abstract\n"
+    )
+    assert metadata_module._title_candidate_is_in_head(
+        "Limitations of Neural Collapse for Understanding Generalization in Deep Learning",
+        text,
+    )
+    assert not metadata_module._title_candidate_is_in_head(
+        "Neural Collapse on CIFAR-10",
+        text,
+    )
 
 
 def test_arxiv_verification_requires_a_second_signal() -> None:
@@ -175,12 +218,86 @@ async def test_metadata_runs_in_python_and_preserves_edited_fields(
         await asyncio.sleep(0.01)
 
     assert documents.document["title"] == "Manual title"
-    assert documents.document["authors"] == "Lovelace, Ada"
+    assert documents.document["authors"] == "Ada Lovelace"
     assert documents.document["metadataStatus"] == "done"
     assert documents.document["metadataAttempts"] == 0
     assert documents.remote_values is not None
     assert documents.remote_values["title"]["value"] == "Paper"
     assert events[-1][0] == "document.updated"
+    await service["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_metadata_uses_reliable_pdf_title_and_text_authors_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = FakeDocuments()
+    documents.document["fileName"] = "paper3.pdf"
+    documents.document["title"] = None
+    documents.document["editedFields"] = []
+    text = (
+        "Towards Model-Agnostic Cooperative Perception\n"
+        "Junjie Wang1, Tomas Nordstr ¨om1,2\n"
+        "1Department of Applied Physics and Electronics, Ume ˚a University\n"
+        "2RISE Research Institutes of Sweden\n"
+        "Abstract—We study cooperative perception.\n"
+    )
+    monkeypatch.setattr(
+        metadata_module,
+        "extractMetadataFromPdf",
+        lambda _path, _pages: {
+            "info": {"/Author": "", "/Title": ""},
+            "text": text,
+            "titleCandidate": "Towards Model-Agnostic Cooperative Perception",
+        },
+    )
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def json(self) -> dict[str, Any]:
+            if "dblp.org" in self.url:
+                return {"result": {"hits": {"hit": []}}}
+            return {"message": {"items": []}}
+
+    class Client:
+        def __init__(self, **_options: Any) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, url: str, **_options: Any) -> Response:
+            return Response(url)
+
+    monkeypatch.setattr(metadata_module.httpx, "AsyncClient", Client)
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={},
+        emit=lambda _name, _data: None,
+    )
+
+    service["refresh"]("doc-1")
+    for _ in range(100):
+        if documents.document["metadataStatus"] == "done":
+            break
+        await asyncio.sleep(0.01)
+
+    assert documents.document["title"] == "Towards Model-Agnostic Cooperative Perception"
+    assert documents.document["authors"] == "Junjie Wang; Tomas Nordström"
+    assert documents.document["affiliations"] == (
+        "Department of Applied Physics and Electronics, Umeå University; "
+        "RISE Research Institutes of Sweden"
+    )
     await service["destroy"]()
 
 

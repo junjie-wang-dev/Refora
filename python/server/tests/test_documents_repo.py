@@ -323,6 +323,28 @@ def test_setRemoteValues(db):
     assert repo["get"]("a")["remoteValues"] is None
 
 
+def test_authors_are_normalized_on_insert_update_and_remote_metadata(db):
+    repo = make_docs_repo(db, library_folder="/lib")
+    inserted = repo["insert"](
+        make_doc(
+            id="a",
+            file_path="/lib/a.pdf",
+            file_name="a.pdf",
+            authors="Lin, Ming C.; Qiao, Yi-Ling",
+        )
+    )
+    assert inserted["authors"] == "Ming C. Lin; Yi-Ling Qiao"
+
+    updated = repo["update"]("a", {"authors": "Son, Sanghyun; Zhou, Yang"})
+    assert updated["authors"] == "Sanghyun Son; Yang Zhou"
+
+    repo["setRemoteValues"](
+        "a",
+        {"authors": {"value": "Fisher, Matthew", "source": "dblp"}},
+    )
+    assert repo["get"]("a")["remoteValues"]["authors"]["value"] == "Matthew Fisher"
+
+
 def test_applyMetadataFields_updates_and_sets_status(db):
     repo = make_docs_repo(db, library_folder="/lib")
     repo["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf"))
@@ -338,6 +360,20 @@ def test_applyMetadataFields_updates_and_sets_status(db):
     assert doc["metadataStatus"] == "done"
     assert doc["metadataSource"] == "crossref"
     assert doc["remoteValues"] == {"title": {"value": "Computed", "source": "crossref"}}
+
+
+def test_applyMetadataFields_normalizes_authors(db):
+    repo = make_docs_repo(db, library_folder="/lib")
+    repo["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf"))
+    doc = repo["applyMetadataFields"](
+        "a",
+        {"authors": "0003, Sanghyun Son; Gadelha, Matheus"},
+        {"authors": {"value": "Zhou, Yang", "source": "dblp"}},
+        "done",
+        "dblp",
+    )
+    assert doc["authors"] == "Sanghyun Son; Matheus Gadelha"
+    assert doc["remoteValues"]["authors"]["value"] == "Yang Zhou"
 
 
 def test_applyMetadataFields_does_not_touch_editedFields(db):

@@ -13,17 +13,18 @@ from refora_server.library.bib_import import (
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("Smith, Jane", "Smith, Jane"),
-        ("Smith,Jane", "Smith, Jane"),
-        ("Smith , Jane", "Smith, Jane"),
-        ("Smith, Jane and Doe, John", "Smith, Jane; Doe, John"),
+        ("Smith, Jane", "Jane Smith"),
+        ("Smith,Jane", "Jane Smith"),
+        ("Smith , Jane", "Jane Smith"),
+        ("Smith, Jane and Doe, John", "Jane Smith; John Doe"),
         ("John Smith", "John Smith"),
         ("Mary Jane Watson", "Mary Jane Watson"),
-        ("Doe, John, Jr.", "Doe, John, Jr."),
+        ("Doe, John, Jr.", "John Doe Jr."),
+        ("Doe, Jr., John", "John Doe Jr."),
         ("Solo", "Solo"),
         ("  smith  and  jones  ", "smith; jones"),
         ("", ""),
-        ("Van Der Berg, Carl", "Van Der Berg, Carl"),
+        ("Van Der Berg, Carl", "Carl Van Der Berg"),
     ],
 )
 def test_normalize_authors_matches_ts_behavior(raw: str, expected: str) -> None:
@@ -74,7 +75,7 @@ def test_import_bibtex_creates_missing_document_and_skips_same_doi() -> None:
     assert len(first["imported"]) == 1
     document = documents["get"](first["imported"][0])
     assert document["title"] == "Research & Practice"
-    assert document["authors"] == "Smith, Jane; Doe, John"
+    assert document["authors"] == "Jane Smith; John Doe"
     assert document["year"] == "2024"
     assert document["pages"] == "12-20"
     assert document["fileMissing"] == 1
@@ -128,7 +129,7 @@ async def test_import_from_bibtex_restores_zotero_pdf_and_arxiv_support(tmp_path
     assert len(result["added"]) == 1
     document = documents["get"](result["added"][0])
     assert document["title"] == "Attached Paper"
-    assert document["authors"] == "Smith, Jane"
+    assert document["authors"] == "Jane Smith"
     assert document["fileMissing"] == 0
     assert document["filePath"] == str(library / "paper.pdf")
     assert (library / "paper.pdf").read_bytes() == pdf.read_bytes()

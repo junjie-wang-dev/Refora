@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from math import hypot
 from typing import Any, Optional
 
 from refora_server.academic.arxiv import base_arxiv_id, normalize_arxiv_id
+from refora_server.library.authors import normalizeAuthors
 
 REFERENCE_HEADINGS = re.compile(
     r"references|bibliography|参考文献|参考资料|references\s*$", re.IGNORECASE
@@ -45,17 +48,34 @@ ABSTRACT_NOISE_LINE = re.compile(
     re.IGNORECASE,
 )
 
-AFFILIATION_SYMBOL_PATTERN = re.compile(r"^[†‡§¶∗○●▲△▼▽☆★◇◆■□♣♦♥♠∘]")
+AFFILIATION_SYMBOL_PATTERN = re.compile(r"^[†‡§¶∗⋆○●▲△▼▽☆★◇◆■□♣♦♥♠∘]")
+AFFILIATION_INLINE_SYMBOL_MARKER = re.compile(r"[†‡§¶∗⋆]")
 AFFILIATION_DEPT_KEYWORDS = re.compile(
     r"\b(department|dept|school of|institute|laboratory|lab|college|university|"
     r"center|centre|centre for|faculty of|academy|hospital|corporation|inc|"
-    r"company|gmbh|division of|research group)\b",
+    r"company|gmbh|division of|research group|labs?|technology|università)\b",
     re.IGNORECASE,
 )
 AFFILIATION_ORG_KEYWORDS = re.compile(
     r"\b(research institutes|technologies|sciences|science|engineering|physics|"
     r"electronics|automotive|energy)\b",
     re.IGNORECASE,
+)
+AFFILIATION_COMPANY_NAMES = re.compile(
+    r"^(?:NVIDIA|Google(?: Brain)?|Meta|Microsoft|Adobe|Apple|Amazon|ByteDance|OpenAI|"
+    r"DeepMind|Anthropic|Abacus\.AI)$",
+    re.IGNORECASE,
+)
+AFFILIATION_ACADEMIC_ACRONYMS = re.compile(
+    r"^(?:ETH Zurich|EPFL|MIT|Caltech)(?:\s*,.*)?$",
+    re.IGNORECASE,
+)
+AFFILIATION_NUMBER_MARKER = re.compile(
+    r"(?<!\d)\d{1,2}(?:\s*,\s*\d{1,2})*[.)]?\s*(?=[A-Z])"
+)
+AUTHOR_MARKERS = re.compile(
+    r"(?<=[^\W\d_])(?:\d+(?:\s*,\s*\d+)*)?[*†‡§¶∗]+|"
+    r"(?<=[^\W\d_])\d+(?:\s*,\s*\d+)*"
 )
 SUPERSCRIPT_MARKER = re.compile(
     r"^(?:[†‡§¶∗○●▲△▼▽☆★◇◆■□♣♦♥♠∘]|[a-z](?:,[a-z])*|\d+(?:,\d+)*|\*|•)\.?\s*$"
@@ -202,6 +222,17 @@ def extractDoiFromInfo(info: dict[str, Any]) -> Optional[str]:
 
 def extractArxivFromText(text: str) -> Optional[str]:
     match = ARXIV_ID_REGEX.search(text)
+    if not match:
+        return None
+    return normalize_arxiv_id(match.group(1))
+
+
+def extractArxivFromFileName(fileName: str) -> Optional[str]:
+    match = re.fullmatch(
+        r"(?:arxiv[-_ ]?)?(\d{4}\.\d{4,5}(?:v\d+)?)\.pdf",
+        fileName.strip(),
+        re.IGNORECASE,
+    )
     if not match:
         return None
     return normalize_arxiv_id(match.group(1))
@@ -359,6 +390,10 @@ def _isLikelyAffiliation(line: str) -> bool:
         return False
     if "@" in line:
         return False
+    if AFFILIATION_COMPANY_NAMES.fullmatch(line):
+        return True
+    if AFFILIATION_ACADEMIC_ACRONYMS.fullmatch(line):
+        return True
     if AFFILIATION_DEPT_KEYWORDS.search(line):
         return True
     if AFFILIATION_ORG_KEYWORDS.search(line) and re.search(
@@ -379,9 +414,55 @@ def _isLikelyAffiliation(line: str) -> bool:
     return False
 
 
+def _repairPdfDiacritics(value: str) -> str:
+    marks = {"¨": "\u0308", "˚": "\u030a", "˘": "\u0306"}
+    repaired = value
+    for mark, combining in marks.items():
+        repaired = re.sub(
+            rf"\s*{re.escape(mark)}\s*([A-Za-z])",
+            lambda match: unicodedata.normalize("NFC", match.group(1) + combining),
+            repaired,
+        )
+    return repaired
+
+
+def _splitNumberedAffiliationLine(line: str) -> Optional[list[str]]:
+    matches = list(AFFILIATION_NUMBER_MARKER.finditer(line))
+    if not matches or (matches[0].start() != 0 and len(matches) == 1):
+        return None
+
+    parts = [
+        line[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(line)]
+        .strip(" ,;")
+        for index, match in enumerate(matches)
+    ]
+    return [part for part in parts if part]
+
+
+def _splitSymbolAffiliationLine(line: str) -> Optional[list[str]]:
+    matches = list(AFFILIATION_INLINE_SYMBOL_MARKER.finditer(line))
+    if not matches:
+        return None
+    parts: list[str] = []
+    cursor = 0
+    for match in matches:
+        if match.start() > cursor:
+            parts.append(line[cursor:match.start()].strip(" ,;"))
+        cursor = match.end()
+    if cursor < len(line):
+        parts.append(line[cursor:].strip(" ,;"))
+    return [part for part in parts if part]
+
+
 def extractAffiliationsFromText(text: str) -> Optional[str]:
     hasAbstract = re.search(r"\babstract\b", text[:3000], re.IGNORECASE) is not None
-    if not hasAbstract:
+    hasPhysicsFrontMatter = (
+        re.search(r"^\(Dated:\s+", text[:3000], re.IGNORECASE | re.MULTILINE)
+        is not None
+        and re.search(r"^\s*(?:I\.|1\.?)\s+INTRODUCTION\b", text[:5000], re.IGNORECASE | re.MULTILINE)
+        is not None
+    )
+    if not hasAbstract and not hasPhysicsFrontMatter:
         return None
 
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -390,7 +471,7 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
     seen: set[str] = set()
 
     def tryAdd(value: str) -> None:
-        trimmed = value.strip()
+        trimmed = _repairPdfDiacritics(value).strip()
         if len(trimmed) < 5:
             return
         key = trimmed.lower()
@@ -398,6 +479,19 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
             return
         seen.add(key)
         affiliations.append(trimmed)
+
+    def addLikelyAffiliations(value: str) -> bool:
+        candidates = (
+            _splitNumberedAffiliationLine(value)
+            or _splitSymbolAffiliationLine(value)
+            or [value]
+        )
+        added = False
+        for candidate in candidates:
+            if _isLikelyAffiliation(candidate):
+                tryAdd(candidate)
+                added = True
+        return added
 
     inAffiliationBlock = False
     blockEnded = False
@@ -412,6 +506,8 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
 
         if re.match(r"^(abstract|keywords|introduction)\b", line, re.IGNORECASE):
             break
+        if re.match(r"^\(Dated:\s+", line, re.IGNORECASE):
+            break
 
         if re.match(r"^affiliations?\b", line, re.IGNORECASE) or re.match(
             r"^\*?\s*author affiliations?\b", line, re.IGNORECASE
@@ -420,8 +516,8 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
             if len(rest) > 0:
                 for part in rest.split(";"):
                     part = part.strip()
-                    if part and _isLikelyAffiliation(part):
-                        tryAdd(part)
+                    if part:
+                        addLikelyAffiliations(part)
                 inAffiliationBlock = True
             i += 1
             continue
@@ -431,8 +527,7 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
                 blockEnded = True
                 i += 1
                 continue
-            if _isLikelyAffiliation(line):
-                tryAdd(line)
+            if addLikelyAffiliations(line):
                 i += 1
                 continue
             blockEnded = True
@@ -442,14 +537,12 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
         if SUPERSCRIPT_MARKER.match(line):
             if i + 1 < len(head):
                 nxt = head[i + 1]
-                if _isLikelyAffiliation(nxt):
-                    tryAdd(nxt)
+                if addLikelyAffiliations(nxt):
                     expectAffiliationAfterMarker = True
                     i += 2
                     continue
 
-        if expectAffiliationAfterMarker and _isLikelyAffiliation(line):
-            tryAdd(line)
+        if expectAffiliationAfterMarker and addLikelyAffiliations(line):
             i += 1
             continue
 
@@ -457,19 +550,80 @@ def extractAffiliationsFromText(text: str) -> Optional[str]:
             cleaned = AFFILIATION_SYMBOL_PATTERN.sub("", line)
             cleaned = re.sub(r"^[a-z\d]+,?\s*", "", cleaned)
             cleaned = re.sub(r"^\d+\.?\s*", "", cleaned).strip()
-            if len(cleaned) > 5 and _isLikelyAffiliation(cleaned):
-                tryAdd(cleaned)
+            if len(cleaned) > 5 and addLikelyAffiliations(cleaned):
                 i += 1
                 continue
 
-        if not inAffiliationBlock and _isLikelyAffiliation(line):
-            tryAdd(line)
+        if not inAffiliationBlock:
+            addLikelyAffiliations(line)
 
         i += 1
 
     if not affiliations:
         return None
     return "; ".join(affiliations)
+
+
+def _isLikelyAuthorName(value: str) -> bool:
+    words = [word for word in value.split() if word]
+    if len(words) < 2 or len(words) > 6:
+        return False
+    if any(
+        not all(
+            character.isalpha() or character in ".'’`-"
+            for character in word
+        )
+        for word in words
+    ):
+        return False
+    return True
+
+
+def extractAuthorsFromText(
+    text: str,
+    titleHint: Optional[str] = None,
+) -> Optional[str]:
+    if re.search(r"\babstract\b", text[:3000], re.IGNORECASE) is None:
+        return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    title = titleHint or extractTitleFromText(text)
+    if not title:
+        return None
+
+    title_end = -1
+    for start in range(min(len(lines), 10)):
+        for end in range(start, min(len(lines), start + 4)):
+            combined = re.sub(r"\s+", " ", " ".join(lines[start:end + 1])).strip()
+            if combined == title:
+                title_end = end
+                break
+        if title_end >= 0:
+            break
+    if title_end < 0:
+        return None
+
+    authors: list[str] = []
+    for line in lines[title_end + 1:title_end + 4]:
+        if re.match(r"^abstract\b", line, re.IGNORECASE) or "@" in line:
+            break
+        affiliation_parts = _splitNumberedAffiliationLine(line) or [line]
+        if any(_isLikelyAffiliation(part) for part in affiliation_parts):
+            break
+        cleaned = _repairPdfDiacritics(AUTHOR_MARKERS.sub("", line))
+        names = [
+            name.strip(" ,;")
+            for name in re.split(r"\s*(?:,|;|\band\b|&)\s*", cleaned, flags=re.IGNORECASE)
+        ]
+        valid = [name for name in names if _isLikelyAuthorName(name)]
+        if not valid:
+            if authors:
+                break
+            continue
+        authors.extend(valid)
+
+    if not authors:
+        return None
+    return normalizeAuthors("; ".join(dict.fromkeys(authors)))
 
 
 def _normalizeVenueKey(rawVenue: str) -> Optional[str]:
@@ -645,25 +799,6 @@ def titleFromFileName(fileName: str) -> Optional[str]:
     return result[0].upper() + result[1:]
 
 
-def normalizeAuthors(raw: Optional[str]) -> Optional[str]:
-    if not raw or not raw.strip():
-        return None
-    parts = [s.strip() for s in raw.split(";") if s.strip()]
-    if not parts:
-        return None
-    out: list[str] = []
-    for p in parts:
-        if "," in p:
-            out.append(p)
-            continue
-        spaceIdx = p.rfind(" ")
-        if spaceIdx == -1:
-            out.append(p)
-            continue
-        out.append(p[spaceIdx + 1:] + ", " + p[:spaceIdx])
-    return "; ".join(out)
-
-
 def _isPdfTitleNoise(text: str) -> bool:
     return bool(
         PDF_TITLE_NOISE.search(text)
@@ -793,18 +928,23 @@ def extractMetadataFromPdf(filePath: str, maxPages: int = 5) -> dict[str, Any]:
 
                 def visitor(
                     text: str,
-                    _cm: list[float],
+                    cm: list[float],
                     tm: list[float],
                     _font: dict[str, Any] | None,
                     font_size: float,
                 ) -> None:
+                    y = tm[5] if len(tm) > 5 else 0
+                    size = font_size
+                    if len(cm) > 5 and len(tm) > 5:
+                        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+                        size = font_size * hypot(cm[2], cm[3])
                     for value in text.splitlines():
                         if value.strip():
                             fragments.append(
                                 {
                                     "text": value,
-                                    "y": tm[5] if len(tm) > 5 else 0,
-                                    "size": font_size,
+                                    "y": y,
+                                    "size": size,
                                 }
                             )
 

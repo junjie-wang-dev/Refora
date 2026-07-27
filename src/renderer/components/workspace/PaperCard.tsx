@@ -6,6 +6,7 @@ import { Sparkle, FileText, Copy, Trash, CircleNotch, WarningCircle, ArrowClockw
 import { motion, MotionConfig } from 'motion/react'
 import { Badge, cardClassName } from '../ui'
 import type { AiSummary, Document } from '../../../shared/ipc-types'
+import { formatAuthors } from '../../utils/format'
 
 interface PaperCardProps {
   doc: Document | null
@@ -77,7 +78,7 @@ export default function PaperCard({
   const { t } = useTranslation()
 
   const title = doc?.title || doc?.fileName || '…'
-  const authors = doc?.authors
+  const authors = formatAuthors(doc?.authors)
   const content = summary?.content ?? null
   const keyPoints = content?.keyPoints ?? []
   const previewVersion = doc ? `${doc.fileHash ?? 'unhashed'}-${doc.updatedAt}` : ''

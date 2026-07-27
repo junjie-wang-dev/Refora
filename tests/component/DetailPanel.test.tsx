@@ -39,7 +39,7 @@ const mockDoc: Document = {
   lastReadAt: null,
   updatedAt: 1700000000000,
   metadataSource: null,
-  metadataStatus: 'success',
+  metadataStatus: 'done',
   metadataAttempts: 0,
   editedFields: [],
   remoteValues: {},
@@ -174,7 +174,7 @@ describe('DetailPanel', () => {
     it('renders all document fields', () => {
       render(<DetailPanel />)
       expect(screen.getByRole('button', { name: 'Test Paper' })).toBeInTheDocument()
-      expect(screen.getByText('Smith, J.')).toBeInTheDocument()
+      expect(screen.getByText('J. Smith')).toBeInTheDocument()
       expect(screen.getByText('2024')).toBeInTheDocument()
       expect(screen.getByText('Nature')).toBeInTheDocument()
       expect(screen.getByText('10')).toBeInTheDocument()
@@ -365,9 +365,9 @@ describe('DetailPanel', () => {
 
       render(<DetailPanel />)
 
-      expect(screen.getByText('Pu, Yewen')).toBeInTheDocument()
-      expect(screen.getByText('Narasimhan, Karthik')).toBeInTheDocument()
-      expect(screen.getByText('Solar-Lezama, Armando')).toBeInTheDocument()
+      expect(screen.getByText('Yewen Pu')).toBeInTheDocument()
+      expect(screen.getByText('Karthik Narasimhan')).toBeInTheDocument()
+      expect(screen.getByText('Armando Solar-Lezama')).toBeInTheDocument()
     })
 
     it('places the close action in the document header', () => {
@@ -597,6 +597,41 @@ describe('DetailPanel', () => {
       rerender(<DetailPanel />)
 
       expect(screen.getByText('detail.refreshSuccess')).toBeInTheDocument()
+    })
+
+    it('keeps the refresh icon spinning until refreshed metadata is rendered', async () => {
+      mockStoreState.documents = [{ ...mockDoc, metadataStatus: 'done' }]
+      mockStoreState.refreshMetadata.mockResolvedValue(true)
+      const { rerender } = render(<DetailPanel />)
+
+      const refreshBtn = screen.getByRole('button', { name: 'detail.refreshMetadata' })
+      await act(async () => {
+        fireEvent.click(refreshBtn)
+      })
+
+      expect(refreshBtn.querySelector('svg')).toHaveClass('animate-spin')
+      expect(screen.getByText('detail.refreshMetadata')).toBeInTheDocument()
+      expect(screen.queryByText('detail.refreshing')).not.toBeInTheDocument()
+      expect(screen.queryByText('detail.refreshSuccess')).not.toBeInTheDocument()
+
+      mockStoreState.documents = [{ ...mockDoc, metadataStatus: 'pending', updatedAt: mockDoc.updatedAt + 1 }]
+      rerender(<DetailPanel />)
+
+      expect(refreshBtn.querySelector('svg')).toHaveClass('animate-spin')
+      expect(screen.queryByText('detail.refreshSuccess')).not.toBeInTheDocument()
+
+      mockStoreState.documents = [{
+        ...mockDoc,
+        title: 'Refreshed Paper',
+        metadataStatus: 'done',
+        updatedAt: mockDoc.updatedAt + 2
+      }]
+      rerender(<DetailPanel />)
+
+      expect(screen.getByRole('button', { name: 'Refreshed Paper' })).toBeInTheDocument()
+      expect(screen.getByText('detail.refreshMetadata')).toBeInTheDocument()
+      expect(screen.getByText('detail.refreshSuccess')).toBeInTheDocument()
+      expect(refreshBtn.querySelector('svg')).not.toHaveClass('animate-spin')
     })
   })
 

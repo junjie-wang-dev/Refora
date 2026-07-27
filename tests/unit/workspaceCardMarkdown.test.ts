@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { boardCardPreview } from '../../src/renderer/utils/workspaceCardMarkdown'
+import { boardCardPreview, paperCardMarkdown } from '../../src/renderer/utils/workspaceCardMarkdown'
+import type { Document } from '../../src/shared/ipc-types'
 
 describe('boardCardPreview', () => {
   it('preserves short card content', () => {
@@ -15,5 +16,19 @@ describe('boardCardPreview', () => {
     expect(preview.endsWith('…')).toBe(true)
     expect(preview.split('\n').length).toBeLessThanOrEqual(30)
     expect(preview.length).toBeLessThanOrEqual(1810)
+  })
+})
+
+describe('paperCardMarkdown', () => {
+  it('writes authors with given names first', () => {
+    const doc = {
+      title: 'Paper',
+      fileName: 'paper.pdf',
+      authors: 'Lin, Ming C.; Qiao, Yi-Ling'
+    } as Document
+
+    expect(paperCardMarkdown(doc, null)).toContain(
+      '- **Authors:** Ming C. Lin; Yi-Ling Qiao'
+    )
   })
 })

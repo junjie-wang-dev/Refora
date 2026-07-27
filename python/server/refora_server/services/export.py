@@ -5,6 +5,8 @@ import re
 import time
 from typing import Any, Callable, TypedDict
 
+from refora_server.library.authors import authorFamilyName, normalizeAuthors
+
 BIBTEX_ESCAPE_MAP: dict[str, str] = {
     "\\": r"\textbackslash{}",
     "{": r"\{",
@@ -182,8 +184,8 @@ def _firstAuthorLastName(authors: str | None) -> str | None:
     first = authors.split(";")[0].strip()
     if not first:
         return None
-    comma_idx = first.find(",")
-    return first[:comma_idx].strip() if comma_idx >= 0 else first.strip()
+    family = authorFamilyName(first)
+    return family or None
 
 
 _TITLE_CLEAN_RE = re.compile(r"[{}\\]")
@@ -247,9 +249,10 @@ def _buildCitekey(doc: dict[str, Any], used: set[str]) -> str:
 
 
 def _formatAuthors(authors: str | None) -> str | None:
-    if not authors:
+    normalized = normalizeAuthors(authors)
+    if not normalized:
         return None
-    return " and ".join(a.strip() for a in authors.split(";") if a.strip())
+    return " and ".join(a.strip() for a in normalized.split(";") if a.strip())
 
 
 def _formatBibtexEntry(doc: dict[str, Any], used: set[str]) -> str | None:

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { formatDate, formatFilePath } from '../../src/renderer/utils/format'
+import {
+  formatAuthorName,
+  formatAuthors,
+  formatDate,
+  formatFilePath
+} from '../../src/renderer/utils/format'
 
 describe('formatDate', () => {
   it('formats a timestamp as YYYY-MM-DD', () => {
@@ -29,5 +34,27 @@ describe('formatFilePath', () => {
 
   it('returns paths without the home prefix unchanged', () => {
     expect(formatFilePath('/opt/local/share/paper.pdf')).toBe('/opt/local/share/paper.pdf')
+  })
+})
+
+describe('author formatting', () => {
+  it('uses given name before family name for legacy comma-form names', () => {
+    expect(formatAuthorName('Lin, Ming C.')).toBe('Ming C. Lin')
+    expect(formatAuthorName('Van Der Berg, Carl')).toBe('Carl Van Der Berg')
+  })
+
+  it('keeps names that are already given-name-first', () => {
+    expect(formatAuthorName('Ming C. Lin')).toBe('Ming C. Lin')
+  })
+
+  it('formats semicolon-separated author lists and DBLP suffixes', () => {
+    expect(formatAuthors('0003, Sanghyun Son; Zhou, Yang; Yi-Ling Qiao')).toBe(
+      'Sanghyun Son; Yang Zhou; Yi-Ling Qiao'
+    )
+  })
+
+  it('places generational suffixes after the family name', () => {
+    expect(formatAuthorName('Doe, John, Jr.')).toBe('John Doe Jr.')
+    expect(formatAuthorName('Doe, Jr., John')).toBe('John Doe Jr.')
   })
 })

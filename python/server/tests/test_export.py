@@ -51,7 +51,7 @@ def test_toBibtex_conference_paper():
     out = toBibtex([doc])
     assert out.startswith("@inproceedings{smith2023deep,\n")
     assert "booktitle    = {CVPR}" in out
-    assert "author       = {Smith, John and Doe, Jane}" in out
+    assert "author       = {John Smith and Jane Doe}" in out
     assert "pages        = {1--10}" in out
     assert out.endswith("\n")
 

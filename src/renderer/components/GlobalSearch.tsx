@@ -22,6 +22,7 @@ import type {
   WorkspaceFileSearchResult
 } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
+import { formatAuthors } from '../utils/format'
 
 const EMPTY_RESULTS: GlobalSearchResult = {
   documents: [],
@@ -371,7 +372,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
                         {highlightMatch(document.title || document.fileName, query)}
                       </span>
                       <span className="mt-0.5 block truncate text-[11px] text-muted">
-                        {highlightMatch([document.authors, document.year, document.venue].filter(Boolean).join(' · '), query)}
+                        {highlightMatch([formatAuthors(document.authors), document.year, document.venue].filter(Boolean).join(' · '), query)}
                       </span>
                     </span>
                   </>,

@@ -10,7 +10,7 @@ import type { ContextMenuItem } from '@lobehub/ui'
 
 import { useDocumentStore } from '../store/documentStore'
 import { api } from '../ipc'
-import { formatDate, formatFilePath } from '../utils/format'
+import { formatAuthorName, formatDate, formatFilePath } from '../utils/format'
 import type {
   Document,
   EditableField,
@@ -347,7 +347,7 @@ function InlineField({
                     key={`${author}-${index}`}
                     className="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground"
                   >
-                    {author}
+                    {field === 'authors' ? formatAuthorName(author) : author}
                   </span>
                 ))}
               </span>
@@ -584,6 +584,7 @@ function SingleDetail({ doc }: { doc: Document }) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshResult, setRefreshResult] = useState<'idle' | 'success' | 'failed'>('idle')
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const refreshPendingSeenRef = useRef(false)
 
   const onSaved = useCallback(
     (d: Document) => { patchDocument(d.id, d) },
@@ -592,6 +593,11 @@ function SingleDetail({ doc }: { doc: Document }) {
 
   useEffect(() => {
     if (!refreshing) return
+    if (doc.metadataStatus === 'pending') {
+      refreshPendingSeenRef.current = true
+      return
+    }
+    if (!refreshPendingSeenRef.current) return
     if (doc.metadataStatus === 'done') {
       setRefreshing(false)
       setRefreshResult('success')
@@ -612,6 +618,7 @@ function SingleDetail({ doc }: { doc: Document }) {
   }, [])
 
   const handleRefresh = async () => {
+    refreshPendingSeenRef.current = false
     setRefreshing(true)
     setRefreshResult('idle')
     const enqueued = await refreshMetadata(doc.id)
@@ -662,13 +669,9 @@ function SingleDetail({ doc }: { doc: Document }) {
           icon={<ArrowClockwise className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />}
           onClick={handleRefresh}
           disabled={refreshing}
+          aria-label={t('detail.refreshMetadata')}
         >
           <span>{t('detail.refreshMetadata')}</span>
-          {refreshing && (
-            <span className="ml-1 text-caption font-normal normal-case text-muted">
-              {t('detail.refreshing')}
-            </span>
-          )}
           {refreshResult === 'success' && (
             <span className="ml-1 text-caption font-normal normal-case text-success">
               {t('detail.refreshSuccess')}

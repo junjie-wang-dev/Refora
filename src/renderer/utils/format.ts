@@ -16,6 +16,28 @@ export function formatFilePath(path: string): string {
   return path
 }
 
+export function formatAuthorName(name: string): string {
+  const parts = name.split(',').map((part) => part.trim()).filter(Boolean)
+  if (parts.length < 2) return name.trim()
+  if (/^\d{4}$/.test(parts[0])) return parts.slice(1).join(' ')
+  if (parts.length >= 3 && /^(?:Jr\.?|Sr\.?|II|III|IV|V)$/i.test(parts[1])) {
+    return [...parts.slice(2), parts[0], parts[1]].join(' ')
+  }
+  if (parts.length >= 3 && /^(?:Jr\.?|Sr\.?|II|III|IV|V)$/i.test(parts.at(-1) ?? '')) {
+    return [...parts.slice(1, -1), parts[0], parts.at(-1)!].join(' ')
+  }
+  return [...parts.slice(1), parts[0]].join(' ')
+}
+
+export function formatAuthors(authors: string | null | undefined): string {
+  if (!authors) return ''
+  return authors
+    .split(';')
+    .map(formatAuthorName)
+    .filter(Boolean)
+    .join('; ')
+}
+
 export function formatElapsedClock(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000))
   const seconds = String(totalSeconds % 60).padStart(2, '0')

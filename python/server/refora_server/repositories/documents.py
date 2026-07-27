@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import Any, Callable, TypedDict
 
+from refora_server.library.authors import normalizeAuthors
 from refora_server.library.paths import resolveFromLibrary, toLibraryRelative
 from refora_server.repositories.errors import RepoError
 
@@ -140,6 +141,10 @@ def _parse_remote_values(raw: Any) -> dict[str, Any] | None:
     except (ValueError, TypeError):
         return None
     if isinstance(parsed, dict):
+        author_value = parsed.get("authors")
+        if isinstance(author_value, dict) and isinstance(author_value.get("value"), str):
+            normalized = normalizeAuthors(author_value["value"])
+            author_value["value"] = normalized or ""
         return parsed
     return None
 
@@ -169,7 +174,7 @@ def _map_document(row: sqlite3.Row, library_folder: str) -> dict[str, Any]:
         "fileSize": _safe_int(row["fileSize"]),
         "fileHash": row["fileHash"] if row["fileHash"] is not None else None,
         "title": row["title"] if row["title"] is not None else None,
-        "authors": row["authors"] if row["authors"] is not None else None,
+        "authors": normalizeAuthors(row["authors"]),
         "year": row["year"] if row["year"] is not None else None,
         "venue": row["venue"] if row["venue"] is not None else None,
         "volume": row["volume"] if row["volume"] is not None else None,
@@ -293,7 +298,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             doc.get("fileSize"),
             doc.get("fileHash"),
             doc.get("title"),
-            doc.get("authors"),
+            normalizeAuthors(doc.get("authors")),
             doc.get("year"),
             doc.get("venue"),
             doc.get("volume"),
@@ -328,6 +333,11 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
 
     def update(id: str, patch: dict[str, str]) -> dict[str, Any]:
         keys = validatePatch(patch)
+        if "authors" in patch:
+            patch = {
+                **patch,
+                "authors": normalizeAuthors(patch["authors"]) or "",
+            }
         current = get(id)
         if current is None:
             raise RepoError("not_found", f"document not found: {id}")
@@ -448,6 +458,17 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         return [_map_document(r, lf) for r in rows]
 
     def setRemoteValues(id: str, remoteValues: dict[str, Any] | None) -> None:
+        if remoteValues is not None:
+            author_value = remoteValues.get("authors")
+            if isinstance(author_value, dict) and isinstance(author_value.get("value"), str):
+                normalized = normalizeAuthors(author_value["value"])
+                remoteValues = {
+                    **remoteValues,
+                    "authors": {
+                        **author_value,
+                        "value": normalized or "",
+                    },
+                }
         db.execute(
             "UPDATE documents SET remoteValues = ?, updatedAt = ? WHERE id = ?",
             [None if remoteValues is None else json.dumps(remoteValues), now_ms(), id],
@@ -461,6 +482,22 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         source: str | None,
     ) -> dict[str, Any]:
         keys = validatePatch(fields)
+        if "authors" in fields:
+            fields = {
+                **fields,
+                "authors": normalizeAuthors(fields["authors"]) or "",
+            }
+        if remoteValues is not None:
+            author_value = remoteValues.get("authors")
+            if isinstance(author_value, dict) and isinstance(author_value.get("value"), str):
+                normalized = normalizeAuthors(author_value["value"])
+                remoteValues = {
+                    **remoteValues,
+                    "authors": {
+                        **author_value,
+                        "value": normalized or "",
+                    },
+                }
         current = get(id)
         current_status = current["metadataStatus"] if current is not None else "pending"
         if (
