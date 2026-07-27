@@ -133,6 +133,7 @@
     "cancel": "取消转换",
     "open": "打开结构化文档",
     "processing": "处理中 · {{stage}}",
+    "progress": "OCR 进度",
     "elapsed": "已用时 {{time}}",
     "failed": "转换失败：{{message}}",
     "stale": "生成后 PDF 已发生变化，需要重新生成。",
@@ -154,6 +155,15 @@
       "writingResults": "正在写入结果",
       "validating": "正在校验输出",
       "completed": "已完成"
+    },
+    "stageDescription": {
+      "queued": "任务已加入队列，正在等待本地 OCR 资源。",
+      "startingWorker": "正在启动本地 OCR 进程。",
+      "loadingModels": "正在把识别模型载入内存，首次运行可能较慢。",
+      "parsing": "正在识别文本、公式、表格和图片。所需时间取决于本机性能，可能需要较长时间。",
+      "writingResults": "正在整理识别内容并生成结构化文件。",
+      "validating": "正在检查生成文件是否完整可用。",
+      "completed": "结构化文档已生成。"
     }
   },
   "settings": {

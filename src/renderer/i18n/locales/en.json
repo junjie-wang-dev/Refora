@@ -133,6 +133,7 @@
     "cancel": "Cancel conversion",
     "open": "Open structured document",
     "processing": "Processing · {{stage}}",
+    "progress": "OCR progress",
     "elapsed": "Elapsed {{time}}",
     "failed": "Conversion failed: {{message}}",
     "stale": "The PDF changed after this structured document was created.",
@@ -154,6 +155,15 @@
       "writingResults": "Writing results",
       "validating": "Validating output",
       "completed": "Completed"
+    },
+    "stageDescription": {
+      "queued": "The task is queued and waiting for local OCR resources.",
+      "startingWorker": "Starting the local OCR process.",
+      "loadingModels": "Loading recognition models into memory. The first run may take longer.",
+      "parsing": "Recognizing text, formulas, tables, and images. This may take some time depending on your computer's performance.",
+      "writingResults": "Organizing recognized content into structured files.",
+      "validating": "Checking that the generated files are complete and usable.",
+      "completed": "The structured document is ready."
     }
   },
   "settings": {

@@ -348,7 +348,10 @@ describe('DetailPanel', () => {
 
       const { container } = render(<DetailPanel />)
 
-      expect(await screen.findByText('ocr.processing')).toBeInTheDocument()
+      expect(await screen.findByText('ocr.stage.parsing')).toBeInTheDocument()
+      expect(screen.getByText('ocr.stageDescription.parsing')).toBeInTheDocument()
+      expect(screen.getByRole('progressbar', { name: 'ocr.progress' }))
+        .not.toHaveAttribute('aria-valuenow')
       expect(container.querySelector('.mineru-progress-indeterminate')).toBeInTheDocument()
       expect(screen.getByText('ocr.elapsed')).toBeInTheDocument()
       expect(screen.queryByText('12%')).not.toBeInTheDocument()

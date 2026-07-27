@@ -512,8 +512,55 @@ def test_mineru_worker_script_protocol_constants():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.PROTOCOL_VERSION == 1
+    assert module.PROCESSING_WINDOW_SIZE == 1
     assert callable(module.handle)
     assert callable(module.parse_document)
+
+
+def test_mineru_worker_maps_page_progress_into_parse_range():
+    import importlib.util
+
+    path = _worker_script_path()
+    spec = importlib.util.spec_from_file_location("mineru_worker_progress", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.parsing_progress(0, 20) == 0.05
+    assert module.parsing_progress(10, 20) == pytest.approx(0.475)
+    assert module.parsing_progress(20, 20) == 0.9
+    assert module.parsing_progress(0, 0) is None
+
+
+def test_mineru_worker_forwards_processing_pages_updates():
+    import importlib.util
+
+    path = _worker_script_path()
+    spec = importlib.util.spec_from_file_location("mineru_worker_tqdm", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    updates = []
+
+    class FakeTqdm:
+        def __init__(self, *args, **kwargs):
+            self.n = 0
+            self.total = kwargs.get("total")
+
+        def update(self, amount=1):
+            self.n += amount
+            return True
+
+    progress_tqdm = module.create_progress_tqdm(
+        FakeTqdm,
+        lambda current, total: updates.append((current, total)),
+    )
+    pages = progress_tqdm(total=12, desc="Processing pages")
+    other = progress_tqdm(total=12, desc="OCR-det")
+
+    pages.update(4)
+    other.update(4)
+    pages.update(4)
+
+    assert updates == [(4, 12), (8, 12)]
 
 
 def test_mineru_worker_handle_rejects_unknown_methods():

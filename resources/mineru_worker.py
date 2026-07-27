@@ -6,6 +6,9 @@ import traceback
 from pathlib import Path
 
 PROTOCOL_VERSION = 1
+PARSING_PROGRESS_START = 0.05
+PARSING_PROGRESS_END = 0.9
+PROCESSING_WINDOW_SIZE = 1
 
 protocol_fd = os.dup(sys.stdout.fileno())
 os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
@@ -18,6 +21,58 @@ def send(message):
 
 def emit_stage(request_id, stage, progress):
     send({"event": "progress", "requestId": request_id, "stage": stage, "progress": progress})
+
+
+def parsing_progress(current, total):
+    if not total:
+        return None
+    ratio = max(0.0, min(float(current) / float(total), 1.0))
+    return PARSING_PROGRESS_START + ratio * (PARSING_PROGRESS_END - PARSING_PROGRESS_START)
+
+
+def create_progress_tqdm(base_tqdm, on_page_progress):
+    class ReforaProgressTqdm(base_tqdm):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._refora_page_progress = kwargs.get("desc") == "Processing pages"
+
+        def update(self, amount=1):
+            result = super().update(amount)
+            if self._refora_page_progress and self.total:
+                on_page_progress(int(self.n), int(self.total))
+            return result
+
+    return ReforaProgressTqdm
+
+
+def install_page_progress_hook(request_id, backend):
+    from tqdm import tqdm as base_tqdm
+
+    def on_page_progress(current, total):
+        emit_stage(request_id, "parsing", parsing_progress(current, total))
+
+    progress_tqdm = create_progress_tqdm(base_tqdm, on_page_progress)
+    if backend == "pipeline":
+        from mineru.backend.pipeline import pipeline_analyze
+
+        pipeline_analyze.tqdm = progress_tqdm
+    else:
+        from mineru.backend.hybrid import hybrid_analyze
+
+        hybrid_analyze.tqdm = progress_tqdm
+
+
+def pdf_page_count(path):
+    import pypdfium2 as pdfium
+
+    try:
+        document = pdfium.PdfDocument(str(path))
+        try:
+            return len(document)
+        finally:
+            document.close()
+    except Exception:
+        return None
 
 
 def require_pdf(path_value):
@@ -102,7 +157,10 @@ def parse_document(request_id, params):
     image_analysis = profile == "quality"
     emit_stage(request_id, "loadingModels", None)
     from mineru.cli.common import do_parse, read_fn
-    emit_stage(request_id, "parsing", None)
+    os.environ["MINERU_PROCESSING_WINDOW_SIZE"] = str(PROCESSING_WINDOW_SIZE)
+    install_page_progress_hook(request_id, backend)
+    page_count = pdf_page_count(input_path)
+    emit_stage(request_id, "parsing", parsing_progress(0, page_count))
     do_parse(
         output_dir=str(output),
         pdf_file_names=[input_path.stem],

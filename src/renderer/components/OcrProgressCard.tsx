@@ -24,17 +24,33 @@ export default function OcrProgressCard({
   }, [job.id, job.status])
 
   const elapsed = formatElapsedClock(now - (job.startedAt ?? job.createdAt))
+  const percentage = job.progress == null ? null : Math.round(job.progress * 100)
 
   return (
-    <div className={`flex flex-col gap-2 rounded-lg bg-panel-2 px-3 py-2 ${className}`}>
-      <div className="flex items-center justify-between gap-2 text-xs text-foreground">
-        <span>{t('ocr.processing', { stage: t(`ocr.stage.${job.stage}`) })}</span>
-        <span className="text-muted">
-          {job.progress != null ? `${Math.round(job.progress * 100)}% · ` : ''}
+    <div className={`flex flex-col gap-3 rounded-lg bg-panel-2 px-3 py-3 ${className}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-foreground">
+            {t(`ocr.stage.${job.stage}`)}
+          </div>
+          <div className="mt-0.5 text-[11px] leading-4 text-muted">
+            {t(`ocr.stageDescription.${job.stage}`)}
+          </div>
+        </div>
+        <div className="shrink-0 text-right text-[11px] leading-4 text-muted tabular-nums">
+          {percentage != null ? `${percentage}% · ` : ''}
           {t('ocr.elapsed', { time: elapsed })}
-        </span>
+        </div>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-background">
+
+      <div
+        className="h-1.5 overflow-hidden rounded-full bg-background"
+        role="progressbar"
+        aria-label={t('ocr.progress')}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percentage ?? undefined}
+      >
         <div
           className={`h-full rounded-full bg-accent ${
             job.progress == null
@@ -46,11 +62,14 @@ export default function OcrProgressCard({
             : { width: `${Math.max(2, Math.min(100, job.progress * 100))}%` }}
         />
       </div>
-      {onCancel && (
-        <Button variant="ghost" size="sm" className="self-start" onClick={onCancel}>
-          {t('ocr.cancel')}
-        </Button>
-      )}
+
+      {onCancel ? (
+        <div className="border-t border-border/70 pt-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {t('ocr.cancel')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
