@@ -731,12 +731,11 @@ describe('DocumentStore', () => {
       mockFromIdentifier.mockResolvedValueOnce({ added: ['doc-1'] })
       mockList.mockResolvedValueOnce([])
 
-      useDocumentStore.getState().importByIdentifier('10.1000/test')
+      const importPromise = useDocumentStore.getState().importByIdentifier('10.1000/test')
       expect(useDocumentStore.getState().identifierImporting).toBeGreaterThan(0)
 
-      await vi.waitFor(() => {
-        expect(useDocumentStore.getState().identifierImporting).toBe(0)
-      })
+      await expect(importPromise).resolves.toBeNull()
+      expect(useDocumentStore.getState().identifierImporting).toBe(0)
       expect(useDocumentStore.getState().toastMessage).toBe('Imported successfully')
       expect(mockList).toHaveBeenCalled()
     })
@@ -744,23 +743,21 @@ describe('DocumentStore', () => {
     it('shows the service message when no document was added', async () => {
       mockFromIdentifier.mockResolvedValueOnce({ added: [], message: 'Already imported' })
 
-      useDocumentStore.getState().importByIdentifier('2401.12345')
+      const importPromise = useDocumentStore.getState().importByIdentifier('2401.12345')
 
-      await vi.waitFor(() => {
-        expect(useDocumentStore.getState().identifierImporting).toBe(0)
-      })
+      await expect(importPromise).resolves.toBe('Already imported')
+      expect(useDocumentStore.getState().identifierImporting).toBe(0)
       expect(useDocumentStore.getState().toastMessage).toBe('Already imported')
     })
 
     it('shows error toast and clears identifierImporting on failure', async () => {
       mockFromIdentifier.mockRejectedValueOnce(new Error('lookup failed'))
 
-      useDocumentStore.getState().importByIdentifier('2401.12345')
+      const importPromise = useDocumentStore.getState().importByIdentifier('2401.12345')
       expect(useDocumentStore.getState().identifierImporting).toBeGreaterThan(0)
 
-      await vi.waitFor(() => {
-        expect(useDocumentStore.getState().identifierImporting).toBe(0)
-      })
+      await expect(importPromise).resolves.toBe('Import failed: lookup failed')
+      expect(useDocumentStore.getState().identifierImporting).toBe(0)
       expect(useDocumentStore.getState().toastMessage).toBe('Import failed: lookup failed')
     })
 

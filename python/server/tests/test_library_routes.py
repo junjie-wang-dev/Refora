@@ -107,6 +107,13 @@ class Fakes:
                 "arxivId": arxiv_id,
             },
         }
+        self.requested_arxiv_ids = []
+        self.services = {
+            "academic": {
+                "arxiv": {"getById": self.get_arxiv_by_id},
+                "identity": object(),
+            }
+        }
         self.connector = {
             "trashItem": self.trash,
             "openPath": lambda _path: None,
@@ -193,6 +200,17 @@ class Fakes:
         self.metadata_refreshes.append(document_id)
         return {"id": document_id, "metadataStatus": "pending"}
 
+    def get_arxiv_by_id(self, arxiv_id: str):
+        self.requested_arxiv_ids.append(arxiv_id)
+        return {
+            "arxivId": arxiv_id,
+            "title": "Attention Is All You Need",
+            "authors": ["Ashish Vaswani", "Noam Shazeer"],
+            "year": 2017,
+            "url": f"https://arxiv.org/abs/{arxiv_id}",
+            "pdfUrl": f"https://arxiv.org/pdf/{arxiv_id}",
+        }
+
     def trash(self, path: str):
         self.trashed.append(path)
 
@@ -260,6 +278,32 @@ def test_registers_every_library_domain_protocol_route():
         ("POST", "/dialog/open-directory"),
     }
     assert expected <= routes
+
+
+def test_identifier_import_uses_exact_arxiv_lookup(monkeypatch):
+    client, fakes = make_client()
+    captured = {}
+
+    async def import_identifier(repos, identifier, deps):
+        captured["repos"] = repos
+        captured["identifier"] = identifier
+        captured["metadata"] = await deps["fetchArxivMetadata"](identifier)
+        return "doc-new"
+
+    monkeypatch.setattr(library_routes, "importByIdentifier", import_identifier)
+
+    response = client.post(
+        "/import/identifier",
+        headers={"X-Refora-Token": "test-token"},
+        json={"identifier": "1706.03762"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "data": {"documentId": "doc-new"}}
+    assert fakes.requested_arxiv_ids == ["1706.03762"]
+    assert captured["identifier"] == "1706.03762"
+    assert captured["metadata"]["title"] == "Attention Is All You Need"
+    assert captured["metadata"]["year"] == "2017"
 
 
 def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):

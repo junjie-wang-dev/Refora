@@ -78,7 +78,10 @@
     "import": "导入",
     "importing": "正在导入…",
     "success": "导入成功",
-    "failed": "导入失败：{{message}}"
+    "failed": "导入失败：{{message}}",
+    "cut": "剪切",
+    "copy": "复制",
+    "paste": "粘贴"
   },
   "list": {
     "compact": "缩略论文列表",

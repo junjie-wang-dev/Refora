@@ -78,7 +78,10 @@
     "import": "Import",
     "importing": "Importing…",
     "success": "Imported successfully",
-    "failed": "Import failed: {{message}}"
+    "failed": "Import failed: {{message}}",
+    "cut": "Cut",
+    "copy": "Copy",
+    "paste": "Paste"
   },
   "list": {
     "compact": "Compact paper list",

@@ -830,29 +830,38 @@ def create_library_router(deps: Any) -> APIRouter:
             arxiv = _value(academic, "arxiv", {})
 
             async def fetch_arxiv_metadata(arxiv_id: str) -> dict[str, Any] | None:
-                if not callable(_value(arxiv, "search")):
-                    return None
-                result = await _call(
-                    arxiv,
-                    "search",
-                    ArxivSearchInput(query=arxiv_id, pageSize=20),
-                )
-                papers = result.get("papers", []) if isinstance(result, Mapping) else []
                 target = base_arxiv_id(arxiv_id).lower()
-                paper = next(
-                    (
-                        item
-                        for item in papers
-                        if isinstance(item, Mapping)
-                        and isinstance(item.get("arxivId"), str)
-                        and base_arxiv_id(item["arxivId"]).lower() == target
-                    ),
-                    None,
-                )
+                paper = None
+                if callable(_value(arxiv, "getById")):
+                    candidate = await _call(arxiv, "getById", arxiv_id)
+                    if (
+                        isinstance(candidate, Mapping)
+                        and isinstance(candidate.get("arxivId"), str)
+                        and base_arxiv_id(candidate["arxivId"]).lower() == target
+                    ):
+                        paper = candidate
+                elif callable(_value(arxiv, "search")):
+                    result = await _call(
+                        arxiv,
+                        "search",
+                        ArxivSearchInput(query=arxiv_id, pageSize=20),
+                    )
+                    papers = result.get("papers", []) if isinstance(result, Mapping) else []
+                    paper = next(
+                        (
+                            item
+                            for item in papers
+                            if isinstance(item, Mapping)
+                            and isinstance(item.get("arxivId"), str)
+                            and base_arxiv_id(item["arxivId"]).lower() == target
+                        ),
+                        None,
+                    )
                 if paper is None:
                     return None
                 authors = paper.get("authors", [])
                 publication_date = paper.get("publicationDate")
+                year = paper.get("year")
                 return {
                     "title": paper.get("title"),
                     "authors": (
@@ -861,8 +870,13 @@ def create_library_router(deps: Any) -> APIRouter:
                         else None
                     ),
                     "year": (
-                        publication_date[:4]
-                        if isinstance(publication_date, str) and len(publication_date) >= 4
+                        str(year)
+                        if isinstance(year, int) and not isinstance(year, bool)
+                        else publication_date[:4]
+                        if isinstance(publication_date, str)
+                        and len(publication_date) >= 4
+                        else year
+                        if isinstance(year, str)
                         else None
                     ),
                     "abstract": paper.get("abstract"),

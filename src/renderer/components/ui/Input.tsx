@@ -7,6 +7,7 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   variant?: InputVariant
   inputSize?: InputSize
   error?: boolean
+  focusRing?: boolean
   onPressEnter?: () => void
 }
 
@@ -25,13 +26,14 @@ const VARIANT_CLASSES: Record<InputVariant, string> = {
 }
 
 const BASE_CLASS =
-  'w-full rounded-lg text-foreground placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-accent no-drag transition-colors duration-150'
+  'w-full rounded-lg text-foreground placeholder:text-muted focus:outline-none focus-visible:outline-none no-drag transition-colors duration-150'
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   {
     variant = 'outlined',
     inputSize = 'md',
     error = false,
+    focusRing = true,
     onPressEnter,
     className,
     onKeyDown,
@@ -45,6 +47,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       className={[
         BASE_CLASS,
         SIZE_CLASSES[inputSize],
+        focusRing ? 'focus:ring-1 focus:ring-accent' : 'focus:ring-0',
         error ? 'border-error focus:border-error focus:ring-error' : VARIANT_CLASSES[variant],
         className,
       ]

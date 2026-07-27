@@ -85,7 +85,7 @@ interface DocumentState {
   endImport: () => void
   importFromZotero: () => Promise<void>
   importFromMendeley: () => Promise<void>
-  importByIdentifier: (identifier: string) => void
+  importByIdentifier: (identifier: string) => Promise<string | null>
   init: (listColumnState: ListColumnState | null) => void
   destroy: () => void
   fetchCategories: () => Promise<void>
@@ -435,28 +435,30 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  importByIdentifier: (identifier: string) => {
+  importByIdentifier: async (identifier: string) => {
     set((s) => ({ identifierImporting: s.identifierImporting + 1 }))
-    void (async () => {
-      try {
-        const result = await api.import.fromIdentifier(identifier)
-        if (result.added.length > 0) {
-          get().showToast(i18n.t('identifierImport.success') as string)
-        } else {
-          get().showToast(
-            result.message ?? i18n.t('identifierImport.failed', { message: '' }) as string
-          )
-        }
-      } catch (e) {
-        get().showToast(
-          i18n.t('identifierImport.failed', { message: errorMessage(e, '') }) as string
-        )
-      } finally {
-        set((s) => ({ identifierImporting: Math.max(0, s.identifierImporting - 1) }))
-        void get().fetchDocuments()
-        void get().fetchDocumentCounts()
+    try {
+      const result = await api.import.fromIdentifier(identifier)
+      if (result.added.length > 0) {
+        get().showToast(i18n.t('identifierImport.success') as string)
+        return null
       }
-    })()
+      const message =
+        result.message ?? i18n.t('identifierImport.failed', { message: '' }) as string
+      get().showToast(message)
+      return message
+    } catch (e) {
+      const message = i18n.t(
+        'identifierImport.failed',
+        { message: errorMessage(e, '') }
+      ) as string
+      get().showToast(message)
+      return message
+    } finally {
+      set((s) => ({ identifierImporting: Math.max(0, s.identifierImporting - 1) }))
+      void get().fetchDocuments()
+      void get().fetchDocumentCounts()
+    }
   },
 
   init: (listColumnState: ListColumnState | null) => {
