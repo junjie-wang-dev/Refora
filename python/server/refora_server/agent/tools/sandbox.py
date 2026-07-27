@@ -8,8 +8,15 @@ from refora_server.agent.tools.registry import ToolGroup
 _TEXT = {"type": "string"}
 
 
+def _artifact_path(path: Any) -> Any:
+    if isinstance(path, str) and path.startswith("/outputs/"):
+        return path[1:]
+    return path
+
+
 def publish_workspace_artifacts(executor: Any, args: dict[str, Any]) -> Any:
-    return call(value(executor, "deps"), "publish_artifacts", executor.context.workspace_id, args.get("paths", []), {key: args[key] for key in ("x", "y") if key in args})
+    paths = [_artifact_path(path) for path in args.get("paths", [])]
+    return call(value(executor, "deps"), "publish_artifacts", executor.context.workspace_id, paths, {key: args[key] for key in ("x", "y") if key in args})
 
 
 def install_runtime_packages(executor: Any, args: dict[str, Any]) -> Any:
@@ -42,7 +49,7 @@ class SandboxTools(ToolGroup):
         "__execute": execute_sandbox,
     }
     descriptions = {
-        "publish_workspace_artifacts": "Publish final files from the current agent sandbox to the selected Workspace as managed WorkspaceAsset cards. Use relative sandbox paths, normally under outputs/. Without a selected Workspace the files remain in the default sandbox.",
+        "publish_workspace_artifacts": "Publish final files from the current agent sandbox to the selected Workspace as managed WorkspaceAsset cards. Paths may use the filesystem tool form /outputs/file.ext or the sandbox-relative form outputs/file.ext. Without a selected Workspace the files remain in the default sandbox.",
         "install_runtime_packages": "Install shared Python 3.12 or Node.js 24 runtimes and version-pinned packages for the current Workspace or default sandbox. The user must approve downloads and installation. Package lifecycle scripts and Python source builds are disabled.",
         "__execute": "Run a shell command inside the current agent sandbox. The command can read and write only the sandbox, starts in work/, and can place publishable files in $REFORA_OUTPUTS. OS-level isolation blocks access to user files and the network.",
     }

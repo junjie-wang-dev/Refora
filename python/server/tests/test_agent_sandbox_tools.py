@@ -50,6 +50,42 @@ def test_execute_tool_fails_closed_without_an_os_sandbox_dependency():
     }
 
 
+def test_publish_tool_accepts_filesystem_virtual_output_paths():
+    calls = []
+
+    def publish_artifacts(workspace_id, paths, placement):
+        calls.append((workspace_id, paths, placement))
+        return {"published": [{"path": path} for path in paths], "errors": []}
+
+    executor = AgentToolExecutor(
+        AgentToolContext(
+            run_id="run-1",
+            thread_id="thread-1",
+            workspace_id="workspace-1",
+        ),
+        {"publish_artifacts": publish_artifacts},
+    )
+    result = json.loads(
+        executor.execute(
+            "publish_workspace_artifacts",
+            {
+                "paths": ["/outputs/report.md", "outputs/chart.png"],
+                "x": 40,
+                "y": 80,
+            },
+        )
+    )
+
+    assert result["errors"] == []
+    assert calls == [
+        (
+            "workspace-1",
+            ["outputs/report.md", "outputs/chart.png"],
+            {"x": 40, "y": 80},
+        )
+    ]
+
+
 def test_install_tool_forwards_run_id_and_requires_exact_versions_in_schema():
     calls = []
 

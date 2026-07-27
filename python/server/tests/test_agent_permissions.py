@@ -53,13 +53,33 @@ def test_interactive_mode_allows_refora_workspace_writes(tool_name):
     assert not decision.needs_user
 
 
-def test_shell_operators_do_not_bypass_command_allowlist():
-    engine = PermissionEngine(allowed_commands=["python -m pytest"])
+def test_interactive_mode_allows_os_isolated_sandbox_commands_without_approval():
+    engine = PermissionEngine(sandbox_root="/tmp/refora-sandbox")
 
     decision = engine.evaluate("__execute", {"command": "python -m pytest; rm -rf /"})
 
+    assert decision.allowed
+    assert not decision.needs_user
+    assert decision.reason == "isolated sandbox command"
+
+
+def test_sandbox_command_without_a_managed_root_still_requires_approval():
+    decision = PermissionEngine().evaluate(
+        "__execute", {"command": "python analyze.py"}
+    )
+
     assert not decision.allowed
     assert decision.needs_user
+
+
+def test_plan_mode_rejects_os_isolated_sandbox_commands():
+    decision = PermissionEngine(mode=Mode.PLAN).evaluate(
+        "__execute", {"command": "python analyze.py"}
+    )
+
+    assert not decision.allowed
+    assert not decision.needs_user
+    assert "plan mode" in decision.reason
 
 
 def test_unattended_auto_mode_is_not_supported():

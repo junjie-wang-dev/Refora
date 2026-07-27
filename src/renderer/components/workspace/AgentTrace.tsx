@@ -328,6 +328,7 @@ function formatToolLabel(
           : t('workspace.chat.toolRequestSummaryDone', 'Requested summary'),
         detail: docId || undefined
       }
+    case '__execute':
     case 'execute':
     case 'run_bash':
       return {

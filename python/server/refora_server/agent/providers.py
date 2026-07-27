@@ -27,6 +27,17 @@ from refora_server.services.agent_memory import (
 
 
 _DISABLED_BUILTIN_TOOLS = frozenset({"execute"})
+_REFORA_FILESYSTEM_PROMPT = (
+    "You have a persistent Refora sandbox dedicated to this Workspace, with virtual "
+    "/work, /scripts, /outputs, /tmp, and /env directories. Prefer ls, read_file, "
+    "write_file, edit_file, glob, and grep for ordinary file work; those tools use "
+    "virtual absolute paths such as /outputs/report.md. Use __execute only when a "
+    "calculation, data transformation, or program actually needs a shell. Shell commands "
+    "start in /work, so use $REFORA_WORK, $REFORA_SCRIPTS, and $REFORA_OUTPUTS instead "
+    "of virtual absolute paths or work-relative outputs/. Keep intermediate files in "
+    "/work or /scripts and final user deliverables in /outputs. publish_workspace_artifacts "
+    "accepts either /outputs/file.ext or outputs/file.ext."
+)
 _SUBAGENT_PROFILES = (
     (
         "general-purpose",
@@ -197,7 +208,8 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
     ]
     system_prompt = request.get("systemPrompt") or ""
     system_prompt = (
-        f"{system_prompt}\n\nCurated user-approved context is mounted read-only "
+        f"{system_prompt}\n\n{_REFORA_FILESYSTEM_PROMPT}\n\n"
+        "Curated user-approved context is mounted read-only "
         "under /memories/. Use propose_workspace_memory_update for changes."
     )
     memory_paths = (

@@ -104,12 +104,13 @@ describe('AgentTracePanel', () => {
   it('labels execution, dependency installation, and artifact publishing steps', () => {
     const steps = [
       step({ id: 'bash', kind: 'tool', name: 'run_bash' }),
+      step({ id: 'python-execute', kind: 'tool', name: '__execute' }),
       step({ id: 'install', kind: 'tool', name: 'install_runtime_packages' }),
       step({ id: 'publish', kind: 'tool', name: 'publish_workspace_artifacts' })
     ]
     render(<AgentTracePanel steps={steps} streaming={false} />)
     fireEvent.click(headerButton())
-    expect(screen.getByText('Ran command')).toBeInTheDocument()
+    expect(screen.getAllByText('Ran command')).toHaveLength(2)
     expect(screen.getByText('Installed packages')).toBeInTheDocument()
     expect(screen.getByText('Published artifacts')).toBeInTheDocument()
   })

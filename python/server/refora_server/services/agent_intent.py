@@ -34,7 +34,11 @@ SYSTEM_PROMPT = (
 
 WORKSPACE_SYSTEM_PROMPT = (
     "A workspace is selected for this chat. Use the workspace paper catalog below as context. "
-    "Use workspace tools for reports, pinned papers, notes, assets, and connections. "
+    "When the user asks for a report, survey, literature review, or comparison, call "
+    "generate_report to create and pin a structured report directly on the Workspace board; "
+    "do not substitute a sandbox Markdown file unless the user explicitly requests a file. "
+    "Use publish_workspace_artifacts for requested file deliverables, not for structured "
+    "Workspace reports. Use workspace tools for pinned papers, notes, assets, and connections. "
     "When the user message contains [Attached papers], prioritize those papers."
 )
 
