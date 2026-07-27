@@ -8,7 +8,7 @@ from refora_server.agent.tools.registry import ToolGroup
 _TEXT = {"type": "string"}
 _DOC_ID = {"type": "string", "description": "The docId of the paper"}
 _OFFSET = {"type": "integer", "minimum": 0, "default": 0}
-_CHUNK_LIMIT = {"type": "integer", "minimum": 500, "maximum": 12000, "default": 8000}
+_CHUNK_LIMIT = {"type": "integer", "minimum": 500, "maximum": 40000, "default": 40000}
 
 
 def search_library(executor: Any, args: dict[str, Any]) -> Any:
@@ -33,21 +33,39 @@ def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, 
     doc = call(repo(executor.repos, "documents"), "get", args["docId"])
     if not doc:
         return {"error": "Document not found."}
-    if ocr:
-        cached = call(executor.deps, "read_ocr_fulltext", args["docId"])
-        if cached is None:
-            return {
-                "status": "ocr_cache_missing",
-                "docId": args["docId"],
-                "nextTool": "prepare_paper_ocr",
-                "approval": "handled_by_application",
-                "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
-            }
-        result = cached["result"]
-        text = cached["markdown"]
+
+    ocr_fn = value(executor.deps, "read_ocr_fulltext")
+    ocr_cached = call(executor.deps, "read_ocr_fulltext", args["docId"]) if callable(ocr_fn) else None
+
+    source = "extracted"
+    ocr_result: Any = None
+
+    if ocr_cached is not None:
+        text = ocr_cached["markdown"]
+        source = "mineru_ocr"
+        ocr_result = ocr_cached["result"]
+    elif ocr:
+        return {
+            "status": "ocr_cache_missing",
+            "docId": args["docId"],
+            "nextTool": "prepare_paper_ocr",
+            "approval": "handled_by_application",
+            "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
+        }
     else:
         text = call(executor.deps, "read_paper_fulltext", args["docId"])
-    offset, limit = max(0, int(args.get("offset", 0))), min(12_000, max(500, int(args.get("limit", 8_000))))
+        if not text or len(text.strip()) < 100:
+            return {
+                "docId": args["docId"],
+                "title": doc.get("title") or doc.get("fileName"),
+                "status": "extraction_poor",
+                "totalChars": len(text),
+                "source": "extracted",
+                "message": "The extracted text is empty or too short, likely a scanned or image-based PDF. Call read_paper_ocr_fulltext to use OCR, or prepare_paper_ocr to generate an OCR cache first.",
+                "nextTool": "read_paper_ocr_fulltext",
+            }
+
+    offset, limit = max(0, int(args.get("offset", 0))), min(40_000, max(500, int(args.get("limit", 40_000))))
     chunk_count = max(1, (len(text) + limit - 1) // limit)
     response = {
         "docId": args["docId"],
@@ -59,17 +77,13 @@ def _read_fulltext(executor: Any, args: dict[str, Any], ocr: bool) -> dict[str, 
         "chunkIndex": offset // limit,
         "chunkCount": chunk_count,
         "text": text[offset:offset + limit],
+        "source": source,
     }
     if offset >= len(text):
         response["message"] = "offset past end"
-    if ocr:
-        response.update(
-            {
-                "source": "mineru_ocr",
-                "profile": result["profile"],
-                "resultKey": result["resultKey"],
-            }
-        )
+    if ocr_result is not None:
+        response["profile"] = ocr_result["profile"]
+        response["resultKey"] = ocr_result["resultKey"]
     return response
 
 
@@ -116,8 +130,8 @@ class LibraryTools(ToolGroup):
     descriptions = {
         "search_library": "Search the entire document library by full-text query. Returns a JSON array of objects [{docId, title, authors, year}]. Use this when the user asks about papers that may not be in the current workspace.",
         "get_paper_metadata": "Get full metadata of a paper by its docId. Returns a JSON object with title, authors, year, venue, abstract, keywords, doi, arxivId, url, and other fields.",
-        "read_paper_fulltext": "Read a chunk of the full extracted text of a paper by its docId. Use offset (character position, default 0) and limit (max characters per call, 500-12000, default 8000) to paginate. Returns JSON with {docId, title, offset, limit, totalChars, nextOffset, chunkIndex, chunkCount, text}. If nextOffset is not null, call again with offset=nextOffset to read the next chunk. When nextOffset is null you have reached the end of the paper.",
-        "read_paper_ocr_fulltext": "Read a chunk of existing MinerU OCR Markdown for a paper by docId without running OCR or requiring approval. Always try read_paper_fulltext first and use this only when the regular extraction is empty, garbled, structurally ambiguous, or insufficient for exact formulas, tables, multi-column order, or scanned pages. The result includes its OCR profile. If no current OCR cache exists, call prepare_paper_ocr directly instead of asking for approval in assistant text; the application handles approval before execution. Use offset and limit to paginate cached Markdown until nextOffset is null.",
+        "read_paper_fulltext": "Read a chunk of the full text of a paper by its docId. If a MinerU OCR cache exists for the paper, it is used automatically (source=mineru_ocr) since OCR preserves formulas, tables, and multi-column order better than plain extraction. Otherwise plain pypdf extraction is used (source=extracted). Use offset (character position, default 0) and limit (max characters per call, 500-40000, default 40000) to paginate. Returns JSON with {docId, title, offset, limit, totalChars, nextOffset, chunkIndex, chunkCount, text, source}. If nextOffset is not null, call again with offset=nextOffset to read the next chunk. When nextOffset is null you have reached the end of the paper. If the response has status=extraction_poor, the plain extraction is empty or too short (likely a scanned PDF); call read_paper_ocr_fulltext next, or prepare_paper_ocr to generate an OCR cache. When the text contains garbled formulas, broken tables, or disordered multi-column text, switch to read_paper_ocr_fulltext for higher-quality OCR Markdown.",
+        "read_paper_ocr_fulltext": "Read a chunk of existing MinerU OCR Markdown for a paper by docId without running OCR or requiring approval. Use this when read_paper_fulltext returns garbled formulas, broken tables, disordered multi-column text, or status=extraction_poor, and no OCR cache is present yet. The result includes its OCR profile. If no current OCR cache exists, call prepare_paper_ocr directly instead of asking for approval in assistant text; the application handles approval before execution. Use offset and limit (500-40000, default 40000) to paginate cached Markdown until nextOffset is null.",
         "get_paper_summary": "Get the cached AI summary of a paper by its docId. Returns a JSON summary object, or a notice that no summary is available yet.",
         "request_summary": "Queues background AI summary generation for a paper to cache it for future use. Does NOT return a summary when none exists - it returns status queued immediately. For an immediate summary, use read_paper_fulltext to read the paper and summarize it yourself.",
         "open_paper": "Open a paper PDF in the system default viewer by its docId. Use when the user wants to view or read a paper.",

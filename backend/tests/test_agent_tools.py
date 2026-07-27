@@ -206,7 +206,7 @@ def test_library_tools_registered_with_document_and_summary_schemas():
     fulltext = tools["read_paper_fulltext"].args_schema
     assert fulltext["required"] == ["docId"]
     assert fulltext["properties"]["offset"] == {"type": "integer", "minimum": 0, "default": 0}
-    assert fulltext["properties"]["limit"] == {"type": "integer", "minimum": 500, "maximum": 12000, "default": 8000}
+    assert fulltext["properties"]["limit"] == {"type": "integer", "minimum": 500, "maximum": 40000, "default": 40000}
 
     related = tools["find_related_papers"].args_schema
     assert related["required"] == ["docId"]
@@ -333,6 +333,70 @@ def test_read_paper_ocr_fulltext_reports_missing_document():
     executor = _library_executor({"documents": docs}, {"read_ocr_fulltext": lambda doc_id: "x"})
 
     assert json.loads(executor.execute("read_paper_ocr_fulltext", {"docId": "ghost"})) == {"error": "Document not found."}
+
+
+def test_read_paper_fulltext_prefers_ocr_when_cache_exists():
+    docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
+    pypdf_calls = []
+    executor = _library_executor(
+        {"documents": docs},
+        {
+            "read_paper_fulltext": lambda doc_id: pypdf_calls.append(doc_id) or "pypdf text " * 100,
+            "read_ocr_fulltext": lambda doc_id: {
+                "result": {"profile": "balanced", "resultKey": "key-1"},
+                "markdown": "OCR markdown " * 100,
+            },
+        },
+    )
+
+    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+
+    assert result["source"] == "mineru_ocr"
+    assert "OCR markdown" in result["text"]
+    assert result["profile"] == "balanced"
+    assert result["resultKey"] == "key-1"
+    assert pypdf_calls == []
+
+
+def test_read_paper_fulltext_reports_extraction_poor_for_empty_text():
+    docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
+    executor = _library_executor(
+        {"documents": docs},
+        {"read_paper_fulltext": lambda doc_id: ""},
+    )
+
+    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+
+    assert result["status"] == "extraction_poor"
+    assert result["nextTool"] == "read_paper_ocr_fulltext"
+    assert result["source"] == "extracted"
+
+
+def test_read_paper_fulltext_reports_extraction_poor_for_short_text():
+    docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
+    executor = _library_executor(
+        {"documents": docs},
+        {"read_paper_fulltext": lambda doc_id: "ab"},
+    )
+
+    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+
+    assert result["status"] == "extraction_poor"
+    assert result["nextTool"] == "read_paper_ocr_fulltext"
+
+
+def test_read_paper_fulltext_includes_source_extracted_for_pypdf():
+    docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
+    executor = _library_executor(
+        {"documents": docs},
+        {"read_paper_fulltext": lambda doc_id: "sufficient text " * 100},
+    )
+
+    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+
+    assert result["source"] == "extracted"
+    assert "profile" not in result
+    assert "resultKey" not in result
 
 
 def test_get_paper_summary_returns_content_or_unavailable_notice():
