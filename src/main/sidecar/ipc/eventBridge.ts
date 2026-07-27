@@ -1,10 +1,10 @@
 import type { BrowserWindow } from 'electron'
-import { IpcChannel } from '../../shared/ipc-channels'
-import type { ServerClient, WsEventName } from '../services/serverClient'
+import { IpcChannel } from '../../../shared/ipc-channels'
+import type { ServerClient, WsEventName } from '../client'
 import {
   CONNECTOR_EVENT_NAMES,
   type ServerEventName
-} from '../../shared/server-contract'
+} from '../../../shared/server-contract'
 
 type EventForward = readonly [ServerEventName, (typeof IpcChannel)[keyof typeof IpcChannel]]
 

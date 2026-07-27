@@ -11,10 +11,10 @@ import { readLibraryFolderPath, writeLibraryFolderPath } from './services/prefs'
 import { IpcChannel } from '../shared/ipc-channels'
 import type { LibrarySwitchResult } from '../shared/ipc-types'
 import { runMenuAction } from './services/menuAction'
-import { createAgentPythonRuntime } from './services/agentPythonRuntime'
-import type { AgentPythonRuntime } from './services/agentPythonRuntime'
-import { createServerLifecycle } from './services/serverLifecycle'
-import { createServerAssembly, type ServerAssembly } from './serverAssembly'
+import { createServerPythonRuntime } from './sidecar/runtime'
+import type { ServerPythonRuntime } from './sidecar/runtime'
+import { createServerLifecycle } from './sidecar/lifecycle'
+import { createServerAssembly, type ServerAssembly } from './sidecar/assembly'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -30,7 +30,7 @@ protocol.registerSchemesAsPrivileged([
 let isDev = false
 const IS_MAC = process.platform === 'darwin'
 let serverAssembly: ServerAssembly | null = null
-let agentPythonRuntime: AgentPythonRuntime | null = null
+let serverPythonRuntime: ServerPythonRuntime | null = null
 let pdfTextService: PdfTextService | null = null
 let activeDbPath = ''
 let activeLibraryFolder = ''
@@ -402,7 +402,7 @@ async function createPythonServerAssembly(
   libraryFolder: string,
   switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult>
 ): Promise<ServerAssembly> {
-  if (!agentPythonRuntime) throw new Error('Python runtime is not ready')
+  if (!serverPythonRuntime) throw new Error('Python runtime is not ready')
   const serverStateDir = join(app.getPath('userData'), 'server')
   mkdirSync(serverStateDir, { recursive: true })
   const serverExecutable = app.isPackaged
@@ -410,8 +410,8 @@ async function createPythonServerAssembly(
     : undefined
   const serverPython = app.isPackaged
     ? undefined
-    : await agentPythonRuntime.install(new AbortController().signal)
-  const serverSourceRoot = join(__dirname, '../../python/server')
+    : await serverPythonRuntime.install(new AbortController().signal)
+  const serverSourceRoot = join(__dirname, '../../backend')
   return createServerAssembly({
     lifecycle: createServerLifecycle({
       pythonPath: serverPython,
@@ -428,7 +428,7 @@ async function createPythonServerAssembly(
         ...(app.isPackaged ? {} : { PYTHONPATH: serverSourceRoot }),
         REFORA_MINERU_WORKER_PATH: app.isPackaged
           ? join(process.resourcesPath, 'mineru', 'mineru_worker.py')
-          : join(__dirname, '../../resources/mineru_worker.py')
+          : join(__dirname, '../../backend/workers/mineru_worker.py')
       }
     }),
     getWin: () => win,
@@ -517,9 +517,9 @@ void app.whenReady().then(async () => {
   logger.info(`app:ready (dev=${isDev})`)
   applyCsp()
 
-  agentPythonRuntime = createAgentPythonRuntime({
+  serverPythonRuntime = createServerPythonRuntime({
     userDataDir: app.getPath('userData'),
-    projectPath: join(__dirname, '../../python/server/pyproject.toml'),
+    projectPath: join(__dirname, '../../backend/pyproject.toml'),
     downloadFile: async (url, destination, signal) => {
       const response = await net.fetch(url, { signal })
       if (!response.ok) throw new Error(`Runtime download failed with HTTP ${response.status}`)
@@ -583,8 +583,8 @@ app.on('before-quit', () => {
   void assembly?.stop()
   pdfTextService?.destroy()
   pdfTextService = null
-  agentPythonRuntime?.destroy()
-  agentPythonRuntime = null
+  serverPythonRuntime?.destroy()
+  serverPythonRuntime = null
   if (win) {
     win = null
   }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createServerClient } from '../../src/main/services/serverClient'
-import type { ServerLifecycle, ServerConnection } from '../../src/main/services/serverLifecycle'
-import type { NativeRpc, NativeRpcInfo } from '../../src/main/services/nativeRpc'
+import { createServerClient } from '../../src/main/sidecar/client'
+import type { ServerLifecycle, ServerConnection } from '../../src/main/sidecar/lifecycle'
+import type { NativeRpc, NativeRpcInfo } from '../../src/main/sidecar/nativeRpc'
 import type { Result } from '../../shared/ipc-types'
 
 vi.mock('../../src/main/services/logger', () => ({

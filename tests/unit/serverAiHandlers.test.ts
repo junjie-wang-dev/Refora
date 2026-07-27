@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import { createServerAiHandlers } from '../../src/main/ipc/serverAiHandlers'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import { createServerAiHandlers } from '../../src/main/sidecar/ipc/ai'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 type Result = { ok: true; data: unknown } | { ok: false; error: { code: string; message: string } }
 

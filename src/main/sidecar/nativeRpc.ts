@@ -2,9 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto'
 import { shell, dialog, clipboard, session as electronSession, type BrowserWindow } from 'electron'
 import type { Result } from '../../shared/ipc-types'
-import { createSafeStorageProxy, type SafeStorageProxy } from './safeStorageProxy'
-import { logger } from './logger'
-import { writeFileToClipboard } from './clipboard'
+import { createSafeStorageProxy, type SafeStorageProxy } from '../services/safeStorageProxy'
+import { logger } from '../services/logger'
+import { writeFileToClipboard } from '../services/clipboard'
 
 const HOST = '127.0.0.1'
 const TOKEN_HEADER = 'x-refora-token'

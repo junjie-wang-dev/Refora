@@ -4,10 +4,10 @@ import { promisify } from 'node:util'
 
 const runFile = promisify(execFile)
 const target = new URL('../src/shared/server-contract.ts', import.meta.url)
-const { stdout } = await runFile('python3', ['python/server/export_contract.py'], {
+const { stdout } = await runFile('python3', ['backend/export_contract.py'], {
   env: {
     ...process.env,
-    PYTHONPATH: 'python/server',
+    PYTHONPATH: 'backend',
     PYTHONNOUSERSITE: '1'
   }
 })

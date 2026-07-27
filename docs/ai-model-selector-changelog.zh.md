@@ -28,7 +28,7 @@
 ## 主要改动文件
 
 - `src/shared/modelVariant.ts` — 拼接/解析工具
-- `python/server/refora_server/db/migrations/0006_ai_provider_model_variant.sql`
+- `backend/refora_server/db/migrations/0006_ai_provider_model_variant.sql`
 - `src/main/services/aiProviders.ts` — `listModels` + 字段解析
 - `src/renderer/components/SettingsModal.tsx` — 模型列表 / 变体 UI
 - `src/renderer/components/workspace/ChatPanel.tsx` — 输入框内工具栏

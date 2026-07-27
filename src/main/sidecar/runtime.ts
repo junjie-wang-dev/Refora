@@ -13,10 +13,10 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
-export const AGENT_PYTHON_RUNTIME_VERSION = '0.3.0'
+export const SERVER_PYTHON_RUNTIME_VERSION = '0.3.0'
 
 const UV_VERSION = '0.11.16'
-const AGENT_PYTHON_VERSION = '3.12.13'
+const SERVER_PYTHON_VERSION = '3.12.13'
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 const UV_RELEASES = {
   arm64: {
@@ -38,7 +38,7 @@ const EXPECTED_PACKAGES = {
   aiosqlite: '0.22.1'
 } as const
 
-interface AgentPythonManifest {
+interface ServerPythonManifest {
   runtimeVersion: string
   architecture: 'arm64' | 'x64'
   pythonVersion: string
@@ -48,7 +48,7 @@ interface AgentPythonManifest {
   installedAt: number
 }
 
-interface AgentPythonRuntimeDeps {
+interface ServerPythonRuntimeDeps {
   userDataDir: string
   projectPath: string
   environment?: NodeJS.ProcessEnv
@@ -126,7 +126,7 @@ function runFile(command: string, args: string[], options: RunFileOptions): Prom
     }
     const timer = setTimeout(() => {
       terminate(child)
-      finish(() => reject(new Error('Agent Python runtime setup timed out')))
+      finish(() => reject(new Error('Server Python runtime setup timed out')))
     }, options.timeoutMs ?? INSTALL_TIMEOUT_MS)
     options.signal.addEventListener('abort', abort, { once: true })
     child.stdout.on('data', (chunk: Buffer) => {
@@ -139,7 +139,7 @@ function runFile(command: string, args: string[], options: RunFileOptions): Prom
     child.once('close', (code, signal) => finish(() => {
       if (code !== 0) {
         reject(new Error(
-          stderr.trim() || stdout.trim() || `Agent Python setup exited with ${code ?? signal}`
+          stderr.trim() || stdout.trim() || `Server Python setup exited with ${code ?? signal}`
         ))
         return
       }
@@ -174,12 +174,12 @@ function samePackages(packages: Record<string, string>): boolean {
   return Object.entries(EXPECTED_PACKAGES).every(([name, version]) => packages[name] === version)
 }
 
-export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
+export function createServerPythonRuntime(deps: ServerPythonRuntimeDeps) {
   const architecture = deps.architecture ?? (process.arch === 'x64' ? 'x64' : 'arm64')
   const root = join(
     deps.userDataDir,
     'agent-python',
-    AGENT_PYTHON_RUNTIME_VERSION,
+    SERVER_PYTHON_RUNTIME_VERSION,
     `darwin-${architecture}`
   )
   const manifestPath = join(root, 'installed-manifest.json')
@@ -200,13 +200,13 @@ export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
     }
   }
 
-  async function readManifest(lockSha256: string): Promise<AgentPythonManifest | null> {
+  async function readManifest(lockSha256: string): Promise<ServerPythonManifest | null> {
     try {
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as AgentPythonManifest
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ServerPythonManifest
       if (
-        manifest.runtimeVersion !== AGENT_PYTHON_RUNTIME_VERSION ||
+        manifest.runtimeVersion !== SERVER_PYTHON_RUNTIME_VERSION ||
         manifest.architecture !== architecture ||
-        manifest.pythonVersion !== AGENT_PYTHON_VERSION ||
+        manifest.pythonVersion !== SERVER_PYTHON_VERSION ||
         manifest.lockSha256 !== lockSha256 ||
         !manifest.pythonRelativePath ||
         !samePackages(manifest.packages)
@@ -270,7 +270,7 @@ export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
         await runFile(uvPath, [
           'python',
           'install',
-          AGENT_PYTHON_VERSION,
+          SERVER_PYTHON_VERSION,
           '--install-dir',
           pythonRoot
         ], {
@@ -336,16 +336,16 @@ export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
           packages?: Record<string, string>
         }
         const packages = reported.packages ?? {}
-        if (reported.python !== AGENT_PYTHON_VERSION) {
-          throw new Error(`Installed Agent Python reported an unexpected version: ${reportedText}`)
+        if (reported.python !== SERVER_PYTHON_VERSION) {
+          throw new Error(`Installed Server Python reported an unexpected version: ${reportedText}`)
         }
         if (!samePackages(packages)) {
-          throw new Error(`Installed Agent Python packages reported unexpected versions: ${reportedText}`)
+          throw new Error(`Installed Server Python packages reported unexpected versions: ${reportedText}`)
         }
-        const manifest: AgentPythonManifest = {
-          runtimeVersion: AGENT_PYTHON_RUNTIME_VERSION,
+        const manifest: ServerPythonManifest = {
+          runtimeVersion: SERVER_PYTHON_RUNTIME_VERSION,
           architecture,
-          pythonVersion: AGENT_PYTHON_VERSION,
+          pythonVersion: SERVER_PYTHON_VERSION,
           pythonRelativePath: 'runtime/venv/bin/python',
           lockSha256,
           packages,
@@ -382,4 +382,4 @@ export function createAgentPythonRuntime(deps: AgentPythonRuntimeDeps) {
   return { install, destroy }
 }
 
-export type AgentPythonRuntime = ReturnType<typeof createAgentPythonRuntime>
+export type ServerPythonRuntime = ReturnType<typeof createServerPythonRuntime>

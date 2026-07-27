@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createServerAiHandlers } from '../../src/main/ipc/serverAiHandlers'
-import { createServerAppHandlers } from '../../src/main/ipc/serverAppHandlers'
-import { createServerLibraryHandlers } from '../../src/main/ipc/serverLibraryHandlers'
-import { createServerWorkspaceHandlers } from '../../src/main/ipc/serverWorkspaceHandlers'
+import { createServerAiHandlers } from '../../src/main/sidecar/ipc/ai'
+import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
+import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
+import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 describe('server IPC handler coverage', () => {
   it('registers every request channel exposed by preload', () => {

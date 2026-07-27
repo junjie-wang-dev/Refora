@@ -4,9 +4,9 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  AGENT_PYTHON_RUNTIME_VERSION,
-  createAgentPythonRuntime
-} from '../../src/main/services/agentPythonRuntime'
+  SERVER_PYTHON_RUNTIME_VERSION,
+  createServerPythonRuntime
+} from '../../src/main/sidecar/runtime'
 
 describe('server Python runtime', () => {
   const roots: string[] = []
@@ -21,7 +21,7 @@ describe('server Python runtime', () => {
     const root = join(
       userDataDir,
       'agent-python',
-      AGENT_PYTHON_RUNTIME_VERSION,
+      SERVER_PYTHON_RUNTIME_VERSION,
       'darwin-arm64'
     )
     const python = join(root, 'runtime', 'venv', 'bin', 'python')
@@ -34,7 +34,7 @@ describe('server Python runtime', () => {
     await writeFile(lockPath, 'test lock')
     const lockSha256 = createHash('sha256').update('test lock').digest('hex')
     await writeFile(join(root, 'installed-manifest.json'), JSON.stringify({
-      runtimeVersion: AGENT_PYTHON_RUNTIME_VERSION,
+      runtimeVersion: SERVER_PYTHON_RUNTIME_VERSION,
       architecture: 'arm64',
       pythonVersion: '3.12.13',
       pythonRelativePath: 'runtime/venv/bin/python',
@@ -51,7 +51,7 @@ describe('server Python runtime', () => {
       installedAt: 1
     }))
     const downloadFile = vi.fn()
-    const runtime = createAgentPythonRuntime({
+    const runtime = createServerPythonRuntime({
       userDataDir,
       projectPath,
       architecture: 'arm64',
@@ -68,7 +68,7 @@ describe('server Python runtime', () => {
     const projectPath = join(userDataDir, 'pyproject.toml')
     await writeFile(projectPath, '')
     await writeFile(join(userDataDir, 'uv.lock'), 'test lock')
-    const runtime = createAgentPythonRuntime({
+    const runtime = createServerPythonRuntime({
       userDataDir,
       projectPath,
       architecture: 'arm64',

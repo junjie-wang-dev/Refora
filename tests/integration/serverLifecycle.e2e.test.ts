@@ -5,8 +5,8 @@ import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createServerLifecycle, type ServerLifecycle } from '../../src/main/services/serverLifecycle'
-import { createServerClient } from '../../src/main/services/serverClient'
+import { createServerLifecycle, type ServerLifecycle } from '../../src/main/sidecar/lifecycle'
+import { createServerClient } from '../../src/main/sidecar/client'
 import {
   SERVER_PROTOCOL_DIGEST,
   SERVER_PROTOCOL_VERSION
@@ -16,7 +16,7 @@ vi.mock('electron', () => ({ net: { fetch: globalThis.fetch } }))
 vi.mock('../../src/main/services/logger', () => ({ logger: { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const serverRoot = join(projectRoot, 'python/server')
+const serverRoot = join(projectRoot, 'backend')
 const execFile = promisify(execFileCallback)
 
 async function pythonPath(): Promise<string> {

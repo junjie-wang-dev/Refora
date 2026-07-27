@@ -10,10 +10,12 @@ macOS only.
 
 ## Repository map
 - `src/main/`: Electron main process, native macOS integration, IPC handlers, and Python sidecar lifecycle.
+- `src/main/sidecar/`: Electron-to-Python lifecycle, client, native RPC, and renderer IPC adapters.
 - `src/preload/`: the isolated, typed bridge exposed to the renderer.
 - `src/shared/`: IPC channels, request/response types, and cross-process domain types.
 - `src/renderer/`: React UI, Zustand stores, hooks, styles, theme tokens, and localization.
-- `python/server/refora_server/db/migrations/`: ordered SQLite migrations; add a new numbered migration instead of rewriting an applied one.
+- `backend/`: Python FastAPI sidecar project, backend tests, and isolated Python workers.
+- `backend/refora_server/db/migrations/`: ordered SQLite migrations; add a new numbered migration instead of rewriting an applied one.
 - `tests/unit/` and `tests/component/`: Vitest coverage for services, stores, hooks, and renderer components.
 - `build/`: application icons and packaging resources that are intentionally checked in.
 - `.github/workflows/`: macOS CI and tag-driven release automation.

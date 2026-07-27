@@ -1,6 +1,6 @@
-import { IpcChannel } from '../../shared/ipc-channels'
-import type { Result } from '../../shared/ipc-types'
-import type { ServerClient } from '../services/serverClient'
+import { IpcChannel } from '../../../shared/ipc-channels'
+import type { Result } from '../../../shared/ipc-types'
+import type { ServerClient } from '../client'
 
 function toErrorResult(error: unknown): Result<never> {
   const message = error instanceof Error ? error.message : String(error)

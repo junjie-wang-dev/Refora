@@ -17,14 +17,14 @@ vi.mock('electron', () => ({
   ipcMain: { handle: mocks.ipcHandle, removeHandler: mocks.ipcRemoveHandler }
 }))
 
-vi.mock('../../src/main/services/nativeRpc', () => ({
+vi.mock('../../src/main/sidecar/nativeRpc', () => ({
   createNativeRpc: vi.fn(() => ({
     start: mocks.nativeStart,
     stop: mocks.nativeStop
   }))
 }))
 
-vi.mock('../../src/main/services/serverClient', () => ({
+vi.mock('../../src/main/sidecar/client', () => ({
   createServerClient: vi.fn(() => ({
     http: {
       systemReady: mocks.ready
@@ -36,37 +36,37 @@ vi.mock('../../src/main/services/serverClient', () => ({
   }))
 }))
 
-vi.mock('../../src/main/ipc/serverEventBridge', () => ({
+vi.mock('../../src/main/sidecar/ipc/eventBridge', () => ({
   createServerEventBridge: vi.fn(() => ({
     start: mocks.bridgeStart,
     stop: mocks.bridgeStop
   }))
 }))
 
-vi.mock('../../src/main/ipc/serverAppHandlers', () => ({
+vi.mock('../../src/main/sidecar/ipc/app', () => ({
   createServerAppHandlers: vi.fn(() => ({ app: vi.fn() }))
 }))
 
-vi.mock('../../src/main/ipc/serverLibraryHandlers', () => ({
+vi.mock('../../src/main/sidecar/ipc/library', () => ({
   createServerLibraryHandlers: vi.fn(() => ({ library: vi.fn() }))
 }))
 
-vi.mock('../../src/main/ipc/serverWorkspaceHandlers', () => ({
+vi.mock('../../src/main/sidecar/ipc/workspaces', () => ({
   createServerWorkspaceHandlers: vi.fn(() => ({ workspace: vi.fn() }))
 }))
 
-vi.mock('../../src/main/ipc/serverAiHandlers', () => ({
+vi.mock('../../src/main/sidecar/ipc/ai', () => ({
   createServerAiHandlers: vi.fn(() => ({ ai: vi.fn() }))
 }))
 
-import { createServerAssembly } from '../../src/main/serverAssembly'
-import { createNativeRpc } from '../../src/main/services/nativeRpc'
-import { createServerClient } from '../../src/main/services/serverClient'
-import { createServerEventBridge } from '../../src/main/ipc/serverEventBridge'
-import { createServerAppHandlers } from '../../src/main/ipc/serverAppHandlers'
-import { createServerLibraryHandlers } from '../../src/main/ipc/serverLibraryHandlers'
-import { createServerWorkspaceHandlers } from '../../src/main/ipc/serverWorkspaceHandlers'
-import { createServerAiHandlers } from '../../src/main/ipc/serverAiHandlers'
+import { createServerAssembly } from '../../src/main/sidecar/assembly'
+import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
+import { createServerClient } from '../../src/main/sidecar/client'
+import { createServerEventBridge } from '../../src/main/sidecar/ipc/eventBridge'
+import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
+import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
+import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
+import { createServerAiHandlers } from '../../src/main/sidecar/ipc/ai'
 import {
   SERVER_PROTOCOL_DIGEST,
   SERVER_PROTOCOL_VERSION

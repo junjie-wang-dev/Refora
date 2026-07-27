@@ -1,17 +1,17 @@
 import { ipcMain, net, type BrowserWindow } from 'electron'
-import type { LibrarySwitchResult } from '../shared/ipc-types'
-import { createServerAppHandlers } from './ipc/serverAppHandlers'
-import { createServerAiHandlers } from './ipc/serverAiHandlers'
-import { createServerEventBridge, type ServerEventBridge } from './ipc/serverEventBridge'
-import { createServerLibraryHandlers } from './ipc/serverLibraryHandlers'
-import { createServerWorkspaceHandlers } from './ipc/serverWorkspaceHandlers'
-import { createNativeRpc, type NativeRpc } from './services/nativeRpc'
-import { createServerClient, type ServerClient } from './services/serverClient'
-import type { ServerLifecycle } from './services/serverLifecycle'
+import type { LibrarySwitchResult } from '../../shared/ipc-types'
+import { createServerAppHandlers } from './ipc/app'
+import { createServerAiHandlers } from './ipc/ai'
+import { createServerEventBridge, type ServerEventBridge } from './ipc/eventBridge'
+import { createServerLibraryHandlers } from './ipc/library'
+import { createServerWorkspaceHandlers } from './ipc/workspaces'
+import { createNativeRpc, type NativeRpc } from './nativeRpc'
+import { createServerClient, type ServerClient } from './client'
+import type { ServerLifecycle } from './lifecycle'
 import {
   SERVER_PROTOCOL_DIGEST,
   SERVER_PROTOCOL_VERSION
-} from '../shared/server-contract'
+} from '../../shared/server-contract'
 
 export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle

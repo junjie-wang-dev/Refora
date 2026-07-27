@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import { createServerEventBridge } from '../../src/main/ipc/serverEventBridge'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import { createServerEventBridge } from '../../src/main/sidecar/ipc/eventBridge'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 describe('server event bridge', () => {
   let listeners: Map<string, (data: unknown) => void>

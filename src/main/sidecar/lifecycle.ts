@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { join } from 'node:path'
 import { net } from 'electron'
-import { logger } from './logger'
+import { logger } from '../services/logger'
 
 const DEFAULT_MAX_RESTARTS = 5
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000

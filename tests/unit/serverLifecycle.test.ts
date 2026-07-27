@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createServerLifecycle } from '../../src/main/services/serverLifecycle'
+import { createServerLifecycle } from '../../src/main/sidecar/lifecycle'
 import type { ChildProcess } from 'node:child_process'
 
 const { mockFetchHealth, mockReadFile } = vi.hoisted(() => ({

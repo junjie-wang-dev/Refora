@@ -6,7 +6,7 @@ directories:
 files:
   - out/**/*
 extraResources:
-  - from: resources/mineru_worker.py
+  - from: backend/workers/mineru_worker.py
     to: mineru/mineru_worker.py
   - from: build/python-server
     to: python-server

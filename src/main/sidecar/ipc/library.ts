@@ -1,4 +1,4 @@
-import { IpcChannel } from '../../shared/ipc-channels'
+import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
   AiProviderInput,
   AiProviderPatch,
@@ -8,13 +8,13 @@ import type {
   ListModelsRequest,
   ListModelsResult,
   Result
-} from '../../shared/ipc-types'
-import { normalizeModelList } from '../../shared/modelVariant'
-import type { WebSearchConfigPatch } from '../../shared/webSearch'
+} from '../../../shared/ipc-types'
+import { normalizeModelList } from '../../../shared/modelVariant'
+import type { WebSearchConfigPatch } from '../../../shared/webSearch'
 import type {
   ImportBibPayload,
   ServerClient
-} from '../services/serverClient'
+} from '../client'
 
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient

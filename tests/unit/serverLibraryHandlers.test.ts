@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createServerLibraryHandlers } from '../../src/main/ipc/serverLibraryHandlers'
+import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 function createClient() {
   const methods = new Map<string, ReturnType<typeof vi.fn>>()

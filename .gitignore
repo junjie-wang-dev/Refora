@@ -26,6 +26,6 @@ __pycache__/
 .DS_Store
 
 # Python server
-python/server/.venv/
-python/server/.pytest_cache/
-python/server/.ruff_cache/
+backend/.venv/
+backend/.pytest_cache/
+backend/.ruff_cache/

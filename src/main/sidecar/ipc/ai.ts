@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { IpcChannel } from '../../shared/ipc-channels'
+import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
   AgentInterrupt,
   AgentResumeRequest,
@@ -12,11 +12,11 @@ import type {
   ChatThread,
   Result,
   WorkspaceAgentMemory
-} from '../../shared/ipc-types'
+} from '../../../shared/ipc-types'
 import type {
   ChatResumePayload,
   ServerClient,
-} from '../services/serverClient'
+} from '../client'
 
 function errorResult(error: unknown): Result<never> {
   const value = error as { code?: unknown; message?: unknown }

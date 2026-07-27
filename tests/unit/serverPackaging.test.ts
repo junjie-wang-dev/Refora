@@ -15,6 +15,7 @@ describe('Python server packaging', () => {
   it('builds the sidecar from the locked Python server project', () => {
     const script = readFileSync('scripts/build-server-sidecar.sh', 'utf8')
 
+    expect(script).toContain('PROJECT_DIR="$ROOT_DIR/backend"')
     expect(script).toContain('--project "$PROJECT_DIR"')
     expect(script).toContain('--locked')
     expect(script).toContain('pyinstaller')
@@ -27,6 +28,13 @@ describe('Python server packaging', () => {
     expect(script).toContain('--copy-metadata langgraph-checkpoint-sqlite')
     expect(script).toContain('verify-server-sidecar.mjs')
     expect(script).not.toContain('src/main/db')
+  })
+
+  it('packages backend workers from the backend boundary', () => {
+    const configuration = readFileSync('electron-builder.yml', 'utf8')
+
+    expect(configuration).toContain('from: backend/workers/mineru_worker.py')
+    expect(configuration).not.toContain('from: resources/')
   })
 
   it('runs offline artifact and server startup smoke checks', () => {

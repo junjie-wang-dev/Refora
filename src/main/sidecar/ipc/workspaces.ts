@@ -1,4 +1,4 @@
-import { IpcChannel } from '../../shared/ipc-channels'
+import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
   Result,
   WorkspaceCanvasViewport,
@@ -8,9 +8,9 @@ import type {
   WorkspaceNote,
   WorkspaceNotePatch,
   WorkspaceNoteType
-} from '../../shared/ipc-types'
-import type { OcrJob, OcrProfile } from '../../shared/mineru-types'
-import type { ServerClient } from '../services/serverClient'
+} from '../../../shared/ipc-types'
+import type { OcrJob, OcrProfile } from '../../../shared/mineru-types'
+import type { ServerClient } from '../client'
 
 function errorResult(error: unknown): Result<never> {
   if (error && typeof error === 'object' && 'code' in error && 'message' in error) {

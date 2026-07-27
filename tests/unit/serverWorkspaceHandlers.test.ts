@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import { createServerWorkspaceHandlers } from '../../src/main/ipc/serverWorkspaceHandlers'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 const workspace = { id: 'workspace-1', name: 'Workspace', createdAt: 1, updatedAt: 2 }
 const item = {

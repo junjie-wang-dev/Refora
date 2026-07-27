@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-PROJECT_DIR="$ROOT_DIR/python/server"
+PROJECT_DIR="$ROOT_DIR/backend"
 OUTPUT_DIR="$ROOT_DIR/build/python-server"
 WORK_DIR="$ROOT_DIR/build/python-server-work"
 ENTRYPOINT="$PROJECT_DIR/sidecar_entry.py"

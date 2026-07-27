@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createNativeRpc } from '../../src/main/services/nativeRpc'
+import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
 import type { Server, IncomingMessage, ServerResponse } from 'node:http'
 
 const electronMocks = vi.hoisted(() => ({

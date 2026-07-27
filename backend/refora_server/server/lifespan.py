@@ -68,8 +68,8 @@ def _mineru_worker_path() -> str:
         return configured
     package_root = Path(__file__).resolve().parents[2]
     candidates = (
+        package_root / "workers" / "mineru_worker.py",
         package_root.parent / "mineru" / "mineru_worker.py",
-        package_root.parents[1] / "resources" / "mineru_worker.py",
     )
     for candidate in candidates:
         if candidate.is_file():

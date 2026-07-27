@@ -1,4 +1,4 @@
-import type { ServerLifecycle } from './serverLifecycle'
+import type { ServerLifecycle } from './lifecycle'
 import type { NativeRpc } from './nativeRpc'
 import type { NativeRpcInfo } from './nativeRpc'
 import type { IpcError, Result } from '../../shared/ipc-types'
@@ -45,8 +45,8 @@ import type {
   WebSearchConfigPatch,
   WebSearchTestResult
 } from '../../shared/webSearch'
-import type { ServerConnection } from './serverLifecycle'
-import { logger } from './logger'
+import type { ServerConnection } from './lifecycle'
+import { logger } from '../services/logger'
 import {
   CONNECTOR_EVENT_NAMES,
   SERVER_EVENT_NAMES,

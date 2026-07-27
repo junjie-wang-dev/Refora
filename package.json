@@ -17,6 +17,7 @@
     "typecheck": "npm run check:server-contract && tsc -b",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
+    "test:backend": "uv run --project backend --locked pytest -c backend/pyproject.toml backend/tests",
     "test:server-integration": "vitest run --config vitest.server-integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --passWithNoTests",

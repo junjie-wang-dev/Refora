@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
-import migrationSql from '../../python/server/refora_server/db/migrations/0014_workspace_board.sql?raw'
-import canvasMigrationSql from '../../python/server/refora_server/db/migrations/0015_workspace_canvas.sql?raw'
-import noteTypesMigrationSql from '../../python/server/refora_server/db/migrations/0016_workspace_note_types.sql?raw'
+import migrationSql from '../../backend/refora_server/db/migrations/0014_workspace_board.sql?raw'
+import canvasMigrationSql from '../../backend/refora_server/db/migrations/0015_workspace_canvas.sql?raw'
+import noteTypesMigrationSql from '../../backend/refora_server/db/migrations/0016_workspace_note_types.sql?raw'
 import type {
   AiReport,
   WorkspaceItem,

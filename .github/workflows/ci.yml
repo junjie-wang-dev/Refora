@@ -49,7 +49,7 @@ jobs:
         run: npm run test
 
       - name: Python Server Tests
-        run: uv run --project python/server --locked pytest -c python/server/pyproject.toml python/server/tests
+        run: npm run test:backend
 
       - name: Workspace Card Interaction E2E
         run: npm run test:e2e:workspace-card

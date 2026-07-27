@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createServerAppHandlers } from '../../src/main/ipc/serverAppHandlers'
+import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import type { ServerClient } from '../../src/main/services/serverClient'
+import type { ServerClient } from '../../src/main/sidecar/client'
 
 function clientWith(http: Record<string, ReturnType<typeof vi.fn>>): ServerClient {
   return { http, ws: {} } as unknown as ServerClient
