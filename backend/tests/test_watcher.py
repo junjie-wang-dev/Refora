@@ -550,6 +550,70 @@ def test_event_driven_library_reconcile_on_start(tmp_path):
         db.close()
 
 
+def test_library_reconcile_suppresses_unchanged_skipped_pdf(tmp_path, monkeypatch):
+    db = open_migrated_db()
+    try:
+        class ObserverStub:
+            def schedule(self, *_args, **_kwargs):
+                return None
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def join(self, **_kwargs):
+                return None
+
+        monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", True)
+        monkeypatch.setattr(watcher_module, "Observer", ObserverStub)
+        monkeypatch.setattr(
+            watcher_module,
+            "_LIBRARY_RECONCILE_INTERVAL_S",
+            0.05,
+        )
+        wf_repo = make_watch_folders_repo(db)
+        duplicate = tmp_path / "duplicate.pdf"
+        duplicate.write_bytes(b"%PDF-1.7 duplicate")
+        repos = {
+            "watchFolders": wf_repo,
+            "documents": {"list": lambda _filter: []},
+        }
+        captured: list[list[str]] = []
+
+        def on_new_pdf(paths):
+            captured.append(list(paths))
+            return {"imported": [], "skipped": list(paths), "errors": []}
+
+        from refora_server.services.watcher import createWatcherService
+
+        svc = createWatcherService(
+            repos,
+            {
+                "onNewPdf": on_new_pdf,
+                "getLibraryFolder": lambda: str(tmp_path),
+                "stabilityThresholdMs": 80,
+                "debounceMs": 20,
+            },
+        )
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.25)
+                assert captured == [[str(duplicate)]]
+                duplicate.write_bytes(b"%PDF-1.7 replacement content")
+                await asyncio.sleep(0.35)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == [[str(duplicate)], [str(duplicate)]]
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Fallback path: simulate watchdog unavailable.
 # ---------------------------------------------------------------------------

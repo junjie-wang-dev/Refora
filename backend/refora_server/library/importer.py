@@ -150,6 +150,22 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                 if documents["findByPath"](path) is not None:
                     skipped.append(path)
                     continue
+                file_hash = await call_work(hash_pdf, path)
+                duplicate = (
+                    documents["findByHash"](file_hash)
+                    if file_hash
+                    else None
+                )
+                if duplicate is not None:
+                    if isWatch or not callable(confirm_duplicate):
+                        skipped.append(path)
+                        continue
+                    should_skip = confirm_duplicate(Path(path).name)
+                    if inspect.isawaitable(should_skip):
+                        should_skip = await should_skip
+                    if should_skip is not False:
+                        skipped.append(path)
+                        continue
                 validation = await call_work(validate_pdf, path)
                 if isinstance(validation, dict):
                     file_name = Path(path).name
@@ -161,17 +177,6 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                         message = str(validation.get("message") or "Unable to read PDF")
                     errors.append({"path": path, "message": message})
                     continue
-                file_hash = await call_work(hash_pdf, path)
-                if file_hash and documents["findByHash"](file_hash) is not None:
-                    if isWatch or not callable(confirm_duplicate):
-                        skipped.append(path)
-                        continue
-                    should_skip = confirm_duplicate(Path(path).name)
-                    if inspect.isawaitable(should_skip):
-                        should_skip = await should_skip
-                    if should_skip is not False:
-                        skipped.append(path)
-                        continue
                 stored_path = path
                 if not isInsideLibrary(path, library_folder):
                     copied_path = await call_work(copy_to_library, path, library_folder)

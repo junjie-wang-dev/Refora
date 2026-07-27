@@ -81,7 +81,10 @@ class WatcherRepos(TypedDict, total=False):
     documents: Any
 
 
-OnNewPdf = Callable[[list[str]], Awaitable[None] | None]
+OnNewPdf = Callable[
+    [list[str]],
+    Awaitable[dict[str, Any] | None] | dict[str, Any] | None,
+]
 
 
 class WatcherServiceDeps(TypedDict, total=False):
@@ -112,7 +115,51 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "debounceTimer": None,
         "pending": set(),
         "reconcileTask": None,
+        "skippedLibraryFiles": {},
     }
+
+    def _fileSignature(path: str) -> tuple[int, int, int, int] | None:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+    def _shouldSuppressLibraryImport(path: str) -> bool:
+        normalized = os.path.normpath(os.path.abspath(path))
+        skipped: dict[str, tuple[int, int, int, int]] = state[
+            "skippedLibraryFiles"
+        ]
+        previous = skipped.get(normalized)
+        if previous is None:
+            return False
+        current = _fileSignature(normalized)
+        if current == previous:
+            return True
+        skipped.pop(normalized, None)
+        return False
+
+    def _recordSkippedLibraryFiles(result: Any) -> None:
+        if not isinstance(result, dict):
+            return
+        skipped_paths = result.get("skipped")
+        if not isinstance(skipped_paths, list):
+            return
+        library_folder = get_library_folder()
+        if not library_folder:
+            return
+        skipped: dict[str, tuple[int, int, int, int]] = state[
+            "skippedLibraryFiles"
+        ]
+        for value in skipped_paths:
+            if not isinstance(value, str) or not value:
+                continue
+            normalized = os.path.normpath(os.path.abspath(value))
+            if not isInsideLibrary(normalized, library_folder):
+                continue
+            signature = _fileSignature(normalized)
+            if signature is not None:
+                skipped[normalized] = signature
 
     def _getLoop() -> asyncio.AbstractEventLoop:
         loop = state["loop"]
@@ -166,6 +213,9 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     def _scheduleImport(path: str, *, allow_library: bool = False) -> None:
         if not path or not _isPdf(path):
             return
+        path = os.path.normpath(os.path.abspath(path))
+        if allow_library and _shouldSuppressLibraryImport(path):
+            return
         library_folder = get_library_folder()
         if not allow_library:
             if library_folder and isInsideLibrary(path, library_folder):
@@ -207,13 +257,16 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 task.add_done_callback(lambda _t: None)
             else:
                 try:
-                    loop.run_until_complete(result)
+                    loop.run_until_complete(_awaitResult(result))
                 except Exception:
                     pass
+        else:
+            _recordSkippedLibraryFiles(result)
 
     async def _awaitResult(awaitable: Awaitable[Any]) -> None:
         try:
-            await awaitable
+            result = await awaitable
+            _recordSkippedLibraryFiles(result)
         except Exception:
             pass
 
@@ -365,6 +418,11 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         known = _knownLibraryFiles()
         current = set(_listPdfsRecursive(library_folder, skip_managed=True))
         untracked = current - known
+        skipped: dict[str, tuple[int, int, int, int]] = state[
+            "skippedLibraryFiles"
+        ]
+        for path in set(skipped) - untracked:
+            skipped.pop(path, None)
         for path in sorted(untracked):
             _scheduleImport(path, allow_library=True)
 
@@ -432,7 +490,8 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 if batch:
                     result = on_new_pdf(batch)
                     if inspect.isawaitable(result):
-                        await result
+                        result = await result
+                    _recordSkippedLibraryFiles(result)
             except Exception:
                 pass
             await asyncio.sleep(poll_interval)

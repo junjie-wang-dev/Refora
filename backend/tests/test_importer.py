@@ -44,6 +44,31 @@ async def test_import_files_copies_and_deduplicates_by_hash(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_watched_duplicate_skips_pdf_validation(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    first = tmp_path / "first.pdf"
+    duplicate = tmp_path / "duplicate.pdf"
+    _pdf(first, b"same")
+    _pdf(duplicate, b"same")
+    validated: list[str] = []
+    documents = make_docs_repo(open_migrated_db(), str(library))
+    importer = createImporter(
+        {"documents": documents},
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda path: validated.append(path),
+        },
+    )
+
+    first_result = await importer["importFiles"]([str(first)], True)
+    duplicate_result = await importer["importFiles"]([str(duplicate)], True)
+
+    assert len(first_result["imported"]) == 1
+    assert duplicate_result["skipped"] == [str(duplicate.resolve())]
+    assert validated == [str(first.resolve())]
+
+
+@pytest.mark.asyncio
 async def test_import_folder_honors_recursive_flag(tmp_path: Path) -> None:
     library = tmp_path / "library"
     folder = tmp_path / "source"
