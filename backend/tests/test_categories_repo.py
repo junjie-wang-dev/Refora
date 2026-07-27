@@ -37,6 +37,22 @@ def test_list_orders_by_sortOrder_then_name(db):
     assert names == ["Apple", "Mango", "Zebra"]
 
 
+def test_list_includes_document_count(db):
+    cats = make_cats_repo(db)
+    docs = make_docs_repo(db, library_folder="/lib")
+    assigned = cats["create"]("Assigned")
+    empty = cats["create"]("Empty")
+    docs["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf"))
+    docs["insert"](make_doc(id="b", file_path="/lib/b.pdf", file_name="b.pdf"))
+    cats["assign"]("a", assigned["id"])
+    cats["assign"]("b", assigned["id"])
+
+    listed = {category["id"]: category for category in cats["list"]()}
+
+    assert listed[assigned["id"]]["count"] == 2
+    assert listed[empty["id"]]["count"] == 0
+
+
 def test_rename_updates_name(db):
     cats = make_cats_repo(db)
     cat = cats["create"]("Old")

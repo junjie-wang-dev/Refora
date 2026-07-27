@@ -637,6 +637,7 @@ describe('DocumentStore', () => {
 
       await useDocumentStore.getState().bulkCategorize(['doc-1'], 'cat-1')
       expect(mockBulkCategorize).toHaveBeenCalledWith(['doc-1'], 'cat-1')
+      expect(mockCategoriesList).toHaveBeenCalled()
       expect(useDocumentStore.getState().selectedIds).toEqual([])
 
       await useDocumentStore.getState().deleteDoc('doc-1')

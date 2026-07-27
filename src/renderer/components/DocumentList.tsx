@@ -169,11 +169,13 @@ function visibleColumns(cols: ListColumn[]): ListColumn[] {
 interface DocumentListProps {
   compact?: boolean
   onClose?: () => void
+  onDocumentFocus?: () => void
 }
 
 export default function DocumentList({
   compact = false,
-  onClose
+  onClose,
+  onDocumentFocus
 }: DocumentListProps = {}) {
   const { t } = useTranslation()
   const documents = useDocumentStore((s) => s.documents)
@@ -246,8 +248,9 @@ export default function DocumentList({
     (docId: string, e: React.MouseEvent) => {
       e.preventDefault()
       setFocusedDoc(docId)
+      onDocumentFocus?.()
     },
-    [setFocusedDoc]
+    [setFocusedDoc, onDocumentFocus]
   )
 
   const handleCopyPath = useCallback((filePath: string) => {

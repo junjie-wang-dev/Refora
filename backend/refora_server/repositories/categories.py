@@ -7,17 +7,26 @@ from refora_server.repositories.errors import RepoError
 
 
 def _map_category(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    category = {
         "id": row["id"],
         "name": row["name"],
         "sortOrder": row["sortOrder"],
         "createdAt": row["createdAt"],
     }
+    if "count" in row.keys():
+        category["count"] = row["count"]
+    return category
 
 
 def createCategoriesRepository(db):
     def list_() -> list[dict[str, Any]]:
-        cur = db.execute("SELECT * FROM categories ORDER BY sortOrder, name")
+        cur = db.execute(
+            "SELECT c.*, count(dc.documentId) AS count "
+            "FROM categories c "
+            "LEFT JOIN document_categories dc ON dc.categoryId = c.id "
+            "GROUP BY c.id "
+            "ORDER BY c.sortOrder, c.name"
+        )
         rows = cur.fetchall()
         return [_map_category(r) for r in rows]
 
@@ -28,7 +37,7 @@ def createCategoriesRepository(db):
             "INSERT INTO categories (id, name, sortOrder, createdAt) VALUES (?, ?, ?, ?)",
             [id, name, 0, created_at],
         )
-        cur = db.execute("SELECT * FROM categories WHERE id = ?", [id])
+        cur = db.execute("SELECT *, 0 AS count FROM categories WHERE id = ?", [id])
         row = cur.fetchone()
         return _map_category(row)
 
@@ -56,7 +65,10 @@ def createCategoriesRepository(db):
 
     def listForDocument(docId: str) -> list[dict[str, Any]]:
         cur = db.execute(
-            "SELECT c.* FROM categories c JOIN document_categories dc ON c.id = dc.categoryId "
+            "SELECT c.*, "
+            "(SELECT count(*) FROM document_categories category_docs "
+            "WHERE category_docs.categoryId = c.id) AS count "
+            "FROM categories c JOIN document_categories dc ON c.id = dc.categoryId "
             "WHERE dc.documentId = ? ORDER BY c.sortOrder, c.name",
             [docId],
         )

@@ -113,17 +113,30 @@ vi.mock('@renderer/components/Sidebar', () => ({
   )
 }))
 vi.mock('@renderer/components/DocumentList', () => ({
-  default: ({ compact, onClose }: { compact: boolean; onClose?: () => void }) => {
+  default: ({
+    compact,
+    onClose,
+    onDocumentFocus
+  }: {
+    compact: boolean
+    onClose?: () => void
+    onDocumentFocus?: () => void
+  }) => {
     mocks.documentListRender()
     return (
       <div data-testid="document-list" data-compact={compact ? 'true' : 'false'}>
         {onClose ? <button type="button" onClick={onClose}>document-tab-close</button> : null}
+        <button type="button" onClick={onDocumentFocus}>document-row</button>
       </div>
     )
   }
 }))
 vi.mock('@renderer/components/DetailPanel', () => ({
-  default: () => <div data-testid="detail-panel" />
+  default: ({ onClose }: { onClose?: () => void }) => (
+    <div data-testid="detail-panel">
+      <button type="button" onClick={onClose}>detail-tab-close</button>
+    </div>
+  )
 }))
 vi.mock('@renderer/components/StructuredDocumentPanel', () => ({
   default: () => <div data-testid="structured-document-panel" />
@@ -309,6 +322,20 @@ describe('App root layout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.openPanel' }))
     expect(screen.getByTestId('app-chat-panel')).toBeInTheDocument()
+  })
+
+  it('reopens the detail panel when the focused document row is clicked again', async () => {
+    mocks.documentState.focusedDocId = 'doc-1'
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    const detailPanelContainer = screen.getByTestId('detail-panel').parentElement?.parentElement
+    await waitFor(() => expect(detailPanelContainer).toHaveStyle({ width: '384px' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'detail-tab-close' }))
+    expect(detailPanelContainer).toHaveStyle({ width: '0px' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'document-row' }))
+    expect(detailPanelContainer).toHaveStyle({ width: '384px' })
   })
 
   it('closes a compact document list and reopens it when a library view is selected', async () => {

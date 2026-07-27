@@ -585,6 +585,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
                     >
                       <DocumentList
                         compact={workspacePanelOpen && documentListCompact}
+                        onDocumentFocus={() => setRightPanelOpen(true)}
                         onClose={workspacePanelOpen && documentListCompact
                           ? () => setDocumentListOpen(false)
                           : undefined}

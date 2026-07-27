@@ -327,6 +327,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       await api.documents.bulkCategorize(ids, catId)
       get().clearSelection()
+      await get().fetchCategories()
     } catch (e) {
       get().showToast(errorMessage(e, 'Failed to categorize'))
     }

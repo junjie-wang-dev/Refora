@@ -182,6 +182,18 @@ describe('DocumentList', () => {
     expect(screen.getAllByRole('checkbox')).toHaveLength(5)
   })
 
+  it('requests the detail panel whenever a document row is clicked', () => {
+    const onDocumentFocus = vi.fn()
+    mockState.documents = [makeDoc()]
+
+    render(<DocumentList onDocumentFocus={onDocumentFocus} />)
+    fireEvent.click(screen.getByText('Test Title'))
+    fireEvent.click(screen.getByText('Test Title'))
+
+    expect(mockState.setFocusedDoc).toHaveBeenCalledTimes(2)
+    expect(onDocumentFocus).toHaveBeenCalledTimes(2)
+  })
+
   it('renders loading skeleton when isLoading is true', () => {
     mockState.isLoading = true
 
