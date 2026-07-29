@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-platform="mac" data-window-focused="true">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refora — Sidebar mock</title>
+<link rel="stylesheet" href="_utilities.css" />
+<link rel="stylesheet" href="_tokens.css" />
+</head>
+<body class="font-sans antialiased text-[13px]">
+
+<!-- review-only switcher bar -->
+<div class="mock-reviewbar flex items-center gap-3 px-4 h-11 border-b border-border text-[12.5px]">
+  <span class="font-semibold tracking-tight">Refora · Sidebar</span>
+  <span class="text-muted">static mock</span>
+  <div class="ml-2 inline-flex rounded-lg border border-border p-0.5 bg-background">
+    <button data-view="expanded" data-group="sb" class="view-tab px-3 py-1 rounded-md font-medium">Expanded</button>
+    <button data-view="collapsed" data-group="sb" class="view-tab px-3 py-1 rounded-md font-medium">Collapsed</button>
+  </div>
+  <span class="ml-2 text-muted">Floating sidebar; sections = Smart Items · Workspaces · Categories · footer.</span>
+  <nav class="ml-2 flex items-center gap-1 text-[12px]" id="reviewNav"></nav>
+  <button id="themeBtn" class="ml-auto px-2.5 py-1 rounded-md border border-border bg-background hover:border-muted">◐ Theme</button>
+</div>
+
+<div class="flex gap-6 p-6" style="height:calc(100vh - 44px); background:var(--color-background)">
+
+  <!-- ============ EXPANDED ============ -->
+  <div data-view="expanded" data-group="sb" class="view-panel relative shrink-0" style="width:224px; height:100%">
+    <div class="sidebar-vibrancy-frame" aria-hidden="true"><div class="sidebar-vibrancy-frame__mask"></div></div>
+    <aside class="sidebar-floating relative z-10 flex h-full w-full flex-col">
+      <!-- drag region header -->
+      <div class="flex h-10 shrink-0 items-center px-2">
+        <div class="ml-auto mr-2 flex items-center gap-3">
+          <button class="sidebar-header-btn" title="Collapse Sidebar"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrow-line-left"/></svg></button>
+          <button class="sidebar-header-btn" title="Add PDF File"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-plus"/></svg></button>
+          <button class="sidebar-header-btn" title="Import by Identifier"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-arrow-down"/></svg></button>
+        </div>
+      </div>
+
+      <nav class="min-h-0 flex-1 overflow-y-auto py-2">
+        <!-- smart items (no section header) -->
+        <div class="mb-4 px-1">
+          <div class="sidebar-item sidebar-item-active"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-files"/></svg><span class="min-w-0 flex-1 truncate">All Files</span><span class="shrink-0 text-[10px] tabular-nums text-muted">128</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-clock"/></svg><span class="min-w-0 flex-1 truncate">Recently Read</span><span class="shrink-0 text-[10px] tabular-nums text-muted">42</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg><span class="min-w-0 flex-1 truncate">Recently Added</span><span class="shrink-0 text-[10px] tabular-nums text-muted">7</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg><span class="min-w-0 flex-1 truncate">Starred</span><span class="shrink-0 text-[10px] tabular-nums text-muted">12</span></div>
+        </div>
+
+        <!-- workspaces -->
+        <div class="mb-4">
+          <div class="flex items-center gap-1.5 px-2.5 py-1.5 text-label font-semibold uppercase tracking-wide text-muted"><span class="flex-1">Workspaces</span><button class="-mr-1 text-muted hover:text-foreground" title="Create Workspace"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg></button></div>
+          <div class="px-1">
+            <div class="sidebar-item"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-squares-four"/></svg><span class="min-w-0 flex-1 truncate">Transformer architectures</span></div>
+            <div class="sidebar-item"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-squares-four"/></svg><span class="min-w-0 flex-1 truncate">Graph RL survey</span></div>
+          </div>
+        </div>
+
+        <!-- categories (no leading icon, count badge) -->
+        <div class="mb-4">
+          <div class="flex items-center gap-1.5 px-2.5 py-1.5 text-label font-semibold uppercase tracking-wide text-muted"><span class="flex-1">Categories</span><button class="-mr-1 text-muted hover:text-foreground" title="Create Category"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg></button></div>
+          <div class="px-1">
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Foundations</span><span class="shrink-0 text-[10px] tabular-nums text-muted">23</span></div>
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Optimization</span><span class="shrink-0 text-[10px] tabular-nums text-muted">14</span></div>
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Multimodal</span><span class="shrink-0 text-[10px] tabular-nums text-muted">9</span></div>
+          </div>
+        </div>
+      </nav>
+
+      <!-- footer: theme popover trigger + settings -->
+      <div class="mt-auto px-2 py-2">
+        <div class="mr-2 flex items-center justify-end gap-2">
+          <button class="sidebar-header-btn" title="Theme"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sun"/></svg></button>
+          <button class="sidebar-header-btn" title="Settings"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-gear"/></svg></button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ COLLAPSED ============ -->
+  <div data-view="collapsed" data-group="sb" class="view-panel hidden relative flex-1" style="height:100%">
+    <div class="flex h-full items-start">
+      <!-- floating collapsed toolbar (expand · separator · add file · import by identifier) -->
+      <div class="sidebar-floating-toolbar" style="left:92px">
+        <button class="sidebar-header-btn" title="Expand Sidebar"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrow-line-right"/></svg></button>
+        <div class="toolbar-sep" aria-hidden="true"></div>
+        <button class="sidebar-header-btn" title="Add PDF File"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-plus"/></svg></button>
+        <button class="sidebar-header-btn" title="Import by Identifier"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-arrow-down"/></svg></button>
+      </div>
+      <div class="ml-6 mt-2 text-xs text-muted max-w-sm">
+        <p class="mb-1">When collapsed, the sidebar becomes a compact floating toolbar (expand · add file · import by identifier).</p>
+        <p class="text-muted">On macOS the toolbar offsets left for traffic lights; the document list expands to fill the freed space.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script src="_shared.js"></script>
+<script>document.getElementById('reviewNav').innerHTML = mockReviewNav('sidebar.html');</script>
+<script src="_icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-platform="mac" data-window-focused="true">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refora — Settings mock</title>
+<link rel="stylesheet" href="_utilities.css" />
+<link rel="stylesheet" href="_tokens.css" />
+<style>
+  .settings-titlebar-material { background-color: color-mix(in srgb, var(--color-panel) 78%, transparent); backdrop-filter: saturate(160%) blur(24px); -webkit-backdrop-filter: saturate(160%) blur(24px); }
+  [data-theme='light'] .settings-titlebar-material { background-color: rgba(246, 246, 246, 0.82); }
+  [data-theme='dark'] .settings-titlebar-material { background-color: rgba(34, 34, 36, 0.82); }
+  .settings-nav-btn { display: flex; min-height: 36px; align-items: center; gap: 0.625rem; border: 1px solid transparent; border-radius: 0.625rem; padding: 0.5rem 0.75rem; text-align: left; font-size: 12px; transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease; color: var(--color-muted); }
+  .settings-nav-btn:hover { background-color: color-mix(in srgb, var(--color-background) 60%, transparent); color: var(--color-foreground); }
+  .settings-nav-btn-active { border-color: color-mix(in srgb, var(--color-border) 72%, transparent); background-color: var(--color-panel); font-weight: 600; color: var(--color-foreground); box-shadow: var(--shadow-sm); }
+  .settings-section { max-width: 720px; }
+  .settings-section-title { font-size: 15px; font-weight: 650; letter-spacing: -0.015em; color: var(--color-foreground); }
+  .settings-section-desc { margin-top: 0.125rem; font-size: 11px; line-height: 1.45; color: var(--color-muted); }
+  .settings-label { font-size: 12px; color: var(--color-muted); }
+  .settings-input { height: 34px; width: 100%; border-radius: 0.625rem; border: 1px solid var(--color-border); background: var(--color-panel); padding: 0 0.75rem; font-size: 12px; color: var(--color-foreground); outline: none; box-shadow: inset 0 1px 1px color-mix(in srgb, var(--color-foreground) 3%, transparent); }
+  .settings-input:focus { border-color: var(--color-accent); box-shadow: var(--shadow-focus); }
+  .settings-textarea { width: 100%; min-height: 6rem; resize: vertical; border-radius: 0.625rem; border: 1px solid var(--color-border); background: var(--color-panel); padding: 0.625rem 0.75rem; font-size: 12px; line-height: 1.55; color: var(--color-foreground); outline: none; box-shadow: inset 0 1px 1px color-mix(in srgb, var(--color-foreground) 3%, transparent); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .settings-textarea:focus { border-color: var(--color-accent); box-shadow: var(--shadow-focus); }
+  .btn { display: inline-flex; min-height: 30px; align-items: center; justify-content: center; gap: 0.25rem; border-radius: 0.625rem; padding: 0.25rem 0.75rem; font-size: 12px; font-weight: 600; transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; cursor: pointer; }
+  .btn-primary { background: var(--color-accent); color: #fff; }
+  .btn-primary:hover { background: var(--color-accent-hover); }
+  .btn-ghost { background: transparent; color: var(--color-foreground); }
+  .btn-ghost:hover { background: var(--color-hover); }
+  .btn-danger { background: var(--color-error); color: #fff; }
+  .btn-danger:hover { opacity: 0.9; }
+  .btn-sm { height: 30px; padding: 0 0.75rem; }
+</style>
+</head>
+<body class="font-sans antialiased text-[13px]">
+
+<div class="mock-reviewbar flex items-center gap-3 px-4 h-11 border-b border-border text-[12.5px]">
+  <span class="font-semibold tracking-tight">Refora · Settings</span>
+  <span class="text-muted">static mock</span>
+  <div class="ml-2 inline-flex rounded-lg border border-border p-0.5 bg-background">
+    <button data-view="general" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">General</button>
+    <button data-view="appearance" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">Appearance</button>
+    <button data-view="mineru" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">Mineru</button>
+    <button data-view="providers" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">AI Providers</button>
+    <button data-view="websearch" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">Web Search</button>
+    <button data-view="memory" data-group="st" class="view-tab px-3 py-1 rounded-md font-medium">Agent Memory</button>
+  </div>
+  <nav class="ml-2 flex items-center gap-1 text-[12px]" id="reviewNav"></nav>
+  <button id="themeBtn" class="ml-auto px-2.5 py-1 rounded-md border border-border bg-background hover:border-muted">◐ Theme</button>
+</div>
+
+<div class="flex justify-center p-6" style="height:calc(100vh - 44px); background:var(--color-background)">
+  <!-- Modal shell (920px, two-pane) -->
+  <div class="relative flex h-full min-h-0 overflow-hidden rounded-xl border border-border bg-panel shadow-lg" style="width:920px; height:min(100%,680px); min-height:520px">
+    <div class="dialog-overlay absolute inset-0 hidden items-center justify-center z-50" id="providerOverlay" style="background:var(--color-overlay); backdrop-filter:blur(4px)"></div>
+
+    <!-- left nav -->
+    <aside class="settings-titlebar-material flex w-52 shrink-0 flex-col border-r border-border p-3 pt-12">
+      <nav class="flex flex-col gap-1">
+        <button class="settings-nav-btn settings-nav-btn-active" data-settings-nav="general"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-folder-open"/></svg><span class="truncate">General</span></button>
+        <button class="settings-nav-btn" data-settings-nav="appearance"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-palette"/></svg><span class="truncate">Appearance</span></button>
+        <button class="settings-nav-btn" data-settings-nav="mineru"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-hard-drives"/></svg><span class="truncate">Mineru OCR</span></button>
+        <button class="settings-nav-btn" data-settings-nav="providers"><svg class="h-4 w-4 shrink-0" style="color:var(--color-accent-2)" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sparkle"/></svg><span class="truncate">AI Providers</span></button>
+        <button class="settings-nav-btn" data-settings-nav="websearch"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-globe"/></svg><span class="truncate">Web Search</span></button>
+        <button class="settings-nav-btn" data-settings-nav="memory"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-brain"/></svg><span class="truncate">Agent Memory</span></button>
+      </nav>
+    </aside>
+
+    <!-- right content -->
+    <main class="min-w-0 flex-1 overflow-y-auto bg-background p-5 pt-12">
+
+      <!-- GENERAL -->
+      <div data-settings-panel="general" data-view="general" data-group="st" class="settings-section view-panel flex flex-col gap-5">
+        <div><h4 class="settings-section-title">General</h4><p class="settings-section-desc">Library location and network settings.</p></div>
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Library folder</label>
+            <div class="flex gap-2">
+              <span class="min-w-0 flex-1 truncate rounded-lg bg-panel-2 px-3 py-1.5 text-xs text-foreground">~/Documents/Refora Library</span>
+              <button class="btn btn-ghost btn-sm">Choose Folder</button>
+            </div>
+            <span class="settings-label text-[11px]">Any PDF you place in this folder is imported automatically.</span>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Proxy URL</label>
+            <input class="settings-input" placeholder="http://proxy:8080" value="" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Crossref mailto (for metadata lookups)</label>
+            <input class="settings-input" placeholder="user@example.com" value="" />
+          </div>
+        </div>
+      </div>
+
+      <!-- APPEARANCE -->
+      <div data-settings-panel="appearance" data-view="appearance" data-group="st" class="settings-section view-panel hidden flex-col gap-5">
+        <div><h4 class="settings-section-title">Appearance</h4><p class="settings-section-desc">Customize how Refora looks.</p></div>
+        <div class="flex flex-col gap-4">
+          <div class="flex items-center justify-between">
+            <label class="settings-label">Theme</label>
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-panel-2 p-0.5">
+              <button class="rounded-md px-2.5 py-1 text-xs text-muted hover:text-foreground">System</button>
+              <button class="rounded-md bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm">Light</button>
+              <button class="rounded-md px-2.5 py-1 text-xs text-muted hover:text-foreground">Dark</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between">
+            <label class="settings-label">Language</label>
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-panel-2 p-0.5">
+              <button class="rounded-md bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm">中文</button>
+              <button class="rounded-md px-2.5 py-1 text-xs text-muted hover:text-foreground">English</button>
+            </div>
+          </div>
+          <label class="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" class="m-0" style="accent-color:var(--color-accent)" />
+            <span class="text-xs text-foreground">Collapse sidebar by default</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- MINERU -->
+      <div data-settings-panel="mineru" data-view="mineru" data-group="st" class="settings-section view-panel hidden flex-col gap-5">
+        <div><h4 class="settings-section-title">Mineru OCR Engine</h4><p class="settings-section-desc">Local OCR for structured document extraction.</p></div>
+        <div class="flex flex-col gap-1.5">
+          <label class="settings-label">Install location</label>
+          <div class="flex gap-2">
+            <span class="min-w-0 flex-1 truncate rounded-lg bg-panel-2 px-3 py-1.5 text-xs text-foreground">~/.refora/mineru</span>
+            <button class="btn btn-ghost btn-sm">Choose Folder</button>
+          </div>
+          <span class="text-[11px] text-muted">The engine and its model weights are stored here.</span>
+        </div>
+        <!-- status card: installing -->
+        <div class="rounded-lg border border-border bg-panel p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-foreground">Installing…</div>
+              <div class="mt-1 text-xs text-muted">Downloading model weights · ~2.1 GB required.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm">Cancel</button>
+          </div>
+          <div class="mt-4 flex flex-col gap-2">
+            <div class="h-1.5 overflow-hidden rounded-full bg-panel-2">
+              <div class="h-full rounded-full bg-accent transition-[width] duration-300" style="width:47%"></div>
+            </div>
+            <div class="flex items-center justify-between gap-3 text-[11px] text-muted">
+              <span>Downloading models</span><span>47%</span>
+            </div>
+            <div class="flex items-center justify-between gap-3 text-[11px] text-muted">
+              <span class="truncate">Step 4 of 7 · 1.0 GB / 2.1 GB</span><span class="shrink-0">Elapsed 02:14</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI PROVIDERS -->
+      <div data-settings-panel="providers" data-view="providers" data-group="st" class="settings-section view-panel hidden flex-col gap-5">
+        <div><h4 class="settings-section-title">AI Providers</h4><p class="settings-section-desc">Connect model providers for chat and agent features.</p></div>
+        <div class="flex flex-col gap-4">
+          <!-- configured provider -->
+          <div class="flex items-center gap-3 rounded-lg border border-border bg-panel p-3">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg" style="background:color-mix(in srgb, var(--color-accent-2) 10%, transparent); color:var(--color-accent-2)"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sparkle"/></svg></div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-foreground">Anthropic</div>
+              <div class="text-[11px] text-muted">3 models · connected</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('providerOverlay').classList.remove('hidden'); document.getElementById('providerOverlay').classList.add('flex')">Edit</button>
+            <button class="btn btn-danger btn-sm">Delete</button>
+          </div>
+          <!-- preset rows -->
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Add a provider</label>
+            <div class="flex flex-wrap gap-2">
+              <button class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-panel px-3 py-1.5 text-xs text-foreground hover:border-accent"><svg class="h-3.5 w-3.5 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sparkle"/></svg>OpenAI</button>
+              <button class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-panel px-3 py-1.5 text-xs text-foreground hover:border-accent"><svg class="h-3.5 w-3.5 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-key"/></svg>OpenRouter</button>
+              <button class="inline-flex items-center gap-1.5 rounded-lg border border-border border-dashed border-border bg-transparent px-3 py-1.5 text-xs text-muted hover:border-accent hover:text-foreground"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg>Custom provider</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WEB SEARCH -->
+      <div data-settings-panel="websearch" data-view="websearch" data-group="st" class="settings-section view-panel hidden flex-col gap-5">
+        <div><h4 class="settings-section-title">Web Search</h4><p class="settings-section-desc">Let the agent search the web for up-to-date information.</p></div>
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Provider</label>
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-panel-2 p-0.5 w-fit">
+              <button class="rounded-md bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm">DuckDuckGo</button>
+              <button class="rounded-md px-2.5 py-1 text-xs text-muted hover:text-foreground">Tavily</button>
+              <button class="rounded-md px-2.5 py-1 text-xs text-muted hover:text-foreground">Brave</button>
+            </div>
+            <span class="text-[11px] text-muted">DuckDuckGo runs locally — no API key needed.</span>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Tavily API key</label>
+            <div class="flex items-center gap-2">
+              <input type="password" class="settings-input flex-1" placeholder="tvly-…" value="" />
+              <span class="inline-flex items-center gap-1 rounded-full bg-error/10 px-2 py-0.5 text-[10px] font-medium text-error"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg>Missing</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="btn btn-ghost btn-sm">Test connection</button>
+            <span class="text-[11px] text-success">✓ Connected — 12 results in 0.4s</span>
+          </div>
+          <p class="rounded-lg bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-muted"><svg class="mr-1 inline h-3 w-3 align-text-bottom" viewBox="0 0 256 256" fill="currentColor"><use href="#i-globe"/></svg>Search queries are sent to the provider you choose. Refora never logs or stores your queries.</p>
+        </div>
+      </div>
+
+      <!-- AGENT MEMORY -->
+      <div data-settings-panel="memory" data-view="memory" data-group="st" class="settings-section view-panel hidden flex-col gap-5">
+        <div><h4 class="settings-section-title">Agent Memory</h4><p class="settings-section-desc">Persistent context the agent uses for this workspace.</p></div>
+        <div class="flex flex-col gap-4">
+          <div class="rounded-lg border border-border bg-panel p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium text-foreground">Brief</div>
+                <div class="text-[11px] text-muted">/brief.md · v3</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-ghost btn-sm">Delete</button>
+                <button class="btn btn-primary btn-sm">Save</button>
+              </div>
+            </div>
+            <textarea class="settings-textarea mt-3">This workspace tracks transformer architecture papers from 2017–2024. Focus on attention mechanisms and scaling laws.</textarea>
+          </div>
+          <div class="rounded-lg border border-border bg-panel p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium text-foreground">Preferences</div>
+                <div class="text-[11px] text-muted">/preferences.md · not set</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-ghost btn-sm" disabled>Delete</button>
+                <button class="btn btn-primary btn-sm" disabled>Save</button>
+              </div>
+            </div>
+            <textarea class="settings-textarea mt-3" placeholder="e.g. Prefer concise summaries. Cite arXiv IDs when referencing papers."></textarea>
+          </div>
+          <div class="rounded-lg border border-border bg-panel p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium text-foreground">Decisions</div>
+                <div class="text-[11px] text-muted">/decisions.md · v1</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-ghost btn-sm">Delete</button>
+                <button class="btn btn-primary btn-sm">Save</button>
+              </div>
+            </div>
+            <textarea class="settings-textarea mt-3">- Use "balanced" OCR mode for papers with tables.
+- Group papers by venue when generating comparative reports.</textarea>
+          </div>
+          <div class="rounded-lg border border-border bg-panel p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium text-foreground">Glossary</div>
+                <div class="text-[11px] text-muted">/glossary.md · not set</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-ghost btn-sm" disabled>Delete</button>
+                <button class="btn btn-primary btn-sm" disabled>Save</button>
+              </div>
+            </div>
+            <textarea class="settings-textarea mt-3" placeholder="Define terms the agent should know: e.g. MoE = Mixture of Experts."></textarea>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Provider edit overlay (shown when Edit clicked in AI Providers) -->
+<template id="providerEditTemplate">
+  <div class="dialog-panel relative flex w-[640px] max-w-[90vw] flex-col gap-4 bg-panel p-6" style="box-shadow:var(--shadow-lg)">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2.5">
+        <div class="flex h-9 w-9 items-center justify-center rounded-lg" style="background:color-mix(in srgb, var(--color-accent-2) 10%, transparent); color:var(--color-accent-2)"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sparkle"/></svg></div>
+        <div>
+          <div class="text-sm font-semibold text-foreground">Edit provider — Anthropic</div>
+          <div class="text-[11px] text-muted">Configure API key and model defaults.</div>
+        </div>
+      </div>
+      <button aria-label="Close provider settings" class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-foreground" onclick="this.closest('.dialog-overlay').classList.add('hidden'); this.closest('.dialog-overlay').classList.remove('flex')"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="flex flex-col gap-3">
+      <div class="flex flex-col gap-1.5">
+        <label class="settings-label">Provider name</label>
+        <input class="settings-input" value="Anthropic" />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <label class="settings-label">API key</label>
+        <input type="password" class="settings-input" value="sk-ant-•••••••••••••••••" />
+      </div>
+      <div class="mt-1 flex flex-col gap-2">
+        <button class="flex items-center gap-1 text-xs text-accent hover:underline"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-down"/></svg>Advanced settings</button>
+        <div class="flex flex-col gap-3 rounded-lg border border-border bg-background p-3">
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Base URL</label>
+            <input class="settings-input" placeholder="https://api.anthropic.com" value="https://api.anthropic.com" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="settings-label">Models</label>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="inline-flex items-center gap-1 rounded-md border border-accent bg-accent/10 px-2 py-0.5 text-[11px] text-accent"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-check"/></svg>claude-sonnet-4<span class="ml-0.5 rounded bg-accent/20 px-1 text-[9px]">chat+reason</span></span>
+              <span class="inline-flex items-center gap-1 rounded-md border border-accent bg-accent/10 px-2 py-0.5 text-[11px] text-accent"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-check"/></svg>claude-opus-4<span class="ml-0.5 rounded bg-accent/20 px-1 text-[9px]">chat+reason</span></span>
+              <span class="inline-flex items-center gap-1 rounded-md border border-border bg-panel-2 px-2 py-0.5 text-[11px] text-muted">claude-haiku<span class="ml-0.5 rounded bg-panel px-1 text-[9px]">chat</span></span>
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <label class="settings-label">Reasoning control</label>
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-panel-2 p-0.5">
+              <button class="rounded-md px-2 py-0.5 text-[11px] text-muted">None</button>
+              <button class="rounded-md bg-background px-2 py-0.5 text-[11px] font-medium text-foreground shadow-sm">Effort</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <label class="settings-label">Default reasoning effort</label>
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-panel-2 p-0.5">
+              <button class="rounded-md px-2 py-0.5 text-[11px] text-muted">none</button>
+              <button class="rounded-md px-2 py-0.5 text-[11px] text-muted">low</button>
+              <button class="rounded-md bg-background px-2 py-0.5 text-[11px] font-medium text-foreground shadow-sm">medium</button>
+              <button class="rounded-md px-2 py-0.5 text-[11px] text-muted">high</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1.5">
+              <label class="settings-label">Temperature</label>
+              <input class="settings-input" value="1.0" />
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label class="settings-label">Max tokens</label>
+              <input class="settings-input" value="16384" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="flex justify-end gap-2 pt-2">
+      <button class="btn btn-ghost btn-sm" onclick="this.closest('.dialog-overlay').classList.add('hidden'); this.closest('.dialog-overlay').classList.remove('flex')">Cancel</button>
+      <button class="btn btn-primary btn-sm">Save</button>
+    </div>
+  </div>
+</template>
+
+<script src="_shared.js"></script>
+<script>document.getElementById('reviewNav').innerHTML = mockReviewNav('settings.html');</script>
+<script>
+  function syncSettingsNav(target) {
+    document.querySelectorAll('[data-settings-nav]').forEach((button) => {
+      button.classList.toggle('settings-nav-btn-active', button.dataset.settingsNav === target);
+      button.setAttribute('aria-current', button.dataset.settingsNav === target ? 'page' : 'false');
+    });
+  }
+
+  document.querySelectorAll('[data-settings-nav]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.settingsNav;
+      syncSettingsNav(target);
+      document.querySelector(`.view-tab[data-group="st"][data-view="${target}"]`)?.click();
+    });
+  });
+
+  document.querySelectorAll('.view-tab[data-group="st"]').forEach((tab) => {
+    tab.addEventListener('click', () => syncSettingsNav(tab.dataset.view));
+  });
+
+  syncSettingsNav('general');
+
+  const overlay = document.getElementById('providerOverlay');
+  if (overlay && !overlay.querySelector('.dialog-panel')) {
+    const tpl = document.getElementById('providerEditTemplate');
+    overlay.appendChild(tpl.content.cloneNode(true));
+  }
+</script>
+<script src="_icons.js"></script>
+</body>
+</html>

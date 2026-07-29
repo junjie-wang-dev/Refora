@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-platform="mac" data-window-focused="true">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refora — Onboarding mock</title>
+<link rel="stylesheet" href="_utilities.css" />
+<link rel="stylesheet" href="_tokens.css" />
+<style>
+  @keyframes splash-spin { to { transform: rotate(360deg); } }
+  .splash-spinner { animation: splash-spin 0.8s linear infinite; }
+</style>
+</head>
+<body class="font-sans antialiased text-[13px]">
+
+<div class="mock-reviewbar flex items-center gap-3 px-4 h-11 border-b border-border text-[12.5px]">
+  <span class="font-semibold tracking-tight">Refora · Onboarding</span>
+  <span class="text-muted">static mock</span>
+  <div class="ml-2 inline-flex rounded-lg border border-border p-0.5 bg-background">
+    <button data-view="splash" data-group="ob" class="view-tab px-3 py-1 rounded-md font-medium">Splash</button>
+    <button data-view="wizard" data-group="ob" class="view-tab px-3 py-1 rounded-md font-medium">First-run wizard</button>
+    <button data-view="scanning" data-group="ob" class="view-tab px-3 py-1 rounded-md font-medium">Scanning</button>
+    <button data-view="error" data-group="ob" class="view-tab px-3 py-1 rounded-md font-medium">Error</button>
+  </div>
+  <span class="ml-2 text-muted">Boot-time surfaces before the library is set up.</span>
+  <nav class="ml-2 flex items-center gap-1 text-[12px]" id="reviewNav"></nav>
+  <button id="themeBtn" class="ml-auto px-2.5 py-1 rounded-md border border-border bg-background hover:border-muted">◐ Theme</button>
+</div>
+
+<div class="p-6" style="height:calc(100vh - 44px); background:var(--color-background)">
+
+  <!-- ============ SPLASH ============ -->
+  <div data-view="splash" data-group="ob" class="view-panel relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
+    <div class="flex flex-col items-center text-center">
+      <div class="flex h-20 w-20 items-center justify-center rounded-[22px] border border-border bg-panel shadow-md">
+        <svg class="h-11 w-11 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-book-open"/></svg>
+      </div>
+      <h1 class="mt-5 text-xl font-semibold tracking-tight text-foreground">Refora</h1>
+      <p class="mt-1 text-xs text-muted">Your local research library</p>
+      <div class="mt-7 flex items-center gap-2 text-label text-muted">
+        <div class="h-4 w-4 splash-spinner rounded-full border-2 border-border border-t-accent"></div>
+        Preparing your library
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ FIRST-RUN WIZARD ============ -->
+  <div data-view="wizard" data-group="ob" class="view-panel hidden relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
+    <div class="dialog-overlay absolute inset-0 flex items-center justify-center" style="position:absolute">
+      <div class="dialog-panel flex w-80 flex-col items-center gap-4">
+        <svg class="h-12 w-12 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-book-open"/></svg>
+        <h1 class="text-base font-semibold text-foreground">Welcome to Refora</h1>
+        <p class="text-center text-xs leading-relaxed text-muted">Choose a Library Folder to store your PDFs. This is required to start using Refora. Any PDF you add there is imported automatically.</p>
+        <div class="flex w-full flex-col gap-2">
+          <button class="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover">
+            <svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-folder-open"/></svg>
+            Choose Library Folder
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SCANNING ============ -->
+  <div data-view="scanning" data-group="ob" class="view-panel hidden relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
+    <div class="dialog-overlay absolute inset-0 flex items-center justify-center" style="position:absolute">
+      <div class="dialog-panel flex w-80 flex-col items-center gap-4">
+        <svg class="h-12 w-12 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-book-open"/></svg>
+        <h1 class="text-base font-semibold text-foreground">Welcome to Refora</h1>
+        <p class="text-center text-xs leading-relaxed text-muted">Choose a Library Folder to store your PDFs. This is required to start using Refora. Any PDF you add there is imported automatically.</p>
+        <div class="flex w-full flex-col gap-2">
+          <button class="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white" disabled>
+            <svg class="h-4 w-4 splash-spinner" viewBox="0 0 256 256" fill="currentColor"><use href="#i-circle-notch"/></svg>
+            Scanning library…
+          </button>
+        </div>
+        <div class="flex w-full items-center gap-2 px-1">
+          <div class="h-1 flex-1 overflow-hidden rounded-full bg-panel-2">
+            <div class="h-full rounded-full bg-accent" style="width:62%"></div>
+          </div>
+          <span class="text-label tabular-nums text-muted">62%</span>
+        </div>
+        <p class="text-center text-label text-muted">Found 86 PDFs so far…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ERROR ============ -->
+  <div data-view="error" data-group="ob" class="view-panel hidden relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
+    <div class="dialog-overlay absolute inset-0 flex items-center justify-center" style="position:absolute">
+      <div class="dialog-panel flex w-80 flex-col items-center gap-4">
+        <svg class="h-12 w-12 text-accent" viewBox="0 0 256 256" fill="currentColor"><use href="#i-book-open"/></svg>
+        <h1 class="text-base font-semibold text-foreground">Welcome to Refora</h1>
+        <p class="text-center text-xs leading-relaxed text-muted">Choose a Library Folder to store your PDFs. This is required to start using Refora. Any PDF you add there is imported automatically.</p>
+        <div class="flex w-full flex-col gap-2">
+          <button class="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover">
+            <svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-folder-open"/></svg>
+            Choose Library Folder
+          </button>
+        </div>
+        <div class="w-full rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error">Failed to set library folder — the selected folder is not writable.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script src="_shared.js"></script>
+<script>document.getElementById('reviewNav').innerHTML = mockReviewNav('onboarding.html');</script>
+<script src="_icons.js"></script>
+</body>
+</html>

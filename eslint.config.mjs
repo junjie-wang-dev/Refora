@@ -11,6 +11,7 @@ export default tseslint.config(
       'release/**',
       'build/**',
       '.kilo/**',
+      'ui-mocks/**',
       '*.tsbuildinfo'
     ]
   },

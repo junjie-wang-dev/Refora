@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-platform="mac" data-window-focused="true">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refora — app layout mockups</title>
+<link rel="stylesheet" href="_utilities.css" />
+<link rel="stylesheet" href="_tokens.css" />
+</head>
+<body class="font-sans antialiased text-[13px]">
+
+<!-- ============ review-only switcher bar (not part of the product) ============ -->
+<div class="mock-reviewbar flex items-center gap-3 px-4 h-11 border-b border-border text-[12.5px]">
+  <span class="font-semibold tracking-tight">Refora · app layout</span>
+  <span class="text-muted">static mock</span>
+  <div class="ml-2 inline-flex rounded-lg border border-border p-0.5 bg-background">
+    <button data-view="library" data-group="app" class="view-tab px-3 py-1 rounded-md font-medium">Library</button>
+    <button data-view="workspace" data-group="app" class="view-tab px-3 py-1 rounded-md font-medium">Workspace + Chat</button>
+  </div>
+  <nav class="ml-2 flex items-center gap-1 text-[12px]" id="reviewNav"></nav>
+  <div class="ml-auto flex items-center gap-2">
+    <button id="themeBtn" class="px-2.5 py-1 rounded-md border border-border bg-background hover:border-muted">◐ Theme</button>
+  </div>
+</div>
+
+<!-- ============ app frame ============ -->
+<div class="flex" style="height:calc(100vh - 44px)">
+
+  <!-- ---------- floating sidebar (shared chrome) ---------- -->
+  <div class="relative z-30 shrink-0" style="width:224px; padding:8px 0 8px 8px">
+    <div class="sidebar-vibrancy-frame" aria-hidden="true"><div class="sidebar-vibrancy-frame__mask"></div></div>
+    <aside class="sidebar-floating relative z-10 flex h-full w-full flex-col">
+      <!-- drag region header -->
+      <div class="flex h-10 shrink-0 items-center px-2">
+        <div class="ml-auto mr-2 flex items-center gap-3">
+          <button class="sidebar-header-btn" title="Collapse Sidebar"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrow-line-left"/></svg></button>
+          <button class="sidebar-header-btn" title="Add PDF File"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-plus"/></svg></button>
+          <button class="sidebar-header-btn" title="Import by Identifier"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-arrow-down"/></svg></button>
+        </div>
+      </div>
+
+      <nav class="min-h-0 flex-1 overflow-y-auto py-2">
+        <!-- smart items -->
+        <div class="mb-4 px-1">
+          <div class="sidebar-item sidebar-item-active"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-files"/></svg><span class="min-w-0 flex-1 truncate">All Files</span><span class="shrink-0 text-[10px] tabular-nums text-muted">128</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-clock"/></svg><span class="min-w-0 flex-1 truncate">Recently Read</span><span class="shrink-0 text-[10px] tabular-nums text-muted">42</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg><span class="min-w-0 flex-1 truncate">Recently Added</span><span class="shrink-0 text-[10px] tabular-nums text-muted">7</span></div>
+          <div class="sidebar-item"><svg class="sidebar-item-icon h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg><span class="min-w-0 flex-1 truncate">Starred</span><span class="shrink-0 text-[10px] tabular-nums text-muted">12</span></div>
+        </div>
+
+        <!-- workspaces -->
+        <div class="mb-4">
+          <div class="flex items-center gap-1.5 px-2.5 py-1.5 text-label font-semibold uppercase tracking-wide text-muted"><span class="flex-1">Workspaces</span><button class="-mr-1 text-muted hover:text-foreground" title="Create Workspace"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg></button></div>
+          <div class="px-1">
+            <div class="sidebar-item"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-squares-four"/></svg><span class="min-w-0 flex-1 truncate">Transformer architectures</span></div>
+            <div class="sidebar-item"><svg class="h-4 w-4 shrink-0" viewBox="0 0 256 256" fill="currentColor"><use href="#i-squares-four"/></svg><span class="min-w-0 flex-1 truncate">Graph RL survey</span></div>
+          </div>
+        </div>
+
+        <!-- categories -->
+        <div class="mb-4">
+          <div class="flex items-center gap-1.5 px-2.5 py-1.5 text-label font-semibold uppercase tracking-wide text-muted"><span class="flex-1">Categories</span><button class="-mr-1 text-muted hover:text-foreground" title="Create Category"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg></button></div>
+          <div class="px-1">
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Foundations</span><span class="shrink-0 text-[10px] tabular-nums text-muted">23</span></div>
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Optimization</span><span class="shrink-0 text-[10px] tabular-nums text-muted">14</span></div>
+            <div class="sidebar-item"><span class="min-w-0 flex-1 truncate">Multimodal</span><span class="shrink-0 text-[10px] tabular-nums text-muted">9</span></div>
+          </div>
+        </div>
+      </nav>
+
+      <!-- footer -->
+      <div class="mt-auto px-2 py-2">
+        <div class="mr-2 flex items-center justify-end gap-2">
+          <button class="sidebar-header-btn" title="Theme"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sun"/></svg></button>
+          <button class="sidebar-header-btn" title="Settings"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-gear"/></svg></button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ---------- main column ---------- -->
+  <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+
+    <!-- top bar with global search + chat toggle -->
+    <div class="relative h-12 w-full shrink-0 bg-background">
+      <div class="pointer-events-auto absolute left-1/2 top-2.5 z-[60] isolate w-[min(480px,calc(100vw-32px))] -translate-x-1/2">
+        <div class="relative">
+          <svg class="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-magnifying-glass"/></svg>
+          <input class="h-8 w-full min-w-0 rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent shadow-sm" placeholder="Search papers, workspace content, files, and chats…" />
+        </div>
+      </div>
+      <div class="absolute right-3 top-2.5 z-[60] flex items-center">
+        <button id="chatToggle" class="flex h-7 w-7 items-center justify-center rounded-lg bg-active text-accent hover:bg-hover" title="Close AI chat">
+          <svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-chat-circle-text"/></svg>
+        </button>
+      </div>
+      <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-px" style="background:linear-gradient(to right, var(--color-background), var(--color-border) 100px)"></div>
+    </div>
+
+    <!-- ============================ LIBRARY VIEW ============================ -->
+    <div id="view-library" data-view="library" data-group="app" class="view-panel relative min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div class="flex h-full min-h-0 min-w-0 overflow-hidden">
+        <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+
+          <!-- document list -->
+          <div class="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+            <!-- column header bar -->
+            <div class="relative flex" style="background:linear-gradient(to right, var(--color-background), var(--color-panel) 60px)">
+              <div class="w-10 flex-shrink-0"></div>
+              <div class="w-8 flex-shrink-0"></div>
+              <div class="w-8 flex-shrink-0"></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:300px;min-width:300px"><span class="truncate">Title</span></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:192px;min-width:192px"><span class="truncate">Authors</span></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:64px;min-width:64px"><span class="truncate">Year</span></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:128px;min-width:128px"><span class="truncate">Venue</span></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:96px;min-width:96px"><span class="truncate">Added</span><span class="doc-sort-indicator ml-0.5"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-down"/></svg></span></div>
+              <div class="flex items-center px-1 text-label font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0" style="width:192px;min-width:192px"><span class="truncate">Path</span></div>
+              <div class="absolute bottom-0 left-0 right-0 h-px" style="background:linear-gradient(to right, var(--color-background), var(--color-border) 100px)"></div>
+            </div>
+
+            <!-- rows -->
+            <div class="min-h-0 flex-1 overflow-auto">
+              <div class="doc-row doc-row-selected flex items-center px-3 text-xs cursor-pointer" style="height:36px">
+                <div class="flex w-10 flex-shrink-0 items-center justify-center"><input type="checkbox" class="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer" checked /></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="flex items-center justify-center text-accent hover:text-accent-hover" title="Open"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></button></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 star-active" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+                <div class="truncate px-1 text-foreground" style="width:300px;flex-shrink:0">Attention Is All You Need</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">Ashish Vaswani; Noam Shazeer</div>
+                <div class="truncate px-1 text-muted" style="width:64px;flex-shrink:0">2017</div>
+                <div class="truncate px-1 text-muted" style="width:128px;flex-shrink:0">NeurIPS</div>
+                <div class="truncate px-1 text-muted" style="width:96px;flex-shrink:0">Jun 12, 2024</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">~/Refora Library/1706.03762.pdf</div>
+              </div>
+
+              <div class="doc-row flex items-center px-3 text-xs cursor-pointer" style="height:36px">
+                <div class="flex w-10 flex-shrink-0 items-center justify-center"><input type="checkbox" class="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer" /></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="flex items-center justify-center text-accent hover:text-accent-hover" title="Open"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></button></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+                <div class="truncate px-1 text-foreground" style="width:300px;flex-shrink:0">BERT: Pre-training of Deep Bidirectional Transformers</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">Jacob Devlin; Ming-Wei Chang</div>
+                <div class="truncate px-1 text-muted" style="width:64px;flex-shrink:0">2019</div>
+                <div class="truncate px-1 text-muted" style="width:128px;flex-shrink:0">NAACL</div>
+                <div class="truncate px-1 text-muted" style="width:96px;flex-shrink:0">Jun 10, 2024</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">~/Refora Library/1810.04805.pdf</div>
+              </div>
+
+              <div class="doc-row flex items-center px-3 text-xs cursor-pointer" style="height:36px">
+                <div class="flex w-10 flex-shrink-0 items-center justify-center"><input type="checkbox" class="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer" /></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="flex items-center justify-center text-accent hover:text-accent-hover" title="Open"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></button></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 star-active" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+                <div class="truncate px-1 text-foreground" style="width:300px;flex-shrink:0">Language Models are Few-Shot Learners</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">Tom Brown; Benjamin Mann</div>
+                <div class="truncate px-1 text-muted" style="width:64px;flex-shrink:0">2020</div>
+                <div class="truncate px-1 text-muted" style="width:128px;flex-shrink:0">NeurIPS</div>
+                <div class="truncate px-1 text-muted" style="width:96px;flex-shrink:0">May 28, 2024</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">~/Refora Library/2005.14165.pdf</div>
+              </div>
+
+              <div class="doc-row flex items-center px-3 text-xs cursor-pointer" style="height:36px">
+                <div class="flex w-10 flex-shrink-0 items-center justify-center"><input type="checkbox" class="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer" /></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="flex items-center justify-center text-accent hover:text-accent-hover" title="Open"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></button></div>
+                <div class="flex w-8 flex-shrink-0 items-center justify-center text-center"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+                <div class="truncate px-1 text-foreground" style="width:300px;flex-shrink:0">Direct Preference Optimization</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">Rafael Rafailov; Archit Sharma</div>
+                <div class="truncate px-1 text-muted" style="width:64px;flex-shrink:0">2023</div>
+                <div class="truncate px-1 text-muted" style="width:128px;flex-shrink:0">NeurIPS</div>
+                <div class="truncate px-1 text-muted" style="width:96px;flex-shrink:0">Mar 19, 2024</div>
+                <div class="truncate px-1 text-muted" style="width:192px;flex-shrink:0">~/Refora Library/2305.18290.pdf</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- resize divider -->
+          <div class="w-px shrink-0 bg-border/60"></div>
+
+          <!-- detail panel -->
+          <div class="relative z-20 min-w-0 overflow-hidden bg-background" style="width:384px;min-width:0">
+            <div class="h-full min-h-0 overflow-y-auto overflow-x-hidden">
+              <!-- PanelHeader -->
+              <div class="flex h-9 shrink-0 items-center gap-2 px-2">
+                <span class="flex-1"></span>
+                <button class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-foreground" title="Close"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button>
+              </div>
+
+              <div class="-mt-4 flex flex-col">
+                <div class="border-b border-border/60 px-5 pb-4 pt-4">
+                  <button class="flex items-center gap-1.5 text-sm font-medium text-foreground hover:text-accent hover:no-underline">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrow-clockwise"/></svg>
+                    <span>Refresh Metadata</span>
+                  </button>
+                  <div class="mt-3 px-3"><div class="text-lg font-semibold leading-6 tracking-tight">Attention Is All You Need</div></div>
+                  <div class="mt-1 px-3 text-sm leading-5 text-muted">2017</div>
+                </div>
+
+                <div class="flex flex-col px-8 py-5">
+                  <div class="grid grid-cols-[84px_minmax(0,1fr)] gap-x-4">
+                    <span class="pt-1 text-[13px] text-muted">Authors</span>
+                    <div class="flex flex-wrap gap-2">
+                      <span class="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground">Ashish Vaswani</span>
+                      <span class="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground">Noam Shazeer</span>
+                      <span class="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground">Niki Parmar</span>
+                    </div>
+                  </div>
+
+                  <div class="mt-3 grid grid-cols-[84px_minmax(0,1fr)] gap-x-4">
+                    <span class="pt-1 text-[13px] text-muted">Affiliations</span>
+                    <div class="flex flex-wrap gap-2">
+                      <span class="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground">Google Brain</span>
+                      <span class="rounded-lg border border-border/60 bg-panel px-2.5 py-1 text-[13px] text-foreground">Google Research</span>
+                    </div>
+                  </div>
+
+                  <div class="mt-5 grid grid-cols-[84px_minmax(0,1fr)] gap-x-4 gap-y-2">
+                    <span class="text-[13px] leading-5 text-muted">Venue</span><span class="text-[13px] leading-5 text-foreground">NeurIPS</span>
+                    <span class="text-[13px] leading-5 text-muted">Volume</span><span class="text-[13px] leading-5 text-muted">30</span>
+                    <span class="text-[13px] leading-5 text-muted">Issue</span><span class="text-[13px] leading-5 text-muted">—</span>
+                    <span class="text-[13px] leading-5 text-muted">Pages</span><span class="text-[13px] leading-5 text-muted">5998–6008</span>
+                  </div>
+
+                  <div class="mt-5">
+                    <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Abstract</span>
+                    <p class="mt-2 text-justify text-sm leading-[22px] text-foreground">The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.</p>
+                  </div>
+
+                  <div class="mt-6 grid grid-cols-[84px_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-border pt-5">
+                    <span class="text-[13px] leading-5 text-muted">Keywords</span><span class="text-[13px] leading-5 text-muted">attention; transformer; self-attention</span>
+                    <span class="text-[13px] leading-5 text-muted">URL</span><span class="text-[13px] leading-5 text-muted">arxiv.org/abs/1706.03762</span>
+                    <span class="text-[13px] leading-5 text-muted">DOI</span><span class="text-[13px] leading-5 text-muted">10.48550/arXiv.1706.03762</span>
+                    <span class="text-[13px] leading-5 text-muted">arXiv ID</span><span class="text-[13px] leading-5 text-muted">1706.03762</span>
+                  </div>
+
+                  <div class="mt-6 flex flex-col gap-1 border-t border-border pt-5">
+                    <span class="text-label font-semibold uppercase tracking-wide text-muted">Added</span>
+                    <div class="text-sm text-muted">Jun 12, 2024</div>
+                  </div>
+
+                  <div class="mt-4 flex flex-col gap-1">
+                    <div class="flex items-center justify-between">
+                      <span class="text-label font-semibold uppercase tracking-wide text-muted">Path</span>
+                      <div class="flex items-center gap-2">
+                        <button class="flex items-center gap-1 text-xs text-accent hover:underline"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg>Open File</button>
+                        <button class="flex items-center gap-1 text-xs text-accent hover:underline"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-folder-open"/></svg>Show in Folder</button>
+                      </div>
+                    </div>
+                    <span class="truncate text-sm text-muted">~/Refora Library/1706.03762.pdf</span>
+                  </div>
+
+                  <div class="mt-5 flex flex-col gap-3 border-t border-border pt-5">
+                    <div>
+                      <div class="text-label font-semibold uppercase tracking-wide text-muted">Structured document</div>
+                      <p class="mb-0 mt-1 text-xs leading-5 text-muted">Use local MinerU OCR to create searchable Markdown with formulas, tables, and images.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <div class="flex h-8 items-center rounded-lg border border-border bg-background px-3 text-xs text-foreground">Balanced</div>
+                      <button class="flex h-8 items-center rounded-lg px-3 text-xs text-foreground hover:bg-hover">Convert with MinerU</button>
+                    </div>
+                  </div>
+
+                  <div class="mt-5">
+                    <span class="text-label font-semibold uppercase tracking-wide text-muted">Notes</span>
+                    <div class="mt-1 min-h-[96px] resize-y rounded-lg border border-transparent bg-background px-3 py-1.5 text-sm text-muted hover:border-border focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent">Self-attention replaces recurrence; parallelizable and scales better on GPUs.</div>
+                  </div>
+
+                  <div class="mt-4 flex flex-col gap-1">
+                    <span class="text-label font-semibold uppercase tracking-wide text-muted">Categories</span>
+                    <div class="flex flex-wrap items-center gap-1">
+                      <span class="inline-flex items-center gap-0.5 rounded bg-panel-2 px-1.5 py-0.5 text-xs text-foreground">Foundations<button aria-label="Remove Foundations category" class="ml-0.5 text-muted hover:text-error"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button></span>
+                      <button aria-label="Add category" class="text-xs text-accent hover:text-accent-hover">+</button>
+                    </div>
+                  </div>
+
+                  <button class="mt-5 flex items-center gap-1 self-start text-error hover:opacity-90"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-trash"/></svg>Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================ WORKSPACE + CHAT VIEW ============================ -->
+    <div id="view-workspace" data-view="workspace" data-group="app" class="view-panel relative min-h-0 min-w-0 flex-1 overflow-hidden hidden">
+      <div class="flex h-full min-h-0 min-w-0 overflow-hidden">
+
+        <!-- compact document list -->
+        <div class="relative z-10 flex min-h-0 w-[280px] shrink-0 flex-col overflow-hidden bg-background">
+          <!-- PanelTabHeader -->
+          <div class="relative z-30 flex h-8 shrink-0 items-end border-b border-border bg-background">
+            <div class="-mb-px flex h-8 w-[min(320px,65%)] min-w-0 items-center gap-2 rounded-tr-xl border border-l-0 border-t-0 border-border border-b-background bg-background pl-4 pr-2">
+              <span class="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground">All Files</span>
+              <button class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-foreground" title="Close document list"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button>
+            </div>
+          </div>
+          <div class="min-h-0 flex-1 overflow-auto">
+            <div class="doc-row flex items-start px-2 py-2 text-xs" style="height:52px">
+              <div class="flex w-7 flex-shrink-0 items-start pt-0.5"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 star-active" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+              <div class="min-w-0 flex-1 pl-1">
+                <div class="flex min-w-0 items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-foreground">Attention Is All You Need</span></div>
+                <div class="mt-0.5 truncate text-xs leading-4 text-muted">Ashish Vaswani; Noam Shazeer</div>
+              </div>
+            </div>
+            <div class="doc-row flex items-start px-2 py-2 text-xs" style="height:52px">
+              <div class="flex w-7 flex-shrink-0 items-start pt-0.5"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+              <div class="min-w-0 flex-1 pl-1">
+                <div class="flex min-w-0 items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-foreground">BERT: Pre-training of Deep…</span></div>
+                <div class="mt-0.5 truncate text-xs leading-4 text-muted">Jacob Devlin; Ming-Wei Chang</div>
+              </div>
+            </div>
+            <div class="doc-row flex items-start px-2 py-2 text-xs" style="height:52px">
+              <div class="flex w-7 flex-shrink-0 items-start pt-0.5"><button class="cursor-pointer" title="Starred"><svg class="h-4 w-4 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-star"/></svg></button></div>
+              <div class="min-w-0 flex-1 pl-1">
+                <div class="flex min-w-0 items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-foreground">Language Models are Few-Shot…</span></div>
+                <div class="mt-0.5 truncate text-xs leading-4 text-muted">Tom Brown; Benjamin Mann</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="w-px shrink-0 bg-border/60"></div>
+
+        <!-- workspace board -->
+        <div class="relative z-20 min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+          <!-- PanelTabHeader -->
+          <div class="relative z-30 flex h-8 shrink-0 items-end border-b border-border bg-background">
+            <div class="-mb-px flex h-8 w-[min(320px,65%)] min-w-0 items-center gap-2 rounded-tr-xl border border-l-0 border-t-0 border-border border-b-background bg-background pl-4 pr-2">
+              <button class="text-muted hover:text-foreground" title="Back"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-left"/></svg></button>
+              <span class="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground">Transformer architectures</span>
+              <button class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-foreground" title="Close"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="ml-auto flex h-full shrink-0 items-center gap-1 px-3">
+              <button class="sidebar-header-btn" title="Add files"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-plus"/></svg></button>
+              <button class="sidebar-header-btn" title="New Markdown note"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-note-pencil"/></svg></button>
+              <button class="sidebar-header-btn" title="New sticky note"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-sticker"/></svg></button>
+              <button class="sidebar-header-btn" title="Open workspace sandbox"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-folder-open"/></svg></button>
+              <button class="sidebar-header-btn" title="Enter fullscreen"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrows-out-simple"/></svg></button>
+            </div>
+          </div>
+
+          <!-- board surface with cards -->
+          <div class="board-surface relative min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div class="grid h-full grid-cols-2 gap-5 p-6 lg:grid-cols-3">
+              <!-- paper card -->
+              <div class="resizable-card" style="box-shadow:var(--workspace-card-shadow)">
+                <div class="workspace-content-card workspace-content-card--document flex h-full w-full overflow-hidden">
+                  <button aria-label="Open slides.pdf preview" class="relative h-full max-w-[70%] shrink-0 cursor-pointer overflow-hidden bg-white text-muted"><div class="absolute inset-0 flex items-center justify-center bg-panel-2 text-muted"><svg class="h-8 w-8" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></div></button>
+                  <div class="flex min-w-0 flex-1 flex-col gap-2 p-3">
+                    <div class="workspace-card-heading min-w-0 flex-1"><span class="workspace-card-type-label">Paper</span><h3 class="workspace-card-title line-clamp-2 text-base font-semibold text-foreground">Attention Is All You Need</h3><p class="mt-0.5 truncate text-xs text-muted">Vaswani et al.</p></div>
+                    <div class="flex shrink-0 flex-wrap gap-1"><span class="inline-flex h-5 items-center rounded-md border border-border bg-panel-2 px-1.5 text-[11px] text-foreground">2017</span><span class="inline-flex h-5 items-center rounded-md border border-border bg-panel-2 px-1.5 text-[11px] text-foreground">NeurIPS</span></div>
+                    <div class="min-h-0 flex-1 overflow-y-auto text-xs text-muted"><p class="italic">Click to generate an AI summary</p></div>
+                  </div>
+                </div>
+              </div>
+              <!-- report card -->
+              <div class="resizable-card" style="box-shadow:var(--workspace-card-shadow)">
+                <div class="workspace-content-card workspace-content-card--report flex h-full w-full cursor-pointer flex-col gap-2 overflow-hidden p-3">
+                  <div class="workspace-card-heading"><span class="workspace-card-type-label">AI report</span><h3 class="workspace-card-title line-clamp-2 text-base font-semibold text-foreground">Comparative analysis</h3><p class="mt-0.5 text-xs text-muted">Jul 14, 2024</p><p class="mt-0.5 text-xs text-muted">2 source papers</p></div>
+                  <div class="min-h-0 flex-1 overflow-y-auto text-xs text-muted"><p>This report compares the attention mechanisms across the selected papers…</p></div>
+                </div>
+              </div>
+              <!-- note card -->
+              <div class="resizable-card" style="box-shadow:var(--workspace-card-shadow)">
+                <div class="workspace-content-card workspace-content-card--note flex h-full w-full cursor-pointer flex-col gap-2 overflow-hidden p-3">
+                  <div class="workspace-card-heading"><span class="workspace-card-type-label">Markdown note</span><h3 class="workspace-card-title line-clamp-2 text-base font-semibold text-foreground">Scaling laws notes</h3><p class="mt-0.5 text-xs text-muted">Jul 10, 2024</p></div>
+                  <div class="workspace-note-preview min-h-0 flex-1 overflow-y-auto p-3 text-xs text-muted"><p>Loss scales as a power law with compute…</p></div>
+                </div>
+              </div>
+              <!-- sticky card -->
+              <div class="resizable-card" style="box-shadow:var(--workspace-card-shadow)">
+                <div class="workspace-content-card workspace-content-card--sticky relative flex h-full w-full flex-col gap-2 overflow-hidden p-3">
+                  <span class="workspace-sticky-fold"></span>
+                  <div class="flex shrink-0 items-center gap-2 pr-3"><div class="workspace-card-heading flex-1"><span class="workspace-card-type-label mb-0">Sticky note</span></div></div>
+                  <textarea class="min-h-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted/70" placeholder="Type a note…">Check citation count — cross-ref with Semantic Scholar.</textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="w-px shrink-0 bg-border/60"></div>
+
+        <!-- chat panel -->
+        <div class="relative z-20 flex min-h-0 w-[460px] shrink-0 flex-col overflow-hidden bg-background" style="container-type:inline-size">
+          <!-- PanelTabHeader -->
+          <div class="relative z-30 flex h-8 shrink-0 items-end border-b border-border bg-background">
+            <div class="-mb-px flex h-8 w-[min(320px,65%)] min-w-0 items-center gap-2 rounded-tr-xl border border-l-0 border-t-0 border-border border-b-background bg-background pl-4 pr-2">
+              <button class="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground hover:text-accent" title="New conversation">New conversation</button>
+              <button class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-foreground" title="Close"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="ml-auto flex h-full shrink-0 items-center gap-1 px-3">
+              <button class="flex h-6 w-6 items-center justify-center rounded-lg text-foreground hover:bg-hover" title="Thread history"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-clock-counter-clockwise"/></svg></button>
+              <button class="flex h-6 w-6 items-center justify-center rounded-lg text-foreground hover:bg-hover" title="New chat"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-plus"/></svg></button>
+            </div>
+          </div>
+
+          <!-- messages -->
+          <div class="min-h-0 flex-1 overflow-y-auto py-3" style="padding-inline:clamp(12px,7cqi,64px)">
+            <div class="mx-auto flex w-full max-w-[768px] flex-col gap-3">
+              <!-- user message -->
+              <div class="group flex w-full flex-col items-end">
+                <div class="chat-user-message">Summarize the key contribution of the Transformer architecture paper.</div>
+              </div>
+
+              <!-- assistant answer -->
+              <article class="chat-response-group">
+                <div class="chat-run-timeline">
+                  <button class="chat-run-toggle" aria-expanded="false">
+                    <span class="chat-run-label">Completed</span>
+                    <span class="chat-run-duration">3.2s</span>
+                    <svg class="h-3.5 w-3.5 shrink-0 text-muted -rotate-90" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-down"/></svg>
+                  </button>
+                </div>
+                <section class="chat-timeline-answer">
+                  <div class="chat-assistant-content chat-markdown"><p>The Transformer's key contribution is replacing recurrence and convolution entirely with <strong>self-attention</strong>. The scaled dot-product attention mechanism lets every position attend to all others in parallel, enabling significantly faster training on GPUs while achieving state-of-the-art results on translation tasks.</p></div>
+                </section>
+                <div class="chat-message-actions">
+                  <button class="chat-message-action text-muted opacity-60" title="Copy"><svg class="h-3 w-3" viewBox="0 0 256 256" fill="currentColor"><use href="#i-file-text"/></svg></button>
+                  <button class="chat-message-action text-muted opacity-60" title="Regenerate"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-arrow-clockwise"/></svg></button>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <!-- input area -->
+          <div class="shrink-0 py-3" style="padding-inline:clamp(12px,7cqi,64px)">
+            <div class="mx-auto flex w-full max-w-[768px] flex-col rounded-xl border border-border bg-input-area shadow-sm focus-within:border-accent focus-within:ring-1 focus-within:ring-accent">
+              <textarea rows="2" class="max-h-40 min-h-[52px] w-full resize-none bg-transparent px-3 pt-3 text-sm text-foreground placeholder:text-muted focus:outline-none" placeholder="Send a message… (Enter to send, Shift+Enter for newline)"></textarea>
+              <div class="flex min-w-0 items-center gap-1 px-2 pb-2 pt-1">
+                <button class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-foreground hover:bg-hover" title="Attach papers"><svg class="h-4 w-4" viewBox="0 0 256 256" fill="currentColor"><use href="#i-paperclip"/></svg></button>
+                <div class="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1">
+                  <button class="inline-flex w-full min-w-0 max-w-[200px] items-center gap-1 rounded-lg px-2 py-1 text-label text-foreground hover:bg-hover" title="Select model / provider">
+                    <span class="min-w-0 flex-1 truncate text-right font-medium">Anthropic/claude-sonnet-4</span>
+                    <svg class="h-3 w-3 shrink-0 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-down"/></svg>
+                  </button>
+                  <button class="inline-flex min-w-0 max-w-[112px] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-label text-foreground hover:bg-hover" title="Reasoning effort: medium">
+                    <span class="min-w-0 truncate font-medium">medium</span>
+                    <svg class="h-3 w-3 shrink-0 text-muted" viewBox="0 0 256 256" fill="currentColor"><use href="#i-caret-down"/></svg>
+                  </button>
+                  <button class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-accent text-white hover:bg-accent-hover" title="Send"><svg class="h-3.5 w-3.5" viewBox="0 0 256 256" fill="currentColor"><use href="#i-paper-plane-tilt"/></svg></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="_shared.js"></script>
+<script>document.getElementById('reviewNav').innerHTML = mockReviewNav('app-layout.html');</script>
+<script>
+  document.getElementById('chatToggle').addEventListener('click', () => {
+    document.querySelector('.view-tab[data-view="workspace"]').click();
+  });
+</script>
+<script src="_icons.js"></script>
+</body>
+</html>
