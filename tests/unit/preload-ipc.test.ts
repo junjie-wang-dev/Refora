@@ -137,6 +137,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.AiChatSend, args: [{ workspaceId: 'workspace-1', text: 'Hello', providerId: 'provider-1' }], invoke: (value) => value.ai.chatSend({ workspaceId: 'workspace-1', text: 'Hello', providerId: 'provider-1' }) },
       { channel: IpcChannel.AiChatHistory, args: ['thread-1'], invoke: (value) => value.ai.chatHistory('thread-1') },
       { channel: IpcChannel.AiChatThreads, args: ['workspace-1'], invoke: (value) => value.ai.chatThreads('workspace-1') },
+      { channel: IpcChannel.AiUsageStats, args: [], invoke: (value) => value.ai.usageStats() },
       { channel: IpcChannel.AiChatTraces, args: ['thread-1'], invoke: (value) => value.ai.chatTraces('thread-1') },
       { channel: IpcChannel.AiChatRun, args: ['run-1'], invoke: (value) => value.ai.chatRun('run-1') },
       { channel: IpcChannel.AiChatCancel, args: ['run-1'], invoke: (value) => value.ai.chatCancel('run-1') },

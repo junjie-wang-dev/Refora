@@ -1,6 +1,6 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "224ad3de017e3a4f2cbe1d0f416516fd98d899bc8d43e6735f90216226cbfe5d" as const
+export const SERVER_PROTOCOL_DIGEST = "dc0c1ae6da8596dcca884d80b04f712fd696f355d6121101aba04ba41f481163" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -90,6 +90,10 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "GET",
     "path": "/ai/summary/{document_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/usage"
   },
   {
     "method": "GET",

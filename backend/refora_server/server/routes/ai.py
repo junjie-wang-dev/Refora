@@ -370,6 +370,15 @@ def create_ai_router(deps: Any) -> APIRouter:
             lambda: _value(_value(repos, "chat"), "listThreads")(workspaceId),
         )
 
+    @router.get("/ai/usage")
+    async def get_usage(
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        return await execute(
+            authorization,
+            lambda: _value(_value(repos, "agentTraces"), "usageStats")(),
+        )
+
     @router.get("/ai/chat/threads/{thread_id}/history")
     async def get_history(
         thread_id: str,

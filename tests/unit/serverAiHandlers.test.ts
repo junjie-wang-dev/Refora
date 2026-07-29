@@ -19,6 +19,7 @@ describe('server AI IPC handlers', () => {
       aiChatCancel: vi.fn().mockResolvedValue({ ack: true }),
       aiChatHistory: vi.fn().mockResolvedValue([]),
       aiChatThreads: vi.fn().mockResolvedValue([]),
+      aiUsageStats: vi.fn().mockResolvedValue({ totalTokens: 0 }),
       aiChatTraces: vi.fn().mockResolvedValue([]),
       aiChatRun: vi.fn().mockResolvedValue({ id: 'run-1', status: 'running' }),
       aiChatPendingInterrupt: vi.fn().mockResolvedValue(null),
@@ -91,6 +92,7 @@ describe('server AI IPC handlers', () => {
     await Promise.all([
       handlers[IpcChannel.AiChatHistory]('thread-1'),
       handlers[IpcChannel.AiChatThreads](null),
+      handlers[IpcChannel.AiUsageStats](),
       handlers[IpcChannel.AiChatTraces]('thread-1'),
       handlers[IpcChannel.AiChatRun]('run-1'),
       handlers[IpcChannel.AiChatPendingInterrupt]('run-1'),
@@ -106,6 +108,7 @@ describe('server AI IPC handlers', () => {
 
     expect(http.aiChatHistory).toHaveBeenCalledWith('thread-1')
     expect(http.aiChatThreads).toHaveBeenCalledWith({})
+    expect(http.aiUsageStats).toHaveBeenCalledWith()
     expect(http.aiChatTraces).toHaveBeenCalledWith('thread-1')
     expect(http.aiChatRun).toHaveBeenCalledWith('run-1')
     expect(http.aiChatPendingInterrupt).toHaveBeenCalledWith('run-1')

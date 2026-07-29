@@ -338,6 +338,17 @@ const noop = async () => undefined
     chatSend: async () => ({ threadId: 't', runId: 'r' }),
     chatHistory: async () => [],
     chatThreads: async () => [],
+    usageStats: async () => ({
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      conversationCount: 0,
+      turnCount: 0,
+      modelCallCount: 0,
+      activeDays: 0,
+      models: [],
+      activity: []
+    }),
     chatTraces: async () => [],
     chatRun: async (runId: string) => ({
       id: runId,

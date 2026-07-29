@@ -114,6 +114,7 @@ export const IpcChannel = {
   AiChatSend: 'ai:chat:send',
   AiChatHistory: 'ai:chat:history',
   AiChatThreads: 'ai:chat:threads',
+  AiUsageStats: 'ai:usage:stats',
   AiChatTraces: 'ai:chat:traces',
   AiChatRun: 'ai:chat:run',
   AiChatCancel: 'ai:chat:cancel',

@@ -1364,6 +1364,14 @@
   border: 0;
 }
 
+.usage-heatmap-scroll {
+  scrollbar-width: none;
+}
+
+.usage-heatmap-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 [data-theme='light'] .settings-titlebar-material {
   background-color: rgba(246, 246, 246, 0.82);
 }

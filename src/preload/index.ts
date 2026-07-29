@@ -10,6 +10,7 @@ import type {
   AiProviderPatch,
   AiReport,
   AiSummary,
+  AiUsageStats,
   BibImportResult,
   BootstrapData,
   Category,
@@ -346,6 +347,7 @@ const api: ReforaApi = {
     chatHistory: (threadId: string) => invoke<ChatMessage[]>(IpcChannel.AiChatHistory, threadId),
     chatThreads: (workspaceId: string | null) =>
       invoke<ChatThread[]>(IpcChannel.AiChatThreads, workspaceId),
+    usageStats: () => invoke<AiUsageStats>(IpcChannel.AiUsageStats),
     chatTraces: (threadId: string) =>
       invoke<AgentTraceStep[]>(IpcChannel.AiChatTraces, threadId),
     chatRun: (runId: string) => invoke<AgentRun>(IpcChannel.AiChatRun, runId),

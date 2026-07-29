@@ -463,6 +463,30 @@ export interface AiReport {
   createdAt: number
 }
 
+export interface AiUsageModel {
+  model: string
+  tokens: number
+  calls: number
+}
+
+export interface AiUsageActivity {
+  date: string
+  tokens: number
+  turns: number
+}
+
+export interface AiUsageStats {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  conversationCount: number
+  turnCount: number
+  modelCallCount: number
+  activeDays: number
+  models: AiUsageModel[]
+  activity: AiUsageActivity[]
+}
+
 export interface WorkspaceNote {
   id: string
   workspaceId: string
@@ -873,6 +897,7 @@ export interface ReforaApi {
     chatSend(req: ChatSendRequest): Promise<{ threadId: string; runId: string }>
     chatHistory(threadId: string): Promise<ChatMessage[]>
     chatThreads(workspaceId: string | null): Promise<ChatThread[]>
+    usageStats(): Promise<AiUsageStats>
     chatTraces(threadId: string): Promise<AgentTraceStep[]>
     chatRun(runId: string): Promise<AgentRun>
     chatCancel(runId: string): Promise<void>

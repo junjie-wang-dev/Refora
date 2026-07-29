@@ -5,6 +5,7 @@ import type { IpcError, Result } from '../../shared/ipc-types'
 import type {
   AiProvider,
   AiProviderInput,
+  AiUsageStats,
   AgentRun,
   AgentTurnIntent,
   AiReport,
@@ -399,6 +400,7 @@ export interface ServerHttp {
   aiChatResume(payload: ChatResumePayload): Promise<{ runId: string }>
   aiChatCancel(payload: ChatCancelPayload): Promise<{ ack: boolean }>
   aiChatThreads(query?: ChatThreadsQuery): Promise<ChatThread[]>
+  aiUsageStats(): Promise<AiUsageStats>
   aiChatHistory(threadId: string): Promise<ChatMessage[]>
   aiChatTraces(threadId: string): Promise<unknown[]>
   aiChatRun(runId: string): Promise<AgentRun>
@@ -650,6 +652,7 @@ export function createServerClient(
     aiChatResume: (payload) => post<{ runId: string }>('/ai/chat/resume', payload),
     aiChatCancel: (payload) => post<{ ack: boolean }>('/ai/chat/cancel', payload),
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
+    aiUsageStats: () => get<AiUsageStats>('/ai/usage'),
     aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${id}/history`),
     aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${id}/traces`),
     aiChatRun: (id) => get<AgentRun>(`/ai/chat/runs/${id}`),

@@ -165,6 +165,91 @@ def createAgentTracesRepository(db):
         )
         return cur.rowcount
 
+    def usageStats() -> dict[str, Any]:
+        totals = db.execute(
+            """
+            SELECT
+              COALESCE(SUM(inputTokens), 0) AS inputTokens,
+              COALESCE(SUM(outputTokens), 0) AS outputTokens,
+              COALESCE(SUM(COALESCE(totalTokens, COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0))), 0) AS totalTokens,
+              COUNT(*) AS modelCalls
+            FROM agent_trace_steps
+            WHERE kind = 'llm'
+            """
+        ).fetchone()
+        conversation_count = db.execute(
+            "SELECT COUNT(*) AS count FROM chat_threads"
+        ).fetchone()["count"]
+        turn_count = db.execute(
+            "SELECT COUNT(*) AS count FROM agent_runs"
+        ).fetchone()["count"]
+        active_days = db.execute(
+            """
+            SELECT COUNT(DISTINCT date(startedAt / 1000, 'unixepoch', 'localtime')) AS count
+            FROM agent_runs
+            """
+        ).fetchone()["count"]
+        models = db.execute(
+            """
+            SELECT
+              COALESCE(NULLIF(r.modelId, ''), 'Unknown') AS model,
+              COALESCE(SUM(COALESCE(s.totalTokens, COALESCE(s.inputTokens, 0) + COALESCE(s.outputTokens, 0))), 0) AS tokens,
+              COUNT(*) AS calls
+            FROM agent_trace_steps s
+            LEFT JOIN agent_runs r ON r.id = s.runId
+            WHERE s.kind = 'llm'
+            GROUP BY COALESCE(NULLIF(r.modelId, ''), 'Unknown')
+            HAVING COALESCE(SUM(COALESCE(s.totalTokens, COALESCE(s.inputTokens, 0) + COALESCE(s.outputTokens, 0))), 0) > 0
+            ORDER BY tokens DESC, model ASC
+            """
+        ).fetchall()
+        activity = db.execute(
+            """
+            WITH run_usage AS (
+              SELECT
+                r.id,
+                r.threadId,
+                r.startedAt,
+                COALESCE(SUM(COALESCE(s.totalTokens, COALESCE(s.inputTokens, 0) + COALESCE(s.outputTokens, 0))), 0) AS tokens
+              FROM agent_runs r
+              LEFT JOIN agent_trace_steps s ON s.runId = r.id AND s.kind = 'llm'
+              GROUP BY r.id, r.threadId, r.startedAt
+            )
+            SELECT
+              date(startedAt / 1000, 'unixepoch', 'localtime') AS date,
+              SUM(tokens) AS tokens,
+              COUNT(*) AS turns
+            FROM run_usage
+            GROUP BY date(startedAt / 1000, 'unixepoch', 'localtime')
+            ORDER BY date ASC
+            """
+        ).fetchall()
+        return {
+            "totalTokens": int(totals["totalTokens"]),
+            "inputTokens": int(totals["inputTokens"]),
+            "outputTokens": int(totals["outputTokens"]),
+            "conversationCount": int(conversation_count),
+            "turnCount": int(turn_count),
+            "modelCallCount": int(totals["modelCalls"]),
+            "activeDays": int(active_days),
+            "models": [
+                {
+                    "model": row["model"],
+                    "tokens": int(row["tokens"]),
+                    "calls": int(row["calls"]),
+                }
+                for row in models
+            ],
+            "activity": [
+                {
+                    "date": row["date"],
+                    "tokens": int(row["tokens"]),
+                    "turns": int(row["turns"]),
+                }
+                for row in activity
+            ],
+        }
+
     return {
         "addStep": addStep,
         "updateStep": updateStep,
@@ -174,4 +259,5 @@ def createAgentTracesRepository(db):
         "deleteByRun": deleteByRun,
         "deleteOlderThan": deleteOlderThan,
         "reconcileRunning": reconcileRunning,
+        "usageStats": usageStats,
     }

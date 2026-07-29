@@ -7,6 +7,7 @@ import type {
   AgentTraceStep,
   AiReport,
   AiSummary,
+  AiUsageStats,
   ChatMessage,
   ChatSendRequest,
   ChatThread,
@@ -77,6 +78,8 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       asyncWrap(() => http.aiChatHistory(threadId)),
     [IpcChannel.AiChatThreads]: (workspaceId: string | null): Promise<Result<ChatThread[]>> =>
       asyncWrap(() => http.aiChatThreads(workspaceId === null ? {} : { workspaceId })),
+    [IpcChannel.AiUsageStats]: (): Promise<Result<AiUsageStats>> =>
+      asyncWrap(() => http.aiUsageStats()),
     [IpcChannel.AiChatTraces]: (threadId: string): Promise<Result<AgentTraceStep[]>> =>
       asyncWrap(async () => (await http.aiChatTraces(threadId)) as AgentTraceStep[]),
     [IpcChannel.AiChatRun]: (runId: string): Promise<Result<AgentRun>> =>

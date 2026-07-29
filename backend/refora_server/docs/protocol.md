@@ -153,6 +153,7 @@ never raise across the transport.
 | GET | `/ai/chat/threads` | required | `?workspaceId=` | `Thread[]` |
 | GET | `/ai/chat/threads/{threadId}/history` | required | — | `Message[]` |
 | GET | `/ai/chat/threads/{threadId}/traces` | required | — | `Trace[]` |
+| GET | `/ai/usage` | required | — | `AiUsageStats` |
 | GET | `/ai/chat/runs/{runId}` | required | — | `AgentRun` |
 | GET | `/ai/chat/runs/{runId}/pending-interrupt` | required | — | `Interrupt\|null` |
 | DELETE | `/ai/chat/threads/{threadId}` | required | — | `{ack:true}` |

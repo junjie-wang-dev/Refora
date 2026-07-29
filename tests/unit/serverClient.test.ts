@@ -294,6 +294,7 @@ describe('serverClient', () => {
       })
       await client.http.aiChatCancel({ runId: 'r1' })
       await client.http.aiChatThreads({ workspaceId: 'w1' })
+      await client.http.aiUsageStats()
       await client.http.aiChatRun('r1')
       await client.http.aiChatPendingInterrupt('r1')
       await client.http.aiChatMemories(null)
@@ -309,9 +310,10 @@ describe('serverClient', () => {
       expect(calls[1].url).toContain('/ai/chat/cancel')
       expect(calls[2].url).toContain('/ai/chat/threads')
       expect(calls[2].url).toContain('workspaceId=w1')
-      expect(calls[3].url).toContain('/ai/chat/runs/r1')
-      expect(calls[4].url).toContain('/ai/chat/runs/r1/pending-interrupt')
-      expect(calls[5].url).toContain('/ai/memories')
+      expect(calls[3].url).toContain('/ai/usage')
+      expect(calls[4].url).toContain('/ai/chat/runs/r1')
+      expect(calls[5].url).toContain('/ai/chat/runs/r1/pending-interrupt')
+      expect(calls[6].url).toContain('/ai/memories')
     })
 
     it('unwraps the persistent run snapshot envelope', async () => {

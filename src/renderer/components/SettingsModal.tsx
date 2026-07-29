@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, type ReactNode } from 'react'
 import { Modal, Button, Select } from '@lobehub/ui'
-import { Brain, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
+import { Brain, ChartDonut, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
 import { api } from '../ipc'
 import { changeLanguage, type AppLanguage } from '../i18n'
@@ -13,6 +13,7 @@ import { IpcChannel } from '../../shared/ipc-channels'
 import { formatElapsedClock } from '../utils/format'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { WebSearchSettings } from './WebSearchSettings'
+import { UsageStatsSection } from './UsageStatsSection'
 
 interface SettingsModalProps {
   open: boolean
@@ -40,7 +41,14 @@ const MINERU_INSTALL_STAGES = [
   'finalizing'
 ] as const
 
-type SettingsPage = 'general' | 'appearance' | 'mineru' | 'aiProviders' | 'webSearch' | 'agentMemory'
+type SettingsPage =
+  | 'general'
+  | 'appearance'
+  | 'mineru'
+  | 'aiProviders'
+  | 'usage'
+  | 'webSearch'
+  | 'agentMemory'
 
 const AGENT_MEMORY_PATHS = [
   '/brief.md',
@@ -519,6 +527,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       icon: Sparkle
     },
     {
+      id: 'usage' as const,
+      label: t('settings.usage.title'),
+      description: t('settings.usage.desc'),
+      icon: ChartDonut
+    },
+    {
       id: 'webSearch' as const,
       label: t('settings.webSearch.title'),
       description: t('settings.webSearch.desc'),
@@ -669,6 +683,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           {activePage === 'mineru' && <MineruSettingsSection onError={setError} />}
 
           {activePage === 'aiProviders' && <ProviderConnectionsSection />}
+
+          {activePage === 'usage' && <UsageStatsSection onError={setError} />}
 
           {activePage === 'webSearch' && <WebSearchSettings />}
 

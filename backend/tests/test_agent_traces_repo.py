@@ -108,6 +108,66 @@ def test_add_step_depth_defaults_to_zero_when_none(thread, db):
     assert step["depth"] == 0
 
 
+def test_usage_stats_aggregate_tokens_models_conversations_and_activity(thread, db):
+    runs = make_agent_runs_repo(db)
+    traces = make_agent_traces_repo(db)
+    runs["create"](
+        {
+            "id": "run-1",
+            "threadId": thread["id"],
+            "providerId": "provider-1",
+            "modelId": "model-a",
+            "startedAt": 1_750_000_000_000,
+        }
+    )
+    runs["create"](
+        {
+            "id": "run-2",
+            "threadId": thread["id"],
+            "providerId": "provider-1",
+            "modelId": "model-b",
+            "startedAt": 1_750_000_100_000,
+        }
+    )
+    traces["addStep"](
+        _step_input(
+            thread,
+            runId="run-1",
+            kind="llm",
+            inputTokens=90,
+            outputTokens=30,
+            totalTokens=120,
+        )
+    )
+    traces["addStep"](
+        _step_input(
+            thread,
+            runId="run-2",
+            kind="llm",
+            inputTokens=40,
+            outputTokens=10,
+            totalTokens=None,
+            seq=1,
+        )
+    )
+
+    stats = traces["usageStats"]()
+
+    assert stats["totalTokens"] == 170
+    assert stats["inputTokens"] == 130
+    assert stats["outputTokens"] == 40
+    assert stats["conversationCount"] == 1
+    assert stats["turnCount"] == 2
+    assert stats["modelCallCount"] == 2
+    assert stats["activeDays"] == 1
+    assert stats["models"] == [
+        {"model": "model-a", "tokens": 120, "calls": 1},
+        {"model": "model-b", "tokens": 50, "calls": 1},
+    ]
+    assert stats["activity"][0]["tokens"] == 170
+    assert stats["activity"][0]["turns"] == 2
+
+
 def test_field_contract_matches_agent_trace_step_type(thread, db):
     repo = make_agent_traces_repo(db)
     step = repo["addStep"](_step_input(thread))

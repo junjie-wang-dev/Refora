@@ -119,7 +119,10 @@ class FakeRepos:
             "deleteThread": self.delete_thread,
             "updateTitle": self.update_title,
         }
-        self.agentTraces = {"listByThread": self.list_traces}
+        self.agentTraces = {
+            "listByThread": self.list_traces,
+            "usageStats": self.usage_stats,
+        }
         self.agentRuns = {"listByThread": self.list_runs, "get": self.get_run}
         self.agentInterrupts = {"getPendingByRun": self.pending_interrupt}
         self.agentMemories = {
@@ -195,6 +198,20 @@ class FakeRepos:
     def list_traces(self, thread_id: str) -> list[dict[str, Any]]:
         self.calls.append(("traces.listByThread", thread_id))
         return [{"id": "trace-1", "threadId": thread_id, "runId": "run-1", "kind": "run"}]
+
+    def usage_stats(self) -> dict[str, Any]:
+        self.calls.append(("traces.usageStats", None))
+        return {
+            "totalTokens": 120,
+            "inputTokens": 80,
+            "outputTokens": 40,
+            "conversationCount": 2,
+            "turnCount": 3,
+            "modelCallCount": 4,
+            "activeDays": 1,
+            "models": [{"model": "model-1", "tokens": 120, "calls": 4}],
+            "activity": [{"date": "2026-07-29", "tokens": 120, "turns": 3}],
+        }
 
     def list_runs(self, thread_id: str) -> list[dict[str, str]]:
         self.calls.append(("runs.listByThread", thread_id))
@@ -441,6 +458,7 @@ def test_chat_history_traces_interrupt_threads_and_memories() -> None:
     threads = request(client, "GET", "/ai/chat/threads", params={"workspaceId": "workspace-1"})
     history = request(client, "GET", "/ai/chat/threads/thread-1/history")
     traces = request(client, "GET", "/ai/chat/threads/thread-1/traces")
+    usage = request(client, "GET", "/ai/usage")
     run = request(client, "GET", "/ai/chat/runs/run-1")
     interrupt = request(client, "GET", "/ai/chat/runs/run-1/pending-interrupt")
     renamed = request(client, "PATCH", "/ai/chat/threads/thread-1", json={"title": "Renamed"})
@@ -462,6 +480,7 @@ def test_chat_history_traces_interrupt_threads_and_memories() -> None:
     assert threads.json()["data"][0]["id"] == "thread-1"
     assert history.json()["data"][0]["content"] == "Hello"
     assert traces.json()["data"][0]["id"] == "trace-1"
+    assert usage.json()["data"]["totalTokens"] == 120
     assert run.json()["data"]["status"] == "interrupted"
     assert interrupt.json()["data"]["id"] == "interrupt-1"
     assert renamed.json()["data"]["title"] == "Renamed"
