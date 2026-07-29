@@ -47,6 +47,7 @@ const note = {
   id: 'note-1',
   workspaceId: workspace.id,
   noteType: 'markdown' as const,
+  color: 'sand' as const,
   title: 'Note',
   contentMd: 'content',
   createdAt: 1,
@@ -226,9 +227,7 @@ describe('server workspace IPC handlers', () => {
       placement: { x: 3, y: 4 }
     })
     expect(http.workspaceNotesUpdate).toHaveBeenCalledWith(workspace.id, note.id, {
-      title: 'Updated',
-      contentMd: note.contentMd,
-      noteType: note.noteType
+      title: 'Updated'
     })
     expect(http.workspaceNotesDelete).toHaveBeenCalledWith(workspace.id, note.id)
     expect(http.workspaceConnectionGet).toHaveBeenCalledOnce()

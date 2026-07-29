@@ -6,6 +6,7 @@ import type {
   WorkspaceItemPlacement,
   AiReport,
   WorkspaceNote,
+  WorkspaceNotePatch,
   WorkspaceNoteType,
   ChatThread,
   WorkspaceItemsChangedEvent,
@@ -63,7 +64,7 @@ interface WorkspaceState {
   fetchNotes: () => Promise<void>
   createNote: (title: string, contentMd: string, noteType: WorkspaceNoteType, placement?: WorkspaceItemPlacement) => Promise<WorkspaceNote | null>
   deleteNote: (id: string) => Promise<void>
-  updateNote: (id: string, patch: { title?: string; contentMd?: string }) => Promise<boolean>
+  updateNote: (id: string, patch: WorkspaceNotePatch) => Promise<boolean>
   addItem: (kind: WorkspaceItemKind, ids: string[], placement?: WorkspaceItemPlacement) => Promise<void>
 }
 
@@ -71,6 +72,12 @@ const aiSummaryUpdatedCb: Array<null | ((docId: string) => void)> = [null]
 const aiReportCreatedCb: Array<null | ((report: AiReport) => void)> = [null]
 const workspaceItemsChangedCb: Array<null | ((payload: WorkspaceItemsChangedEvent) => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
+const noteUpdateQueues = new Map<string, Promise<void>>()
+const noteUpdateRevisions = new Map<
+  string,
+  Partial<Record<keyof WorkspaceNotePatch, number>>
+>()
+let nextNoteUpdateRevision = 0
 
 function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
@@ -615,16 +622,81 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  updateNote: async (id: string, patch: { title?: string; contentMd?: string }) => {
+  updateNote: async (id: string, patch: WorkspaceNotePatch) => {
     const workspaceId = get().activeWorkspaceId
+    const previousNote = get().notes.find((note) => note.id === id)
+    const revision = ++nextNoteUpdateRevision
+    const fields = (Object.keys(patch) as Array<keyof WorkspaceNotePatch>)
+      .filter((field) => patch[field] !== undefined)
+    const revisions = noteUpdateRevisions.get(id) ?? {}
+    fields.forEach((field) => {
+      revisions[field] = revision
+    })
+    noteUpdateRevisions.set(id, revisions)
+    const isLatest = (field: keyof WorkspaceNotePatch) =>
+      noteUpdateRevisions.get(id)?.[field] === revision
+    if (previousNote) {
+      set((s) => ({
+        notes: s.notes.map((note) => note.id === id ? { ...note, ...patch } : note)
+      }))
+    }
+    const execute = () => api.workspaceNotes.update(id, patch)
+    const previousQueue = noteUpdateQueues.get(id)
+    const request = previousQueue ? previousQueue.then(execute) : execute()
+    const settled = request.then(() => undefined, () => undefined)
+    noteUpdateQueues.set(id, settled)
     try {
-      const updated = await api.workspaceNotes.update(id, patch)
+      const updated = await request
       if (get().activeWorkspaceId !== workspaceId) return true
-      set((s) => ({ notes: s.notes.map((note) => note.id === id ? updated : note) }))
+      const hasLatestField = fields.some(isLatest)
+      set((s) => ({
+        notes: s.notes.map((note) => {
+          if (note.id !== id) return note
+          return {
+            ...note,
+            title: patch.title === undefined || !isLatest('title') ? note.title : updated.title,
+            contentMd: patch.contentMd === undefined || !isLatest('contentMd')
+              ? note.contentMd
+              : updated.contentMd,
+            color: patch.color === undefined || !isLatest('color') ? note.color : updated.color,
+            updatedAt: hasLatestField ? Math.max(note.updatedAt, updated.updatedAt) : note.updatedAt
+          }
+        })
+      }))
       return true
     } catch (e) {
+      if (previousNote && get().activeWorkspaceId === workspaceId) {
+        set((s) => ({
+          notes: s.notes.map((note) => {
+            if (note.id !== id) return note
+            return {
+              ...note,
+              title: patch.title !== undefined && isLatest('title') && note.title === patch.title
+                ? previousNote.title
+                : note.title,
+              contentMd: patch.contentMd !== undefined
+                && isLatest('contentMd')
+                && note.contentMd === patch.contentMd
+                ? previousNote.contentMd
+                : note.contentMd,
+              color: patch.color !== undefined && isLatest('color') && note.color === patch.color
+                ? previousNote.color
+                : note.color
+            }
+          })
+        }))
+      }
       toast(errorMessage(e, 'Failed to update workspace note'))
       return false
+    } finally {
+      const currentRevisions = noteUpdateRevisions.get(id)
+      fields.forEach((field) => {
+        if (currentRevisions?.[field] === revision) delete currentRevisions[field]
+      })
+      if (currentRevisions && Object.keys(currentRevisions).length === 0) {
+        noteUpdateRevisions.delete(id)
+      }
+      if (noteUpdateQueues.get(id) === settled) noteUpdateQueues.delete(id)
     }
   }
 }))

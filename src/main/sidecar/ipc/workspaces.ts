@@ -153,12 +153,8 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
     ) => wrap(() => http.workspaceNotesCreate(workspaceId, { title, contentMd, noteType, placement })),
     [IpcChannel.WorkspaceNotesUpdate]: (noteId: string, patch: WorkspaceNotePatch) =>
       wrap(async () => {
-        const { workspaceId, note } = await noteForId(noteId)
-        return http.workspaceNotesUpdate(workspaceId, noteId, {
-          title: patch.title ?? note.title,
-          contentMd: patch.contentMd ?? note.contentMd,
-          noteType: note.noteType
-        })
+        const { workspaceId } = await noteForId(noteId)
+        return http.workspaceNotesUpdate(workspaceId, noteId, patch)
       }),
     [IpcChannel.WorkspaceNotesDelete]: (noteId: string) =>
       wrap(async () => {

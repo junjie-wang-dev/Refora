@@ -467,6 +467,7 @@ export interface WorkspaceNote {
   id: string
   workspaceId: string
   noteType: WorkspaceNoteType
+  color: WorkspaceStickyColor
   title: string
   contentMd: string
   createdAt: number
@@ -474,10 +475,20 @@ export interface WorkspaceNote {
 }
 
 export type WorkspaceNoteType = 'markdown' | 'plain'
+export type WorkspaceStickyColor =
+  | 'sand'
+  | 'lemon'
+  | 'coral'
+  | 'rose'
+  | 'mint'
+  | 'sky'
+  | 'lavender'
+  | 'slate'
 
 export interface WorkspaceNotePatch {
   title?: string
   contentMd?: string
+  color?: WorkspaceStickyColor
 }
 
 export interface ChatThread {

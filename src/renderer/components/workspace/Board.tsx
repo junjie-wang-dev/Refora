@@ -2,16 +2,14 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
-import { FilePlus, NotePencil, Sticker } from '@phosphor-icons/react'
+import { FilePlus, GridFour, NotePencil, Palette, Stack, Sticker } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useDocumentStore } from '../../store/documentStore'
 import { api } from '../../ipc'
 import { markdownCardContent, paperCardMarkdown } from '../../utils/workspaceCardMarkdown'
-import { Button, EmptyState } from '../ui'
+import { EmptyState } from '../ui'
 import {
   WORKSPACE_CANVAS_DEFAULT_ZOOM,
-  WORKSPACE_CANVAS_MAX_ZOOM,
-  WORKSPACE_CANVAS_MIN_ZOOM,
   errorMessage
 } from '../../../shared/ipc-types'
 import type {
@@ -31,6 +29,7 @@ import PaperCard from './PaperCard'
 import ReportCard from './ReportCard'
 import NoteCard from './NoteCard'
 import StickyNoteCard from './StickyNoteCard'
+import { STICKY_NOTE_COLORS } from './stickyNoteColors'
 import AssetCard from './AssetCard'
 import ResizableCard, {
   clampCardSize,
@@ -46,7 +45,6 @@ import {
 } from './connectionGeometry'
 
 const DOC_MIME = 'application/x-refora-docids'
-const GRID_SIZE = 32
 const VIEWPORT_SAVE_DELAY = 160
 const EMPTY_NOTES: WorkspaceNote[] = []
 const DEFAULT_VIEWPORT: WorkspaceCanvasViewport = {
@@ -62,8 +60,62 @@ interface ConnectionDraft {
   pointer: ConnectionPoint
 }
 
-function clampZoom(zoom: number): number {
-  return Math.max(WORKSPACE_CANVAS_MIN_ZOOM, Math.min(WORKSPACE_CANVAS_MAX_ZOOM, zoom))
+interface MarqueeSelection {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+interface GridPlacement {
+  x: number
+  y: number
+}
+
+function compactGridPlacements(
+  items: WorkspaceItem[],
+  sizeFor: (item: WorkspaceItem) => CardSize,
+  originX: number,
+  originY: number
+): GridPlacement[] {
+  const gap = 24
+  const columnCount = Math.ceil(Math.sqrt(items.length))
+  const columns = Array.from({ length: columnCount }, () => ({
+    width: 0,
+    height: 0
+  }))
+  const itemColumns: number[] = []
+  const itemY: number[] = []
+
+  items.forEach((item) => {
+    const size = sizeFor(item)
+    let columnIndex = 0
+    for (let index = 1; index < columns.length; index += 1) {
+      if (columns[index].height < columns[columnIndex].height) columnIndex = index
+    }
+    const column = columns[columnIndex]
+    itemColumns.push(columnIndex)
+    itemY.push(originY + column.height)
+    column.width = Math.max(column.width, size.width)
+    column.height += size.height + gap
+  })
+
+  const columnX: number[] = []
+  let nextX = originX
+  columns.forEach((column, index) => {
+    columnX[index] = nextX
+    nextX += column.width + gap
+  })
+
+  return items.map((_, index) => ({
+    x: columnX[itemColumns[index]],
+    y: itemY[index]
+  }))
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
 }
 
 export interface BoardHandle {
@@ -114,12 +166,14 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const [dropActive, setDropActive] = useState(false)
   const [autoEditNoteId, setAutoEditNoteId] = useState<string | null>(null)
   const [autoEditStickyNoteId, setAutoEditStickyNoteId] = useState<string | null>(null)
-  const [viewport, setViewport] = useState<WorkspaceCanvasViewport>(DEFAULT_VIEWPORT)
   const [connections, setConnections] = useState<WorkspaceConnection[]>([])
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null)
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set())
+  const [animatingItemIds, setAnimatingItemIds] = useState<Set<string>>(new Set())
+  const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelection | null>(null)
+  const [spacePressed, setSpacePressed] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
-  const gridRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
   const activeWorkspaceIdRef = useRef(activeWorkspaceId)
   const viewportRef = useRef<WorkspaceCanvasViewport>(DEFAULT_VIEWPORT)
@@ -129,6 +183,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dropErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panCleanupRef = useRef<(() => void) | null>(null)
+  const marqueeCleanupRef = useRef<(() => void) | null>(null)
+  const layoutAnimationFrameRef = useRef<number | null>(null)
+  const layoutAnimationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const spacePressedRef = useRef(false)
   const connectionCleanupRef = useRef<(() => void) | null>(null)
   const connectionDraftRef = useRef<ConnectionDraft | null>(null)
   const connectionPreviewPathRef = useRef<SVGPathElement>(null)
@@ -171,14 +229,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   const applyViewportVisuals = useCallback((next: WorkspaceCanvasViewport) => {
     if (worldRef.current) {
-      worldRef.current.style.transform = `translate3d(${next.panX}px, ${next.panY}px, 0) scale(${next.zoom})`
-    }
-    if (gridRef.current) {
-      const gridSize = GRID_SIZE * next.zoom
-      const offsetX = ((next.panX % gridSize) + gridSize) % gridSize - gridSize
-      const offsetY = ((next.panY % gridSize) + gridSize) % gridSize - gridSize
-      gridRef.current.style.backgroundSize = `${gridSize}px ${gridSize}px`
-      gridRef.current.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0)`
+      worldRef.current.style.transform = `translate3d(${next.panX}px, ${next.panY}px, 0) scale(${WORKSPACE_CANVAS_DEFAULT_ZOOM})`
     }
   }, [])
 
@@ -193,9 +244,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [applyViewportVisuals])
 
   const updateViewportTransient = useCallback((next: WorkspaceCanvasViewport) => {
+    const fixedViewport = { ...next, zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM }
     viewportTouchedRef.current = true
-    viewportRef.current = next
-    pendingViewportRef.current = next
+    viewportRef.current = fixedViewport
+    pendingViewportRef.current = fixedViewport
     if (viewportFrameRef.current !== null) return
     viewportFrameRef.current = requestAnimationFrame(() => {
       viewportFrameRef.current = null
@@ -219,7 +271,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     const workspaceId = activeWorkspaceId
     viewportSaveTimerRef.current = setTimeout(() => {
       viewportSaveTimerRef.current = null
-      setViewport(next)
       persistViewport(workspaceId, next)
     }, VIEWPORT_SAVE_DELAY)
   }, [activeWorkspaceId, persistViewport])
@@ -231,11 +282,18 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     }
     updateViewportTransient(next)
     flushViewportVisuals()
-    setViewport(next)
     if (activeWorkspaceId) persistViewport(activeWorkspaceId, next)
   }, [activeWorkspaceId, flushViewportVisuals, persistViewport, updateViewportTransient])
 
   useEffect(() => {
+    if (layoutAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(layoutAnimationFrameRef.current)
+      layoutAnimationFrameRef.current = null
+    }
+    if (layoutAnimationTimerRef.current) {
+      clearTimeout(layoutAnimationTimerRef.current)
+      layoutAnimationTimerRef.current = null
+    }
     setDocs(new Map())
     setSummaries(new Map())
     setSummarizing(new Set())
@@ -248,7 +306,42 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     connectionDraftRef.current = null
     setConnectionDraft(null)
     setSelectedConnectionId(null)
+    setSelectedItemIds(new Set())
+    setAnimatingItemIds(new Set())
+    setMarqueeSelection(null)
   }, [activeWorkspaceId])
+
+  useEffect(() => {
+    setSelectedItemIds((current) => {
+      const availableIds = new Set(items.map((item) => item.id))
+      const next = new Set([...current].filter((id) => availableIds.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [items])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || isEditableTarget(event.target)) return
+      event.preventDefault()
+      if (spacePressedRef.current) return
+      spacePressedRef.current = true
+      setSpacePressed(true)
+    }
+    const releaseSpace = (event?: Event) => {
+      if (event?.type === 'keyup' && (event as KeyboardEvent).code !== 'Space') return
+      if (!spacePressedRef.current) return
+      spacePressedRef.current = false
+      setSpacePressed(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', releaseSpace)
+    window.addEventListener('blur', releaseSpace)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', releaseSpace)
+      window.removeEventListener('blur', releaseSpace)
+    }
+  }, [])
 
   useEffect(() => {
     connectionCleanupRef.current?.()
@@ -286,15 +379,14 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     viewportRef.current = DEFAULT_VIEWPORT
     pendingViewportRef.current = null
     applyViewportVisuals(DEFAULT_VIEWPORT)
-    setViewport(DEFAULT_VIEWPORT)
     if (!activeWorkspaceId) return
     const workspaceId = activeWorkspaceId
     let cancelled = false
     void api.workspaceCanvas.get(workspaceId).then((saved) => {
       if (cancelled || viewportTouchedRef.current) return
-      viewportRef.current = saved
-      applyViewportVisuals(saved)
-      setViewport(saved)
+      const fixedViewport = { ...saved, zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM }
+      viewportRef.current = fixedViewport
+      applyViewportVisuals(fixedViewport)
     }).catch((e) => {
       if (!cancelled) {
         useDocumentStore.getState().showToast(errorMessage(e, t('workspace.canvasLoadFailed')))
@@ -315,7 +407,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       if (dropErrorTimerRef.current) clearTimeout(dropErrorTimerRef.current)
       if (viewportFrameRef.current !== null) cancelAnimationFrame(viewportFrameRef.current)
       if (connectionFrameRef.current !== null) cancelAnimationFrame(connectionFrameRef.current)
+      if (layoutAnimationFrameRef.current !== null) cancelAnimationFrame(layoutAnimationFrameRef.current)
+      if (layoutAnimationTimerRef.current) clearTimeout(layoutAnimationTimerRef.current)
       panCleanupRef.current?.()
+      marqueeCleanupRef.current?.()
       connectionCleanupRef.current?.()
     }
   }, [])
@@ -492,6 +587,74 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     refreshConnectionPreview(itemId)
   }, [refreshConnectionPreview])
 
+  const selectedItems = useMemo(
+    () => sortedItems.filter((item) => selectedItemIds.has(item.id)),
+    [selectedItemIds, sortedItems]
+  )
+
+  const selectedBounds = useMemo(() => {
+    if (selectedItems.length === 0) return null
+    return selectedItems.reduce((current, item) => {
+      const position = positionFor(item)
+      const size = sizeFor(item)
+      return {
+        minX: Math.min(current.minX, position.x),
+        minY: Math.min(current.minY, position.y),
+        maxX: Math.max(current.maxX, position.x + size.width),
+        maxY: Math.max(current.maxY, position.y + size.height)
+      }
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity })
+  }, [positionFor, selectedItems, sizeFor])
+
+  const selectedStickyNotes = useMemo(() => selectedItems.flatMap((item) => {
+    if (item.kind !== 'note' || !item.noteId) return []
+    const note = noteMap.get(item.noteId)
+    return note?.noteType === 'plain' ? [note] : []
+  }), [noteMap, selectedItems])
+
+  const arrangeSelected = useCallback((mode: 'stack' | 'grid') => {
+    if (selectedItems.length < 2) return
+    const ordered = [...selectedItems].sort((a, b) => a.zIndex - b.zIndex || a.addedAt - b.addedAt)
+    const minX = Math.min(...ordered.map((item) => item.x))
+    const minY = Math.min(...ordered.map((item) => item.y))
+    const nextZIndex = maxZIndex + 1
+    const placements = mode === 'stack'
+      ? ordered.map((item, index) => ({
+          item,
+          x: minX + index * 18,
+          y: minY + index * 18,
+          zIndex: nextZIndex + index
+        }))
+      : (() => {
+          const gridPlacements = compactGridPlacements(ordered, sizeFor, minX, minY)
+          return ordered.map((item, index) => ({
+            item,
+            x: gridPlacements[index].x,
+            y: gridPlacements[index].y,
+            zIndex: nextZIndex + index
+          }))
+        })()
+    if (layoutAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(layoutAnimationFrameRef.current)
+    }
+    if (layoutAnimationTimerRef.current) clearTimeout(layoutAnimationTimerRef.current)
+    setAnimatingItemIds(new Set(ordered.map((item) => item.id)))
+    layoutAnimationFrameRef.current = requestAnimationFrame(() => {
+      layoutAnimationFrameRef.current = null
+      void Promise.all(placements.map(({ item, x, y, zIndex }) =>
+        moveItem(item.id, x, y, zIndex)
+      ))
+      layoutAnimationTimerRef.current = setTimeout(() => {
+        layoutAnimationTimerRef.current = null
+        setAnimatingItemIds(new Set())
+      }, 340)
+    })
+  }, [maxZIndex, moveItem, selectedItems, sizeFor])
+
+  const handleStickyColor = useCallback((color: WorkspaceNote['color']) => {
+    void Promise.all(selectedStickyNotes.map((note) => updateNote(note.id, { color })))
+  }, [selectedStickyNotes, updateNote])
+
   const connectionPaths = useMemo(() => connections.flatMap((connection) => {
     const sourceItem = itemMap.get(connection.sourceItemId)
     const targetItem = itemMap.get(connection.targetItemId)
@@ -619,83 +782,136 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     return { x: Math.round(center.x - 150), y: Math.round(center.y - 100) }
   }, [worldPositionAt])
 
-  const applyZoomAt = useCallback((
-    zoom: number,
-    clientX?: number,
-    clientY?: number,
-    deferCommit = false
-  ) => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const current = viewportRef.current
-    const nextZoom = clampZoom(zoom)
-    const anchorX = (clientX ?? rect.left + rect.width / 2) - rect.left
-    const anchorY = (clientY ?? rect.top + rect.height / 2) - rect.top
-    const worldX = (anchorX - current.panX) / current.zoom
-    const worldY = (anchorY - current.panY) / current.zoom
-    const next = {
-      panX: anchorX - worldX * nextZoom,
-      panY: anchorY - worldY * nextZoom,
-      zoom: nextZoom
-    }
-    if (deferCommit) {
-      updateViewportTransient(next)
-      scheduleViewportSave(next)
-    } else {
-      commitViewport(next)
-    }
-  }, [commitViewport, scheduleViewportSave, updateViewportTransient])
-
-  const resetViewport = useCallback(() => {
-    commitViewport(DEFAULT_VIEWPORT)
-  }, [commitViewport])
-
-  const fitAll = useCallback(() => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect || sortedItems.length === 0) {
-      resetViewport()
+  const handleWheel = useCallback((event: WheelEvent) => {
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault()
       return
     }
-    const bounds = sortedItems.reduce((current, item) => {
-      const position = positionFor(item)
-      const size = sizeFor(item)
-      return {
-        minX: Math.min(current.minX, position.x),
-        minY: Math.min(current.minY, position.y),
-        maxX: Math.max(current.maxX, position.x + size.width),
-        maxY: Math.max(current.maxY, position.y + size.height)
-      }
-    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity })
-    const contentWidth = Math.max(1, bounds.maxX - bounds.minX)
-    const contentHeight = Math.max(1, bounds.maxY - bounds.minY)
-    const zoom = clampZoom(Math.min(1, (rect.width - 96) / contentWidth, (rect.height - 96) / contentHeight))
-    commitViewport({
-      panX: rect.width / 2 - (bounds.minX + contentWidth / 2) * zoom,
-      panY: rect.height / 2 - (bounds.minY + contentHeight / 2) * zoom,
-      zoom
-    })
-  }, [commitViewport, positionFor, resetViewport, sizeFor, sortedItems])
-
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault()
+    const target = event.target
+    if (target instanceof HTMLElement && target.closest('[data-card-scroll]')) return
+    event.preventDefault()
     const current = viewportRef.current
-    if (e.ctrlKey || e.metaKey) {
-      applyZoomAt(current.zoom * Math.exp(-e.deltaY * 0.002), e.clientX, e.clientY, true)
-      return
-    }
     const next = {
-      panX: current.panX - e.deltaX,
-      panY: current.panY - e.deltaY,
-      zoom: current.zoom
+      panX: current.panX - event.deltaX,
+      panY: current.panY - event.deltaY,
+      zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
     }
     updateViewportTransient(next)
     scheduleViewportSave(next)
+  }, [scheduleViewportSave, updateViewportTransient])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
+
+  const handleCanvasPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || spacePressedRef.current) return
+    const target = event.target as HTMLElement
+    if (target.closest('[data-selection-toolbar]')) return
+    const card = target.closest<HTMLElement>('[data-workspace-card-id]')
+    const itemId = card?.dataset.workspaceCardId
+    if (!itemId) return
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey
+    if (additive && selectedItemIds.has(itemId)) {
+      event.preventDefault()
+      canvasRef.current?.focus({ preventScroll: true })
+    }
+    setSelectedConnectionId(null)
+    setSelectedItemIds((current) => {
+      if (!additive) return current.has(itemId) ? current : new Set([itemId])
+      const next = new Set(current)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  const handleCanvasFocusCapture = (event: React.FocusEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    const itemId = target.closest<HTMLElement>('[data-workspace-card-id]')?.dataset.workspaceCardId
+    if (!itemId) return
+    setSelectedConnectionId(null)
+    setSelectedItemIds((current) => current.has(itemId) ? current : new Set([itemId]))
   }
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.button !== 1) return
     const target = e.target as HTMLElement
-    if (target.closest('[data-workspace-card], button, input, textarea, a, [role="dialog"]')) return
+    const wantsPan = e.button === 1 || (e.button === 0 && spacePressedRef.current)
+    if (target.closest('[data-selection-toolbar], [role="dialog"]')) return
+    if (!wantsPan) {
+      if (target.closest('[data-workspace-card], button, input, textarea, a')) return
+      e.preventDefault()
+      canvasRef.current?.focus({ preventScroll: true })
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const pointerId = e.pointerId
+      const startX = e.clientX
+      const startY = e.clientY
+      const initialSelection = new Set(selectedItemIds)
+      const additive = e.shiftKey || e.metaKey || e.ctrlKey
+      let moved = false
+      if (!additive) setSelectedItemIds(new Set())
+      setSelectedConnectionId(null)
+
+      const cleanup = () => {
+        document.removeEventListener('pointermove', onMove)
+        document.removeEventListener('pointerup', onUp)
+        document.removeEventListener('pointercancel', onCancel)
+        document.body.style.userSelect = ''
+        setMarqueeSelection(null)
+        marqueeCleanupRef.current = null
+      }
+      const onMove = (event: PointerEvent) => {
+        if (event.pointerId !== pointerId) return
+        const deltaX = event.clientX - startX
+        const deltaY = event.clientY - startY
+        if (!moved && Math.hypot(deltaX, deltaY) < 4) return
+        moved = true
+        const left = Math.min(startX, event.clientX)
+        const top = Math.min(startY, event.clientY)
+        const right = Math.max(startX, event.clientX)
+        const bottom = Math.max(startY, event.clientY)
+        setMarqueeSelection({
+          left: left - rect.left,
+          top: top - rect.top,
+          width: right - left,
+          height: bottom - top
+        })
+        const next = additive ? new Set(initialSelection) : new Set<string>()
+        canvasRef.current?.querySelectorAll<HTMLElement>('[data-workspace-card-id]').forEach((card) => {
+          const cardRect = card.getBoundingClientRect()
+          if (
+            cardRect.right >= left
+            && cardRect.left <= right
+            && cardRect.bottom >= top
+            && cardRect.top <= bottom
+          ) {
+            const itemId = card.dataset.workspaceCardId
+            if (itemId) next.add(itemId)
+          }
+        })
+        setSelectedItemIds(next)
+      }
+      const onUp = (event: PointerEvent) => {
+        if (event.pointerId === pointerId) cleanup()
+      }
+      const onCancel = (event: PointerEvent) => {
+        if (event.pointerId !== pointerId) return
+        setSelectedItemIds(initialSelection)
+        cleanup()
+      }
+      marqueeCleanupRef.current?.()
+      marqueeCleanupRef.current = cleanup
+      document.addEventListener('pointermove', onMove)
+      document.addEventListener('pointerup', onUp)
+      document.addEventListener('pointercancel', onCancel)
+      document.body.style.userSelect = 'none'
+      return
+    }
     e.preventDefault()
     e.currentTarget.setPointerCapture?.(e.pointerId)
     const pointerId = e.pointerId
@@ -711,7 +927,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       updateViewportTransient({
         panX: start.panX + event.clientX - start.x,
         panY: start.panY + event.clientY - start.y,
-        zoom: viewportRef.current.zoom
+        zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
       })
     }
     const cleanup = () => {
@@ -907,13 +1123,16 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     showContextMenu(items)
   }, [addAssets, handleCreateNote, t, worldPositionAt])
 
-  const getViewportScale = useCallback(() => viewportRef.current.zoom, [])
+  const getViewportScale = useCallback(() => WORKSPACE_CANVAS_DEFAULT_ZOOM, [])
 
   const cardProps = useCallback((item: WorkspaceItem) => ({
     sizeKey: item.id,
     size: sizeFor(item),
     position: positionFor(item),
     getScale: getViewportScale,
+    canStartDrag: () => !spacePressedRef.current,
+    selected: selectedItemIds.has(item.id),
+    animatePosition: animatingItemIds.has(item.id),
     frontZIndex: maxZIndex + 1,
     onSizeChange: handleCardSizeChange,
     onSizeCommit: handleCardSizeCommit,
@@ -926,6 +1145,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     moveLabel: t('workspace.moveCard')
   }), [
     getViewportScale,
+    animatingItemIds,
     handleCardPositionChange,
     handleCardPositionCancel,
     handleCardPositionCommit,
@@ -935,6 +1155,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     handleConnectionStart,
     maxZIndex,
     positionFor,
+    selectedItemIds,
     sizeFor,
     t
   ])
@@ -1095,28 +1316,24 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   return (
     <div
       ref={canvasRef}
-      className={`board-surface relative h-full w-full min-h-0 min-w-0 cursor-grab select-none overflow-hidden ${connectionDraft ? 'is-connecting' : ''}`}
+      tabIndex={-1}
+      className={`board-surface relative h-full w-full min-h-0 min-w-0 select-none overflow-hidden outline-none ${spacePressed ? 'is-pan-ready cursor-grab' : 'cursor-default'} ${connectionDraft ? 'is-connecting' : ''}`}
       style={{
         outline: dropActive ? '2px dashed var(--color-accent)' : undefined,
         outlineOffset: dropActive ? '-6px' : undefined
       }}
+      onPointerDownCapture={handleCanvasPointerDownCapture}
       onPointerDown={handleCanvasPointerDown}
+      onFocusCapture={handleCanvasFocusCapture}
+      onAuxClick={(event) => {
+        if (event.button === 1) event.preventDefault()
+      }}
       onContextMenu={handleCanvasContextMenu}
-      onWheel={handleWheel}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={(e) => void handleDrop(e)}
     >
-      <div
-        ref={gridRef}
-        className="workspace-canvas-grid pointer-events-none absolute"
-        style={{
-          backgroundImage: 'radial-gradient(circle, var(--color-border) 1px, transparent 1px)',
-          backgroundSize: `${GRID_SIZE * DEFAULT_VIEWPORT.zoom}px ${GRID_SIZE * DEFAULT_VIEWPORT.zoom}px`
-        }}
-        aria-hidden
-      />
       <div className="pointer-events-none absolute left-3 top-3 z-[200000]">
         {summaryErrors.get('__drop__') && (
           <div className="rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error shadow-sm">
@@ -1221,6 +1438,70 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           })()}
         </svg>
         {cardNodes}
+        {selectedBounds && (
+          <div
+            data-selection-toolbar
+            className="absolute z-[300000] flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border bg-panel/95 p-1 shadow-lg backdrop-blur"
+            style={{
+              left: (selectedBounds.minX + selectedBounds.maxX) / 2,
+              top: selectedBounds.maxY + 12
+            }}
+            role="toolbar"
+            aria-label={t('workspace.selectionActions')}
+          >
+            <span
+              className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-background px-2 text-xs tabular-nums text-muted"
+              aria-label={t('workspace.selectionCount')}
+            >
+              {selectedItems.length}
+            </span>
+            <button
+              type="button"
+              className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground hover:bg-background disabled:cursor-default disabled:opacity-40"
+              disabled={selectedItems.length < 2}
+              onClick={() => arrangeSelected('stack')}
+              aria-label={t('workspace.selectionStack')}
+              title={t('workspace.selectionStack')}
+            >
+              <Stack className="h-3.5 w-3.5" />
+              {t('workspace.selectionStack')}
+            </button>
+            <button
+              type="button"
+              className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground hover:bg-background disabled:cursor-default disabled:opacity-40"
+              disabled={selectedItems.length < 2}
+              onClick={() => arrangeSelected('grid')}
+              aria-label={t('workspace.selectionGrid')}
+              title={t('workspace.selectionGrid')}
+            >
+              <GridFour className="h-3.5 w-3.5" />
+              {t('workspace.selectionGrid')}
+            </button>
+            {selectedStickyNotes.length > 0 && (
+              <>
+                <div className="mx-0.5 h-5 w-px bg-border" />
+                <Palette
+                  className="mx-1 h-3.5 w-3.5 text-muted"
+                  aria-label={t('workspace.stickyColor')}
+                />
+                {STICKY_NOTE_COLORS.map((option) => {
+                  const active = selectedStickyNotes.every((note) => (note.color ?? 'sand') === option.id)
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`h-5 w-5 rounded-full border transition-transform hover:scale-110 ${active ? 'border-accent ring-2 ring-accent/30' : 'border-black/10'}`}
+                      style={{ backgroundColor: option.value }}
+                      onClick={() => handleStickyColor(option.id)}
+                      aria-label={t(`workspace.stickyColor${option.label}`)}
+                      title={t(`workspace.stickyColor${option.label}`)}
+                    />
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )}
         {selectedConnectionId && connectionPaths.map(({ connection, midpoint }) => (
           connection.id === selectedConnectionId && (
             <button
@@ -1241,49 +1522,13 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           )
         ))}
       </div>
-
-      <div className="absolute bottom-3 left-3 z-[200000] rounded-lg border border-border bg-panel/90 px-2.5 py-1.5 text-[11px] text-muted shadow-sm backdrop-blur">
-        {t('workspace.canvasHint')}
-      </div>
-      <div className="absolute bottom-3 right-3 z-[200000] flex items-center gap-1 rounded-xl border border-border bg-panel/90 p-1 shadow-md backdrop-blur">
-        <Button
-          variant="ghost"
-          size="sm"
-          iconOnly
-          aria-label={t('workspace.canvasZoomOut')}
-          title={t('workspace.canvasZoomOut')}
-          onClick={() => applyZoomAt(viewportRef.current.zoom / 1.2)}
-        >
-          −
-        </Button>
-        <span className="min-w-[44px] text-center text-xs tabular-nums text-muted">
-          {Math.round(viewport.zoom * 100)}%
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          iconOnly
-          aria-label={t('workspace.canvasZoomIn')}
-          title={t('workspace.canvasZoomIn')}
-          onClick={() => applyZoomAt(viewportRef.current.zoom * 1.2)}
-        >
-          +
-        </Button>
-        <div className="mx-0.5 h-4 w-px bg-border" />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="min-w-[52px]"
-          aria-label={t('workspace.canvasReset')}
-          title={t('workspace.canvasReset')}
-          onClick={() => applyZoomAt(WORKSPACE_CANVAS_DEFAULT_ZOOM)}
-        >
-          Reset
-        </Button>
-        <Button variant="ghost" size="sm" onClick={fitAll}>
-          {t('workspace.canvasFit')}
-        </Button>
-      </div>
+      {marqueeSelection && (
+        <div
+          className="workspace-selection-marquee pointer-events-none absolute z-[250000]"
+          style={marqueeSelection}
+          aria-hidden
+        />
+      )}
     </div>
   )
 })

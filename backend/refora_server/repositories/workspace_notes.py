@@ -14,6 +14,7 @@ def _map_note(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "workspaceId": row["workspaceId"],
         "noteType": note_type if note_type is not None else "markdown",
+        "color": row["color"],
         "title": row["title"],
         "contentMd": row["contentMd"],
         "createdAt": row["createdAt"],
@@ -78,10 +79,11 @@ def createWorkspaceNotesRepository(db):
             if patch.get("contentMd") is None
             else patch["contentMd"]
         )
+        color = existing["color"] if patch.get("color") is None else patch["color"]
         now = int(time.time() * 1000)
         db.execute(
-            "UPDATE workspace_notes SET title = ?, contentMd = ?, updatedAt = ? WHERE id = ?",
-            [title, contentMd, now, id],
+            "UPDATE workspace_notes SET title = ?, contentMd = ?, color = ?, updatedAt = ? WHERE id = ?",
+            [title, contentMd, color, now, id],
         )
         db.execute(
             "UPDATE workspaces SET updatedAt = ? WHERE id = ?",

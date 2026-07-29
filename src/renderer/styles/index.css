@@ -15,7 +15,7 @@
     --sidebar-inset: 8px;
     --sidebar-radius: 14px;
     --sidebar-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    --workspace-card-radius: 24px;
+    --workspace-card-radius: 16px;
     --workspace-card-surface-base: #1e1e20;
     --workspace-card-surface: linear-gradient(145deg, #242426 0%, var(--workspace-card-surface-base) 100%);
     --workspace-card-border: rgba(255, 255, 255, 0.1);
@@ -194,7 +194,7 @@
   .workspace-content-card {
     --workspace-card-accent: var(--workspace-card-document);
     border: 0;
-    border-radius: var(--workspace-card-radius);
+    border-radius: var(--workspace-card-radius) !important;
     background: var(--workspace-card-surface);
     box-shadow: none;
   }
@@ -217,11 +217,16 @@
 
   .workspace-content-card--sticky {
     --workspace-card-accent: var(--workspace-card-sticky);
-    background: linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--workspace-card-accent) 6%, var(--workspace-card-surface-base)) 0,
-      var(--workspace-card-surface-base) 100%
-    );
+    --workspace-sticky-ink: #292621;
+    background: #f2e4c4;
+  }
+
+  .workspace-content-card--sticky textarea {
+    color: var(--workspace-sticky-ink);
+  }
+
+  .workspace-content-card--sticky textarea::placeholder {
+    color: color-mix(in srgb, var(--workspace-sticky-ink) 48%, transparent);
   }
 
   .workspace-content-card--asset {
@@ -317,16 +322,6 @@
       opacity: 1;
       transform: translateY(0);
     }
-  }
-
-  .workspace-sticky-fold {
-    @apply pointer-events-none absolute right-0 top-0 h-5 w-5;
-    background: linear-gradient(
-      225deg,
-      color-mix(in srgb, var(--workspace-card-surface-base) 82%, var(--color-background)) 0 48%,
-      color-mix(in srgb, var(--workspace-card-accent) 16%, var(--workspace-card-surface-base)) 50% 100%
-    );
-    box-shadow: -1px 1px 2px rgba(45, 39, 32, 0.1);
   }
 
   .workspace-card-type-label {
@@ -1070,11 +1065,6 @@
     cursor: grabbing;
   }
 
-  .workspace-canvas-grid {
-    inset: -96px;
-    will-change: transform;
-  }
-
   .workspace-canvas-world {
     will-change: transform;
   }
@@ -1082,6 +1072,7 @@
   .resizable-card {
     --workspace-connection-accent: var(--workspace-card-document);
     flex: 0 0 auto;
+    outline: none;
     border-radius: var(--workspace-card-radius);
     box-shadow: var(--workspace-card-shadow);
     transition: box-shadow 0.18s ease;
@@ -1115,6 +1106,21 @@
 
   .resizable-card:hover {
     box-shadow: var(--workspace-card-shadow-hover);
+  }
+
+  .resizable-card.is-selected {
+    outline: 4px solid rgba(255, 255, 255, 0.94);
+    outline-offset: -1px;
+    box-shadow:
+      0 0 0 4px rgba(32, 36, 42, 0.1),
+      var(--workspace-card-shadow-hover);
+  }
+
+  .resizable-card.is-layout-animating {
+    transition:
+      transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms ease;
+    will-change: transform;
   }
 
   .resizable-card.is-moving {
@@ -1193,6 +1199,12 @@
 
   .resizable-card > .card {
     height: 100%;
+  }
+
+  .workspace-selection-marquee {
+    border: 1px solid color-mix(in srgb, var(--color-accent) 72%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   }
 }
 

@@ -482,7 +482,8 @@ describe('Workspace card types', () => {
     expect(screen.getByText('workspace.cardTypePaper')).toBeInTheDocument()
     expect(screen.getByText('workspace.cardTypeReport')).toBeInTheDocument()
     expect(screen.getByText('workspace.cardTypeNote')).toBeInTheDocument()
-    expect(screen.getByText('workspace.cardTypeSticky')).toBeInTheDocument()
+    expect(screen.queryByText('workspace.cardTypeSticky')).not.toBeInTheDocument()
+    expect(stickyContainer.querySelector('.workspace-sticky-fold')).not.toBeInTheDocument()
   })
 })
 
@@ -670,6 +671,7 @@ describe('StickyNoteCard', () => {
     id: 'sticky-1',
     workspaceId: 'ws-1',
     noteType: 'plain',
+    color: 'mint',
     title: 'Sticky note',
     contentMd: 'Original text',
     createdAt: 1,
@@ -682,6 +684,7 @@ describe('StickyNoteCard', () => {
       <StickyNoteCard note={note} onDelete={() => {}} onUpdate={async () => true} onCopy={onCopy} />
     )
     const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    fireEvent.click(content)
     fireEvent.change(content, { target: { value: 'Current unsaved text' } })
     fireEvent.contextMenu(container.querySelector('.card') as HTMLElement)
     const items = mockShowContextMenu.mock.calls[0][0] as Array<{ key: string; onClick?: () => void }>
@@ -689,7 +692,18 @@ describe('StickyNoteCard', () => {
     expect(onCopy).toHaveBeenCalledWith('Current unsaved text')
   })
 
-  it('edits plain text directly on the card without opening a modal', async () => {
+  it('renders its selected preset as a solid card color', () => {
+    const { container } = render(
+      <StickyNoteCard note={note} onDelete={() => {}} onUpdate={async () => true} />
+    )
+    const sticky = container.querySelector('[data-card-kind="sticky"]') as HTMLElement
+
+    expect(sticky).toHaveAttribute('data-sticky-color', 'mint')
+    expect(sticky).toHaveStyle({ background: '#C9E9DA' })
+    expect(sticky.style.backgroundImage).toBe('none')
+  })
+
+  it('enters inline editing only after a click and exits on blur', async () => {
     const onUpdate = vi.fn().mockResolvedValue(true)
     render(
       <StickyNoteCard
@@ -700,6 +714,15 @@ describe('StickyNoteCard', () => {
     )
 
     const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    expect(content).toHaveAttribute('readonly')
+    expect(content).toHaveClass('cursor-default')
+    expect(content).toHaveAttribute('data-card-drag-click', 'true')
+
+    fireEvent.click(content)
+    expect(content).not.toHaveAttribute('readonly')
+    expect(content).toHaveClass('cursor-text')
+    expect(content).not.toHaveAttribute('data-card-drag-click')
+
     fireEvent.change(content, { target: { value: 'Edited plain text' } })
     fireEvent.blur(content)
 
@@ -708,6 +731,25 @@ describe('StickyNoteCard', () => {
     })
     expect(screen.queryByTestId('modal')).not.toBeInTheDocument()
     expect(content).toHaveValue('Edited plain text')
+    expect(content).toHaveAttribute('readonly')
+  })
+
+  it('enters and exits inline editing from the keyboard', () => {
+    render(
+      <StickyNoteCard
+        note={note}
+        onDelete={() => {}}
+        onUpdate={async () => true}
+      />
+    )
+
+    const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    content.focus()
+    fireEvent.keyDown(content, { key: 'Enter' })
+    expect(content).not.toHaveAttribute('readonly')
+
+    fireEvent.keyDown(content, { key: 'Escape' })
+    expect(content).toHaveAttribute('readonly')
   })
 
   it('keeps the inline draft visible when autosave fails', async () => {
@@ -721,6 +763,7 @@ describe('StickyNoteCard', () => {
     )
 
     const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    fireEvent.click(content)
     fireEvent.change(content, { target: { value: 'Unsaved text' } })
     fireEvent.blur(content)
 

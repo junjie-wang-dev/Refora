@@ -8,6 +8,7 @@ import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import migrationSql from '../../backend/refora_server/db/migrations/0014_workspace_board.sql?raw'
 import canvasMigrationSql from '../../backend/refora_server/db/migrations/0015_workspace_canvas.sql?raw'
 import noteTypesMigrationSql from '../../backend/refora_server/db/migrations/0016_workspace_note_types.sql?raw'
+import noteColorsMigrationSql from '../../backend/refora_server/db/migrations/0028_workspace_note_colors.sql?raw'
 import type {
   AiReport,
   WorkspaceItem,
@@ -72,6 +73,7 @@ function makeNote(overrides: Partial<WorkspaceNote> = {}): WorkspaceNote {
     id: 'note-1',
     workspaceId: 'ws-1',
     noteType: 'markdown',
+    color: 'sand',
     title: 'Note',
     contentMd: '',
     createdAt: 0,
@@ -532,6 +534,54 @@ describe('WorkspaceStore', () => {
 
       await update
       expect(useWorkspaceStore.getState().notes).toEqual(nextNotes)
+    })
+
+    it('persists and applies a sticky note color update', async () => {
+      const note = makeNote({ noteType: 'plain', color: 'sand' })
+      let resolveUpdate!: (note: WorkspaceNote) => void
+      mockWorkspaceNotesUpdate.mockReturnValue(new Promise((resolve) => {
+        resolveUpdate = resolve
+      }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1', notes: [note] })
+
+      const update = useWorkspaceStore.getState().updateNote(note.id, { color: 'sky' })
+
+      expect(mockWorkspaceNotesUpdate).toHaveBeenCalledWith(note.id, { color: 'sky' })
+      expect(useWorkspaceStore.getState().notes[0].color).toBe('sky')
+      resolveUpdate({ ...note, color: 'sky', updatedAt: 2 })
+      expect(await update).toBe(true)
+      expect(useWorkspaceStore.getState().notes[0].color).toBe('sky')
+    })
+
+    it('serializes rapid note updates and keeps the latest color', async () => {
+      const note = makeNote({ noteType: 'plain', color: 'sand' })
+      let resolveFirst!: (note: WorkspaceNote) => void
+      let resolveSecond!: (note: WorkspaceNote) => void
+      mockWorkspaceNotesUpdate
+        .mockReturnValueOnce(new Promise((resolve) => {
+          resolveFirst = resolve
+        }))
+        .mockReturnValueOnce(new Promise((resolve) => {
+          resolveSecond = resolve
+        }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1', notes: [note] })
+
+      const first = useWorkspaceStore.getState().updateNote(note.id, { color: 'sky' })
+      const second = useWorkspaceStore.getState().updateNote(note.id, { color: 'coral' })
+
+      expect(mockWorkspaceNotesUpdate).toHaveBeenCalledTimes(1)
+      expect(useWorkspaceStore.getState().notes[0].color).toBe('coral')
+
+      resolveFirst({ ...note, color: 'sky', updatedAt: 2 })
+      await first
+      await vi.waitFor(() => {
+        expect(mockWorkspaceNotesUpdate).toHaveBeenCalledTimes(2)
+      })
+      expect(useWorkspaceStore.getState().notes[0].color).toBe('coral')
+
+      resolveSecond({ ...note, color: 'coral', updatedAt: 3 })
+      expect(await second).toBe(true)
+      expect(useWorkspaceStore.getState().notes[0].color).toBe('coral')
     })
   })
 
@@ -999,6 +1049,17 @@ describe('workspace board migration', () => {
     expect(rejectsSql(`
       INSERT INTO workspace_notes (id, workspaceId, noteType, title, contentMd, createdAt, updatedAt)
       VALUES ('bad-note', 'ws-1', 'rich-text', 'Bad', '', 6, 6);
+    `)).toBe(true)
+
+    runSql(noteColorsMigrationSql)
+    expect(query<{ id: string; color: string }>(
+      'SELECT id, color FROM workspace_notes ORDER BY id;'
+    )).toEqual([
+      { id: 'legacy-note', color: 'sand' },
+      { id: 'sticky-note', color: 'sand' }
+    ])
+    expect(rejectsSql(`
+      UPDATE workspace_notes SET color = 'neon' WHERE id = 'sticky-note';
     `)).toBe(true)
   })
 })

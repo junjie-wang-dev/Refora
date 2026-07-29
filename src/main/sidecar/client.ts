@@ -31,6 +31,7 @@ import type {
   WorkspaceItemKind,
   WorkspaceItemPlacement,
   WorkspaceNote,
+  WorkspaceNotePatch,
   WorkspaceNoteType,
   WatchFolder
 } from '../../shared/ipc-types'
@@ -301,6 +302,7 @@ export interface WorkspaceNoteInput {
   title: string
   contentMd: string
   noteType: WorkspaceNoteType
+  color?: WorkspaceNote['color']
   placement?: WorkspaceItemPlacement
 }
 
@@ -443,7 +445,7 @@ export interface ServerHttp {
   workspaceNotesList(workspaceId: string): Promise<WorkspaceNote[]>
   workspaceNoteGet(noteId: string): Promise<WorkspaceNote>
   workspaceNotesCreate(workspaceId: string, input: WorkspaceNoteInput): Promise<WorkspaceNote>
-  workspaceNotesUpdate(workspaceId: string, noteId: string, input: WorkspaceNoteInput): Promise<WorkspaceNote>
+  workspaceNotesUpdate(workspaceId: string, noteId: string, input: WorkspaceNotePatch): Promise<WorkspaceNote>
   workspaceNotesDelete(workspaceId: string, noteId: string): Promise<{ ack: boolean }>
 
   mineruStatus(): Promise<MineruEngineStatus>

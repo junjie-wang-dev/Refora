@@ -402,7 +402,9 @@ describe('Board card clipboard actions', () => {
     }]
 
     const { container } = render(<Board />)
-    fireEvent.change(screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' }), {
+    const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    fireEvent.click(content)
+    fireEvent.change(content, {
       target: { value: 'Unsaved current text' }
     })
     fireEvent.contextMenu(container.querySelector('[data-card-kind="sticky"]') as HTMLElement)
@@ -671,12 +673,26 @@ describe('Board error handling', () => {
 })
 
 describe('Board canvas controls and connections', () => {
-  it('keeps an explicit Reset button after changing the zoom level', () => {
-    render(<Board />)
+  it('keeps the canvas at 100% without zoom controls or a dotted grid', () => {
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    const world = container.querySelector('.workspace-canvas-world') as HTMLElement
 
-    fireEvent.click(screen.getByRole('button', { name: 'workspace.canvasZoomIn' }))
+    const wheel = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: 120
+    })
+    board.dispatchEvent(wheel)
 
-    expect(screen.getByRole('button', { name: 'workspace.canvasReset' })).toHaveTextContent('Reset')
+    expect(world.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
+    expect(wheel.defaultPrevented).toBe(true)
+    expect(screen.queryByRole('button', { name: 'workspace.canvasZoomIn' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'workspace.canvasZoomOut' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'workspace.canvasReset' })).not.toBeInTheDocument()
+    expect(container.querySelector('.workspace-canvas-grid')).not.toBeInTheDocument()
+    expect(screen.queryByText('workspace.canvasHint')).not.toBeInTheDocument()
   })
 
   it('moves a card through a transient transform and persists only on pointer release', () => {
@@ -728,16 +744,183 @@ describe('Board canvas controls and connections', () => {
     expect(mockMoveItem).not.toHaveBeenCalled()
   })
 
-  it('pans the world layer without rendering viewport state for each pointer event', () => {
+  it('pans with Space plus the primary button or with the middle button', () => {
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
     const world = container.querySelector('.workspace-canvas-world') as HTMLElement
 
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' })
     fireEvent.pointerDown(board, { pointerId: 11, button: 0, clientX: 100, clientY: 100 })
     fireEvent.pointerMove(document, { pointerId: 11, clientX: 140, clientY: 130 })
     fireEvent.pointerUp(document, { pointerId: 11 })
+    fireEvent.keyUp(window, { code: 'Space', key: ' ' })
 
     expect(world.style.transform).toBe('translate3d(40px, 30px, 0) scale(1)')
+
+    fireEvent.pointerDown(board, { pointerId: 12, button: 1, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(document, { pointerId: 12, clientX: 120, clientY: 125 })
+    fireEvent.pointerUp(document, { pointerId: 12 })
+
+    expect(world.style.transform).toBe('translate3d(60px, 55px, 0) scale(1)')
+  })
+
+  it('selects cards by click, focus, and marquee while showing floating actions', () => {
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    const first = container.querySelector('[data-workspace-card-id="item-1"]') as HTMLElement
+    const second = container.querySelector('[data-workspace-card-id="item-2"]') as HTMLElement
+
+    fireEvent.focus(first)
+    expect(first).toHaveAttribute('data-selected', 'true')
+    expect(screen.getByRole('toolbar', { name: 'workspace.selectionActions' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(second, { pointerId: 21, button: 0, shiftKey: true })
+    fireEvent.pointerUp(document, { pointerId: 21 })
+    expect(first).toHaveAttribute('data-selected', 'true')
+    expect(second).toHaveAttribute('data-selected', 'true')
+
+    first.getBoundingClientRect = () => ({
+      left: 20,
+      top: 20,
+      right: 320,
+      bottom: 220,
+      width: 300,
+      height: 200,
+      x: 20,
+      y: 20,
+      toJSON: () => ({})
+    })
+    second.getBoundingClientRect = () => ({
+      left: 420,
+      top: 20,
+      right: 720,
+      bottom: 220,
+      width: 300,
+      height: 200,
+      x: 420,
+      y: 20,
+      toJSON: () => ({})
+    })
+    fireEvent.pointerDown(board, { pointerId: 22, button: 0, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { pointerId: 22, clientX: 350, clientY: 250 })
+    expect(container.querySelector('.workspace-selection-marquee')).toBeInTheDocument()
+    fireEvent.pointerUp(document, { pointerId: 22 })
+
+    expect(first).toHaveAttribute('data-selected', 'true')
+    expect(second).not.toHaveAttribute('data-selected')
+  })
+
+  it('moves focus to the canvas and exits sticky editing when blank space is pressed', () => {
+    const note: WorkspaceNote = {
+      id: 'sticky-1',
+      workspaceId: 'ws-1',
+      noteType: 'plain',
+      color: 'sand',
+      title: 'Sticky',
+      contentMd: 'Text',
+      createdAt: 1,
+      updatedAt: 1
+    }
+    mockNotes = [note]
+    mockItems = [{
+      ...makeItem('item-sticky', '', 0),
+      kind: 'note',
+      docId: null,
+      noteId: note.id
+    }]
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    const card = container.querySelector('[data-workspace-card-id="item-sticky"]') as HTMLElement
+    const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+
+    content.focus()
+    fireEvent.click(content)
+    expect(content).not.toHaveAttribute('readonly')
+    expect(card).toHaveAttribute('data-selected', 'true')
+
+    fireEvent.pointerDown(board, { pointerId: 23, button: 0, clientX: 10, clientY: 10 })
+
+    expect(document.activeElement).toBe(board)
+    expect(content).toHaveAttribute('readonly')
+    expect(card).not.toHaveAttribute('data-selected')
+    fireEvent.pointerUp(document, { pointerId: 23 })
+  })
+
+  it('animates stacking and gridding from the floating toolbar', async () => {
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
+    const { container } = render(<Board />)
+    const first = container.querySelector('[data-workspace-card-id="item-1"]') as HTMLElement
+    const second = container.querySelector('[data-workspace-card-id="item-2"]') as HTMLElement
+
+    fireEvent.pointerDown(first, { pointerId: 31, button: 0 })
+    fireEvent.pointerUp(document, { pointerId: 31 })
+    fireEvent.pointerDown(second, { pointerId: 32, button: 0, shiftKey: true })
+    fireEvent.pointerUp(document, { pointerId: 32 })
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.selectionStack' }))
+
+    expect(first).toHaveClass('is-layout-animating')
+    await waitFor(() => {
+      expect(mockMoveItem).toHaveBeenNthCalledWith(1, 'item-1', 0, 0, 401)
+      expect(mockMoveItem).toHaveBeenNthCalledWith(2, 'item-2', 18, 18, 402)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.selectionGrid' }))
+    await waitFor(() => {
+      expect(mockMoveItem).toHaveBeenNthCalledWith(3, 'item-1', 0, 0, 401)
+      expect(mockMoveItem).toHaveBeenNthCalledWith(4, 'item-2', 324, 0, 402)
+    })
+  })
+
+  it('packs differently sized cards into a compact grid', async () => {
+    mockItems = [
+      { ...makeItem('item-1', 'doc-1', 0), width: 420, height: 120 },
+      { ...makeItem('item-2', 'doc-2', 100), width: 160, height: 300 },
+      { ...makeItem('item-3', 'doc-3', 200), width: 280, height: 100 },
+      { ...makeItem('item-4', 'doc-4', 300), width: 120, height: 140 }
+    ]
+    const { container } = render(<Board />)
+    const cards = [...container.querySelectorAll<HTMLElement>('[data-workspace-card]')]
+
+    cards.forEach((card, index) => {
+      fireEvent.pointerDown(card, { pointerId: 40 + index, button: 0, shiftKey: index > 0 })
+      fireEvent.pointerUp(document, { pointerId: 40 + index })
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.selectionGrid' }))
+
+    await waitFor(() => {
+      expect(mockMoveItem).toHaveBeenNthCalledWith(1, 'item-1', 0, 0, 301)
+      expect(mockMoveItem).toHaveBeenNthCalledWith(2, 'item-2', 444, 0, 302)
+      expect(mockMoveItem).toHaveBeenNthCalledWith(3, 'item-3', 0, 144, 303)
+      expect(mockMoveItem).toHaveBeenNthCalledWith(4, 'item-4', 0, 268, 304)
+    })
+  })
+
+  it('changes the selected sticky note to a preset solid color', () => {
+    const note: WorkspaceNote = {
+      id: 'sticky-1',
+      workspaceId: 'ws-1',
+      noteType: 'plain',
+      color: 'sand',
+      title: 'Sticky',
+      contentMd: 'Text',
+      createdAt: 1,
+      updatedAt: 1
+    }
+    mockNotes = [note]
+    mockItems = [{
+      ...makeItem('item-sticky', '', 0),
+      kind: 'note',
+      docId: null,
+      noteId: note.id
+    }]
+    const { container } = render(<Board />)
+    const card = container.querySelector('[data-workspace-card-id="item-sticky"]') as HTMLElement
+
+    fireEvent.focus(card)
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.stickyColorSky' }))
+
+    expect(mockUpdateNote).toHaveBeenCalledWith('sticky-1', { color: 'sky' })
   })
 
   it('creates a persisted arrow connection by dragging a card-edge handle to another card', async () => {

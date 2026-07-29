@@ -37,6 +37,9 @@ interface ResizableCardProps {
   moveLabel?: string
   children: ReactNode
   className?: string
+  selected?: boolean
+  canStartDrag?: () => boolean
+  animatePosition?: boolean
 }
 
 type Edge = 'e' | 's' | 'se'
@@ -58,7 +61,10 @@ export default function ResizableCard({
   connectionLabel,
   moveLabel,
   children,
-  className = ''
+  className = '',
+  selected = false,
+  canStartDrag,
+  animatePosition = false
 }: ResizableCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
   const resizeStartRef = useRef({ x: 0, y: 0, w: 0, h: 0, edge: 'se' as Edge })
@@ -131,7 +137,7 @@ export default function ResizableCard({
   }, [])
 
   const startPointerDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return
+    if (e.button !== 0 || canStartDrag?.() === false) return
     suppressClickUntilRef.current = 0
     const target = e.target as HTMLElement
     const dragClickTarget = target.closest<HTMLElement>('[data-card-drag-click]')
@@ -229,10 +235,11 @@ export default function ResizableCard({
     document.addEventListener('pointermove', onMove)
     document.addEventListener('pointerup', onUp)
     document.addEventListener('pointercancel', onCancel)
-  }, [flushVisuals, frontZIndex, getScale, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
+  }, [canStartDrag, flushVisuals, frontZIndex, getScale, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
 
   const startResize = useCallback(
     (edge: Edge, e: React.PointerEvent) => {
+      if (e.button !== 0 || canStartDrag?.() === false) return
       e.preventDefault()
       e.stopPropagation()
       interactionCleanupRef.current?.()
@@ -305,7 +312,7 @@ export default function ResizableCard({
         edge === 'e' ? 'ew-resize' : edge === 's' ? 'ns-resize' : 'nwse-resize'
       document.body.style.userSelect = 'none'
     },
-    [flushVisuals, getScale, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
+    [canStartDrag, flushVisuals, getScale, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
   )
 
   const moveByKeyboard = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -329,11 +336,12 @@ export default function ResizableCard({
       ref={cardRef}
       data-workspace-card
       data-workspace-card-id={sizeKey}
+      data-selected={selected || undefined}
       role="group"
       tabIndex={0}
       aria-label={moveLabel}
       title={moveLabel}
-      className={`resizable-card group/card absolute outline-none focus-visible:ring-2 focus-visible:ring-accent ${moving ? 'is-moving cursor-grabbing' : ''} ${resizing ? 'is-resizing' : ''} ${className}`}
+      className={`resizable-card group/card absolute ${selected ? 'is-selected' : ''} ${animatePosition ? 'is-layout-animating' : ''} ${moving ? 'is-moving cursor-grabbing' : ''} ${resizing ? 'is-resizing' : ''} ${className}`}
       onPointerDown={startPointerDrag}
       onKeyDown={moveByKeyboard}
       onClickCapture={(e) => {

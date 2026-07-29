@@ -33,6 +33,7 @@ def test_create_returns_note_with_markdown_default(db):
     assert note["title"] == "My Note"
     assert note["contentMd"] == "# body"
     assert note["noteType"] == "markdown"
+    assert note["color"] == "sand"
     assert note["createdAt"] > 0
     assert note["updatedAt"] == note["createdAt"]
 
@@ -160,6 +161,16 @@ def test_update_preserves_note_type(db):
     assert updated["noteType"] == "plain"
 
 
+def test_update_changes_and_validates_color(db):
+    wid = _make_workspace(db)
+    notes = make_workspace_notes_repo(db)
+    created = notes["create"](wid, "Title", "content", "plain")
+    updated = notes["update"](created["id"], {"color": "sky"})
+    assert updated["color"] == "sky"
+    with pytest.raises(sqlite3.IntegrityError):
+        notes["update"](created["id"], {"color": "neon"})
+
+
 def test_update_missing_raises(db):
     notes = make_workspace_notes_repo(db)
     with pytest.raises(RepoError) as exc:
@@ -227,6 +238,7 @@ def test_field_contract_matches_workspace_note_type(db):
         "id",
         "workspaceId",
         "noteType",
+        "color",
         "title",
         "contentMd",
         "createdAt",
