@@ -233,8 +233,8 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     const annotations = [...(get().annotations[documentId] ?? []), annotation]
     set((state) => ({
       annotations: { ...state.annotations, [documentId]: annotations },
-      selectedAnnotationId: annotation.id,
-      selectedAnnotationIds: [annotation.id],
+      selectedAnnotationId: null,
+      selectedAnnotationIds: [],
       sidebarOpen: true,
       pendingCommentFocusId: annotation.kind === 'note' ? annotation.id : null,
       lastDeletion: null

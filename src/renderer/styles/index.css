@@ -251,6 +251,11 @@
     color: color-mix(in srgb, var(--workspace-sticky-ink) 48%, transparent);
   }
 
+  .pdf-text-annotation::placeholder {
+    color: var(--pdf-text-annotation-color);
+    opacity: 0.72;
+  }
+
   .workspace-content-card--asset {
     --workspace-card-accent: var(--workspace-card-asset);
   }

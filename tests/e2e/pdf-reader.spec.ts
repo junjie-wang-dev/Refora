@@ -91,6 +91,14 @@ test.describe('Built-in PDF reader', () => {
       name: 'Freehand drawing',
       exact: true
     })).toBeVisible()
+    await expect(page.locator('[data-pdf-annotation-toolbar]')).toHaveCSS(
+      'background-color',
+      'rgba(0, 0, 0, 0)'
+    )
+    await expect(page.locator('[data-pdf-annotation-toolbar]')).toHaveCSS(
+      'border-top-width',
+      '0px'
+    )
     await expect(page.locator('[data-pdf-reader-toolbar][data-compact]')).toBeVisible()
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Read and select text')
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(0)
@@ -125,10 +133,10 @@ test.describe('Built-in PDF reader', () => {
     const ink = pdfPage.locator('[data-annotation-kind="ink"]').last()
     await expect(ink).toHaveCount(1)
     await expect(ink).toHaveAttribute('stroke-width', '3')
-    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
     await expect(page.getByRole('button', {
       name: 'Delete selected annotations (1)'
-    })).toBeVisible()
+    })).toHaveCount(0)
     await page.getByRole('button', { name: 'Read and select text', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Freehand drawing', exact: true }))
       .not.toHaveAttribute('aria-pressed', 'true')
@@ -136,19 +144,24 @@ test.describe('Built-in PDF reader', () => {
     await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     await page.getByRole('button', { name: 'Add text', exact: true }).click()
     await page.getByRole('button', { name: 'Increase font size' }).click()
-    await page.getByRole('button', { name: 'Annotation color' }).nth(4).click()
     await pdfPage.click({ position: { x: 120, y: 210 } })
     const inlineText = pdfPage.getByRole('textbox', { name: 'Add text' })
     await expect(inlineText).toBeVisible()
+    await expect(inlineText).toBeFocused()
+    await page.getByRole('button', { name: 'Annotation color' }).nth(4).click()
+    await expect(inlineText).toBeFocused()
+    await expect.poll(() => inlineText.evaluate((element) =>
+      window.getComputedStyle(element, '::placeholder').color
+    )).toBe('rgb(235, 87, 87)')
     await inlineText.fill('Inline PDF annotation')
     await expect(inlineText).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
     await expect(inlineText).toHaveCSS('border-top-width', '0px')
     await expect(inlineText).toHaveCSS('font-size', '18.4px')
     await expect(inlineText).toHaveCSS('color', 'rgb(235, 87, 87)')
-    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
     await expect(page.getByRole('button', {
       name: 'Delete selected annotations (1)'
-    })).toBeVisible()
+    })).toHaveCount(0)
 
     await expect.poll(() => page.evaluate(async (documentId) => {
       const api = (window as unknown as {

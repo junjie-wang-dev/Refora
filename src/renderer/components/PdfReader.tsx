@@ -376,6 +376,31 @@ function PdfPage({
     }
   }, [tool])
 
+  useEffect(() => {
+    if (!editingTextAnnotationId) return
+    const annotation = annotations.find((item) => item.id === editingTextAnnotationId)
+    if (!annotation || annotation.kind !== 'text' || annotation.color === color) return
+    updateAnnotation(documentId, annotation.id, { color })
+  }, [
+    annotations,
+    color,
+    documentId,
+    editingTextAnnotationId,
+    updateAnnotation
+  ])
+
+  useEffect(() => {
+    if (!editingTextAnnotationId) return
+    const frame = window.requestAnimationFrame(() => {
+      pageElementRef.current
+        ?.querySelector<HTMLTextAreaElement>(
+          `[data-text-annotation-id="${editingTextAnnotationId}"]`
+        )
+        ?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [editingTextAnnotationId])
+
   return (
     <div
       ref={pageElementRef}
@@ -564,6 +589,7 @@ function PdfPage({
           return (
             <textarea
               key={annotation.id}
+              data-text-annotation-id={annotation.id}
               autoFocus={
                 editingTextAnnotationId === annotation.id &&
                 annotation.text.length === 0
@@ -571,7 +597,7 @@ function PdfPage({
               value={annotation.text}
               rows={rows}
               placeholder={t('pdfReader.textPlaceholder')}
-              className={`absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
+              className={`pdf-text-annotation absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
                 tool === 'text' || tool === 'select' || tool === 'eraser'
                   ? 'pointer-events-auto'
                   : 'pointer-events-none'
@@ -586,8 +612,9 @@ function PdfPage({
                 width,
                 color: annotation.color,
                 fontSize: `${(annotation.fontSize ?? 14) * scale}px`,
-                lineHeight: 1.35
-              }}
+                lineHeight: 1.35,
+                '--pdf-text-annotation-color': annotation.color
+              } as CSSProperties}
               aria-label={t('pdfReader.tools.text')}
               readOnly={tool !== 'text'}
               onPointerDown={(event) => event.stopPropagation()}
@@ -600,9 +627,12 @@ function PdfPage({
                 annotation.id,
                 { text: event.target.value }
               )}
-              onBlur={() => setEditingTextAnnotationId((current) =>
-                current === annotation.id ? null : current
-              )}
+              onBlur={() => {
+                if (!annotation.text.trim()) return
+                setEditingTextAnnotationId((current) =>
+                  current === annotation.id ? null : current
+                )
+              }}
               onKeyDown={(event) => {
                 if (event.key !== 'Escape') return
                 if (!annotation.text.trim()) removeAnnotation(documentId, annotation.id)
@@ -1281,7 +1311,8 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const annotationControls = (
     <>
       <div
-        className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5"
+        data-pdf-annotation-toolbar
+        className="flex shrink-0 items-center gap-0.5"
         aria-label={t('pdfReader.annotationTools')}
       >
         <ReaderButton
@@ -1394,6 +1425,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   : 'border-transparent'
               }`}
               style={{ background: item }}
+              onPointerDown={(event) => event.preventDefault()}
               onClick={() => changeColor(item)}
             />
           ))}

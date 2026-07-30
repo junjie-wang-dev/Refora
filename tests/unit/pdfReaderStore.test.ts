@@ -199,7 +199,7 @@ describe('PDF reader state', () => {
     expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith('paper', [])
   })
 
-  it('selects new annotations immediately and keeps selection available across tools', async () => {
+  it('keeps new annotations unselected until the select tool chooses them', async () => {
     await usePdfReaderStore.getState().open(document('paper'))
     usePdfReaderStore.getState().setTool('ink')
     const annotation = usePdfReaderStore.getState().addAnnotation('paper', {
@@ -214,8 +214,8 @@ describe('PDF reader state', () => {
 
     expect(usePdfReaderStore.getState()).toMatchObject({
       tool: 'ink',
-      selectedAnnotationId: annotation.id,
-      selectedAnnotationIds: [annotation.id]
+      selectedAnnotationId: null,
+      selectedAnnotationIds: []
     })
 
     usePdfReaderStore.getState().setTool('select')
@@ -244,7 +244,7 @@ describe('PDF reader state', () => {
 
     expect(usePdfReaderStore.getState()).toMatchObject({
       pendingCommentFocusId: note.id,
-      selectedAnnotationIds: [note.id]
+      selectedAnnotationIds: []
     })
 
     usePdfReaderStore.getState().removeAnnotations('paper', [first.id, note.id])
