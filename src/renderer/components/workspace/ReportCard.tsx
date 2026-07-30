@@ -13,14 +13,14 @@ import {
   urlTransform
 } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
-import { api } from '../../ipc'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
 import { Input as UiInput, Textarea as UiTextarea, cardClassName } from '../ui'
 import type { AiReport, Document } from '../../../shared/ipc-types'
+import { openDocumentPdf } from '../../utils/openPdf'
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => api.documents.openPdf(docId),
+  (docId) => openDocumentPdf(docId),
   () => useDocumentStore.getState().showToast(
     'Failed to open document. It may have been moved or deleted.'
   )

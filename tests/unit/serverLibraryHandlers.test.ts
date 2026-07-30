@@ -73,6 +73,8 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.DocumentsBulkCategorize, args: [['doc-1'], 'cat-1'], method: 'documentsBulkCategorize', forwarded: [{ ids: ['doc-1'], categoryId: 'cat-1' }] },
       { channel: IpcChannel.DocumentsBulkRefreshMetadata, args: [['doc-1']], method: 'documentsBulkRefreshMetadata', forwarded: [['doc-1']] },
       { channel: IpcChannel.DocumentsOpenPdf, args: ['doc-1'], method: 'documentsOpenPdf', forwarded: ['doc-1'] },
+      { channel: IpcChannel.DocumentsPdfAnnotationsGet, args: ['doc-1'], method: 'documentsPdfAnnotations', forwarded: ['doc-1'] },
+      { channel: IpcChannel.DocumentsPdfAnnotationsSet, args: ['doc-1', []], method: 'documentsSetPdfAnnotations', forwarded: ['doc-1', []] },
       { channel: IpcChannel.DocumentsOpenInFinder, args: ['doc-1'], method: 'documentsOpenInFinder', forwarded: ['doc-1'] },
       { channel: IpcChannel.DocumentsRefreshMetadata, args: ['doc-1'], method: 'documentsRefreshMetadata', forwarded: ['doc-1'] },
       { channel: IpcChannel.DocumentsRelocateFile, args: ['doc-1', '/tmp/paper.pdf'], method: 'documentsRelocate', forwarded: ['doc-1', { path: '/tmp/paper.pdf' }] },
@@ -142,6 +144,18 @@ describe('createServerLibraryHandlers', () => {
       ok: false,
       error: { code: 'not_found', message: 'Missing document' }
     })
+  })
+
+  it('forwards the built-in PDF reader flag to the server', async () => {
+    const { client, methods } = createClient()
+    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
+
+    await handlers[IpcChannel.DocumentsOpenPdf]('doc-1', false)
+
+    expect(methods.get('documentsOpenPdf')).toHaveBeenCalledWith('doc-1', false)
   })
 
   it('routes metadata refresh and arxiv verification to Python', async () => {

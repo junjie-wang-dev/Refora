@@ -65,6 +65,9 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.DocumentsBulkCategorize, args: [['doc-1'], 'cat-1'], invoke: (value) => value.documents.bulkCategorize(['doc-1'], 'cat-1') },
       { channel: IpcChannel.DocumentsBulkRefreshMetadata, args: [['doc-1']], invoke: (value) => value.documents.bulkRefreshMetadata(['doc-1']) },
       { channel: IpcChannel.DocumentsOpenPdf, args: ['doc-1'], invoke: (value) => value.documents.openPdf('doc-1') },
+      { channel: IpcChannel.DocumentsReadPdf, args: ['doc-1'], invoke: (value) => value.documents.readPdf('doc-1') },
+      { channel: IpcChannel.DocumentsPdfAnnotationsGet, args: ['doc-1'], invoke: (value) => value.documents.pdfAnnotations('doc-1') },
+      { channel: IpcChannel.DocumentsPdfAnnotationsSet, args: ['doc-1', []], invoke: (value) => value.documents.setPdfAnnotations('doc-1', []) },
       { channel: IpcChannel.DocumentsOpenInFinder, args: ['doc-1'], invoke: (value) => value.documents.openInFinder('doc-1') },
       { channel: IpcChannel.DocumentsRefreshMetadata, args: ['doc-1'], invoke: (value) => value.documents.refreshMetadata('doc-1') },
       { channel: IpcChannel.DocumentsRelocateFile, args: ['doc-1', '/tmp/paper.pdf'], invoke: (value) => value.documents.relocateFile('doc-1', '/tmp/paper.pdf') },
@@ -181,6 +184,15 @@ describe('preload IPC bridge', () => {
     )
     expect(api.workspaceAssets.previewUrl('asset / 1')).toBe('refora-asset://asset/asset%20%2F%201')
     expect(electronMocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it('forwards the built-in reader flag only when external opening is disabled', async () => {
+    await api.documents.openPdf('doc-1', false)
+    expect(electronMocks.invoke).toHaveBeenCalledWith(
+      IpcChannel.DocumentsOpenPdf,
+      'doc-1',
+      false
+    )
   })
 
   it('subscribes every event method and forwards only the payload', () => {

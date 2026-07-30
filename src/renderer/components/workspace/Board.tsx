@@ -31,6 +31,7 @@ import NoteCard from './NoteCard'
 import StickyNoteCard from './StickyNoteCard'
 import { STICKY_NOTE_COLORS } from './stickyNoteColors'
 import AssetCard from './AssetCard'
+import { openDocumentPdf } from '../../utils/openPdf'
 import ResizableCard, {
   clampCardSize,
   type CardPosition,
@@ -1178,7 +1179,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
             summarizing={summarizing.has(docId)}
             summaryError={summaryErrors.get(docId) ?? null}
             onSummarize={() => handleSummarize(docId)}
-            onOpenPdf={() => void api.documents.openPdf(docId)}
+            onOpenPdf={() => void openDocumentPdf(docId)}
             onRemove={() => void removeItem(item.id)}
             onOpenSummary={doc && summaryForReader && onOpenMarkdownCard
               ? () => onOpenMarkdownCard({ kind: 'summary', doc, summary: summaryForReader })
@@ -1202,7 +1203,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           <ReportCard
             report={report}
             sourceDocuments={docs}
-            onOpenSource={(docId) => void api.documents.openPdf(docId)}
+            onOpenSource={(docId) => void openDocumentPdf(docId)}
             onDelete={() => void deleteReport(report.id)}
             onUpdate={updateReport}
             onOpen={onOpenMarkdownCard

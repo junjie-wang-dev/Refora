@@ -30,6 +30,7 @@ SETTING_KEYS: tuple[str, ...] = (
     "detailWidth",
     "workspaceWidth",
     "documentListCompactWidth",
+    "pdfOpenMode",
 )
 
 
@@ -57,6 +58,7 @@ def default_settings(language: Language) -> list[tuple[str, Any]]:
         ("detailWidth", 384),
         ("workspaceWidth", 480),
         ("documentListCompactWidth", 320),
+        ("pdfOpenMode", "system"),
     ]
 
 

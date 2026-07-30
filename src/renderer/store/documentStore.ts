@@ -14,6 +14,7 @@ import type {
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import i18n from '../i18n'
+import { openDocumentPdf } from '../utils/openPdf'
 
 const DEFAULT_COLUMNS: ListColumn[] = [
   { id: 'title', visible: true, width: 300, order: 0 },
@@ -236,7 +237,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const doc = findKnownDocument(get(), docId)
     if (!doc || doc.fileMissing) return
     try {
-      const updated = await api.documents.openPdf(docId)
+      const updated = await openDocumentPdf(docId)
       get().patchDocument(docId, updated)
       void get().fetchDocumentCounts()
     } catch (e) {

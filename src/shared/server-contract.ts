@@ -1,6 +1,6 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "dc0c1ae6da8596dcca884d80b04f712fd696f355d6121101aba04ba41f481163" as const
+export const SERVER_PROTOCOL_DIGEST = "48d3e563bd3bd6fea1124d266a15582e3acb13a97bc6085577b6e49f03f02444" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -118,6 +118,10 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "GET",
     "path": "/documents/{document_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/documents/{document_id}/pdf-annotations"
   },
   {
     "method": "GET",
@@ -466,6 +470,10 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "PUT",
     "path": "/ai/memories"
+  },
+  {
+    "method": "PUT",
+    "path": "/documents/{document_id}/pdf-annotations"
   },
   {
     "method": "PUT",

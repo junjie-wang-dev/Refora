@@ -530,6 +530,7 @@ export default function DocumentList({
                 <div
                   key={vr.key}
                   data-index={vr.index}
+                  data-document-id={doc.id}
                   ref={virtualizer.measureElement}
                   style={{
                     position: 'absolute',

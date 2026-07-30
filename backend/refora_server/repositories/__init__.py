@@ -15,6 +15,7 @@ from refora_server.repositories.categories import createCategoriesRepository
 from refora_server.repositories.chat import createChatRepository
 from refora_server.repositories.document_ocr import createDocumentOcrRepository
 from refora_server.repositories.documents import createDocumentsRepository
+from refora_server.repositories.pdf_annotations import createPdfAnnotationsRepository
 from refora_server.repositories.settings import create_settings_repository
 from refora_server.repositories.watch_folders import createWatchFoldersRepository
 from refora_server.repositories.web_search_config import createWebSearchConfigRepository
@@ -84,6 +85,7 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     aiProviders = createAiProvidersRepository(db)
     workspaces = createWorkspacesRepository(db)
     documentOcr = createDocumentOcrRepository(db)
+    pdfAnnotations = createPdfAnnotationsRepository(db)
     webSearchConfig = createWebSearchConfigRepository(db)
     aiSummaries = createAiSummariesRepository(db)
     aiReports = createAiReportsRepository(db)
@@ -107,6 +109,7 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
         "aiProviders": aiProviders,
         "workspaces": workspaces,
         "documentOcr": documentOcr,
+        "pdfAnnotations": pdfAnnotations,
         "webSearchConfig": webSearchConfig,
         "aiSummaries": aiSummaries,
         "aiReports": aiReports,

@@ -21,6 +21,7 @@ import type {
   GlobalSearchResult,
   ListModelsRequest,
   PdfImportResult,
+  PdfAnnotation,
   Workspace,
   WorkspaceAgentMemory,
   WorkspaceAsset,
@@ -355,8 +356,13 @@ export interface ServerHttp {
   documentsRefreshMetadata(documentId: string): Promise<Document>
   documentsRelocate(documentId: string, payload: RelocatePayload): Promise<Document>
   documentsRestoreFile(documentId: string): Promise<Document>
-  documentsOpenPdf(documentId: string): Promise<Document>
+  documentsOpenPdf(documentId: string, external?: boolean): Promise<Document>
   documentsOpenInFinder(documentId: string): Promise<{ ack: boolean }>
+  documentsPdfAnnotations(documentId: string): Promise<PdfAnnotation[]>
+  documentsSetPdfAnnotations(
+    documentId: string,
+    annotations: PdfAnnotation[]
+  ): Promise<PdfAnnotation[]>
 
   importFiles(payload: ImportFilesPayload): Promise<PdfImportResult>
   importFolder(payload: ImportFolderPayload): Promise<PdfImportResult>
@@ -607,8 +613,17 @@ export function createServerClient(
     documentsRefreshMetadata: (id) => post<Document>(`/documents/${id}/refresh-metadata`),
     documentsRelocate: (id, payload) => post<Document>(`/documents/${id}/relocate`, payload),
     documentsRestoreFile: (id) => post<Document>(`/documents/${id}/restore-file`),
-    documentsOpenPdf: (id) => post<Document>(`/documents/${id}/open-pdf`),
+    documentsOpenPdf: (id, external) =>
+      request<Document>('POST', `/documents/${id}/open-pdf`, {
+        query: external === false ? { external: false } : {}
+      }),
     documentsOpenInFinder: (id) => post<{ ack: boolean }>(`/documents/${id}/open-in-finder`),
+    documentsPdfAnnotations: (id) =>
+      get<PdfAnnotation[]>(`/documents/${id}/pdf-annotations`),
+    documentsSetPdfAnnotations: (id, annotations) =>
+      request<PdfAnnotation[]>('PUT', `/documents/${id}/pdf-annotations`, {
+        body: { annotations }
+      }),
 
     importFiles: (payload) => post<PdfImportResult>('/import/files', payload),
     importFolder: (payload) => post<PdfImportResult>('/import/folder', payload),

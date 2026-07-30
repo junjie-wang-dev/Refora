@@ -7,6 +7,7 @@ import type {
   ListFilter,
   ListModelsRequest,
   ListModelsResult,
+  PdfAnnotation,
   Result
 } from '../../../shared/ipc-types'
 import { normalizeModelList } from '../../../shared/modelVariant'
@@ -15,6 +16,8 @@ import type {
   ImportBibPayload,
   ServerClient
 } from '../client'
+import { readFile } from 'node:fs/promises'
+import { resolvePdfFilePath } from '../../services/pdfPath'
 
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient
@@ -70,8 +73,21 @@ export function createServerLibraryHandlers({
       forward(() => http.documentsBulkCategorize({ ids, categoryId })),
     [IpcChannel.DocumentsBulkRefreshMetadata]: (documentIds: string[]) =>
       forward(() => http.documentsBulkRefreshMetadata(documentIds)),
-    [IpcChannel.DocumentsOpenPdf]: (documentId: string) =>
-      forward(() => http.documentsOpenPdf(documentId)),
+    [IpcChannel.DocumentsOpenPdf]: (documentId: string, external?: boolean) =>
+      forward(() => external === false
+        ? http.documentsOpenPdf(documentId, false)
+        : http.documentsOpenPdf(documentId)),
+    [IpcChannel.DocumentsReadPdf]: (documentId: string) =>
+      forward(async () => {
+        const document = await http.documentsGet(documentId)
+        return new Uint8Array(await readFile(resolvePdfFilePath(document.filePath)))
+      }),
+    [IpcChannel.DocumentsPdfAnnotationsGet]: (documentId: string) =>
+      forward(() => http.documentsPdfAnnotations(documentId)),
+    [IpcChannel.DocumentsPdfAnnotationsSet]: (
+      documentId: string,
+      annotations: PdfAnnotation[]
+    ) => forward(() => http.documentsSetPdfAnnotations(documentId, annotations)),
     [IpcChannel.DocumentsOpenInFinder]: (documentId: string) =>
       forward(() => http.documentsOpenInFinder(documentId)),
     [IpcChannel.DocumentsRefreshMetadata]: (documentId: string) =>

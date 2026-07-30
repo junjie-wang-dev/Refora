@@ -22,6 +22,7 @@ interface WorkspaceState {
   activeWorkspaceId: string | null
   activeThreadId: string | null
   panelOpen: boolean
+  panelView: 'workspace' | 'markdown' | 'pdf'
   fullscreen: boolean
   chatStreaming: boolean
   items: WorkspaceItem[]
@@ -45,6 +46,9 @@ interface WorkspaceState {
   fetchThreads: (options?: { selectLatestIfNone?: boolean }) => Promise<void>
   startNewChat: () => void
   openPanel: () => void
+  openPdfReader: () => void
+  showWorkspace: () => void
+  showMarkdown: () => void
   closePanel: () => void
   toggleFullscreen: () => void
   openMarkdownCard: (kind: WorkspaceContentKind, id: string) => void
@@ -88,6 +92,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeWorkspaceId: null,
   activeThreadId: null,
   panelOpen: false,
+  panelView: 'workspace',
   fullscreen: false,
   chatStreaming: false,
   items: [],
@@ -132,6 +137,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         activeWorkspaceId: null,
         activeThreadId: null,
         panelOpen: false,
+        panelView: 'workspace',
         fullscreen: false,
         chatStreaming: false,
         items: [],
@@ -211,6 +217,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                 activeWorkspaceId: null,
                 activeThreadId: null,
                 panelOpen: false,
+                panelView: 'workspace',
                 items: [],
                 reports: [],
                 notes: [],
@@ -232,6 +239,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       activeWorkspaceId: id,
       activeThreadId: null,
       panelOpen: id !== null,
+      panelView: 'workspace',
       items: [],
       reports: [],
       notes: [],
@@ -310,11 +318,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   openPanel: () => {
-    set({ panelOpen: true })
+    set({ panelOpen: true, panelView: 'workspace' })
+  },
+
+  openPdfReader: () => {
+    set({ panelOpen: true, panelView: 'pdf', fullscreen: false })
+  },
+
+  showWorkspace: () => {
+    set({ panelOpen: true, panelView: 'workspace' })
+  },
+
+  showMarkdown: () => {
+    set({ panelOpen: true, panelView: 'markdown' })
   },
 
   closePanel: () => {
-    set({ panelOpen: false, fullscreen: false })
+    set({ panelOpen: false, panelView: 'workspace', fullscreen: false })
   },
 
   toggleFullscreen: () => {
@@ -322,7 +342,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   openMarkdownCard: (kind: WorkspaceContentKind, id: string) => {
-    set({ markdownCardRequest: { kind, id }, panelOpen: true })
+    set({
+      markdownCardRequest: { kind, id },
+      panelOpen: true,
+      panelView: 'markdown'
+    })
   },
 
   clearMarkdownCardRequest: () => {

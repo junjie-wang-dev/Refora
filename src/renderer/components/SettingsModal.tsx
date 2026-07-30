@@ -14,6 +14,7 @@ import { formatElapsedClock } from '../utils/format'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
+import type { PdfOpenMode } from '../utils/openPdf'
 
 interface SettingsModalProps {
   open: boolean
@@ -413,6 +414,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [libraryFolderPath, setLibraryFolderPath] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [crossrefMailto, setCrossrefMailto] = useState('')
+  const [pdfOpenMode, setPdfOpenMode] = useState<PdfOpenMode>('system')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
@@ -432,10 +434,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       const proxy = await api.settings.get<string>('proxyUrl', '')
       const mailto = await api.settings.get<string>('crossrefMailto', '')
       const sc = await api.settings.get<string>('sidebarCollapsed', '0')
+      const openMode = await api.settings.get<PdfOpenMode>('pdfOpenMode', 'system')
       setLibraryFolderPath(lib)
       setProxyUrl(proxy)
       setCrossrefMailto(mailto)
       setSidebarCollapsed(sc === '1')
+      setPdfOpenMode(openMode === 'builtin' ? 'builtin' : 'system')
     } catch {
       setError('Failed to load settings')
     }
@@ -471,6 +475,19 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       await api.settings.set('crossrefMailto', crossrefMailto)
     } catch (e) {
       setError(errorMessage(e, 'Failed to save mailto'))
+    }
+  }
+
+  const handlePdfOpenModeChange = async (value: string) => {
+    const nextMode = value === 'builtin' ? 'builtin' : 'system'
+    const previousMode = pdfOpenMode
+    setPdfOpenMode(nextMode)
+    setError(null)
+    try {
+      await api.settings.set('pdfOpenMode', nextMode)
+    } catch (e) {
+      setPdfOpenMode(previousMode)
+      setError(errorMessage(e, t('settings.pdfOpenMode.saveFailed')))
     }
   }
 
@@ -609,6 +626,27 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 <span className="text-label text-muted">
                   {t('settings.libraryFolderAutoImportHint')}
                 </span>
+              </div>
+
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <label className="text-xs text-foreground">
+                    {t('settings.pdfOpenMode.title')}
+                  </label>
+                  <span className="text-label text-muted">
+                    {t('settings.pdfOpenMode.desc')}
+                  </span>
+                </div>
+                <Select
+                  value={pdfOpenMode}
+                  onChange={handlePdfOpenModeChange}
+                  options={[
+                    { label: t('settings.pdfOpenMode.system'), value: 'system' },
+                    { label: t('settings.pdfOpenMode.builtin'), value: 'builtin' }
+                  ]}
+                  size="small"
+                  style={{ width: 180 }}
+                />
               </div>
 
               <div className="flex flex-col gap-1.5">

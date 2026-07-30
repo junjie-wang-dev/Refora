@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { BookOpen, PencilSimple } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
@@ -9,10 +16,10 @@ import {
   urlTransform
 } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
-import { api } from '../../ipc'
 import { formatDate } from '../../utils/format'
 import { IconTooltip, Input, PanelTabHeader, Textarea } from '../ui'
 import WorkspaceNavigationControls from './WorkspaceNavigationControls'
+import { openDocumentPdf } from '../../utils/openPdf'
 
 export type WorkspaceMarkdownViewKind = 'note' | 'report' | 'summary'
 export type WorkspaceMarkdownViewMode = 'read' | 'edit'
@@ -23,7 +30,7 @@ interface MarkdownDraft {
 }
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => api.documents.openPdf(docId),
+  (docId) => openDocumentPdf(docId),
   () => useDocumentStore.getState().showToast(
     'Failed to open document. It may have been moved or deleted.'
   )
@@ -37,12 +44,20 @@ interface WorkspaceMarkdownViewProps {
   timestamp: number
   initialMode?: WorkspaceMarkdownViewMode
   fullscreen?: boolean
+  embedded?: boolean
   onBack: () => void
   onClose?: () => void
   onUpdate?: (id: string, patch: { title: string; contentMd: string }) => Promise<boolean>
 }
 
-export default function WorkspaceMarkdownView({
+export interface WorkspaceMarkdownViewHandle {
+  requestClose: () => Promise<boolean>
+}
+
+const WorkspaceMarkdownView = forwardRef<
+  WorkspaceMarkdownViewHandle,
+  WorkspaceMarkdownViewProps
+>(function WorkspaceMarkdownView({
   kind,
   id,
   title,
@@ -50,10 +65,11 @@ export default function WorkspaceMarkdownView({
   timestamp,
   initialMode = 'read',
   fullscreen = false,
+  embedded = false,
   onBack,
   onClose,
   onUpdate
-}: WorkspaceMarkdownViewProps) {
+}, ref) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<WorkspaceMarkdownViewMode>(
     kind === 'summary' ? 'read' : initialMode
@@ -123,6 +139,13 @@ export default function WorkspaceMarkdownView({
 
   const saveCurrentDraft = () => save({ title: draftTitle, contentMd: draftContent })
 
+  const requestClose = async () => {
+    if (!isDirty) return true
+    return saveCurrentDraft()
+  }
+
+  useImperativeHandle(ref, () => ({ requestClose }))
+
   const changeMode = async (nextMode: WorkspaceMarkdownViewMode) => {
     if (nextMode === mode) return
     if (nextMode === 'read' && isDirty) {
@@ -143,66 +166,74 @@ export default function WorkspaceMarkdownView({
 
   const handleClose = async () => {
     if (!onClose) return
-    if (isDirty) {
-      if (await saveCurrentDraft()) onClose()
-      return
-    }
-    onClose()
+    if (await requestClose()) onClose()
   }
 
-  const headerBar = (
+  const modeActions = editable ? (
+    <div
+      className="flex shrink-0 items-center gap-1"
+      role="group"
+      aria-label={t('workspace.markdownMode')}
+    >
+      <IconTooltip label={t('workspace.markdownRead')} appearance="sidebar">
+        <button
+          type="button"
+          className={[
+            'sidebar-header-btn',
+            mode === 'read' ? 'bg-active text-accent hover:bg-active' : ''
+          ].filter(Boolean).join(' ')}
+          aria-label={t('workspace.markdownRead')}
+          aria-pressed={mode === 'read'}
+          onClick={() => void changeMode('read')}
+        >
+          <BookOpen className="h-4 w-4" />
+        </button>
+      </IconTooltip>
+      <IconTooltip label={t('workspace.markdownEdit')} appearance="sidebar">
+        <button
+          type="button"
+          className={[
+            'sidebar-header-btn',
+            mode === 'edit' ? 'bg-active text-accent hover:bg-active' : ''
+          ].filter(Boolean).join(' ')}
+          aria-label={t('workspace.markdownEdit')}
+          aria-pressed={mode === 'edit'}
+          onClick={() => void changeMode('edit')}
+        >
+          <PencilSimple className="h-4 w-4" />
+        </button>
+      </IconTooltip>
+    </div>
+  ) : undefined
+
+  const headerBar = !embedded ? (
     <PanelTabHeader
       title={draftTitle || savedDraft.title}
       onClose={onClose ? () => void handleClose() : undefined}
       closeLabel={t('workspace.close')}
       leading={<WorkspaceNavigationControls onBack={() => void handleBack()} />}
-      actions={editable ? (
-        <div
-          className="flex shrink-0 items-center gap-1"
-          role="group"
-          aria-label={t('workspace.markdownMode')}
-        >
-          <IconTooltip label={t('workspace.markdownRead')} appearance="sidebar">
-            <button
-              type="button"
-              className={[
-                'sidebar-header-btn',
-                mode === 'read' ? 'bg-active text-accent hover:bg-active' : ''
-              ].filter(Boolean).join(' ')}
-              aria-label={t('workspace.markdownRead')}
-              aria-pressed={mode === 'read'}
-              onClick={() => void changeMode('read')}
-            >
-              <BookOpen className="h-4 w-4" />
-            </button>
-          </IconTooltip>
-          <IconTooltip label={t('workspace.markdownEdit')} appearance="sidebar">
-            <button
-              type="button"
-              className={[
-                'sidebar-header-btn',
-                mode === 'edit' ? 'bg-active text-accent hover:bg-active' : ''
-              ].filter(Boolean).join(' ')}
-              aria-label={t('workspace.markdownEdit')}
-              aria-pressed={mode === 'edit'}
-              onClick={() => void changeMode('edit')}
-            >
-              <PencilSimple className="h-4 w-4" />
-            </button>
-          </IconTooltip>
-        </div>
-      ) : undefined}
+      actions={modeActions}
     />
-  )
+  ) : null
 
   return (
-    <div className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background ${
+    <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background ${
       fullscreen ? 'workspace-fullscreen' : ''
     }`}>
       {headerBar}
+      {embedded && modeActions ? (
+        <div
+          className="absolute right-5 top-5 z-20 flex items-center rounded-xl border border-border bg-background/95 p-1 shadow-lg backdrop-blur"
+          data-testid="markdown-floating-actions"
+        >
+          {modeActions}
+        </div>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-5 py-8 sm:px-10">
+        <div className={`mx-auto flex min-h-full w-full max-w-4xl flex-col px-5 py-8 sm:px-10 ${
+          embedded && modeActions ? 'pt-16' : ''
+        }`}>
           {saveError && (
             <div className="mb-5 rounded-lg bg-error/10 px-3 py-2 text-sm text-error" role="alert">
               {saveError}
@@ -258,4 +289,6 @@ export default function WorkspaceMarkdownView({
       </div>
     </div>
   )
-}
+})
+
+export default WorkspaceMarkdownView

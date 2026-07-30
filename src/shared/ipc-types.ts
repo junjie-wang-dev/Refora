@@ -122,6 +122,41 @@ export interface Document {
   categories?: Category[]
 }
 
+export type PdfAnnotationKind =
+  | 'highlight'
+  | 'underline'
+  | 'strikeout'
+  | 'note'
+  | 'text'
+  | 'ink'
+
+export interface PdfAnnotationRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PdfAnnotationPoint {
+  x: number
+  y: number
+}
+
+export interface PdfAnnotation {
+  id: string
+  kind: PdfAnnotationKind
+  page: number
+  color: string
+  text: string
+  comment: string
+  createdAt: number
+  rects?: PdfAnnotationRect[]
+  point?: PdfAnnotationPoint
+  points?: PdfAnnotationPoint[]
+  strokeWidth?: number
+  fontSize?: number
+}
+
 export interface WatchFolder {
   id: string
   path: string
@@ -765,7 +800,10 @@ export interface ReforaApi {
     bulkDelete(ids: string[]): Promise<void>
     bulkCategorize(ids: string[], catId: string): Promise<void>
     bulkRefreshMetadata(ids: string[]): Promise<void>
-    openPdf(id: string): Promise<Document>
+    openPdf(id: string, external?: boolean): Promise<Document>
+    readPdf(id: string): Promise<Uint8Array>
+    pdfAnnotations(id: string): Promise<PdfAnnotation[]>
+    setPdfAnnotations(id: string, annotations: PdfAnnotation[]): Promise<PdfAnnotation[]>
     openInFinder(id: string): Promise<void>
     refreshMetadata(id: string): Promise<Document>
     relocateFile(id: string, newPath: string): Promise<Document>

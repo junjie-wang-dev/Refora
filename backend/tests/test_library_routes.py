@@ -20,6 +20,7 @@ class Fakes:
         self.document_overrides = {}
         self.last_read_at = {}
         self.metadata_refreshes = []
+        self.pdf_annotations = {}
         self.documents = {
             "list": self.list_documents,
             "counts": lambda: {
@@ -143,6 +144,10 @@ class Fakes:
             "workspaceAssets": {"search": lambda _query, _limit: []},
             "workspaces": {"searchContent": lambda _query, _limit: []},
             "chat": {"search": lambda _query, _limit: []},
+            "pdfAnnotations": {
+                "get": lambda document_id: self.pdf_annotations.get(document_id, []),
+                "set": self.set_pdf_annotations,
+            },
         }
 
     async def require_token(self, request: Request):
@@ -230,6 +235,10 @@ class Fakes:
         self.web_search_config_data.update(patch)
         return dict(self.web_search_config_data)
 
+    def set_pdf_annotations(self, document_id: str, annotations: list[dict]):
+        self.pdf_annotations[document_id] = annotations
+        return annotations
+
     def get_web_search_config(self):
         return {
             "provider": self.web_search_config_data["provider"],
@@ -260,6 +269,7 @@ def test_registers_every_library_domain_protocol_route():
         ("POST", "/documents/bulk-refresh-metadata"), ("POST", "/documents/{document_id}/refresh-metadata"),
         ("POST", "/documents/{document_id}/relocate"), ("POST", "/documents/{document_id}/restore-file"),
         ("POST", "/documents/{document_id}/open-pdf"), ("POST", "/documents/{document_id}/open-in-finder"),
+        ("GET", "/documents/{document_id}/pdf-annotations"), ("PUT", "/documents/{document_id}/pdf-annotations"),
         ("POST", "/import/files"), ("POST", "/import/folder"), ("POST", "/import/json"),
         ("POST", "/import/zotero"), ("POST", "/import/mendeley"), ("POST", "/import/identifier"),
         ("GET", "/categories"), ("POST", "/categories"), ("PATCH", "/categories/{category_id}"),
@@ -370,6 +380,58 @@ def test_open_missing_pdf_returns_not_found():
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
+
+
+def test_builtin_reader_marks_pdf_read_without_opening_external_app(tmp_path):
+    client, fakes = make_client()
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": str(pdf),
+        "fileMissing": 0,
+    }
+
+    def fail_open(_path: str):
+        raise AssertionError("external PDF app should not be opened")
+
+    fakes.connector["openPath"] = fail_open
+    response = client.post(
+        "/documents/doc-1/open-pdf?external=false",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["id"] == "doc-1"
+    assert fakes.last_read_at["doc-1"] > 0
+
+
+def test_pdf_annotations_roundtrip_is_document_scoped():
+    client, _ = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    annotations = [{
+        "id": "annotation-1",
+        "kind": "note",
+        "page": 2,
+        "color": "#f2c94c",
+        "text": "",
+        "comment": "Important result",
+        "createdAt": 123,
+        "point": {"x": 0.2, "y": 0.3},
+    }]
+
+    updated = client.put(
+        "/documents/doc-1/pdf-annotations",
+        headers=headers,
+        json={"annotations": annotations},
+    )
+    fetched = client.get(
+        "/documents/doc-1/pdf-annotations",
+        headers=headers,
+    )
+
+    assert updated.json()["data"] == annotations
+    assert fetched.json()["data"] == annotations
 
 
 def test_bulk_metadata_refresh_only_enqueues_work():

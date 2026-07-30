@@ -15,14 +15,14 @@ import {
   urlTransform
 } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
-import { api } from '../../ipc'
 import { Button as UiButton } from '../ui'
 import { AgentTraceStepItem } from './AgentTrace'
 import AgentTodoList from './AgentTodoList'
 import type { AgentTraceStep, AiProvider, ChatMessage } from '../../../shared/ipc-types'
+import { openDocumentPdf } from '../../utils/openPdf'
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => api.documents.openPdf(docId),
+  (docId) => openDocumentPdf(docId),
   () => useDocumentStore.getState().showToast(
     'Failed to open document. It may have been moved or deleted.'
   )

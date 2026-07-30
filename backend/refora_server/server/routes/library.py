@@ -238,6 +238,7 @@ def create_library_router(deps: Any) -> APIRouter:
     metadata = _dependency(deps, "metadata")
     ai_summaries = _value(repos, "aiSummaries")
     ai_reports = _value(repos, "aiReports")
+    pdf_annotations = _value(repos, "pdfAnnotations")
     transaction = _value(repos, "transaction")
 
     async def run(action):
@@ -667,7 +668,7 @@ def create_library_router(deps: Any) -> APIRouter:
         return await run(action)
 
     @router.post("/documents/{document_id}/open-pdf")
-    async def open_document_pdf(document_id: str):
+    async def open_document_pdf(document_id: str, external: bool = True):
         async def action():
             item = await document(document_id)
             if item.get("fileMissing") == 1:
@@ -675,7 +676,8 @@ def create_library_router(deps: Any) -> APIRouter:
                 error.code = "file_missing"
                 raise error
             path = resolvePdfFilePath(item["filePath"])
-            await _connector(connector, "open", path)
+            if external:
+                await _connector(connector, "open", path)
             await _call(documents, "setLastReadAt", document_id, int(time.time() * 1000))
             return await document(document_id)
         return await run(action)
@@ -686,6 +688,32 @@ def create_library_router(deps: Any) -> APIRouter:
             item = await document(document_id)
             await _connector(connector, "reveal", item["filePath"])
             return {"ack": True}
+        return await run(action)
+
+    @router.get("/documents/{document_id}/pdf-annotations")
+    async def get_pdf_annotations(document_id: str):
+        async def action():
+            await document(document_id)
+            if not callable(_value(pdf_annotations, "get")):
+                return []
+            return await _call(pdf_annotations, "get", document_id)
+        return await run(action)
+
+    @router.put("/documents/{document_id}/pdf-annotations")
+    async def update_pdf_annotations(document_id: str, body: dict[str, Any]):
+        async def action():
+            await document(document_id)
+            annotations = _body_dict(body).get("annotations")
+            if not isinstance(annotations, list):
+                raise ValueError("annotations must be an array")
+            if len(annotations) > 10000 or any(not isinstance(item, dict) for item in annotations):
+                raise ValueError("annotations contains invalid entries")
+            encoded = json.dumps(annotations, allow_nan=False)
+            if len(encoded.encode("utf-8")) > 16 * 1024 * 1024:
+                raise ValueError("annotations exceeds the 16 MiB limit")
+            if not callable(_value(pdf_annotations, "set")):
+                raise _UnavailableError("PDF annotation storage is unavailable")
+            return await _call(pdf_annotations, "set", document_id, annotations)
         return await run(action)
 
     async def import_result(result: dict[str, Any]) -> dict[str, Any]:

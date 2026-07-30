@@ -130,6 +130,19 @@ describe('WorkspaceMarkdownView', () => {
     expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toHaveValue('# Findings\n\nInitial content')
   })
 
+  it('places embedded reader actions inside the Markdown page', () => {
+    renderView({ embedded: true })
+
+    const actions = screen.getByTestId('markdown-floating-actions')
+    expect(actions).toContainElement(
+      screen.getByRole('button', { name: 'workspace.markdownRead' })
+    )
+    expect(actions).toContainElement(
+      screen.getByRole('button', { name: 'workspace.markdownEdit' })
+    )
+    expect(screen.queryByTestId('panel-tab-header')).not.toBeInTheDocument()
+  })
+
   it('saves a changed draft before returning to reading mode', async () => {
     const { onUpdate } = renderView({ initialMode: 'edit' })
     const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })

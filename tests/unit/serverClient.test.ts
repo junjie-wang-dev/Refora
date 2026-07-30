@@ -281,6 +281,29 @@ describe('serverClient', () => {
       expect(calls[1].url).toContain('/import/zotero')
     })
 
+    it('disables the native PDF open action for the built-in reader', async () => {
+      const { fetch, calls } = makeFetchSpy(() => makeResponse({ id: 'd4' }))
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
+
+      await client.http.documentsOpenPdf('d4', false)
+
+      expect(calls[0].url).toContain('/documents/d4/open-pdf?external=false')
+      expect(calls[0].method).toBe('POST')
+    })
+
+    it('routes PDF annotation reads and updates', async () => {
+      const { fetch, calls } = makeFetchSpy(() => makeResponse([]))
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
+
+      await client.http.documentsPdfAnnotations('d4')
+      await client.http.documentsSetPdfAnnotations('d4', [])
+
+      expect(calls[0].url).toContain('/documents/d4/pdf-annotations')
+      expect(calls[0].method).toBe('GET')
+      expect(calls[1].url).toContain('/documents/d4/pdf-annotations')
+      expect(calls[1].method).toBe('PUT')
+    })
+
     it('routes ai chat endpoints', async () => {
       const { fetch, calls } = makeFetchSpy(() => makeResponse({ runId: 'r1', threadId: 't1' }))
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })

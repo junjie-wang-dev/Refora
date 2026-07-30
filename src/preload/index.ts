@@ -36,6 +36,7 @@ import type {
   ListFilter,
   ListModelsRequest,
   ListModelsResult,
+  PdfAnnotation,
   PdfImportResult,
   Result,
   ReforaApi,
@@ -153,7 +154,14 @@ const api: ReforaApi = {
       invoke<void>(IpcChannel.DocumentsBulkCategorize, ids, catId),
     bulkRefreshMetadata: (ids: string[]) =>
       invoke<void>(IpcChannel.DocumentsBulkRefreshMetadata, ids),
-    openPdf: (id: string) => invoke<Document>(IpcChannel.DocumentsOpenPdf, id),
+    openPdf: (id: string, external) => external === false
+      ? invoke<Document>(IpcChannel.DocumentsOpenPdf, id, false)
+      : invoke<Document>(IpcChannel.DocumentsOpenPdf, id),
+    readPdf: (id: string) => invoke<Uint8Array>(IpcChannel.DocumentsReadPdf, id),
+    pdfAnnotations: (id: string) =>
+      invoke<PdfAnnotation[]>(IpcChannel.DocumentsPdfAnnotationsGet, id),
+    setPdfAnnotations: (id: string, annotations: PdfAnnotation[]) =>
+      invoke<PdfAnnotation[]>(IpcChannel.DocumentsPdfAnnotationsSet, id, annotations),
     openInFinder: (id: string) => invoke<void>(IpcChannel.DocumentsOpenInFinder, id),
     refreshMetadata: (id: string) => invoke<Document>(IpcChannel.DocumentsRefreshMetadata, id),
     relocateFile: (id: string, newPath: string) =>

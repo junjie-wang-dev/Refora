@@ -1,0 +1,275 @@
+import { test, expect, _electron as electron } from '@playwright/test'
+import path from 'node:path'
+import fs from 'node:fs'
+import os from 'node:os'
+import electronExe from 'electron'
+
+const testMain = path.resolve(__dirname, 'electron-main.mjs')
+const fixtures = path.resolve(__dirname, '..', 'fixtures')
+
+test.describe('Built-in PDF reader', () => {
+  let electronApp: Awaited<ReturnType<typeof electron.launch>>
+  let page: Awaited<ReturnType<Awaited<ReturnType<typeof electron.launch>>['firstWindow']>>
+  let userDataFolder: string
+  let libraryFolder: string
+  let firstDocumentId: string
+  let secondDocumentId: string
+
+  test.beforeAll(async () => {
+    userDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-reader-user-'))
+    libraryFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-reader-library-'))
+    fs.writeFileSync(
+      path.join(userDataFolder, 'refora-prefs.json'),
+      JSON.stringify({ libraryFolderPath: libraryFolder })
+    )
+    const launchEnv = {
+      ...process.env,
+      REFORA_E2E_USER_DATA_DIR: userDataFolder
+    }
+    delete launchEnv.ELECTRON_RUN_AS_NODE
+    electronApp = await electron.launch({
+      executablePath: electronExe,
+      env: launchEnv,
+      args: [testMain]
+    })
+    page = await electronApp.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    const imported = await page.evaluate(async ({ first, second }) => {
+      const api = (window as unknown as {
+        api: {
+          import: {
+            addFiles(paths: string[]): Promise<{ added: string[] }>
+          }
+          settings: {
+            set(key: string, value: unknown): Promise<void>
+          }
+          workspaces: {
+            create(name: string): Promise<unknown>
+          }
+          documents: {
+            list(filter: { mode: 'all' }): Promise<Array<{ id: string; fileName: string }>>
+          }
+        }
+      }).api
+      await api.import.addFiles([first, second])
+      await api.settings.set('pdfOpenMode', 'builtin')
+      await api.workspaces.create('Reader workspace')
+      return api.documents.list({ mode: 'all' })
+    }, {
+      first: path.join(fixtures, 'valid.pdf'),
+      second: path.join(fixtures, 'with-doi.pdf')
+    })
+    firstDocumentId = imported.find((document) => document.fileName === 'valid.pdf')?.id ?? ''
+    secondDocumentId = imported.find((document) => document.fileName === 'with-doi.pdf')?.id ?? ''
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+  })
+
+  test.afterAll(async () => {
+    await electronApp?.close()
+    fs.rmSync(userDataFolder, { recursive: true, force: true })
+    fs.rmSync(libraryFolder, { recursive: true, force: true })
+  })
+
+  test('opens multiple tabs and persists visible drawing and text annotations locally', async () => {
+    const firstRow = page.locator(`[data-document-id="${firstDocumentId}"]`)
+    const secondRow = page.locator(`[data-document-id="${secondDocumentId}"]`)
+    await expect(firstRow).toBeVisible()
+    await firstRow.getByRole('button', { name: 'Open' }).click()
+
+    await expect(page.locator('.pdf-reader-page')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add PDF tab' })).toHaveCount(0)
+    await expect(secondRow).toBeVisible()
+    await secondRow.click()
+    await page.getByRole('button', { name: 'Open File' }).click()
+
+    await expect(page.locator('[data-reader-tab-kind="workspace"]')).toHaveCount(1)
+    await expect(page.locator('[data-reader-tab-kind="pdf"]')).toHaveCount(2)
+    await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toHaveCount(1)
+    await expect(page.getByRole('button', { name: 'Highlight' })).toBeVisible()
+    await expect(page.getByRole('button', {
+      name: 'Freehand drawing',
+      exact: true
+    })).toBeVisible()
+    await expect(page.locator('[data-pdf-reader-toolbar][data-compact]')).toBeVisible()
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Read and select text')
+    await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(0)
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Search in PDF', exact: true }).click()
+    const compactSearch = page.getByPlaceholder('Search in PDF', { exact: true })
+    await expect(compactSearch).toBeFocused()
+    await compactSearch.press('Escape')
+    await expect(compactSearch).toBeHidden()
+
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    await expect(page.locator('[data-annotation-sidebar][data-overlay]')).toBeVisible()
+    await page.getByRole('button', { name: 'Close annotations panel' }).click()
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    await expect(page.locator('[data-annotation-sidebar][data-overlay]')).toBeVisible()
+    const pdfPage = page.locator('.pdf-reader-page').first()
+    const bounds = await pdfPage.boundingBox()
+    expect(bounds).not.toBeNull()
+
+    await page.getByRole('button', { name: 'Freehand drawing', exact: true }).click()
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Freehand drawing')
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(5)
+    await page.getByRole('button', { name: 'Increase drawing line width' }).click()
+    await page.mouse.move(bounds!.x + 80, bounds!.y + 110)
+    await page.mouse.down()
+    await page.mouse.move(bounds!.x + 150, bounds!.y + 150, { steps: 6 })
+    await page.mouse.up()
+
+    const ink = pdfPage.locator('[data-annotation-kind="ink"]').last()
+    await expect(ink).toHaveCount(1)
+    await expect(ink).toHaveAttribute('stroke-width', '3')
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    await expect(page.getByRole('button', {
+      name: 'Delete selected annotations (1)'
+    })).toBeVisible()
+    await page.getByRole('button', { name: 'Read and select text', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Freehand drawing', exact: true }))
+      .not.toHaveAttribute('aria-pressed', 'true')
+
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    await page.getByRole('button', { name: 'Add text', exact: true }).click()
+    await page.getByRole('button', { name: 'Increase font size' }).click()
+    await page.getByRole('button', { name: 'Annotation color' }).nth(4).click()
+    await pdfPage.click({ position: { x: 120, y: 210 } })
+    const inlineText = pdfPage.getByRole('textbox', { name: 'Add text' })
+    await expect(inlineText).toBeVisible()
+    await inlineText.fill('Inline PDF annotation')
+    await expect(inlineText).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    await expect(inlineText).toHaveCSS('border-top-width', '0px')
+    await expect(inlineText).toHaveCSS('font-size', '18.4px')
+    await expect(inlineText).toHaveCSS('color', 'rgb(235, 87, 87)')
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    await expect(page.getByRole('button', {
+      name: 'Delete selected annotations (1)'
+    })).toBeVisible()
+
+    await expect.poll(() => page.evaluate(async (documentId) => {
+      const api = (window as unknown as {
+        api: {
+          documents: {
+            pdfAnnotations(id: string): Promise<Array<{
+              kind: string
+              text: string
+              fontSize?: number
+              strokeWidth?: number
+            }>>
+          }
+        }
+      }).api
+      const annotations = await api.documents.pdfAnnotations(documentId)
+      return annotations.some((annotation) =>
+        annotation.kind === 'ink' && annotation.strokeWidth === 3
+      ) && annotations.some((annotation) =>
+        annotation.kind === 'text' &&
+        annotation.text === 'Inline PDF annotation' &&
+        annotation.fontSize === 16 &&
+        annotation.color === '#eb5757'
+      )
+    }, secondDocumentId)).toBe(true)
+
+    await page.getByRole('button', { name: 'Select annotations', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Add text', exact: true }))
+      .not.toHaveAttribute('aria-pressed', 'true')
+    const annotationInput = pdfPage.locator('[data-annotation-input-layer]')
+    await annotationInput.hover({ position: { x: 40, y: 80 } })
+    const selectionBounds = await annotationInput.boundingBox()
+    expect(selectionBounds).not.toBeNull()
+    await page.mouse.move(selectionBounds!.x + 40, selectionBounds!.y + 80)
+    await page.mouse.down()
+    await page.mouse.move(selectionBounds!.x + 260, selectionBounds!.y + 280, { steps: 6 })
+    await expect(pdfPage.locator('[data-annotation-selection]')).toBeVisible()
+    await page.mouse.up()
+    const selectedAnnotations = pdfPage.locator('[data-selected-annotation]')
+    await expect(selectedAnnotations).toHaveCount(2)
+    await expect(selectedAnnotations.first()).toBeVisible()
+    await expect(selectedAnnotations.first()).toHaveCSS('border-top-width', '2px')
+
+    const deleteSelected = page.getByRole('button', {
+      name: 'Delete selected annotations (2)'
+    })
+    await expect(deleteSelected).toBeVisible()
+    await deleteSelected.click()
+    await expect(selectedAnnotations).toHaveCount(0)
+    await expect(pdfPage.locator('[data-annotation-kind="ink"]')).toHaveCount(0)
+    await expect(pdfPage.getByRole('textbox', { name: 'Add text' })).toHaveCount(0)
+    await expect(page.getByRole('status')).toContainText('Deleted 2 annotations')
+    await page.getByRole('button', { name: 'Undo', exact: true }).click()
+    await expect(pdfPage.locator('[data-annotation-kind="ink"]')).toHaveCount(1)
+    await expect(pdfPage.getByRole('textbox', { name: 'Add text' })).toHaveCount(1)
+    await expect(selectedAnnotations).toHaveCount(2)
+    await expect.poll(() => page.evaluate(async (documentId) => {
+      const api = (window as unknown as {
+        api: {
+          documents: {
+            pdfAnnotations(id: string): Promise<unknown[]>
+          }
+        }
+      }).api
+      return (await api.documents.pdfAnnotations(documentId)).length
+    }, secondDocumentId)).toBe(2)
+    await page.getByRole('button', {
+      name: 'Delete selected annotations (2)'
+    }).click()
+    await expect(selectedAnnotations).toHaveCount(0)
+    await expect.poll(() => page.evaluate(async (documentId) => {
+      const api = (window as unknown as {
+        api: {
+          documents: {
+            pdfAnnotations(id: string): Promise<unknown[]>
+          }
+        }
+      }).api
+      return (await api.documents.pdfAnnotations(documentId)).length
+    }, secondDocumentId)).toBe(0)
+
+    await page.getByRole('button', { name: 'Add note', exact: true }).click()
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    await pdfPage.click({ position: { x: 180, y: 120 } })
+    const noteComment = page.locator('[data-annotation-sidebar]')
+      .getByPlaceholder('Add a comment…', { exact: true })
+    await expect(noteComment).toBeFocused()
+    await noteComment.fill('Follow up on this result')
+    await expect.poll(() => page.evaluate(async (documentId) => {
+      const api = (window as unknown as {
+        api: {
+          documents: {
+            pdfAnnotations(id: string): Promise<Array<{ comment: string }>>
+          }
+        }
+      }).api
+      return (await api.documents.pdfAnnotations(documentId))[0]?.comment
+    }, secondDocumentId)).toBe('Follow up on this result')
+    await page.locator('[data-annotation-sidebar]')
+      .getByRole('button', { name: 'Delete', exact: true })
+      .click()
+    await expect.poll(() => page.evaluate(async (documentId) => {
+      const api = (window as unknown as {
+        api: {
+          documents: {
+            pdfAnnotations(id: string): Promise<unknown[]>
+          }
+        }
+      }).api
+      return (await api.documents.pdfAnnotations(documentId)).length
+    }, secondDocumentId)).toBe(0)
+
+    await page.getByTestId('app-sidebar-layer')
+      .getByRole('button', { name: 'Reader workspace', exact: true })
+      .click()
+    await expect(page.getByRole('button', { name: 'Add text' })).toBeHidden()
+    await expect(
+      page.getByTestId('app-workspace-panel').getByText('Reader workspace', { exact: true })
+    ).toBeVisible()
+    await expect(
+      page.getByTestId('workspace-floating-actions').getByRole('button', { name: 'Add files' })
+    ).toBeVisible()
+    await expect(firstRow).toBeVisible()
+  })
+})

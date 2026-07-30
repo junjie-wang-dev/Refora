@@ -179,6 +179,8 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
         return _has_objects(db, [("table", "web_search_config")])
     if version == 28:
         return _has_columns(db, "workspace_notes", ["color"])
+    if version == 29:
+        return _has_objects(db, [("table", "pdf_annotations")])
     return version <= current
 
 

@@ -118,6 +118,7 @@ function resetStoreState(): void {
     activeWorkspaceId: null,
     activeThreadId: null,
     panelOpen: false,
+    panelView: 'workspace',
     fullscreen: false,
     items: [],
     reports: [],
@@ -248,12 +249,13 @@ afterEach(() => {
 describe('WorkspaceStore', () => {
   describe('openMarkdownCard', () => {
     it('opens the workspace panel and exposes a consumable Markdown-card request', () => {
-      useWorkspaceStore.setState({ panelOpen: false })
+      useWorkspaceStore.setState({ panelOpen: false, panelView: 'pdf' })
 
       useWorkspaceStore.getState().openMarkdownCard('note', 'note-1')
 
       expect(useWorkspaceStore.getState()).toMatchObject({
         panelOpen: true,
+        panelView: 'markdown',
         markdownCardRequest: { kind: 'note', id: 'note-1' }
       })
       useWorkspaceStore.getState().clearMarkdownCardRequest()
@@ -337,6 +339,7 @@ describe('WorkspaceStore', () => {
 
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1')
       expect(useWorkspaceStore.getState().panelOpen).toBe(true)
+      expect(useWorkspaceStore.getState().panelView).toBe('workspace')
       await vi.waitFor(() => {
         expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
       })
@@ -697,6 +700,15 @@ describe('WorkspaceStore', () => {
     it('updates thread, streaming, panel, and fullscreen state', () => {
       useWorkspaceStore.getState().setActiveThreadId('thread-1')
       useWorkspaceStore.getState().setChatStreaming(true)
+      useWorkspaceStore.getState().openPdfReader()
+
+      expect(useWorkspaceStore.getState()).toMatchObject({
+        panelOpen: true,
+        panelView: 'pdf',
+        fullscreen: false
+      })
+
+      useWorkspaceStore.getState().showWorkspace()
       useWorkspaceStore.getState().openPanel()
       useWorkspaceStore.getState().toggleFullscreen()
 
@@ -704,12 +716,14 @@ describe('WorkspaceStore', () => {
         activeThreadId: 'thread-1',
         chatStreaming: true,
         panelOpen: true,
+        panelView: 'workspace',
         fullscreen: true
       })
 
       useWorkspaceStore.getState().closePanel()
       expect(useWorkspaceStore.getState()).toMatchObject({
         panelOpen: false,
+        panelView: 'workspace',
         fullscreen: false
       })
 

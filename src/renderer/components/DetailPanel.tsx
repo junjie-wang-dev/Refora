@@ -30,6 +30,7 @@ import type {
 import { IpcChannel } from '../../shared/ipc-channels'
 import { useOcrReaderStore } from '../store/ocrReaderStore'
 import OcrProgressCard from './OcrProgressCard'
+import { openDocumentPdf } from '../utils/openPdf'
 
 type InlineFieldVariant = 'default' | 'title' | 'year' | 'authors' | 'metadata' | 'abstract'
 
@@ -629,7 +630,7 @@ function SingleDetail({ doc }: { doc: Document }) {
 
   const handleOpenPdf = async () => {
     try {
-      const updated = await api.documents.openPdf(doc.id)
+      const updated = await openDocumentPdf(doc.id)
       patchDocument(doc.id, updated)
     } catch (e) {
       useDocumentStore.getState().showToast(errorMessage(e, 'Failed to open PDF'))
