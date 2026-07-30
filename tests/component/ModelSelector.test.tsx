@@ -135,6 +135,7 @@ describe('ModelSelector', () => {
     expect(effortButton.querySelector('span')).toHaveClass('min-w-0', 'flex-1', 'truncate')
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     await user.click(effortButton)
+    expect(screen.queryByRole('option', { name: 'none' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('option', { name: 'low' }))
     expect(defaultProps.onReasoningEffortChange).toHaveBeenCalledWith('low')
 

@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/ipc-types'
 import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { usePdfReaderStore } from '../../store/pdfReaderStore'
 import { Button as UiButton, PanelTabHeader } from '../ui'
 import { useChatStream } from '../../hooks/useChatStream'
 import { AI_PROVIDERS_CHANGED_EVENT } from '../../utils/aiProviderEvents'
@@ -40,7 +41,9 @@ function normalizeReasoningEffort(
   value: unknown,
   fallback: AiReasoningEffort
 ): AiReasoningEffort {
-  return typeof value === 'string' && AI_REASONING_EFFORTS.has(value as AiReasoningEffort)
+  return typeof value === 'string' &&
+    AI_REASONING_EFFORTS.has(value as AiReasoningEffort) &&
+    (value !== 'none' || fallback === 'none')
     ? value as AiReasoningEffort
     : fallback
 }
@@ -69,6 +72,8 @@ interface ChatPanelProps {
 export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const { t } = useTranslation()
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const panelView = useWorkspaceStore((s) => s.panelView)
+  const activePdfDocumentId = usePdfReaderStore((s) => s.activeDocumentId)
   const activeThreadId = useWorkspaceStore((s) => s.activeThreadId)
   const setActiveThreadId = useWorkspaceStore((s) => s.setActiveThreadId)
   const setChatStreaming = useWorkspaceStore((s) => s.setChatStreaming)
@@ -117,6 +122,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
 
   const chat = useChatStream({
     activeWorkspaceId,
+    activeDocumentId: panelView === 'pdf' ? activePdfDocumentId : null,
     activeProviderId,
     activeThreadId,
     requestModel,

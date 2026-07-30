@@ -1,11 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode
+  type ReactNode,
+  type RefObject
 } from 'react'
 import {
   ArrowCounterClockwise,
@@ -54,7 +56,12 @@ import {
   annotationIdsInSelection,
   selectionRectFromPoints
 } from '../utils/pdfAnnotationSelection'
-import { pdfCanvasLayout } from '../utils/pdfCanvas'
+import {
+  pdfCanvasLayout,
+  pdfCanvasTileTransform,
+  pdfVisibilityObserverOptions,
+  type PdfCanvasTile
+} from '../utils/pdfCanvas'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -96,12 +103,82 @@ function normalizedPoint(event: ReactPointerEvent, element: HTMLElement): PdfPoi
   }
 }
 
+type PdfViewport = ReturnType<PDFPageProxy['getViewport']>
+
+function PdfCanvasTileView({
+  page,
+  scrollRootRef,
+  tile,
+  viewport,
+  pixelRatio
+}: {
+  page: PDFPageProxy
+  scrollRootRef: RefObject<HTMLDivElement | null>
+  tile: PdfCanvasTile
+  viewport: PdfViewport
+  pixelRatio: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const renderTaskRef = useRef<RenderTask | null>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const element = canvasRef.current
+    const root = scrollRootRef.current
+    if (!element || !root) return
+    const observer = new IntersectionObserver((entries) => {
+      setVisible(entries[0]?.isIntersecting ?? false)
+    }, pdfVisibilityObserverOptions(root))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [scrollRootRef])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    if (!visible) {
+      renderTaskRef.current?.cancel()
+      canvas.width = 1
+      canvas.height = 1
+      return
+    }
+    canvas.width = tile.pixelWidth
+    canvas.height = tile.pixelHeight
+    renderTaskRef.current?.cancel()
+    const renderTask = page.render({
+      canvas,
+      viewport,
+      transform: pdfCanvasTileTransform(tile, pixelRatio)
+    })
+    renderTaskRef.current = renderTask
+    void renderTask.promise.catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'RenderingCancelledException') return
+    })
+    return () => renderTask.cancel()
+  }, [page, pixelRatio, tile, viewport, visible])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      className="absolute"
+      style={{
+        left: tile.cssX,
+        top: tile.cssY,
+        width: tile.cssWidth,
+        height: tile.cssHeight
+      }}
+    />
+  )
+}
+
 function PdfPage({
   pdf,
   pageNumber,
   scale,
   rotation,
   devicePixelRatio,
+  scrollRootRef,
   documentId,
   annotations,
   tool,
@@ -116,6 +193,7 @@ function PdfPage({
   scale: number
   rotation: number
   devicePixelRatio: number
+  scrollRootRef: RefObject<HTMLDivElement | null>
   documentId: string
   annotations: PdfAnnotation[]
   tool: PdfTool | null
@@ -127,12 +205,9 @@ function PdfPage({
 }) {
   const { t } = useTranslation()
   const pageElementRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
-  const renderTaskRef = useRef<RenderTask | null>(null)
   const textLayerTaskRef = useRef<TextLayer | null>(null)
   const [page, setPage] = useState<PDFPageProxy | null>(null)
-  const [size, setSize] = useState({ width: 612 * scale, height: 792 * scale })
   const [visible, setVisible] = useState(pageNumber <= 2)
   const [inkPoints, setInkPoints] = useState<PdfPoint[] | null>(null)
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
@@ -144,6 +219,19 @@ function PdfPage({
   const selectedAnnotationIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
   const selectAnnotations = usePdfReaderStore((state) => state.selectAnnotations)
   const updateAnnotation = usePdfReaderStore((state) => state.updateAnnotation)
+  const viewport = useMemo(
+    () => page?.getViewport({ scale, rotation }) ?? null,
+    [page, rotation, scale]
+  )
+  const size = viewport
+    ? { width: viewport.width, height: viewport.height }
+    : { width: 612 * scale, height: 792 * scale }
+  const canvasLayout = useMemo(
+    () => viewport
+      ? pdfCanvasLayout(viewport.width, viewport.height, devicePixelRatio)
+      : null,
+    [devicePixelRatio, viewport]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -157,44 +245,30 @@ function PdfPage({
 
   useEffect(() => {
     const element = pageElementRef.current
-    if (!element) return
+    const root = scrollRootRef.current
+    if (!element || !root) return
     const observer = new IntersectionObserver((entries) => {
-      if (!entries[0]?.isIntersecting) return
-      setVisible(true)
-      onPageVisible(pageNumber)
-    }, { rootMargin: '700px 0px' })
+      const isVisible = entries[0]?.isIntersecting ?? false
+      setVisible(isVisible)
+      if (isVisible) onPageVisible(pageNumber)
+    }, pdfVisibilityObserverOptions(root))
     observer.observe(element)
     return () => observer.disconnect()
-  }, [onPageVisible, pageNumber])
+  }, [onPageVisible, pageNumber, scrollRootRef])
 
   useEffect(() => {
-    if (!page) return
-    const viewport = page.getViewport({ scale, rotation })
-    setSize({ width: viewport.width, height: viewport.height })
-    if (!visible || !canvasRef.current || !textLayerRef.current) return
-    const canvas = canvasRef.current
+    if (!page || !viewport || !textLayerRef.current) return
     const textContainer = textLayerRef.current
-    const canvasLayout = pdfCanvasLayout(viewport.width, viewport.height, devicePixelRatio)
-    canvas.width = canvasLayout.width
-    canvas.height = canvasLayout.height
-    canvas.style.width = `${viewport.width}px`
-    canvas.style.height = `${viewport.height}px`
-    renderTaskRef.current?.cancel()
     textLayerTaskRef.current?.cancel()
     textContainer.replaceChildren()
-    renderTaskRef.current = page.render({
-      canvas,
-      viewport,
-      transform: canvasLayout.scaleX === 1 && canvasLayout.scaleY === 1
-        ? undefined
-        : [canvasLayout.scaleX, 0, 0, canvasLayout.scaleY, 0, 0]
-    })
+    if (!visible) {
+      return
+    }
     let disposed = false
     void Promise.all([
-      renderTaskRef.current.promise,
       page.getTextContent(),
       loadPdfRuntime()
-    ]).then(([, textContent, runtime]) => {
+    ]).then(([textContent, runtime]) => {
       if (disposed) return
       textLayerTaskRef.current = new runtime.TextLayer({
         textContentSource: textContent,
@@ -207,10 +281,9 @@ function PdfPage({
     })
     return () => {
       disposed = true
-      renderTaskRef.current?.cancel()
       textLayerTaskRef.current?.cancel()
     }
-  }, [devicePixelRatio, page, rotation, scale, visible])
+  }, [page, viewport, visible])
 
   const addTextAnnotation = useCallback(() => {
     if (
@@ -418,7 +491,16 @@ function PdfPage({
       } as CSSProperties}
       onMouseUp={addTextAnnotation}
     >
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      {page && viewport && canvasLayout?.tiles.map((tile) => (
+        <PdfCanvasTileView
+          key={`${tile.pixelX}-${tile.pixelY}`}
+          page={page}
+          scrollRootRef={scrollRootRef}
+          tile={tile}
+          viewport={viewport}
+          pixelRatio={canvasLayout.pixelRatio}
+        />
+      ))}
       <div
         ref={textLayerRef}
         className="textLayer absolute inset-0"
@@ -1628,6 +1710,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   scale={scale}
                   rotation={rotation}
                   devicePixelRatio={devicePixelRatio}
+                  scrollRootRef={scrollRef}
                   documentId={activeDocument.id}
                   annotations={annotations.filter((annotation) => annotation.page === index + 1)}
                   tool={tool}

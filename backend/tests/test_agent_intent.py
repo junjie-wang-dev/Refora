@@ -1,3 +1,6 @@
+import pytest
+
+from refora_server.services import agent_intent
 from refora_server.services.agent_intent import (
     SYSTEM_PROMPT,
     WORKSPACE_SYSTEM_PROMPT,
@@ -31,3 +34,54 @@ def test_checkpoint_continuation_sends_only_the_new_user_message():
         *history,
         {"role": "user", "content": "new question"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_recovery_rebuilds_the_persisted_active_reader_context(
+    monkeypatch,
+    tmp_path,
+):
+    async def fake_provider_config(*args, **kwargs):
+        return {"model": "model-1"}
+
+    monkeypatch.setattr(agent_intent, "provider_config", fake_provider_config)
+    monkeypatch.setattr(agent_intent, "ensure_memory_files", lambda repos, workspace_id: None)
+    monkeypatch.setattr(agent_intent, "read_memories", lambda repos, workspace_id: {})
+    repos = {
+        "chat": {
+            "getThread": lambda thread_id: {
+                "id": thread_id,
+                "workspaceId": None,
+            },
+            "listMessages": lambda thread_id: [],
+        },
+        "documents": {
+            "get": lambda document_id: {
+                "id": document_id,
+                "title": "Reader paper",
+                "authors": "Researcher",
+                "year": "2026",
+            },
+        },
+        "aiSummaries": {"getSummary": lambda document_id: None},
+    }
+
+    result = await agent_intent.assemble_recovery(
+        {
+            "id": "run-reader",
+            "threadId": "thread-global",
+            "providerId": "provider-1",
+            "modelId": "model-1",
+            "status": "running",
+            "activeDocumentId": "doc-reader",
+        },
+        repos=repos,
+        services={},
+        connector=None,
+        db_path=str(tmp_path / "library.sqlite"),
+        library_folder=str(tmp_path),
+    )
+
+    assert result["activeDocumentId"] == "doc-reader"
+    assert "A paper is open in the active reader tab" in result["systemPrompt"]
+    assert "docId=doc-reader | Reader paper" in result["systemPrompt"]

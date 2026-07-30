@@ -6,7 +6,6 @@ import httpx
 
 from refora_server.providers.catalog import (
     getProviderPreset,
-    inferModelCapabilities,
     providerRequiresApiKey,
 )
 from refora_server.services.ai_summary import build_provider_reasoning_options
@@ -148,19 +147,22 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             raise RepoError("invalid_input", "Model is required")
         requested = features or {}
         requested_effort = requested.get("reasoningEffort")
+        if (
+            requested_effort == "none"
+            and provider.get("reasoningControl") != "none"
+        ):
+            requested_effort = provider.get("reasoningEffort")
         if isinstance(requested_effort, str):
             provider["reasoningEffort"] = requested_effort
         if provider.get("reasoningControl") == "none":
             provider["reasoningEffort"] = "none"
-        capabilities = inferModelCapabilities(provider["presetId"], model)
-        supports_reasoning = capabilities.get("supportsReasoning") is True
         if isinstance(requested_effort, str):
             deep_thinking = requested_effort != "none"
         else:
             deep_thinking = requested.get("deepThinking") is True
         reasoning_options = build_provider_reasoning_options(
             provider,
-            deep_thinking if supports_reasoning else None,
+            deep_thinking,
         )
         config: dict[str, Any] = {
             "model": model,
@@ -168,11 +170,11 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             "apiKey": key,
             "useResponsesApi": reasoning_options["useResponsesApi"],
             "modelKwargs": reasoning_options["modelKwargs"],
-            "temperature": None
-            if supports_reasoning
-            else provider.get("temperature"),
+            "temperature": None,
             "maxTokens": provider.get("maxTokens"),
         }
+        if reasoning_options.get("extraBody") is not None:
+            config["extraBody"] = reasoning_options["extraBody"]
         if reasoning_options.get("reasoning") is not None:
             config["reasoning"] = reasoning_options["reasoning"]
         return config

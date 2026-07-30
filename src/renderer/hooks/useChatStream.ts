@@ -87,6 +87,7 @@ function reviewedOcrDocumentId(context: ResumeRetryContext): string | null {
 
 export function useChatStream({
   activeWorkspaceId,
+  activeDocumentId,
   activeProviderId,
   activeThreadId,
   requestModel,
@@ -691,9 +692,13 @@ export function useChatStream({
     setActiveOcrDocumentId(null)
     hadMessagesRef.current = true
     stickToBottomRef.current = true
+    const contextDocumentId = Object.hasOwn(replacement, 'activeDocumentId')
+      ? replacement.activeDocumentId ?? null
+      : activeDocumentId
     const sendContext: ChatSendContext = {
       text,
       attachments: [...attachments],
+      activeDocumentId: contextDocumentId,
       threadId: existingThread,
       runId: requestedRunId,
       persisted: false
@@ -706,6 +711,7 @@ export function useChatStream({
       if (model) void pushRecentModel(model, activeProviderId)
       const { threadId, runId } = await api.ai.chatSend({
         workspaceId: activeWorkspaceId,
+        ...(contextDocumentId ? { activeDocumentId: contextDocumentId } : {}),
         threadId: existingThread ?? undefined,
         runId: requestedRunId,
         text,
@@ -754,6 +760,7 @@ export function useChatStream({
     }
   }, [
     activeWorkspaceId,
+    activeDocumentId,
     activeProviderId,
     streaming,
     setActiveThreadId,
@@ -820,7 +827,8 @@ export function useChatStream({
     }
     void sendText(last.text, last.attachments, last.threadId, {
       replaceLastExchange: last.persisted,
-      replaceRunId: last.persisted ? last.runId : null
+      replaceRunId: last.persisted ? last.runId : null,
+      activeDocumentId: last.activeDocumentId
     })
   }, [resumeInterrupt, sendText])
 
@@ -845,11 +853,13 @@ export function useChatStream({
   const handleRegenerate = useCallback(() => {
     let text = ''
     let attachments: string[] = []
+    let contextDocumentId: string | null | undefined
     let threadId = activeThreadId
     const latestSend = latestSendRef.current
     if (latestSend && latestSend.threadId === activeThreadId) {
       text = latestSend.text
       attachments = latestSend.attachments
+      contextDocumentId = latestSend.activeDocumentId
       threadId = latestSend.threadId
     } else {
       for (let i = displayMessages.length - 1; i >= 0; i--) {
@@ -881,7 +891,10 @@ export function useChatStream({
     }
     void sendText(text, attachments, threadId, {
       replaceLastExchange: true,
-      replaceRunId: lastRunId
+      replaceRunId: lastRunId,
+      ...(contextDocumentId !== undefined
+        ? { activeDocumentId: contextDocumentId }
+        : {})
     })
   }, [displayMessages, activeThreadId, traceSteps, sendText])
 

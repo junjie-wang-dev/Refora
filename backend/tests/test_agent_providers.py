@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from deepagents.backends import CompositeBackend
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -111,6 +114,124 @@ def test_create_model_use_responses_api_true_sets_attribute() -> None:
     model = providers.create_model(config)
 
     assert model.use_responses_api is True
+
+
+def test_create_model_places_custom_reasoning_fields_in_extra_body() -> None:
+    config: dict[str, Any] = {
+        "model": "xopkimik26",
+        "baseUrl": "https://example.test/v1",
+        "apiKey": "test-key",
+        "useResponsesApi": False,
+        "modelKwargs": {},
+        "extraBody": {"enable_thinking": True},
+        "temperature": None,
+        "maxTokens": None,
+    }
+
+    model = providers.create_model(config)
+    payload = model._get_request_payload("Explain this")
+
+    assert model.extra_body == {"enable_thinking": True}
+    assert model.model_kwargs == {}
+    assert payload["extra_body"] == {"enable_thinking": True}
+    assert "enable_thinking" not in payload
+
+
+def test_create_model_sends_and_preserves_compatible_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        chunks = [
+            {
+                "id": "chunk-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "xopkimik26",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "provider reasoning",
+                        },
+                    }
+                ],
+            },
+            {
+                "id": "chunk-2",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "xopkimik26",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {"content": "Visible answer"},
+                    }
+                ],
+            },
+            {
+                "id": "chunk-3",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "xopkimik26",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "delta": {"content": ""},
+                    }
+                ],
+            },
+        ]
+        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        body += "data: [DONE]\n\n"
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    async def run() -> list[Any]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        original = providers.ChatOpenAI
+        monkeypatch.setattr(
+            providers,
+            "ChatOpenAI",
+            lambda **kwargs: original(**kwargs, http_async_client=client),
+        )
+        model = providers.create_model(
+            {
+                "model": "xopkimik26",
+                "baseUrl": "https://example.test/v1",
+                "apiKey": "test-key",
+                "useResponsesApi": False,
+                "modelKwargs": {},
+                "extraBody": {
+                    "enable_thinking": True,
+                    "reasoning_effort": "max",
+                },
+                "temperature": None,
+                "maxTokens": None,
+            }
+        )
+        result = [chunk async for chunk in model.astream("Explain this")]
+        await client.aclose()
+        return result
+
+    streamed = asyncio.run(run())
+
+    assert captured["enable_thinking"] is True
+    assert captured["reasoning_effort"] == "max"
+    assert "extra_body" not in captured
+    assert streamed[0].additional_kwargs["reasoning_content"] == "provider reasoning"
+    assert "".join(chunk.text for chunk in streamed) == "Visible answer"
 
 
 def test_create_model_can_disable_streaming(
@@ -480,6 +601,35 @@ def test_streaming_role_patch_preserves_explicit_role() -> None:
     assert generation is not None
     assert isinstance(generation.message, AIMessageChunk)
     assert delta["role"] == "assistant"
+
+
+def test_streaming_role_patch_preserves_reasoning_content() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    delta = {"content": "", "reasoning_content": "provider thought"}
+    chunk = {"choices": [{"delta": delta, "index": 0, "finish_reason": None}]}
+    generation = model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert generation is not None
+    assert generation.message.additional_kwargs["reasoning_content"] == "provider thought"
+
+
+def test_streaming_role_patch_preserves_reasoning_details() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    model = _make_streaming_model()
+    providers._normalize_compatible_streaming_roles(model)
+
+    details = [{"type": "reasoning.text", "text": "provider details"}]
+    delta = {"content": "", "reasoning_details": details}
+    chunk = {"choices": [{"delta": delta, "index": 0, "finish_reason": None}]}
+    generation = model._convert_chunk_to_generation_chunk(chunk, AIMessageChunk, {})
+
+    assert generation is not None
+    assert generation.message.additional_kwargs["reasoning_details"] == details
 
 
 def test_streaming_role_patch_handles_chunk_without_choices() -> None:

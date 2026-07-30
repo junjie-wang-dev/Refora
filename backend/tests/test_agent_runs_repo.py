@@ -1,6 +1,7 @@
 import pytest
 
 from conftest import (
+    insert_doc,
     insert_message,
     insert_thread,
     make_agent_runs_repo,
@@ -38,6 +39,7 @@ def test_create_with_defaults(thread, db):
     assert run["threadId"] == thread["id"]
     assert run["providerId"] == "provider-1"
     assert run["modelId"] == "model-1"
+    assert run["activeDocumentId"] is None
     assert run["status"] == "queued"
     assert run["checkpointBefore"] is None
     assert run["checkpointAfter"] is None
@@ -52,12 +54,14 @@ def test_create_with_defaults(thread, db):
 def test_create_with_explicit_values(thread, db):
     repo = make_agent_runs_repo(db)
     user_msg = insert_message(db, threadId=thread["id"], id="msg-1", role="user")
+    document_id = insert_doc(db, id="doc-reader")
     run = repo["create"](
         {
             "id": "run-1",
             "threadId": thread["id"],
             "providerId": "provider-1",
             "modelId": "model-1",
+            "activeDocumentId": document_id,
             "status": "running",
             "checkpointBefore": "ckpt-before",
             "replacesRunId": None,
@@ -67,6 +71,7 @@ def test_create_with_explicit_values(thread, db):
     )
     assert run["status"] == "running"
     assert run["checkpointBefore"] == "ckpt-before"
+    assert run["activeDocumentId"] == "doc-reader"
     assert run["userMessageId"] == "msg-1"
     assert run["startedAt"] == 500
 
@@ -318,6 +323,7 @@ def test_field_contract_matches_agent_run_type(thread, db):
         "threadId",
         "providerId",
         "modelId",
+        "activeDocumentId",
         "status",
         "checkpointBefore",
         "checkpointAfter",

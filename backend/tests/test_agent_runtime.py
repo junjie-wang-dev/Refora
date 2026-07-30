@@ -254,6 +254,31 @@ def test_send_persists_the_provider_selected_for_this_run(repos, db):
     assert repos["chat"]["getThread"]("thread-1")["providerId"] == "provider-original"
 
 
+def test_send_persists_the_active_reader_document_for_recovery(repos, db):
+    insert_thread(db)
+    document_id = insert_doc(db, id="doc-reader")
+
+    async def stream(agent, req, mode):
+        yield {"event": "complete", "result": {"content": "Answer"}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+        },
+    )
+
+    result = asyncio.run(
+        runtime["send"](request(activeDocumentId=document_id))
+    )
+
+    assert result["status"] == "completed"
+    assert repos["agentRuns"]["get"]("run-1")["activeDocumentId"] == "doc-reader"
+
+
 def test_replace_exchange_is_committed_with_new_message_run_and_trace_cleanup(
     repos, db
 ):
@@ -1307,6 +1332,179 @@ def test_reasoning_content_is_not_emitted_as_answer_token(repos, db):
     assert reasoning["token"] == "private chain"
     assert isinstance(reasoning["stepId"], str)
     assert not [payload for event, payload in seen if event == "ai.chat.token"]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (
+            [{"type": "reasoning", "reasoning": "normalized summary", "index": 0}],
+            "normalized summary",
+        ),
+        (
+            [
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": "responses summary",
+                            "index": 0,
+                        }
+                    ],
+                    "index": 0,
+                }
+            ],
+            "responses summary",
+        ),
+    ],
+)
+def test_reasoning_content_blocks_emit_reasoning(repos, db, content, expected):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-reasoning",
+            "data": {"chunk": NativeMessage(content)},
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"output": AIMessage(content="Visible answer")},
+        }
+        yield {"event": "complete", "result": "Visible answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    asyncio.run(runtime["send"](request()))
+
+    reasoning = next(
+        payload for event, payload in seen if event == "ai.chat.reasoning"
+    )
+    assert reasoning["token"] == expected
+    assert not [payload for event, payload in seen if event == "ai.chat.token"]
+
+
+def test_model_end_backfills_reasoning_when_stream_event_omits_it(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {
+                "output": {
+                    "generations": [
+                        [
+                            {
+                                "message": NativeMessage(
+                                    "Visible answer",
+                                    {"reasoning_content": "final reasoning"},
+                                )
+                            }
+                        ]
+                    ]
+                }
+            },
+        }
+        yield {"event": "complete", "result": "Visible answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    asyncio.run(runtime["send"](request()))
+
+    reasoning = [
+        payload["token"] for event, payload in seen if event == "ai.chat.reasoning"
+    ]
+    assert reasoning == ["final reasoning"]
+
+
+def test_model_end_does_not_duplicate_streamed_reasoning(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "on_chat_model_start",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {"input": {"messages": []}},
+        }
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "llm-reasoning",
+            "data": {
+                "chunk": NativeMessage(
+                    "",
+                    {"reasoning_content": "streamed reasoning"},
+                )
+            },
+        }
+        yield {
+            "event": "on_chat_model_end",
+            "name": "test-model",
+            "run_id": "llm-reasoning",
+            "data": {
+                "output": NativeMessage(
+                    "Visible answer",
+                    {"reasoning_content": "streamed reasoning"},
+                )
+            },
+        }
+        yield {"event": "complete", "result": "Visible answer", "state": {}}
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    asyncio.run(runtime["send"](request()))
+
+    reasoning = [
+        payload["token"] for event, payload in seen if event == "ai.chat.reasoning"
+    ]
+    assert reasoning == ["streamed reasoning"]
 
 
 def test_failure_preserves_partial_response_and_emits_done(repos, db):

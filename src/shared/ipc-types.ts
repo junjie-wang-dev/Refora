@@ -575,6 +575,7 @@ export interface ChatMessage {
 
 export interface AgentTurnIntent {
   workspaceId: string | null
+  activeDocumentId?: string
   threadId?: string
   runId?: string
   text: string
@@ -638,6 +639,7 @@ export interface AgentRun {
   threadId: string
   providerId: string
   modelId: string
+  activeDocumentId: string | null
   status: AgentRunStatus
   checkpointBefore: string | null
   checkpointAfter: string | null

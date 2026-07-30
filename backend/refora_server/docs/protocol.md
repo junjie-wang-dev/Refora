@@ -337,6 +337,7 @@ must never send this object:
   apiKey: string,
   useResponsesApi: boolean,
   modelKwargs: object,
+  extraBody?: object,
   reasoning?: { effort: string, summary: "auto" },
   temperature: number | null,
   maxTokens: number | null
@@ -349,6 +350,7 @@ must never send this object:
   runId: string,
   threadId?: string,
   workspaceId: string | null,
+  activeDocumentId?: string,
   text: string,
   providerId: string,
   model?: string,

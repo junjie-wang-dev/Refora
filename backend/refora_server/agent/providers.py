@@ -115,6 +115,7 @@ class AgentProviderConfig(TypedDict, total=False):
     apiKey: str
     useResponsesApi: bool
     modelKwargs: dict[str, Any]
+    extraBody: dict[str, Any]
     reasoning: dict[str, Any] | None
     temperature: float | None
     maxTokens: int | None
@@ -127,6 +128,7 @@ def _normalize_compatible_streaming_roles(model: ChatOpenAI) -> ChatOpenAI:
         return model
 
     def _patched(self: Any, chunk: Any, default_chunk_class: Any, base_generation_info: Any = None) -> Any:
+        reasoning_fields: dict[str, Any] = {}
         try:
             if isinstance(chunk, dict):
                 choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices")
@@ -134,9 +136,26 @@ def _normalize_compatible_streaming_roles(model: ChatOpenAI) -> ChatOpenAI:
                     delta = choices[0].get("delta")
                     if isinstance(delta, dict) and not delta.get("role"):
                         delta["role"] = "assistant"
+                    if isinstance(delta, dict):
+                        reasoning_fields = {
+                            key: delta[key]
+                            for key in (
+                                "reasoning_content",
+                                "reasoning",
+                                "thinking",
+                                "reasoning_details",
+                            )
+                            if delta.get(key) is not None
+                        }
         except Exception:
             pass
-        return original(chunk, default_chunk_class, base_generation_info)
+        generation = original(chunk, default_chunk_class, base_generation_info)
+        if generation is not None and reasoning_fields:
+            message = getattr(generation, "message", None)
+            additional = getattr(message, "additional_kwargs", None)
+            if isinstance(additional, dict):
+                additional.update(reasoning_fields)
+        return generation
 
     try:
         model._convert_chunk_to_generation_chunk = types.MethodType(_patched, model)
@@ -161,6 +180,8 @@ def create_model(config: dict[str, Any]) -> ChatOpenAI:
         options["temperature"] = config["temperature"]
     if config.get("maxTokens") is not None:
         options["max_completion_tokens"] = config["maxTokens"]
+    if isinstance(config.get("extraBody"), dict):
+        options["extra_body"] = config["extraBody"]
     if isinstance(config.get("reasoning"), dict):
         options["reasoning"] = config["reasoning"]
     return _normalize_compatible_streaming_roles(ChatOpenAI(**options))

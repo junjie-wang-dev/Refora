@@ -237,44 +237,29 @@ export function providerRequiresApiKey(id: string): boolean {
   return getProviderPreset(id).apiKeyRequired
 }
 
-function hasReasoningToken(modelId: string): boolean {
-  return /gpt-5|gpt-oss|\bo[134](?:\b|-)|reason|thinking|deepseek-r1|deepseek-v4|qwq|qwen3|glm-[45]|magistral/i.test(
-    modelId
-  )
-}
-
 export function reasoningEffortsForModel(
   presetId: string,
-  modelId: string,
-  supportsReasoningHint = false
+  modelId: string
 ): AiReasoningEffort[] {
   const id = modelId.toLowerCase()
   if (presetId === 'kimi') {
     if (/k2\.7-code|thinking/.test(id)) return ['high']
-    return /k2\.6|k2\.5/.test(id) ? ['none', 'high'] : []
+    if (/k2\.6|k2\.5/.test(id)) return ['none', 'high']
   }
   if (presetId === 'deepseek') {
     if (/v4-(?:flash|pro)|reasoner/.test(id)) return ['none', 'high', 'max']
-    return []
   }
   if (presetId === 'glm') {
     if (/glm-5\.2/.test(id)) return OPENAI_EFFORTS
-    return /glm-(?:5\.1|5|4\.[5-7])/.test(id) ? ['none', 'high'] : []
+    if (/glm-(?:5\.1|5|4\.[5-7])/.test(id)) return ['none', 'high']
   }
   if (/gpt-oss/.test(id)) return ['low', 'medium', 'high']
   if (presetId === 'groq' && /qwen3/.test(id)) return ['none', 'high']
   if (presetId === 'ollama-local' || presetId === 'ollama-cloud') {
     if (/qwen3|deepseek|reason|thinking/.test(id)) return ['none', 'high']
   }
-  if (presetId === 'qwen') return /qwen3/.test(id) ? ['none', 'high'] : []
-  if (presetId === 'openai') return hasReasoningToken(id) ? OPENAI_EFFORTS : []
-  if (presetId === 'openrouter' && (supportsReasoningHint || hasReasoningToken(id))) {
-    return OPENAI_EFFORTS
-  }
-  if (supportsReasoningHint || hasReasoningToken(id)) {
-    return getProviderPreset(presetId).reasoningEfforts
-  }
-  return []
+  if (presetId === 'qwen' && /qwen3/.test(id)) return ['none', 'high']
+  return getProviderPreset(presetId).reasoningEfforts
 }
 
 export function inferModelCapabilities(
@@ -283,17 +268,10 @@ export function inferModelCapabilities(
   hints: ModelCapabilityHints = {}
 ): ModelCapabilities {
   const supportedParameters = Array.from(new Set(hints.supportedParameters ?? [])).sort()
-  const parameterReasoning = supportedParameters.some((param) =>
-    ['reasoning', 'reasoning_effort', 'include_reasoning', 'thinking', 'enable_thinking'].includes(param)
-  )
-  const reasoningEfforts = reasoningEffortsForModel(
-    presetId,
-    modelId,
-    hints.supportsReasoning === true || parameterReasoning
-  )
+  const reasoningEfforts = reasoningEffortsForModel(presetId, modelId)
   const id = modelId.toLowerCase()
   return {
-    supportsReasoning: reasoningEfforts.length > 0,
+    supportsReasoning: true,
     reasoningEfforts,
     supportsVision:
       hints.supportsVision === true ||

@@ -127,13 +127,14 @@ def test_generate_title_reasoning_model_max_tokens(chat_repo, db):
     assert captured["config"]["maxTokens"] == 512
 
 
-def test_generate_title_non_reasoning_max_tokens(chat_repo, db):
+def test_generate_title_plain_model_uses_reasoning_budget(chat_repo, db):
     thread = insert_thread(db, id="t1")
     insert_message(db, threadId=thread, role="user", content="hi")
     captured: dict = {}
 
     def gen(req):
         captured["config"] = req["provider"]
+        captured["reasoning"] = req["reasoningModel"]
         return "Title"
 
     svc = _svc(chat_repo, gen)
@@ -141,7 +142,8 @@ def test_generate_title_non_reasoning_max_tokens(chat_repo, db):
         thread,
         _provider(model="gpt-4.1-mini", supportsReasoning=False),
     )
-    assert captured["config"]["maxTokens"] == 30
+    assert captured["reasoning"] is True
+    assert captured["config"]["maxTokens"] == 512
 
 
 def test_generate_title_exception_returns_none(chat_repo, db):

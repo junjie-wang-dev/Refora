@@ -874,6 +874,111 @@ def _resume_decision(
     }
 
 
+def _reasoning_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_reasoning_value_text(item) for item in value)
+    mapping = _as_mapping(value)
+    if not mapping:
+        return ""
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        text = _reasoning_value_text(mapping.get(key))
+        if text:
+            return text
+    block_type = mapping.get("type")
+    if isinstance(block_type, str) and (
+        block_type == "reasoning"
+        or block_type == "thinking"
+        or block_type == "reasoning_content"
+        or block_type == "summary_text"
+        or block_type == "reasoning_summary"
+        or block_type.startswith("reasoning.")
+    ):
+        for key in ("text", "content", "delta", "summary"):
+            text = _reasoning_value_text(mapping.get(key))
+            if text:
+                return text
+    summary = mapping.get("summary")
+    if isinstance(summary, (dict, list)):
+        return _reasoning_value_text(summary)
+    return ""
+
+
+def _chunk_reasoning_text(chunk: Any) -> str:
+    if isinstance(chunk, list):
+        for item in chunk:
+            text = _chunk_reasoning_text(item)
+            if text:
+                return text
+        return ""
+    mapping = _as_mapping(chunk)
+    for key in (
+        "reasoning_content",
+        "reasoning",
+        "thinking",
+        "reasoning_details",
+    ):
+        text = _reasoning_value_text(mapping.get(key))
+        if text:
+            return text
+    additional = mapping.get("additional_kwargs") or getattr(
+        chunk, "additional_kwargs", None
+    )
+    if isinstance(additional, dict):
+        for key in (
+            "reasoning_content",
+            "reasoning",
+            "thinking",
+            "reasoning_details",
+        ):
+            text = _reasoning_value_text(additional.get(key))
+            if text:
+                return text
+    content = (
+        mapping.get("content")
+        if "content" in mapping
+        else getattr(chunk, "content", None)
+    )
+    if isinstance(content, dict):
+        text = _reasoning_value_text(content)
+        if text:
+            return text
+    if isinstance(content, list):
+        text = "".join(
+            _reasoning_value_text(block)
+            for block in content
+            if isinstance(block, dict)
+        )
+        if text:
+            return text
+    try:
+        content_blocks = getattr(chunk, "content_blocks", None)
+    except Exception:
+        content_blocks = None
+    if isinstance(content_blocks, list):
+        text = "".join(
+            _reasoning_value_text(block)
+            for block in content_blocks
+            if isinstance(block, dict)
+        )
+        if text:
+            return text
+    for key in ("message", "chunk", "output"):
+        nested = mapping.get(key)
+        if nested is not None and nested is not chunk:
+            text = _chunk_reasoning_text(nested)
+            if text:
+                return text
+    generations = mapping.get("generations")
+    if isinstance(generations, list):
+        for generation in generations:
+            text = _chunk_reasoning_text(generation)
+            if text:
+                return text
+    return ""
+
+
 def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
     keys = (
         ("reasoning", "reasoning_content", "thinking")
@@ -891,20 +996,12 @@ def _event_delta(event: dict[str, Any], reasoning: bool) -> str:
             if isinstance(value, str):
                 return value
         chunk = data.get("chunk") or data.get("output")
-        if isinstance(chunk, dict):
-            additional = chunk.get("additional_kwargs")
-            if reasoning and isinstance(additional, dict):
-                value = additional.get("reasoning_content")
-                if isinstance(value, str):
-                    return value
-            return "" if reasoning else _message_text(chunk.get("content"))
         if chunk is not None:
-            additional = getattr(chunk, "additional_kwargs", None)
-            if reasoning and isinstance(additional, dict):
-                value = additional.get("reasoning_content")
-                if isinstance(value, str):
-                    return value
-            return "" if reasoning else _message_text(chunk)
+            if reasoning:
+                return _chunk_reasoning_text(chunk)
+            return _message_text(
+                chunk.get("content") if isinstance(chunk, dict) else chunk
+            )
     return ""
 
 
@@ -1497,6 +1594,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                             "providerId": request.get("providerId")
                             or thread["providerId"],
                             "modelId": model,
+                            "activeDocumentId": request.get("activeDocumentId"),
                             "status": RUN_STATUS_QUEUED,
                             "checkpointBefore": request.get("checkpointBefore"),
                             "replacesRunId": request.get("replaceRunId"),
@@ -1544,6 +1642,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             state: dict[str, Any] = {}
             interrupted = False
             active_content: dict[str, Any] | None = None
+            streamed_reasoning: dict[str, str] = {}
 
             async def observe_streamed_tool_calls(
                 value: Any, event: dict[str, Any]
@@ -1627,6 +1726,32 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 )
                 return active_content["id"]
 
+            async def emit_reasoning_delta(
+                delta: str,
+                event: dict[str, Any],
+                *,
+                track: bool = True,
+            ) -> None:
+                if track:
+                    event_key = _event_key(event, "llm")
+                    streamed_reasoning[event_key] = (
+                        streamed_reasoning.get(event_key, "") + delta
+                    )
+                step_id = await append_content(
+                    "reasoning",
+                    "model_reasoning",
+                    delta,
+                    event,
+                )
+                payload = {
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "token": delta,
+                }
+                if step_id is not None:
+                    payload["stepId"] = step_id
+                await emit_event("ai.chat.reasoning", payload)
+
             async for raw in events:
                 if control["cancelled"]:
                     reason = (
@@ -1651,20 +1776,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         )
                     reasoning_delta = _event_delta(event, True)
                     if reasoning_delta:
-                        step_id = await append_content(
-                            "reasoning",
-                            "model_reasoning",
-                            reasoning_delta,
-                            event,
-                        )
-                        payload = {
-                            "runId": run_id,
-                            "threadId": thread_id,
-                            "token": reasoning_delta,
-                        }
-                        if step_id is not None:
-                            payload["stepId"] = step_id
-                        await emit_event("ai.chat.reasoning", payload)
+                        await emit_reasoning_delta(reasoning_delta, event)
                     delta = _event_delta(event, False)
                     if delta:
                         partial_text += delta
@@ -1688,19 +1800,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     if not delta and isinstance(event.get("delta"), str):
                         delta = event["delta"]
                     if delta:
-                        step_id = await append_content(
-                            "reasoning",
-                            "model_reasoning",
-                            delta,
-                            event,
-                        )
-                        payload = {
-                            "runId": run_id,
-                            "threadId": thread_id,
-                            "token": delta,
-                        }
-                        payload["stepId"] = step_id
-                        await emit_event("ai.chat.reasoning", payload)
+                        await emit_reasoning_delta(delta, event)
                     continue
                 if event_name == "on_chat_model_start":
                     context = _trace_context(event, open_event_traces)
@@ -1734,6 +1834,27 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     if detail is None and isinstance(event_data, dict):
                         detail = event_data.get("error") or event_data.get("output")
                     event_key = _event_key(event, "llm")
+                    if not failed and isinstance(event_data, dict):
+                        final_reasoning = _chunk_reasoning_text(
+                            event_data.get("output")
+                        )
+                        streamed = streamed_reasoning.pop(event_key, "")
+                        if final_reasoning and not streamed:
+                            await emit_reasoning_delta(
+                                final_reasoning,
+                                event,
+                                track=False,
+                            )
+                        elif final_reasoning.startswith(streamed):
+                            remaining = final_reasoning[len(streamed):]
+                            if remaining:
+                                await emit_reasoning_delta(
+                                    remaining,
+                                    event,
+                                    track=False,
+                                )
+                    else:
+                        streamed_reasoning.pop(event_key, None)
                     trace_id = open_llm_traces.pop(event_key, None)
                     open_event_traces.pop(event_key, None)
                     patch = {

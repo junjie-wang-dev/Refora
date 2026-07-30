@@ -200,6 +200,57 @@ def test_build_provider_config_uses_request_key_without_persisting_it(db):
     assert "request-only-secret" not in repr(repo["getRaw"](provider["id"]))
 
 
+def test_build_provider_config_enables_reasoning_for_custom_model_alias(db):
+    provider = _make_provider(
+        db,
+        presetId="custom",
+        apiProtocol="openai-compatible",
+        reasoningControl="enable-thinking",
+        reasoningEffort="max",
+        model="xopkimik26",
+        models=["xopkimik26"],
+        baseModel="xopkimik26",
+    )
+    svc = createAiProvidersService({"aiProviders": _make_provider_repo(db)})
+
+    config = svc["buildProviderConfig"](
+        provider["id"],
+        "request-only-secret",
+        model_id="xopkimik26",
+        features={"deepThinking": True, "reasoningEffort": "max"},
+    )
+
+    assert config["extraBody"]["enable_thinking"] is True
+    assert config["extraBody"]["reasoning_effort"] == "max"
+    assert "enable_thinking" not in config["modelKwargs"]
+
+
+def test_build_provider_config_replaces_stale_none_reasoning_effort(db):
+    provider = _make_provider(
+        db,
+        presetId="custom",
+        apiProtocol="openai-compatible",
+        reasoningControl="enable-thinking",
+        reasoningEffort="max",
+        model="xopkimik26",
+        models=["xopkimik26"],
+        baseModel="xopkimik26",
+    )
+    svc = createAiProvidersService({"aiProviders": _make_provider_repo(db)})
+
+    config = svc["buildProviderConfig"](
+        provider["id"],
+        "request-only-secret",
+        model_id="xopkimik26",
+        features={"deepThinking": False, "reasoningEffort": "none"},
+    )
+
+    assert config["extraBody"] == {
+        "enable_thinking": True,
+        "reasoning_effort": "max",
+    }
+
+
 def test_list_models_http_error_returns_error(db):
     provider = _make_provider(db)
     responder = _FakeClient()

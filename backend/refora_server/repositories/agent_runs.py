@@ -27,6 +27,7 @@ def _map_run(row: sqlite3.Row) -> dict[str, Any]:
         "threadId": row["threadId"],
         "providerId": row["providerId"],
         "modelId": row["modelId"],
+        "activeDocumentId": row["activeDocumentId"],
         "status": row["status"],
         "checkpointBefore": row["checkpointBefore"],
         "checkpointAfter": row["checkpointAfter"],
@@ -48,14 +49,15 @@ def createAgentRunsRepository(db):
         id = input.get("id") or _new_id()
         db.execute(
             "INSERT INTO agent_runs "
-            "(id, threadId, providerId, modelId, status, checkpointBefore, checkpointAfter, "
+            "(id, threadId, providerId, modelId, activeDocumentId, status, checkpointBefore, checkpointAfter, "
             "replacesRunId, userMessageId, assistantMessageId, startedAt, endedAt, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
             [
                 id,
                 input["threadId"],
                 input["providerId"],
                 input["modelId"],
+                input.get("activeDocumentId"),
                 input.get("status") or RUN_STATUS_QUEUED,
                 input.get("checkpointBefore"),
                 input.get("replacesRunId"),

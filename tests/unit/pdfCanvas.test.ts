@@ -1,32 +1,72 @@
 import { describe, expect, it } from 'vitest'
-import { pdfCanvasLayout } from '../../src/renderer/utils/pdfCanvas'
+import {
+  pdfCanvasLayout,
+  pdfCanvasTileTransform,
+  pdfRenderPixelRatio,
+  pdfVisibilityObserverOptions
+} from '../../src/renderer/utils/pdfCanvas'
 
 describe('pdfCanvasLayout', () => {
-  it('uses the full device pixel ratio and keeps the render transform pixel-accurate', () => {
-    const layout = pdfCanvasLayout(703.8, 910.65, 3)
+  it('supersamples beyond the device pixel ratio without downscaling a standard page', () => {
+    const layout = pdfCanvasLayout(703.8, 910.65, 2)
+    const tile = layout.tiles[0]
 
-    expect(layout.width).toBe(2111)
-    expect(layout.height).toBe(2732)
-    expect(layout.scaleX).toBe(layout.width / 703.8)
-    expect(layout.scaleY).toBe(layout.height / 910.65)
-    expect(layout.scaleX).toBeGreaterThan(2)
-    expect(layout.scaleY).toBeGreaterThan(2)
+    expect(layout.pixelRatio).toBe(3)
+    expect(layout.tiles).toHaveLength(1)
+    expect(tile.pixelWidth).toBe(2112)
+    expect(tile.pixelHeight).toBe(2732)
+    expect(pdfCanvasTileTransform(tile, layout.pixelRatio)).toEqual([3, 0, 0, 3, 0, 0])
   })
 
-  it('limits unusually large canvases to the PDF.js viewer pixel budget', () => {
+  it('uses a two-pixel minimum on standard-density displays', () => {
+    expect(pdfRenderPixelRatio(1)).toBe(2)
+    expect(pdfRenderPixelRatio(2)).toBe(3)
+  })
+
+  it('tiles unusually large pages without reducing the render pixel ratio', () => {
     const layout = pdfCanvasLayout(6000, 6000, 3)
 
-    expect(layout.width * layout.height).toBeLessThanOrEqual(2 ** 25)
-    expect(layout.scaleX).toBeLessThan(1)
-    expect(layout.scaleY).toBeLessThan(1)
+    expect(layout.pixelRatio).toBe(4.5)
+    expect(layout.tiles.length).toBeGreaterThan(1)
+    expect(layout.tiles.every((tile) =>
+      tile.pixelWidth * tile.pixelHeight <= 2 ** 25 &&
+      tile.pixelWidth <= 32767 &&
+      tile.pixelHeight <= 32767
+    )).toBe(true)
+    expect(Math.max(...layout.tiles.map((tile) => tile.pixelX + tile.pixelWidth)))
+      .toBe(Math.ceil(6000 * layout.pixelRatio))
+    expect(Math.max(...layout.tiles.map((tile) => tile.pixelY + tile.pixelHeight)))
+      .toBe(Math.ceil(6000 * layout.pixelRatio))
+    const offsetTile = layout.tiles.find((tile) => tile.pixelX > 0 && tile.pixelY > 0)
+    expect(offsetTile).toBeDefined()
+    if (!offsetTile) throw new Error('Expected an offset PDF canvas tile')
+    expect(pdfCanvasTileTransform(offsetTile, layout.pixelRatio)).toEqual([
+      layout.pixelRatio,
+      0,
+      0,
+      layout.pixelRatio,
+      -offsetTile.pixelX,
+      -offsetTile.pixelY
+    ])
   })
 
-  it('falls back to a one-to-one scale for an invalid device ratio', () => {
-    expect(pdfCanvasLayout(612, 792, 0)).toEqual({
-      width: 612,
-      height: 792,
-      scaleX: 1,
-      scaleY: 1
+  it('falls back to the high-quality minimum for an invalid device ratio', () => {
+    const layout = pdfCanvasLayout(612, 792, 0)
+
+    expect(layout.pixelRatio).toBe(2)
+    expect(layout.tiles).toHaveLength(1)
+    expect(layout.tiles[0]).toMatchObject({
+      pixelWidth: 1224,
+      pixelHeight: 1584
+    })
+  })
+
+  it('uses the PDF scroll container as the visibility root', () => {
+    const root = document.createElement('div')
+
+    expect(pdfVisibilityObserverOptions(root)).toEqual({
+      root,
+      rootMargin: '700px 0px'
     })
   })
 })

@@ -16,6 +16,7 @@ export type RecentModelEntry = { model: string; providerId: string }
 export type ChatSendContext = {
   text: string
   attachments: string[]
+  activeDocumentId: string | null
   threadId: string | null
   runId: string | null
   persisted: boolean
@@ -24,12 +25,14 @@ export type ChatSendContext = {
 export type ChatReplacementOptions = {
   replaceLastExchange?: boolean
   replaceRunId?: string | null
+  activeDocumentId?: string | null
 }
 
 export const MAX_INPUT_LENGTH = 32000
 
 export interface UseChatStreamParams {
   activeWorkspaceId: string | null
+  activeDocumentId: string | null
   activeProviderId: string
   activeThreadId: string | null
   requestModel: string

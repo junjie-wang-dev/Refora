@@ -198,17 +198,6 @@ PROVIDER_PRESETS: list[dict[str, Any]] = [
     },
 ]
 
-_REASONING_TOKEN_RE = re.compile(
-    r"gpt-5|gpt-oss|\bo[134](?:\b|-)|reason|thinking|deepseek-r1|deepseek-v4|qwq|qwen3|glm-[45]|magistral",
-    re.IGNORECASE,
-)
-_PARAMETER_REASONING_KEYS = {
-    "reasoning",
-    "reasoning_effort",
-    "include_reasoning",
-    "thinking",
-    "enable_thinking",
-}
 _VISION_RE = re.compile(
     r"vision|vl|gpt-4o|gpt-5|gemini|pixtral|llava|qwen.*vl|kimi-k2\.[5-7]",
     re.IGNORECASE,
@@ -241,28 +230,24 @@ def providerRequiresApiKey(id: str) -> bool:
     return bool(getProviderPreset(id)["apiKeyRequired"])
 
 
-def _has_reasoning_token(model_id: str) -> bool:
-    return bool(_REASONING_TOKEN_RE.search(model_id))
-
-
 def reasoningEffortsForModel(
     preset_id: str,
     model_id: str,
-    supports_reasoning_hint: bool = False,
 ) -> list[str]:
     id_ = model_id.lower()
     if preset_id == "kimi":
         if _KIMI_RE.search(id_):
             return ["high"]
-        return ["none", "high"] if _KIMI_VERSION_RE.search(id_) else []
+        if _KIMI_VERSION_RE.search(id_):
+            return ["none", "high"]
     if preset_id == "deepseek":
         if _DEEPSEEK_RE.search(id_):
             return ["none", "high", "max"]
-        return []
     if preset_id == "glm":
         if _GLM_52_RE.search(id_):
             return list(OPENAI_EFFORTS)
-        return ["none", "high"] if _GLM_OTHER_RE.search(id_) else []
+        if _GLM_OTHER_RE.search(id_):
+            return ["none", "high"]
     if _GPT_OSS_RE.search(id_):
         return ["low", "medium", "high"]
     if preset_id == "groq" and _QWEN3_RE.search(id_):
@@ -270,17 +255,9 @@ def reasoningEffortsForModel(
     if preset_id in ("ollama-local", "ollama-cloud"):
         if _DEEPSEEK_THINK_RE.search(id_):
             return ["none", "high"]
-    if preset_id == "qwen":
-        return ["none", "high"] if _QWEN3_RE.search(id_) else []
-    if preset_id == "openai":
-        return list(OPENAI_EFFORTS) if _has_reasoning_token(id_) else []
-    if preset_id == "openrouter" and (
-        supports_reasoning_hint or _has_reasoning_token(id_)
-    ):
-        return list(OPENAI_EFFORTS)
-    if supports_reasoning_hint or _has_reasoning_token(id_):
-        return list(getProviderPreset(preset_id)["reasoningEfforts"])
-    return []
+    if preset_id == "qwen" and _QWEN3_RE.search(id_):
+        return ["none", "high"]
+    return list(getProviderPreset(preset_id)["reasoningEfforts"])
 
 
 def inferModelCapabilities(
@@ -291,17 +268,10 @@ def inferModelCapabilities(
     if hints is None:
         hints = {}
     supported_parameters = sorted(set(hints.get("supportedParameters") or []))
-    parameter_reasoning = any(
-        param in _PARAMETER_REASONING_KEYS for param in supported_parameters
-    )
-    reasoning_efforts = reasoningEffortsForModel(
-        preset_id,
-        model_id,
-        hints.get("supportsReasoning") is True or parameter_reasoning,
-    )
+    reasoning_efforts = reasoningEffortsForModel(preset_id, model_id)
     id_ = model_id.lower()
     return {
-        "supportsReasoning": len(reasoning_efforts) > 0,
+        "supportsReasoning": True,
         "reasoningEfforts": reasoning_efforts,
         "supportsVision": hints.get("supportsVision") is True
         or bool(_VISION_RE.search(id_)),

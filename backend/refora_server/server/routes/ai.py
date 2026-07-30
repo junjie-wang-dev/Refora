@@ -220,6 +220,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 "runId",
                 "threadId",
                 "workspaceId",
+                "activeDocumentId",
                 "text",
                 "providerId",
                 "model",
@@ -258,6 +259,17 @@ def create_ai_router(deps: Any) -> APIRouter:
                 _required_string(body.get("threadId"), "threadId")
             if body.get("workspaceId") is not None:
                 _required_string(body.get("workspaceId"), "workspaceId")
+            if body.get("activeDocumentId") is not None:
+                active_document_id = _required_string(
+                    body.get("activeDocumentId"),
+                    "activeDocumentId",
+                )
+                document = _value(_value(repos, "documents"), "get")(active_document_id)
+                if document is None:
+                    raise RouteError(
+                        "invalid_document",
+                        "Active reader document does not exist",
+                    )
             if body.get("model") is not None:
                 _required_string(body.get("model"), "model")
             if "replaceLastExchange" in body and not isinstance(body["replaceLastExchange"], bool):

@@ -668,3 +668,43 @@ def test_chat_send_validates_attachment_workspace_ownership() -> None:
     assert foreign_doc.status_code == 400
     assert foreign_doc.json()["error"]["code"] == "invalid_attachment"
     assert [sent["runId"] for sent in runtime.sent] == ["run-attach"]
+
+
+def test_chat_send_adds_the_active_reader_document_to_agent_context() -> None:
+    client, _, _, _, runtime = make_client()
+
+    valid = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-reader",
+            "threadId": "thread-global",
+            "workspaceId": None,
+            "activeDocumentId": "doc-1",
+            "text": "Explain this paper",
+            "providerId": "provider-1",
+        },
+    )
+    missing = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-reader-missing",
+            "threadId": "thread-global",
+            "workspaceId": None,
+            "activeDocumentId": "doc-missing",
+            "text": "Explain this paper",
+            "providerId": "provider-1",
+        },
+    )
+
+    assert valid.status_code == 200
+    assert "A paper is open in the active reader tab" in runtime.sent[0]["systemPrompt"]
+    assert "Active reader paper:" in runtime.sent[0]["systemPrompt"]
+    assert "docId=doc-1 | Paper.pdf | hasSummary=true" in runtime.sent[0]["systemPrompt"]
+    assert runtime.sent[0]["activeDocumentId"] == "doc-1"
+    assert missing.status_code == 400
+    assert missing.json()["error"]["code"] == "invalid_document"
+    assert [sent["runId"] for sent in runtime.sent] == ["run-reader"]

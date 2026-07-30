@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any, Awaitable, Callable
 
-from refora_server.providers.catalog import inferModelCapabilities
 from refora_server.repositories.errors import RepoError
 
 MAX_CONCURRENT = 2
@@ -165,6 +164,7 @@ def build_provider_reasoning_options(
     provider: dict[str, Any], deep_thinking: bool | None
 ) -> dict[str, Any]:
     model_kwargs: dict[str, Any] = {}
+    extra_body: dict[str, Any] = {}
     reasoning: dict[str, Any] | None = None
     reasoning_effort = provider.get("reasoningEffort")
     reasoning_control = provider.get("reasoningControl")
@@ -178,17 +178,18 @@ def build_provider_reasoning_options(
             else:
                 model_kwargs["reasoning_effort"] = reasoning_effort
         if reasoning_control == "thinking":
-            model_kwargs["thinking"] = {"type": "enabled"}
+            extra_body["thinking"] = {"type": "enabled"}
             if preset_id != "kimi":
-                model_kwargs["reasoning_effort"] = reasoning_effort
+                extra_body["reasoning_effort"] = reasoning_effort
         if reasoning_control == "enable-thinking":
-            model_kwargs["enable_thinking"] = True
+            extra_body["enable_thinking"] = True
+            extra_body["reasoning_effort"] = reasoning_effort
 
     if deep_thinking is False:
         if reasoning_control == "thinking":
-            model_kwargs["thinking"] = {"type": "disabled"}
+            extra_body["thinking"] = {"type": "disabled"}
         if reasoning_control == "enable-thinking":
-            model_kwargs["enable_thinking"] = False
+            extra_body["enable_thinking"] = False
 
     result: dict[str, Any] = {
         "useResponsesApi": api_protocol == "openai-responses",
@@ -196,6 +197,8 @@ def build_provider_reasoning_options(
     }
     if reasoning is not None:
         result["reasoning"] = reasoning
+    if extra_body:
+        result["extraBody"] = extra_body
     return result
 
 
@@ -208,13 +211,8 @@ def build_provider_config(
     max_tokens: int | None | None = None,
 ) -> dict[str, Any]:
     model = (model_id or "").strip() or (provider.get("model") or "")
-    capabilities = inferModelCapabilities(provider.get("presetId") or "custom", model)
-    supports_reasoning = capabilities.get("supportsReasoning") is True
     reasoning_options = build_provider_reasoning_options(
-        provider, deep_thinking if supports_reasoning else None
-    )
-    final_temperature = (
-        temperature if temperature is not None else provider.get("temperature")
+        provider, deep_thinking
     )
     final_max_tokens = max_tokens if max_tokens is not None else provider.get("maxTokens")
     config: dict[str, Any] = {
@@ -223,11 +221,11 @@ def build_provider_config(
         "apiKey": provider.get("apiKey"),
         "useResponsesApi": reasoning_options["useResponsesApi"],
         "modelKwargs": reasoning_options["modelKwargs"],
-        "temperature": final_temperature
-        if (final_temperature is not None and not supports_reasoning)
-        else None,
+        "temperature": None,
         "maxTokens": final_max_tokens,
     }
+    if reasoning_options.get("extraBody") is not None:
+        config["extraBody"] = reasoning_options["extraBody"]
     if reasoning_options.get("reasoning") is not None:
         config["reasoning"] = reasoning_options["reasoning"]
     return config

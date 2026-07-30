@@ -61,6 +61,13 @@ describe('provider catalog', () => {
     })
   })
 
+  it('treats provider aliases as reasoning models', () => {
+    expect(inferModelCapabilities('custom', 'xopkimik26')).toMatchObject({
+      supportsReasoning: true,
+      reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    })
+  })
+
   it('selects a recommended or usable chat model', () => {
     const openai = PROVIDER_PRESETS.find((provider) => provider.id === 'openai')!
     expect(pickDefaultModel(openai, ['text-embedding-3-small', 'gpt-5.6-terra'])).toBe(

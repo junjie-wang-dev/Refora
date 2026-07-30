@@ -40,6 +40,7 @@ vi.mock('react-i18next', () => ({
 
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
+import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
 import { AI_PROVIDERS_CHANGED_EVENT } from '../../src/renderer/utils/aiProviderEvents'
 
 const ChatPanelModule = await import('../../src/renderer/components/workspace/ChatPanel')
@@ -106,6 +107,7 @@ function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
     threadId: 'thread-1',
     providerId: 'p1',
     modelId: 'gpt-4o',
+    activeDocumentId: null,
     status: 'running',
     checkpointBefore: null,
     checkpointAfter: null,
@@ -221,6 +223,7 @@ function setupStore(): void {
   useWorkspaceStore.setState({
     activeWorkspaceId: 'ws-1',
     activeThreadId: 'thread-1',
+    panelView: 'workspace',
     threads: [],
     chatStreaming: false,
     fetchThreads: vi.fn().mockResolvedValue(undefined),
@@ -230,6 +233,7 @@ function setupStore(): void {
     setChatStreaming: vi.fn()
   })
   useDocumentStore.setState({ showToast: vi.fn() })
+  usePdfReaderStore.setState({ activeDocumentId: null })
 }
 
 beforeEach(() => {
@@ -258,6 +262,7 @@ afterEach(() => {
     activeThreadId: null,
     threads: []
   })
+  usePdfReaderStore.setState({ activeDocumentId: null })
 })
 
 describe('parseReforaDocLink', () => {
@@ -334,6 +339,28 @@ describe('ChatPanel tab header', () => {
     expect(screen.queryByRole('button', {
       name: 'workspace.chat.academicResearch'
     })).toBeNull()
+  })
+
+  it('sends the paper in the active reader tab as agent context', async () => {
+    setupApi([])
+    useWorkspaceStore.setState({ panelView: 'pdf' })
+    usePdfReaderStore.setState({ activeDocumentId: 'doc-reader' })
+
+    render(<ChatPanel />)
+
+    const input = await screen.findByRole('textbox', {
+      name: 'workspace.chat.inputPlaceholder'
+    })
+    await waitFor(() => expect(input).not.toBeDisabled())
+    fireEvent.change(input, { target: { value: 'Explain this paper' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(1))
+    expect(mockChatSend.mock.calls[0][0] as ChatSendRequest).toMatchObject({
+      workspaceId: 'ws-1',
+      activeDocumentId: 'doc-reader',
+      text: 'Explain this paper'
+    })
   })
 })
 
@@ -518,6 +545,31 @@ describe('ChatPanel tool message filtering', () => {
 })
 
 describe('ChatPanel provider restoration', () => {
+  it('restores a provider reasoning effort when the saved value is none', async () => {
+    setupApi([])
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.settings.get = async (key: string, defaultValue: unknown) => {
+      if (key === 'activeProviderId') return TEST_PROVIDER.id
+      if (key === 'chatSelectedProviderId') return TEST_PROVIDER.id
+      if (key === 'chatSelectedModel') return TEST_PROVIDER.model
+      if (key === 'chatSelectedVariant') return ''
+      if (key === 'chatReasoningEffort') return 'none'
+      return defaultValue
+    }
+    w.api.settings.set = settingsSet
+
+    render(<ChatPanel />)
+
+    const effortButton = await screen.findByRole('button', {
+      name: 'workspace.chat.reasoningEffort'
+    })
+    await waitFor(() => {
+      expect(effortButton).toHaveTextContent('settings.aiProviders.effort.medium')
+    })
+    expect(settingsSet).toHaveBeenCalledWith('chatReasoningEffort', 'medium')
+  })
+
   it('falls back to a valid provider model when saved settings are stale', async () => {
     setupApi([])
     const settingsSet = vi.fn().mockResolvedValue(undefined)
@@ -1072,6 +1124,7 @@ function renderChatStream(
   return renderHook(() =>
     useChatStream({
       activeWorkspaceId,
+      activeDocumentId: null,
       activeProviderId: 'p1',
       activeThreadId,
       requestModel: '',
@@ -1085,6 +1138,46 @@ function renderChatStream(
 }
 
 describe('useChatStream lifecycle', () => {
+  it('retries with the reader document from the original send', async () => {
+    setupApi([])
+    mockChatSend
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockResolvedValueOnce({ threadId: 'thread-1', runId: 'run-retry' })
+    const { result, rerender } = renderHook(
+      ({ activeDocumentId }: { activeDocumentId: string | null }) => useChatStream({
+        activeWorkspaceId: 'ws-1',
+        activeDocumentId,
+        activeProviderId: 'p1',
+        activeThreadId: 'thread-1',
+        requestModel: '',
+        deepThinking: false,
+        setActiveThreadId: vi.fn(),
+        setChatStreaming: vi.fn(),
+        fetchThreads: vi.fn().mockResolvedValue(undefined)
+      }),
+      { initialProps: { activeDocumentId: 'doc-original' as string | null } }
+    )
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+
+    await act(async () => {
+      await result.current.sendText('Explain this paper', [], 'thread-1')
+    })
+    await waitFor(() => expect(result.current.canRetry).toBe(true))
+    rerender({ activeDocumentId: 'doc-new' })
+
+    act(() => {
+      result.current.handleRetry()
+    })
+
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(2))
+    expect(mockChatSend.mock.calls[0][0]).toMatchObject({
+      activeDocumentId: 'doc-original'
+    })
+    expect(mockChatSend.mock.calls[1][0]).toMatchObject({
+      activeDocumentId: 'doc-original'
+    })
+  })
+
   it('resumes an interrupted action with user-edited arguments', async () => {
     const { result } = renderChatStream()
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))
@@ -1342,6 +1435,7 @@ describe('useChatStream lifecycle', () => {
     const { result } = renderHook(
       () => useChatStream({
         activeWorkspaceId: 'ws-1',
+        activeDocumentId: null,
         activeProviderId: 'p1',
         activeThreadId: null,
         requestModel: '',
@@ -1549,6 +1643,7 @@ describe('useChatStream lifecycle', () => {
     const { result, rerender } = renderHook(
       ({ threadId }: { threadId: string | null }) => useChatStream({
         activeWorkspaceId: 'ws-1',
+        activeDocumentId: null,
         activeProviderId: 'p1',
         activeThreadId: threadId,
         requestModel: '',
@@ -1576,6 +1671,7 @@ describe('useChatStream lifecycle', () => {
     const setChatStreaming = vi.fn()
     const { result, unmount } = renderHook(() => useChatStream({
       activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
       activeProviderId: 'p1',
       activeThreadId: 'thread-1',
       requestModel: '',
@@ -1751,6 +1847,7 @@ describe('useChatStream lifecycle', () => {
 
     const { result } = renderHook(() => useChatStream({
       activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
       activeProviderId: 'p1',
       activeThreadId: 'thread-1',
       requestModel: '',
@@ -1801,6 +1898,7 @@ describe('useChatStream lifecycle', () => {
 
     const { result } = renderHook(() => useChatStream({
       activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
       activeProviderId: 'p1',
       activeThreadId: 'thread-1',
       requestModel: '',

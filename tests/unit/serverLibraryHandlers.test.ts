@@ -158,6 +158,38 @@ describe('createServerLibraryHandlers', () => {
     expect(methods.get('documentsOpenPdf')).toHaveBeenCalledWith('doc-1', false)
   })
 
+  it('uses the saved provider preset when normalizing dynamically listed models', async () => {
+    const { client, methods } = createClient()
+    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
+    void client.http.aiProvidersModels
+    void client.http.aiProvidersList
+    methods.get('aiProvidersModels')?.mockResolvedValue({ ok: true, models: ['gpt-5'] })
+    methods.get('aiProvidersList')?.mockResolvedValue([
+      { id: 'provider-1', presetId: 'openai' }
+    ])
+
+    const result = await handlers[IpcChannel.AiProvidersListModels]({
+      providerId: 'provider-1'
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        ok: true,
+        models: [
+          expect.objectContaining({
+            id: 'gpt-5',
+            supportsReasoning: true,
+            reasoningEfforts: expect.arrayContaining(['medium', 'high'])
+          })
+        ]
+      }
+    })
+  })
+
   it('routes metadata refresh and arxiv verification to Python', async () => {
     const { client, methods } = createClient()
     const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<

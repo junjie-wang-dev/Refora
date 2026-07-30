@@ -161,9 +161,14 @@ export function createServerLibraryHandlers({
         if (result.ok === false) {
           return { ok: false, models: [], error: result.error ?? 'Failed to list provider models' }
         }
+        const presetId = parsed.presetId ?? (
+          parsed.providerId
+            ? (await http.aiProvidersList()).find((provider) => provider.id === parsed.providerId)?.presetId
+            : undefined
+        )
         return {
           ok: true,
-          models: normalizeModelList(result.models, undefined, parsed.presetId ?? 'custom')
+          models: normalizeModelList(result.models, undefined, presetId ?? 'custom')
         }
       }),
 

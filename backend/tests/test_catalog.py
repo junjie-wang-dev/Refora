@@ -20,10 +20,18 @@ def test_infer_reasoning_for_openai_gpt5():
     ]
 
 
-def test_infer_no_reasoning_for_plain_chat_model():
+def test_infer_reasoning_for_plain_chat_model():
     caps = inferModelCapabilities("custom", "my-chat-model")
-    assert caps["supportsReasoning"] is False
-    assert caps["reasoningEfforts"] == []
+    assert caps["supportsReasoning"] is True
+    assert caps["reasoningEfforts"] == [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
 
 
 def test_infer_vision_from_model_id():
@@ -91,6 +99,18 @@ def test_reasoning_efforts_for_deepseek_v4_flash():
 
 def test_reasoning_efforts_for_kimi_k26():
     assert reasoningEffortsForModel("kimi", "kimi-k2.6") == ["none", "high"]
+
+
+def test_reasoning_efforts_for_provider_alias():
+    assert reasoningEffortsForModel("custom", "xopkimik26") == [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
 
 
 def test_is_likely_chat_model():

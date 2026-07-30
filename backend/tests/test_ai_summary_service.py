@@ -141,7 +141,26 @@ def test_build_provider_config_disables_compatible_thinking():
         ),
         deep_thinking=False,
     )
-    assert config["modelKwargs"]["thinking"] == {"type": "disabled"}
+    assert config["extraBody"]["thinking"] == {"type": "disabled"}
+    assert "thinking" not in config["modelKwargs"]
+
+
+def test_build_provider_config_sends_compatible_reasoning_controls_in_extra_body():
+    config = build_provider_config(
+        _provider(
+            presetId="custom",
+            apiProtocol="openai-compatible",
+            reasoningControl="enable-thinking",
+            reasoningEffort="max",
+            model="xopkimik26",
+        ),
+        deep_thinking=True,
+    )
+    assert config["extraBody"] == {
+        "enable_thinking": True,
+        "reasoning_effort": "max",
+    }
+    assert config["modelKwargs"] == {}
 
 
 async def test_summarize_persists_summary(db):

@@ -42,6 +42,12 @@ WORKSPACE_SYSTEM_PROMPT = (
     "When the user message contains [Attached papers], prioritize those papers."
 )
 
+ACTIVE_DOCUMENT_SYSTEM_PROMPT = (
+    "A paper is open in the active reader tab. Treat it as the user's current paper and "
+    "prioritize it when resolving references such as 'this paper'. Use its docId with the "
+    "paper tools below to retrieve metadata, summaries, or full text when needed."
+)
+
 
 def _value(container: Any, name: str, default: Any = None) -> Any:
     if isinstance(container, Mapping):
@@ -60,25 +66,30 @@ def _workspace_exists(repos: Mapping[str, Any], workspace_id: str) -> bool:
     return any(item.get("id") == workspace_id for item in _value(workspaces, "list")())
 
 
+def _document_context(repos: Mapping[str, Any], document_id: str) -> dict[str, Any] | None:
+    document = _value(repos.get("documents"), "get")(document_id)
+    if document is None:
+        return None
+    summary = _value(repos.get("aiSummaries"), "getSummary")(document["id"])
+    return {
+        "docId": document["id"],
+        "title": document.get("title") or document.get("fileName") or document["id"],
+        "authors": document.get("authors"),
+        "year": document.get("year"),
+        "hasSummary": bool(summary and summary.get("content")),
+    }
+
+
 def _workspace_documents(repos: Mapping[str, Any], workspace_id: str) -> list[dict[str, Any]]:
     items = _value(repos.get("workspaceItems"), "list")(workspace_id)
     result: list[dict[str, Any]] = []
     for item in items:
         if item.get("kind") != "document" or not isinstance(item.get("docId"), str):
             continue
-        document = _value(repos.get("documents"), "get")(item["docId"])
+        document = _document_context(repos, item["docId"])
         if document is None:
             continue
-        summary = _value(repos.get("aiSummaries"), "getSummary")(document["id"])
-        result.append(
-            {
-                "docId": document["id"],
-                "title": document.get("title") or document.get("fileName") or document["id"],
-                "authors": document.get("authors"),
-                "year": document.get("year"),
-                "hasSummary": bool(summary and summary.get("content")),
-            }
-        )
+        result.append(document)
     return result
 
 
@@ -105,6 +116,38 @@ def _workspace_context(repos: Mapping[str, Any], workspace_id: str) -> str:
     if len(body) > WORKSPACE_CONTEXT_CHAR_LIMIT:
         body = body[:WORKSPACE_CONTEXT_CHAR_LIMIT].rsplit("\n", 1)[0]
     return f"Workspace paper catalog ({len(documents)} documents):\n{body}"
+
+
+def _active_document_context(repos: Mapping[str, Any], document_id: str) -> str:
+    document = _document_context(repos, document_id)
+    if document is None:
+        raise ValueError(f"Document not found: {document_id}")
+    metadata = ", ".join(
+        str(value).strip()
+        for value in (document.get("authors"), document.get("year"))
+        if value and str(value).strip()
+    )
+    line = (
+        f"docId={document['docId']} | "
+        f"{' '.join(str(document['title']).split())}"
+    )
+    if metadata:
+        line += f" | {metadata}"
+    line += f" | hasSummary={'true' if document['hasSummary'] else 'false'}"
+    return f"Active reader paper:\n{line}"
+
+
+def _prompt_parts(
+    repos: Mapping[str, Any],
+    workspace_id: str | None,
+    active_document_context: str | None,
+) -> list[str]:
+    parts = [SYSTEM_PROMPT]
+    if workspace_id:
+        parts.extend((WORKSPACE_SYSTEM_PROMPT, _workspace_context(repos, workspace_id)))
+    if active_document_context:
+        parts.extend((ACTIVE_DOCUMENT_SYSTEM_PROMPT, active_document_context))
+    return parts
 
 
 def _attachment_context(
@@ -263,6 +306,12 @@ async def assemble_turn(
             raise ValueError("workspaceId must be a non-empty string or null")
         if not _workspace_exists(repos, workspace_id):
             raise ValueError(f"Workspace not found: {workspace_id}")
+    active_document_id = intent.get("activeDocumentId")
+    active_document_context = None
+    if active_document_id is not None:
+        if not isinstance(active_document_id, str) or not active_document_id.strip():
+            raise ValueError("activeDocumentId must be a non-empty string")
+        active_document_context = _active_document_context(repos, active_document_id)
 
     provider_id = selected_provider_id(repos, intent.get("providerId"))
     provider = await provider_config(
@@ -318,9 +367,7 @@ async def assemble_turn(
     if thread.get("agentStateVersion") != AGENT_STATE_VERSION:
         checkpoint_before = None
     messages = _turn_messages(history, text, checkpoint_before)
-    prompt_parts = [SYSTEM_PROMPT]
-    if workspace_id:
-        prompt_parts.extend((WORKSPACE_SYSTEM_PROMPT, _workspace_context(repos, workspace_id)))
+    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
     features = intent.get("features")
     if isinstance(features, Mapping) and features.get("deepThinking") is True:
         prompt_parts.append("Prefer careful multi-step reasoning before answering.")
@@ -329,6 +376,7 @@ async def assemble_turn(
         "runId": intent["runId"],
         "threadId": thread_id,
         "workspaceId": workspace_id,
+        "activeDocumentId": active_document_id,
         "providerId": provider_id,
         "replaceLastExchange": replace_last,
         "replaceRunId": replace_run_id if isinstance(replace_run_id, str) else None,
@@ -370,14 +418,19 @@ async def assemble_resume(
         model=run.get("modelId"),
     )
     workspace_id = thread.get("workspaceId")
+    active_document_id = run.get("activeDocumentId")
+    active_document_context = (
+        _active_document_context(repos, active_document_id)
+        if isinstance(active_document_id, str) and active_document_id
+        else None
+    )
     ensure_memory_files(repos, workspace_id)
-    prompt_parts = [SYSTEM_PROMPT]
-    if workspace_id:
-        prompt_parts.extend((WORKSPACE_SYSTEM_PROMPT, _workspace_context(repos, workspace_id)))
+    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
     return {
         **request,
         "threadId": thread["id"],
         "workspaceId": workspace_id,
+        "activeDocumentId": active_document_id,
         "providerId": run["providerId"],
         "provider": provider,
         "systemPrompt": "\n\n".join(prompt_parts),
@@ -409,12 +462,14 @@ async def assemble_recovery(
         model=run.get("modelId"),
     )
     workspace_id = thread.get("workspaceId")
+    active_document_id = run.get("activeDocumentId")
+    active_document_context = (
+        _active_document_context(repos, active_document_id)
+        if isinstance(active_document_id, str) and active_document_id
+        else None
+    )
     ensure_memory_files(repos, workspace_id)
-    prompt_parts = [SYSTEM_PROMPT]
-    if workspace_id:
-        prompt_parts.extend(
-            (WORKSPACE_SYSTEM_PROMPT, _workspace_context(repos, workspace_id))
-        )
+    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
     user_message_id = run.get("userMessageId")
     messages = [
         {"role": "user", "content": message["content"]}
@@ -426,6 +481,7 @@ async def assemble_recovery(
         "runId": run["id"],
         "threadId": thread["id"],
         "workspaceId": workspace_id,
+        "activeDocumentId": active_document_id,
         "providerId": run["providerId"],
         "provider": provider,
         "systemPrompt": "\n\n".join(prompt_parts),

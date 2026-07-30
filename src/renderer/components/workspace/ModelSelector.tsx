@@ -111,9 +111,12 @@ export default function ModelSelector({
           ? getProviderPreset(activeProvider.presetId).reasoningEfforts
           : []
   const allowedReasoningEfforts = new Set<AiReasoningEffort>([
-    'none',
-    ...availableReasoningEfforts,
-    reasoningEffort
+    ...availableReasoningEfforts.filter(
+      (effort) => effort !== 'none' || activeProvider?.reasoningControl === 'none'
+    ),
+    ...(reasoningEffort !== 'none' || activeProvider?.reasoningControl === 'none'
+      ? [reasoningEffort]
+      : [])
   ])
   const reasoningEffortOptions = REASONING_EFFORT_ORDER.filter((effort) =>
     allowedReasoningEfforts.has(effort)

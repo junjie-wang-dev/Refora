@@ -327,6 +327,7 @@ export interface ProviderConfig {
   apiKey: string
   useResponsesApi: boolean
   modelKwargs: Record<string, unknown>
+  extraBody?: Record<string, unknown>
   reasoning?: { effort: string; summary: 'auto' }
   temperature: number | null
   maxTokens: number | null
