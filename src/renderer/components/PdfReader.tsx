@@ -16,7 +16,6 @@ import {
   CaretLeft,
   CaretRight,
   CheckCircle,
-  CursorClick,
   CursorText,
   Eraser,
   Highlighter,
@@ -55,6 +54,7 @@ import {
   annotationIdsInSelection,
   selectionRectFromPoints
 } from '../utils/pdfAnnotationSelection'
+import { pdfCanvasLayout } from '../utils/pdfCanvas'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -101,6 +101,7 @@ function PdfPage({
   pageNumber,
   scale,
   rotation,
+  devicePixelRatio,
   documentId,
   annotations,
   tool,
@@ -114,6 +115,7 @@ function PdfPage({
   pageNumber: number
   scale: number
   rotation: number
+  devicePixelRatio: number
   documentId: string
   annotations: PdfAnnotation[]
   tool: PdfTool | null
@@ -172,9 +174,9 @@ function PdfPage({
     if (!visible || !canvasRef.current || !textLayerRef.current) return
     const canvas = canvasRef.current
     const textContainer = textLayerRef.current
-    const outputScale = Math.min(window.devicePixelRatio || 1, 2)
-    canvas.width = Math.floor(viewport.width * outputScale)
-    canvas.height = Math.floor(viewport.height * outputScale)
+    const canvasLayout = pdfCanvasLayout(viewport.width, viewport.height, devicePixelRatio)
+    canvas.width = canvasLayout.width
+    canvas.height = canvasLayout.height
     canvas.style.width = `${viewport.width}px`
     canvas.style.height = `${viewport.height}px`
     renderTaskRef.current?.cancel()
@@ -183,7 +185,9 @@ function PdfPage({
     renderTaskRef.current = page.render({
       canvas,
       viewport,
-      transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0]
+      transform: canvasLayout.scaleX === 1 && canvasLayout.scaleY === 1
+        ? undefined
+        : [canvasLayout.scaleX, 0, 0, canvasLayout.scaleY, 0, 0]
     })
     let disposed = false
     void Promise.all([
@@ -206,7 +210,7 @@ function PdfPage({
       renderTaskRef.current?.cancel()
       textLayerTaskRef.current?.cancel()
     }
-  }, [page, rotation, scale, visible])
+  }, [devicePixelRatio, page, rotation, scale, visible])
 
   const addTextAnnotation = useCallback(() => {
     if (
@@ -252,7 +256,7 @@ function PdfPage({
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = pageElementRef.current
     if (!element) return
-    if (tool === 'select') {
+    if (tool === null) {
       event.currentTarget.setPointerCapture(event.pointerId)
       const point = normalizedPoint(event, element)
       selectionStartRef.current = point
@@ -294,7 +298,7 @@ function PdfPage({
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = pageElementRef.current
     const selectionStart = selectionStartRef.current
-    if (element && selectionStart && tool === 'select') {
+    if (element && selectionStart && tool === null) {
       setSelectionRect(selectionRectFromPoints(
         selectionStart,
         normalizedPoint(event, element)
@@ -355,7 +359,7 @@ function PdfPage({
   }
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (tool === 'select') finishSelection(event)
+    if (tool === null) finishSelection(event)
     else if (tool === 'ink') finishInk()
   }
 
@@ -370,7 +374,7 @@ function PdfPage({
       inkPointsRef.current = null
       setInkPoints(null)
     }
-    if (tool !== 'select') {
+    if (tool !== null) {
       selectionStartRef.current = null
       setSelectionRect(null)
     }
@@ -423,7 +427,7 @@ function PdfPage({
       <div
         data-annotation-input-layer
         className={`absolute inset-0 ${
-          tool === 'select' || tool === 'note' || tool === 'text' || tool === 'ink'
+          tool === null || tool === 'note' || tool === 'text' || tool === 'ink'
             ? 'pointer-events-auto'
             : 'pointer-events-none'
         }`}
@@ -434,8 +438,8 @@ function PdfPage({
               ? 'text'
               : tool === 'ink'
                 ? 'cell'
-                : tool === 'select'
-                  ? 'crosshair'
+                : tool === null
+                  ? 'default'
                   : undefined
         }}
         onPointerDown={handlePointerDown}
@@ -465,7 +469,7 @@ function PdfPage({
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
                 className={
-                  tool === 'eraser' || tool === 'select'
+                  tool === 'eraser' || tool === null
                     ? 'pointer-events-stroke cursor-pointer'
                     : ''
                 }
@@ -474,7 +478,7 @@ function PdfPage({
                   : undefined}
                 onClick={() => {
                   if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-                  else if (tool === 'select') selectAnnotation(annotation.id)
+                  else if (tool === null) selectAnnotation(annotation.id)
                 }}
               />
             )
@@ -514,7 +518,7 @@ function PdfPage({
             className={`absolute border-0 p-0 ${
               tool === 'eraser'
                 ? 'pointer-events-auto cursor-pointer'
-                : tool === 'select'
+                : tool === null
                   ? 'pointer-events-auto cursor-pointer'
                   : 'pointer-events-none'
             }`}
@@ -538,7 +542,7 @@ function PdfPage({
             aria-label={annotationLabel(annotation, t)}
             onClick={() => {
               if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-              else if (tool === 'select') selectAnnotation(annotation.id)
+              else if (tool === null) selectAnnotation(annotation.id)
             }}
           />
         ))
@@ -549,7 +553,7 @@ function PdfPage({
             key={annotation.id}
             type="button"
             className={`absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-black/15 text-black shadow-sm ${
-              tool === 'eraser' || tool === 'select' ? 'pointer-events-auto' : 'pointer-events-none'
+              tool === 'eraser' || tool === null ? 'pointer-events-auto' : 'pointer-events-none'
             } ${
               selectedAnnotationIds.includes(annotation.id) ? 'ring-2 ring-accent' : ''
             }`}
@@ -561,7 +565,7 @@ function PdfPage({
             aria-label={t('pdfReader.tools.note')}
             onClick={() => {
               if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-              else if (tool === 'select') selectAnnotation(annotation.id)
+              else if (tool === null) selectAnnotation(annotation.id)
             }}
           >
             <NoteBlank className="h-3.5 w-3.5" weight="fill" />
@@ -598,7 +602,7 @@ function PdfPage({
               rows={rows}
               placeholder={t('pdfReader.textPlaceholder')}
               className={`pdf-text-annotation absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
-                tool === 'text' || tool === 'select' || tool === 'eraser'
+                tool === 'text' || tool === null || tool === 'eraser'
                   ? 'pointer-events-auto'
                   : 'pointer-events-none'
               } ${
@@ -620,7 +624,7 @@ function PdfPage({
               onPointerDown={(event) => event.stopPropagation()}
               onClick={() => {
                 if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-                else if (tool === 'select') selectAnnotation(annotation.id)
+                else if (tool === null) selectAnnotation(annotation.id)
               }}
               onChange={(event) => updateAnnotation(
                 documentId,
@@ -861,7 +865,7 @@ function AnnotationSidebar({
               placeholder={t('pdfReader.addComment')}
               className="mt-2 w-full resize-none rounded-md border border-border bg-panel-2 px-2 py-1.5 text-label text-foreground outline-none focus:border-accent"
               onFocus={() => {
-                usePdfReaderStore.getState().setTool('select')
+                usePdfReaderStore.getState().setTool(null)
                 usePdfReaderStore.getState().selectAnnotation(annotation.id)
               }}
               onChange={(event) => updateAnnotation(
@@ -888,7 +892,7 @@ function AnnotationSidebar({
 }
 
 const TOOL_ICONS = {
-  select: CursorClick,
+  read: CursorText,
   highlight: Highlighter,
   underline: TextUnderline,
   strikeout: TextStrikethrough,
@@ -896,10 +900,10 @@ const TOOL_ICONS = {
   text: Textbox,
   ink: PencilSimple,
   eraser: Eraser
-} satisfies Record<PdfTool, typeof CursorClick>
+} satisfies Record<PdfTool, typeof CursorText>
 
 const TOOL_SHORTCUTS: Record<PdfTool, string> = {
-  select: 'A',
+  read: 'V',
   highlight: 'H',
   underline: 'U',
   strikeout: 'S',
@@ -974,7 +978,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
   const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    tool !== null && tool !== 'select' && tool !== 'eraser'
+    tool !== null && tool !== 'read' && tool !== 'eraser'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -988,8 +992,24 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const [searchIndex, setSearchIndex] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [compactLayout, setCompactLayout] = useState(false)
+  const [devicePixelRatio, setDevicePixelRatio] = useState(
+    () => window.devicePixelRatio || 1
+  )
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const updateDevicePixelRatio = () => {
+      setDevicePixelRatio(window.devicePixelRatio || 1)
+    }
+    const resolution = window.matchMedia?.(`(resolution: ${devicePixelRatio}dppx)`)
+    window.addEventListener('resize', updateDevicePixelRatio)
+    resolution?.addEventListener('change', updateDevicePixelRatio)
+    return () => {
+      window.removeEventListener('resize', updateDevicePixelRatio)
+      resolution?.removeEventListener('change', updateDevicePixelRatio)
+    }
+  }, [devicePixelRatio])
 
   useEffect(() => {
     const element = readerRootRef.current
@@ -1011,7 +1031,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     if (
       !compactLayout ||
       tool === null ||
-      tool === 'select' ||
+      tool === 'read' ||
       !usePdfReaderStore.getState().sidebarOpen
     ) return
     usePdfReaderStore.getState().toggleSidebar()
@@ -1056,7 +1076,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     setCurrentPage(safePage)
     setPageInput(String(safePage))
     if (annotationId) {
-      usePdfReaderStore.getState().setTool('select')
+      usePdfReaderStore.getState().setTool(null)
       usePdfReaderStore.getState().selectAnnotation(annotationId)
     }
   }, [pdf?.numPages])
@@ -1214,8 +1234,8 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         return
       }
       const shortcuts: Partial<Record<string, PdfTool | null>> = {
-        v: null,
-        a: 'select',
+        v: 'read',
+        a: null,
         h: 'highlight',
         u: 'underline',
         s: 'strikeout',
@@ -1227,7 +1247,8 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       const nextTool = shortcuts[event.key.toLocaleLowerCase()]
       if (nextTool === undefined) return
       event.preventDefault()
-      usePdfReaderStore.getState().setTool(nextTool)
+      const currentTool = usePdfReaderStore.getState().tool
+      usePdfReaderStore.getState().setTool(currentTool === nextTool ? null : nextTool)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -1315,14 +1336,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         className="flex shrink-0 items-center gap-0.5"
         aria-label={t('pdfReader.annotationTools')}
       >
-        <ReaderButton
-          label={t('pdfReader.tools.read')}
-          shortcut="V"
-          active={tool === null}
-          onClick={() => usePdfReaderStore.getState().setTool(null)}
-        >
-          <CursorText className="h-4 w-4" />
-        </ReaderButton>
         {(Object.keys(TOOL_ICONS) as PdfTool[]).map((item) => {
           const Icon = TOOL_ICONS[item]
           return (
@@ -1331,7 +1344,9 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
               label={t(`pdfReader.tools.${item}`)}
               shortcut={TOOL_SHORTCUTS[item]}
               active={tool === item}
-              onClick={() => usePdfReaderStore.getState().setTool(item)}
+              onClick={() => usePdfReaderStore.getState().setTool(
+                tool === item ? null : item
+              )}
             >
               <Icon className="h-4 w-4" />
             </ReaderButton>
@@ -1343,7 +1358,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
           data-active-pdf-tool
           className="shrink-0 rounded-md bg-active px-2 py-1 text-label font-medium text-accent"
         >
-          {t(tool === null ? 'pdfReader.tools.read' : `pdfReader.tools.${tool}`)}
+          {t(tool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${tool}`)}
         </span>
       )}
       {(tool === 'text' || selectedTextAnnotations.length > 0) && (
@@ -1612,6 +1627,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   pageNumber={index + 1}
                   scale={scale}
                   rotation={rotation}
+                  devicePixelRatio={devicePixelRatio}
                   documentId={activeDocument.id}
                   annotations={annotations.filter((annotation) => annotation.page === index + 1)}
                   tool={tool}

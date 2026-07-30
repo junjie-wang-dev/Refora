@@ -15,7 +15,7 @@ export type PdfPoint = PdfAnnotationPoint
 export type PdfAnnotationDraft = Omit<PdfAnnotation, 'id' | 'createdAt'>
 
 export type PdfTool =
-  | 'select'
+  | 'read'
   | 'highlight'
   | 'underline'
   | 'strikeout'
@@ -204,8 +204,8 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
 
   setTool: (tool) => set((state) => ({
     tool,
-    selectedAnnotationId: tool === 'select' ? state.selectedAnnotationId : null,
-    selectedAnnotationIds: tool === 'select' ? state.selectedAnnotationIds : []
+    selectedAnnotationId: tool === null ? state.selectedAnnotationId : null,
+    selectedAnnotationIds: tool === null ? state.selectedAnnotationIds : []
   })),
   setColor: (color) => set({ color }),
   setFontSize: (fontSize) => set({
@@ -305,7 +305,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
       selectedAnnotationId: restoredIds.at(-1) ?? null,
       selectedAnnotationIds: restoredIds,
       sidebarOpen: true,
-      tool: 'select',
+      tool: null,
       lastDeletion: null
     }))
     persist(deletion.documentId, current)

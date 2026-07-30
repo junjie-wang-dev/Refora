@@ -100,7 +100,11 @@ test.describe('Built-in PDF reader', () => {
       '0px'
     )
     await expect(page.locator('[data-pdf-reader-toolbar][data-compact]')).toBeVisible()
-    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Read and select text')
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
+    await expect(page.getByRole('button', {
+      name: 'Select annotations',
+      exact: true
+    })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(0)
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
 
@@ -137,6 +141,8 @@ test.describe('Built-in PDF reader', () => {
     await expect(page.getByRole('button', {
       name: 'Delete selected annotations (1)'
     })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Freehand drawing', exact: true }).click()
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     await page.getByRole('button', { name: 'Read and select text', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Freehand drawing', exact: true }))
       .not.toHaveAttribute('aria-pressed', 'true')
@@ -187,9 +193,10 @@ test.describe('Built-in PDF reader', () => {
       )
     }, secondDocumentId)).toBe(true)
 
-    await page.getByRole('button', { name: 'Select annotations', exact: true }).click()
-    await expect(page.getByRole('button', { name: 'Add text', exact: true }))
-      .not.toHaveAttribute('aria-pressed', 'true')
+    const addTextTool = page.getByRole('button', { name: 'Add text', exact: true })
+    await addTextTool.click()
+    await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     const annotationInput = pdfPage.locator('[data-annotation-input-layer]')
     await annotationInput.hover({ position: { x: 40, y: 80 } })
     const selectionBounds = await annotationInput.boundingBox()
