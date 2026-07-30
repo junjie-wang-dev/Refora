@@ -54,6 +54,7 @@ test.describe('Built-in PDF reader', () => {
       await api.import.addFiles([first, second])
       await api.settings.set('pdfOpenMode', 'builtin')
       await api.workspaces.create('Reader workspace')
+      await api.workspaces.create('Unopened workspace')
       return api.documents.list({ mode: 'all' })
     }, {
       first: path.join(fixtures, 'valid.pdf'),
@@ -83,7 +84,7 @@ test.describe('Built-in PDF reader', () => {
     await secondRow.click()
     await page.getByRole('button', { name: 'Open File' }).click()
 
-    await expect(page.locator('[data-reader-tab-kind="workspace"]')).toHaveCount(1)
+    await expect(page.locator('[data-reader-tab-kind="workspace"]')).toHaveCount(0)
     await expect(page.locator('[data-reader-tab-kind="pdf"]')).toHaveCount(2)
     await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toHaveCount(1)
     await expect(page.getByRole('button', { name: 'Highlight' })).toBeVisible()
@@ -291,5 +292,24 @@ test.describe('Built-in PDF reader', () => {
       page.getByTestId('workspace-floating-actions').getByRole('button', { name: 'Add files' })
     ).toBeVisible()
     await expect(firstRow).toBeVisible()
+
+    const workspaceTab = page.locator('[data-reader-tab-kind="workspace"]')
+    await expect(workspaceTab).toHaveCount(1)
+    await page.locator('[data-reader-tab-kind="pdf"]').first().getByRole('tab').evaluate(
+      (element: HTMLButtonElement) => element.click()
+    )
+    await expect(page.locator('.pdf-reader-page')).toBeVisible()
+    await workspaceTab.getByRole('button').last().evaluate(
+      (element: HTMLButtonElement) => element.click()
+    )
+    await expect(workspaceTab).toHaveCount(0)
+
+    await page.getByTestId('app-sidebar-layer')
+      .getByRole('button', { name: 'Reader workspace', exact: true })
+      .click()
+    await expect(workspaceTab).toHaveCount(1)
+    await expect(
+      page.getByTestId('app-workspace-panel').getByText('Reader workspace', { exact: true })
+    ).toBeVisible()
   })
 })

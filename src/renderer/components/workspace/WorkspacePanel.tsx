@@ -38,8 +38,10 @@ export default function WorkspacePanel() {
   const { t } = useTranslation()
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const openWorkspaceIds = useWorkspaceStore((s) => s.openWorkspaceIds)
   const panelView = useWorkspaceStore((s) => s.panelView)
   const fullscreen = useWorkspaceStore((s) => s.fullscreen)
+  const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
   const reports = useWorkspaceStore((s) => s.reports)
   const notes = useWorkspaceStore((s) => s.notes)
   const markdownCardRequest = useWorkspaceStore((s) => s.markdownCardRequest)
@@ -48,6 +50,7 @@ export default function WorkspacePanel() {
   const showWorkspace = useWorkspaceStore((s) => s.showWorkspace)
   const showMarkdown = useWorkspaceStore((s) => s.showMarkdown)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
+  const closeWorkspaceTab = useWorkspaceStore((s) => s.closeWorkspaceTab)
   const clearMarkdownCardRequest = useWorkspaceStore((s) => s.clearMarkdownCardRequest)
   const updateNote = useWorkspaceStore((s) => s.updateNote)
   const updateReport = useWorkspaceStore((s) => s.updateReport)
@@ -56,7 +59,6 @@ export default function WorkspacePanel() {
 
   const [activeMarkdownCard, setActiveMarkdownCard] = useState<ActiveMarkdownCard | null>(null)
   const [markdownTabs, setMarkdownTabs] = useState<ActiveMarkdownCard[]>([])
-  const [closedWorkspaceIds, setClosedWorkspaceIds] = useState<Set<string>>(() => new Set())
   const boardRef = useRef<BoardHandle | null>(null)
   const markdownViewRef = useRef<WorkspaceMarkdownViewHandle | null>(null)
 
@@ -64,16 +66,6 @@ export default function WorkspacePanel() {
     setActiveMarkdownCard(null)
     setMarkdownTabs([])
   }, [activeWorkspaceId])
-
-  useEffect(() => {
-    if (panelView !== 'workspace' || !activeWorkspaceId) return
-    setClosedWorkspaceIds((current) => {
-      if (!current.has(activeWorkspaceId)) return current
-      const next = new Set(current)
-      next.delete(activeWorkspaceId)
-      return next
-    })
-  }, [activeWorkspaceId, panelView])
 
   useEffect(() => {
     if (!markdownCardRequest) return
@@ -172,11 +164,13 @@ export default function WorkspacePanel() {
   ])
 
   const handleCloseWorkspace = useCallback((workspaceId: string) => {
-    setClosedWorkspaceIds((current) => new Set(current).add(workspaceId))
+    closeWorkspaceTab(workspaceId)
     if (panelView !== 'workspace' || activeWorkspaceId !== workspaceId) return
-    const nextWorkspace = workspaces.find(
-      (workspace) => workspace.id !== workspaceId && !closedWorkspaceIds.has(workspace.id)
-    )
+    const nextWorkspace = chatStreaming
+      ? undefined
+      : workspaces.find(
+        (workspace) => workspace.id !== workspaceId && openWorkspaceIds.includes(workspace.id)
+      )
     if (nextWorkspace) {
       setActiveWorkspace(nextWorkspace.id)
     } else if (activeMarkdownCard) {
@@ -190,8 +184,10 @@ export default function WorkspacePanel() {
   }, [
     activeMarkdownCard,
     activeWorkspaceId,
+    chatStreaming,
     closePanel,
-    closedWorkspaceIds,
+    closeWorkspaceTab,
+    openWorkspaceIds,
     panelView,
     pdfTabs,
     setActiveWorkspace,
@@ -262,7 +258,7 @@ export default function WorkspacePanel() {
 
   const readerTabs: WorkspaceReaderTab[] = [
     ...workspaces.filter(
-      (workspace) => !closedWorkspaceIds.has(workspace.id)
+      (workspace) => openWorkspaceIds.includes(workspace.id)
     ).map((workspace) => ({
       id: `workspace:${workspace.id}`,
       title: workspace.name,

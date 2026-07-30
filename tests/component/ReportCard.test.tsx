@@ -26,6 +26,7 @@ const mockWorkspacePanelState = vi.hoisted(() => ({
     { id: 'ws-2', name: 'Reading notes', createdAt: 2, updatedAt: 2 }
   ],
   activeWorkspaceId: 'ws-1' as string | null,
+  openWorkspaceIds: ['ws-1'] as string[],
   panelView: 'workspace' as 'workspace' | 'markdown' | 'pdf',
   fullscreen: false,
   chatStreaming: false,
@@ -33,6 +34,7 @@ const mockWorkspacePanelState = vi.hoisted(() => ({
   notes: [] as WorkspaceNote[],
   markdownCardRequest: null as { kind: 'report' | 'note'; id: string } | null,
   setActiveWorkspace: vi.fn(),
+  closeWorkspaceTab: vi.fn(),
   toggleFullscreen: vi.fn(),
   closePanel: vi.fn(),
   showWorkspace: vi.fn(),
@@ -174,6 +176,7 @@ beforeEach(() => {
     { id: 'ws-2', name: 'Reading notes', createdAt: 2, updatedAt: 2 }
   ]
   mockWorkspacePanelState.activeWorkspaceId = 'ws-1'
+  mockWorkspacePanelState.openWorkspaceIds = ['ws-1']
   mockWorkspacePanelState.panelView = 'workspace'
   mockWorkspacePanelState.fullscreen = false
   mockWorkspacePanelState.chatStreaming = false
@@ -183,7 +186,16 @@ beforeEach(() => {
   mockWorkspacePanelState.setActiveWorkspace.mockReset()
   mockWorkspacePanelState.setActiveWorkspace.mockImplementation((id: string | null) => {
     mockWorkspacePanelState.activeWorkspaceId = id
+    if (id && !mockWorkspacePanelState.openWorkspaceIds.includes(id)) {
+      mockWorkspacePanelState.openWorkspaceIds = [...mockWorkspacePanelState.openWorkspaceIds, id]
+    }
     mockWorkspacePanelState.panelView = 'workspace'
+  })
+  mockWorkspacePanelState.closeWorkspaceTab.mockReset()
+  mockWorkspacePanelState.closeWorkspaceTab.mockImplementation((id: string) => {
+    mockWorkspacePanelState.openWorkspaceIds = mockWorkspacePanelState.openWorkspaceIds.filter(
+      (workspaceId) => workspaceId !== id
+    )
   })
   mockWorkspacePanelState.closePanel.mockReset()
   mockWorkspacePanelState.showWorkspace.mockReset()
@@ -542,6 +554,7 @@ describe('WorkspacePanel tab header', () => {
     expect(screen.getByText('Board').parentElement).toHaveClass('hidden')
     expect(screen.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: 'Research' })).toHaveAttribute('aria-selected', 'false')
+    expect(screen.queryByRole('tab', { name: 'Reading notes' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: 'Research' }))
     await waitFor(() => {
       expect(mockWorkspacePanelState.setActiveWorkspace).toHaveBeenCalledWith('ws-1')
@@ -637,32 +650,46 @@ describe('WorkspacePanel tab header', () => {
     expect(screen.queryByRole('listbox', { name: 'workspace.switchWorkspace' })).not.toBeInTheDocument()
   })
 
-  it('closes the active workspace tab and activates the next workspace', async () => {
-    render(<WorkspacePanel />)
+  it('closes the active workspace tab and activates another open workspace', async () => {
+    const view = render(<WorkspacePanel />)
 
-    const researchTab = screen.getByRole('tab', { name: 'Research' })
+    mockWorkspacePanelState.activeWorkspaceId = 'ws-2'
+    mockWorkspacePanelState.openWorkspaceIds = ['ws-1', 'ws-2']
+    view.rerender(<WorkspacePanel />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Reading notes' })).toBeInTheDocument()
+    })
+
+    const readingNotesTab = screen.getByRole('tab', { name: 'Reading notes' })
       .closest('[data-testid="workspace-reader-tab"]') as HTMLElement
-    const close = within(researchTab).getByRole('button', {
+    const close = within(readingNotesTab).getByRole('button', {
       name: 'workspace.closeReaderTab'
     })
     fireEvent.click(close)
 
     await waitFor(() => {
-      expect(mockWorkspacePanelState.setActiveWorkspace).toHaveBeenCalledWith('ws-2')
+      expect(mockWorkspacePanelState.setActiveWorkspace).toHaveBeenCalledWith('ws-1')
     })
   })
 
-  it('keeps the workspace close tab available while chat is streaming', () => {
+  it('closes the active workspace panel instead of leaving a blank tab bar while streaming', () => {
     mockWorkspacePanelState.chatStreaming = true
+    mockWorkspacePanelState.openWorkspaceIds = ['ws-1', 'ws-2']
 
     render(<WorkspacePanel />)
 
     expect(screen.queryByRole('button', { name: 'workspace.switchWorkspace' })).not.toBeInTheDocument()
     const researchTab = screen.getByRole('tab', { name: 'Research' })
       .closest('[data-testid="workspace-reader-tab"]') as HTMLElement
-    expect(
-      within(researchTab).getByRole('button', { name: 'workspace.closeReaderTab' })
-    ).toBeEnabled()
+    const close = within(researchTab).getByRole('button', {
+      name: 'workspace.closeReaderTab'
+    })
+    expect(close).toBeEnabled()
+    fireEvent.click(close)
+
+    expect(mockWorkspacePanelState.closePanel).toHaveBeenCalledOnce()
+    expect(mockWorkspacePanelState.setActiveWorkspace).not.toHaveBeenCalled()
   })
 
   it('creates Markdown notes and sticky notes from fixed canvas actions', () => {

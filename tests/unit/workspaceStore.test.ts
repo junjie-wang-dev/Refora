@@ -116,10 +116,12 @@ function resetStoreState(): void {
   useWorkspaceStore.setState({
     workspaces: [],
     activeWorkspaceId: null,
+    openWorkspaceIds: [],
     activeThreadId: null,
     panelOpen: false,
     panelView: 'workspace',
     fullscreen: false,
+    chatStreaming: false,
     items: [],
     reports: [],
     notes: [],
@@ -249,11 +251,17 @@ afterEach(() => {
 describe('WorkspaceStore', () => {
   describe('openMarkdownCard', () => {
     it('opens the workspace panel and exposes a consumable Markdown-card request', () => {
-      useWorkspaceStore.setState({ panelOpen: false, panelView: 'pdf' })
+      useWorkspaceStore.setState({
+        activeWorkspaceId: 'ws-1',
+        openWorkspaceIds: [],
+        panelOpen: false,
+        panelView: 'pdf'
+      })
 
       useWorkspaceStore.getState().openMarkdownCard('note', 'note-1')
 
       expect(useWorkspaceStore.getState()).toMatchObject({
+        openWorkspaceIds: ['ws-1'],
         panelOpen: true,
         panelView: 'markdown',
         markdownCardRequest: { kind: 'note', id: 'note-1' }
@@ -338,6 +346,7 @@ describe('WorkspaceStore', () => {
       useWorkspaceStore.getState().setActiveWorkspace('ws-1')
 
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1')
+      expect(useWorkspaceStore.getState().openWorkspaceIds).toEqual(['ws-1'])
       expect(useWorkspaceStore.getState().panelOpen).toBe(true)
       expect(useWorkspaceStore.getState().panelView).toBe('workspace')
       await vi.waitFor(() => {
@@ -352,6 +361,38 @@ describe('WorkspaceStore', () => {
 
       await vi.waitFor(() => {
         expect(useWorkspaceStore.getState().activeThreadId).toBe(null)
+      })
+    })
+
+    it('restores a closed workspace tab when the same workspace is opened again', () => {
+      useWorkspaceStore.getState().setActiveWorkspace('ws-1')
+      useWorkspaceStore.getState().closeWorkspaceTab('ws-1')
+
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1')
+      expect(useWorkspaceStore.getState().openWorkspaceIds).toEqual([])
+
+      useWorkspaceStore.getState().openPanel()
+
+      expect(useWorkspaceStore.getState().openWorkspaceIds).toEqual(['ws-1'])
+    })
+
+    it('restores the current workspace tab without changing context while chat is streaming', () => {
+      useWorkspaceStore.setState({
+        activeWorkspaceId: 'ws-1',
+        openWorkspaceIds: [],
+        panelOpen: false,
+        panelView: 'pdf',
+        chatStreaming: true
+      })
+
+      useWorkspaceStore.getState().setActiveWorkspace('ws-1')
+
+      expect(useWorkspaceStore.getState()).toMatchObject({
+        activeWorkspaceId: 'ws-1',
+        openWorkspaceIds: ['ws-1'],
+        panelOpen: true,
+        panelView: 'workspace',
+        chatStreaming: true
       })
     })
 
@@ -664,6 +705,7 @@ describe('WorkspaceStore', () => {
       useWorkspaceStore.setState({
         workspaces: staleWorkspaces,
         activeWorkspaceId: 'old-ws',
+        openWorkspaceIds: ['old-ws'],
         activeThreadId: 'old-thread',
         panelOpen: true,
         items: [makeItem()],
@@ -686,6 +728,7 @@ describe('WorkspaceStore', () => {
       })
 
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+      expect(useWorkspaceStore.getState().openWorkspaceIds).toEqual([])
       expect(useWorkspaceStore.getState().activeThreadId).toBeNull()
       expect(useWorkspaceStore.getState().panelOpen).toBe(false)
       expect(useWorkspaceStore.getState().items).toEqual([])

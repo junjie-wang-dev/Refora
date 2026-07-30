@@ -20,6 +20,7 @@ import { useDocumentStore } from './documentStore'
 interface WorkspaceState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  openWorkspaceIds: string[]
   activeThreadId: string | null
   panelOpen: boolean
   panelView: 'workspace' | 'markdown' | 'pdf'
@@ -39,6 +40,7 @@ interface WorkspaceState {
   renameWorkspace: (id: string, name: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
   setActiveWorkspace: (id: string | null) => void
+  closeWorkspaceTab: (id: string) => void
   setActiveThreadId: (id: string | null) => void
   setChatStreaming: (streaming: boolean) => void
   deleteThread: (threadId: string) => Promise<void>
@@ -87,9 +89,14 @@ function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
 }
 
+function addOpenWorkspace(ids: string[], id: string | null): string[] {
+  return id && !ids.includes(id) ? [...ids, id] : ids
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activeWorkspaceId: null,
+  openWorkspaceIds: [],
   activeThreadId: null,
   panelOpen: false,
   panelView: 'workspace',
@@ -135,6 +142,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({
         workspaces: [],
         activeWorkspaceId: null,
+        openWorkspaceIds: [],
         activeThreadId: null,
         panelOpen: false,
         panelView: 'workspace',
@@ -212,6 +220,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         const activeCleared = s.activeWorkspaceId === id
         return {
           workspaces: s.workspaces.filter((w) => w.id !== id),
+          openWorkspaceIds: s.openWorkspaceIds.filter((workspaceId) => workspaceId !== id),
           ...(activeCleared
             ? {
                 activeWorkspaceId: null,
@@ -234,9 +243,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveWorkspace: (id: string | null) => {
-    if (get().chatStreaming) return
-    set({
+    const current = get()
+    if (current.chatStreaming) {
+      if (!id || current.activeWorkspaceId !== id) return
+      set((state) => ({
+        panelOpen: true,
+        panelView: 'workspace',
+        openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, id)
+      }))
+      return
+    }
+    set((state) => ({
       activeWorkspaceId: id,
+      openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, id),
       activeThreadId: null,
       panelOpen: id !== null,
       panelView: 'workspace',
@@ -246,7 +265,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       assets: [],
       threads: [],
       markdownCardRequest: null
-    })
+    }))
     if (id) {
       void get().fetchItems()
       void get().fetchReports()
@@ -254,6 +273,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       void get().fetchAssets()
     }
     void get().fetchThreads({ selectLatestIfNone: true })
+  },
+
+  closeWorkspaceTab: (id: string) => {
+    set((state) => ({
+      openWorkspaceIds: state.openWorkspaceIds.filter((workspaceId) => workspaceId !== id)
+    }))
   },
 
   setActiveThreadId: (id: string | null) => {
@@ -318,7 +343,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   openPanel: () => {
-    set({ panelOpen: true, panelView: 'workspace' })
+    set((state) => ({
+      panelOpen: true,
+      panelView: 'workspace',
+      openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, state.activeWorkspaceId)
+    }))
   },
 
   openPdfReader: () => {
@@ -326,7 +355,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   showWorkspace: () => {
-    set({ panelOpen: true, panelView: 'workspace' })
+    set((state) => ({
+      panelOpen: true,
+      panelView: 'workspace',
+      openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, state.activeWorkspaceId)
+    }))
   },
 
   showMarkdown: () => {
@@ -342,11 +375,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   openMarkdownCard: (kind: WorkspaceContentKind, id: string) => {
-    set({
+    set((state) => ({
       markdownCardRequest: { kind, id },
       panelOpen: true,
-      panelView: 'markdown'
-    })
+      panelView: 'markdown',
+      openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, state.activeWorkspaceId)
+    }))
   },
 
   clearMarkdownCardRequest: () => {
