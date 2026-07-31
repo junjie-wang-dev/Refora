@@ -47,14 +47,14 @@ describe('Python server packaging', () => {
     expect(script).toContain("'langgraph-checkpoint-sqlite'")
   })
 
-  it('uses separate native runners for arm64 and x64 packages', () => {
+  it('packages only for Apple Silicon on native runners', () => {
     for (const workflow of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
       const contents = readFileSync(workflow, 'utf8')
 
       expect(contents).toContain('arch: arm64')
       expect(contents).toContain('runner: macos-15')
-      expect(contents).toContain('arch: x64')
-      expect(contents).toContain('runner: macos-15-intel')
+      expect(contents).not.toContain('arch: x64')
+      expect(contents).not.toContain('runner: macos-15-intel')
       expect(contents).toContain('REFORA_TARGET_ARCH: ${{ matrix.arch }}')
     }
   })
