@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, nativeImage, net, protocol } from 'electron'
 import { join, resolve as resolvePath } from 'node:path'
-import { createWriteStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
@@ -15,6 +15,7 @@ import { createServerPythonRuntime } from './sidecar/runtime'
 import type { ServerPythonRuntime } from './sidecar/runtime'
 import { createServerLifecycle } from './sidecar/lifecycle'
 import { createServerAssembly, type ServerAssembly } from './sidecar/assembly'
+import { createServerStateDirectory } from './sidecar/stateDirectory'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -403,8 +404,6 @@ async function createPythonServerAssembly(
   switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult>
 ): Promise<ServerAssembly> {
   if (!serverPythonRuntime) throw new Error('Python runtime is not ready')
-  const serverStateDir = join(app.getPath('userData'), 'server')
-  mkdirSync(serverStateDir, { recursive: true })
   const serverExecutable = app.isPackaged
     ? join(process.resourcesPath, 'python-server', 'refora-server')
     : undefined
@@ -412,12 +411,13 @@ async function createPythonServerAssembly(
     ? undefined
     : await serverPythonRuntime.install(new AbortController().signal)
   const serverSourceRoot = join(__dirname, '../../backend')
-  return createServerAssembly({
+  const serverState = createServerStateDirectory(app.getPath('userData'))
+  const assembly = createServerAssembly({
     lifecycle: createServerLifecycle({
       pythonPath: serverPython,
       serverModule: app.isPackaged ? undefined : 'refora_server.server.run',
       executablePath: serverExecutable,
-      stateDir: serverStateDir,
+      stateDir: serverState.path,
       userDataDir: app.getPath('userData'),
       dbPath,
       libraryFolder,
@@ -434,6 +434,25 @@ async function createPythonServerAssembly(
     getWin: () => win,
     switchLibraryFolder
   })
+  return {
+    start: async () => {
+      try {
+        await assembly.start()
+      } catch (error) {
+        serverState.cleanup()
+        throw error
+      }
+    },
+    stop: async () => {
+      try {
+        await assembly.stop()
+      } finally {
+        serverState.cleanup()
+      }
+    },
+    getClient: () => assembly.getClient(),
+    fetchResource: (path, headers) => assembly.fetchResource(path, headers)
+  }
 }
 
 let librarySwitching = false
