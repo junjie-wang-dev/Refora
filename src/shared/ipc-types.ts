@@ -329,6 +329,13 @@ export interface WorkspaceAssetImportResult {
   errors: Array<{ path: string; message: string }>
 }
 
+export interface WorkspaceFileImportResult {
+  documentIds: string[]
+  notes: WorkspaceNote[]
+  assets: WorkspaceAsset[]
+  errors: Array<{ path: string; message: string }>
+}
+
 export interface WorkspaceAssetTextPreview {
   content: string
   truncated: boolean
@@ -900,6 +907,9 @@ export interface ReforaApi {
     reveal(id: string): Promise<void>
     delete(id: string): Promise<void>
     previewUrl(id: string): string
+  }
+  workspaceFiles: {
+    add(workspaceId: string, paths: string[], placement?: WorkspaceItemPlacement): Promise<WorkspaceFileImportResult>
   }
   workspaceNotes: {
     list(workspaceId: string): Promise<WorkspaceNote[]>

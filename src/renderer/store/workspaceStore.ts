@@ -58,6 +58,7 @@ interface WorkspaceState {
   fetchItems: () => Promise<void>
   fetchAssets: () => Promise<void>
   addAssets: (paths: string[], placement?: WorkspaceItemPlacement) => Promise<void>
+  addFiles: (paths: string[], placement?: WorkspaceItemPlacement) => Promise<void>
   deleteAsset: (id: string) => Promise<void>
   addDocs: (docIds: string[], placement?: WorkspaceItemPlacement) => Promise<void>
   removeItem: (itemId: string) => Promise<void>
@@ -444,6 +445,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (result.errors.length > 0) {
         toast(result.errors[0].message)
       }
+    } catch (e) {
+      toast(errorMessage(e, 'Failed to add files to workspace'))
+      throw e
+    }
+  },
+
+  addFiles: async (paths: string[], placement?: WorkspaceItemPlacement) => {
+    const workspaceId = get().activeWorkspaceId
+    if (!workspaceId || paths.length === 0) return
+    try {
+      const result = placement
+        ? await api.workspaceFiles.add(workspaceId, paths, placement)
+        : await api.workspaceFiles.add(workspaceId, paths)
+      if (get().activeWorkspaceId !== workspaceId) return
+      await Promise.all([get().fetchItems(), get().fetchNotes(), get().fetchAssets()])
+      if (result.errors.length > 0) toast(result.errors[0].message)
     } catch (e) {
       toast(errorMessage(e, 'Failed to add files to workspace'))
       throw e

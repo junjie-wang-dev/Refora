@@ -120,6 +120,12 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
         await http.workspaceAssetDelete(await workspaceForAsset(assetId), assetId)
       }),
 
+    [IpcChannel.WorkspaceFilesAdd]: (
+      workspaceId: string,
+      paths: string[],
+      placement?: WorkspaceItemPlacement
+    ) => wrap(() => http.workspaceFilesAdd(workspaceId, { paths, placement })),
+
     [IpcChannel.WorkspaceCanvasGet]: (workspaceId: string) =>
       wrap(async () => (await http.workspaceCanvasGet(workspaceId)) as WorkspaceCanvasViewport),
     [IpcChannel.WorkspaceCanvasUpdate]: (workspaceId: string, viewport: WorkspaceCanvasViewport) =>

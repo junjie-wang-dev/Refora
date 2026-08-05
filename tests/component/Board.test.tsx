@@ -16,6 +16,7 @@ const DOC_MIME = 'application/x-refora-docids'
 
 const mockAddDocs = vi.fn()
 const mockAddAssets = vi.fn()
+const mockAddFiles = vi.fn()
 const mockDeleteAsset = vi.fn()
 const mockFetchItems = vi.fn()
 const mockRemoveItem = vi.fn()
@@ -54,6 +55,7 @@ vi.mock('@renderer/store/workspaceStore', () => ({
       activeWorkspaceId: mockActiveWorkspaceId,
       addDocs: mockAddDocs,
       addAssets: mockAddAssets,
+      addFiles: mockAddFiles,
       deleteAsset: mockDeleteAsset,
       fetchItems: mockFetchItems,
       removeItem: mockRemoveItem,
@@ -85,6 +87,7 @@ beforeEach(() => {
   vi.mocked(showContextMenu).mockReset()
   mockAddDocs.mockReset().mockResolvedValue(undefined)
   mockAddAssets.mockReset().mockResolvedValue(undefined)
+  mockAddFiles.mockReset().mockResolvedValue(undefined)
   mockDeleteAsset.mockReset().mockResolvedValue(undefined)
   mockFetchItems.mockReset().mockResolvedValue(undefined)
   mockRemoveItem.mockReset()
@@ -208,7 +211,7 @@ describe('Board drag-and-drop', () => {
     expect(mockAddDocs).not.toHaveBeenCalled()
   })
 
-  it('accepts Finder file drops and calls addAssets with managed paths', async () => {
+  it('routes Finder file drops through workspace file classification', async () => {
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
 
@@ -230,7 +233,7 @@ describe('Board drag-and-drop', () => {
     fireEvent(board, dropEvent)
 
     await waitFor(() => {
-      expect(mockAddAssets).toHaveBeenCalledWith(
+      expect(mockAddFiles).toHaveBeenCalledWith(
         ['/tmp/notes.md', '/tmp/image.png'],
         { x: 170, y: 140 }
       )

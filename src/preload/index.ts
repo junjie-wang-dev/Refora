@@ -47,6 +47,7 @@ import type {
   WorkspaceAsset,
   WorkspaceAssetImportResult,
   WorkspaceAssetTextPreview,
+  WorkspaceFileImportResult,
   WorkspaceCanvasViewport,
   WorkspaceConnection,
   WorkspaceConnectionAnchor,
@@ -294,6 +295,11 @@ const api: ReforaApi = {
     reveal: (id: string) => invoke<void>(IpcChannel.WorkspaceAssetsReveal, id),
     delete: (id: string) => invoke<void>(IpcChannel.WorkspaceAssetsDelete, id),
     previewUrl: (id: string) => `refora-asset://asset/${encodeURIComponent(id)}`
+  },
+
+  workspaceFiles: {
+    add: (workspaceId: string, paths: string[], placement?: WorkspaceItemPlacement) =>
+      invoke<WorkspaceFileImportResult>(IpcChannel.WorkspaceFilesAdd, workspaceId, paths, placement)
   },
 
   workspaceNotes: {

@@ -723,6 +723,7 @@ def create_lifespan(
                     "getSandboxPath": lambda workspace_id: f"{app.state.library_folder}/.refora/sandboxes/{workspace_id}",
                     "agentRuntime": _LazyAgentRuntime(app),
                     "academic": academic,
+                    "importer": importer,
                 },
             ),
         }

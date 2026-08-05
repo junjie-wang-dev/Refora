@@ -119,6 +119,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.WorkspaceAssetsOpen, args: ['asset-1'], invoke: (value) => value.workspaceAssets.open('asset-1') },
       { channel: IpcChannel.WorkspaceAssetsReveal, args: ['asset-1'], invoke: (value) => value.workspaceAssets.reveal('asset-1') },
       { channel: IpcChannel.WorkspaceAssetsDelete, args: ['asset-1'], invoke: (value) => value.workspaceAssets.delete('asset-1') },
+      { channel: IpcChannel.WorkspaceFilesAdd, args: ['workspace-1', ['/tmp/paper.pdf'], { x: 1, y: 2 }], invoke: (value) => value.workspaceFiles.add('workspace-1', ['/tmp/paper.pdf'], { x: 1, y: 2 }) },
       { channel: IpcChannel.WorkspaceNotesList, args: ['workspace-1'], invoke: (value) => value.workspaceNotes.list('workspace-1') },
       { channel: IpcChannel.WorkspaceNotesCreate, args: ['workspace-1', 'Note', 'Body', 'plain', { x: 1, y: 2 }], invoke: (value) => value.workspaceNotes.create('workspace-1', 'Note', 'Body', 'plain', { x: 1, y: 2 }) },
       { channel: IpcChannel.WorkspaceNotesUpdate, args: ['note-1', { title: 'Updated' }], invoke: (value) => value.workspaceNotes.update('note-1', { title: 'Updated' }) },

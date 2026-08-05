@@ -50,6 +50,10 @@ class FakeServices:
                 ),
             ),
             "importAssets": self._workspace("importAssets", {"imported": [], "errors": []}),
+            "importWorkspaceFiles": self._workspace(
+                "importWorkspaceFiles",
+                {"documentIds": [], "notes": [], "assets": [], "errors": []},
+            ),
             "previewAsset": self._workspace("previewAsset", {"content": "preview", "truncated": False}),
             "openAsset": self._workspace("openAsset", None),
             "revealAsset": self._workspace("revealAsset", None),
@@ -167,6 +171,7 @@ HEADERS = {"X-Refora-Token": "token"}
         ("get", "/workspaces/workspace-1/assets", None, "listAssets"),
         ("get", "/workspace-assets/asset-1", None, "getAsset"),
         ("post", "/workspaces/workspace-1/assets/files", {"paths": ["/tmp/asset.txt"]}, "importAssets"),
+        ("post", "/workspaces/workspace-1/files", {"paths": ["/tmp/paper.pdf"]}, "importWorkspaceFiles"),
         ("get", "/workspaces/workspace-1/assets/asset-1/preview", None, "previewAsset"),
         ("post", "/workspaces/workspace-1/assets/asset-1/open", None, "openAsset"),
         ("post", "/workspaces/workspace-1/assets/asset-1/reveal", None, "revealAsset"),

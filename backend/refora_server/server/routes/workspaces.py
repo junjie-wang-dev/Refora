@@ -350,6 +350,18 @@ def create_workspaces_router(deps: Any) -> APIRouter:
 
         return await _invoke(operation)
 
+    @router.post("/workspaces/{workspace_id}/files")
+    async def import_workspace_files(
+        workspace_id: str, body: dict[str, Any] | None = Body(default=None)
+    ) -> JSONResponse:
+        def operation() -> Any:
+            payload = _body(body)
+            return workspaces["importWorkspaceFiles"](
+                workspace_id, _string_list(payload, "paths"), _placement(payload)
+            )
+
+        return await _invoke(operation)
+
     @router.get("/workspaces/{workspace_id}/assets/{asset_id}/preview")
     async def preview_asset(workspace_id: str, asset_id: str) -> JSONResponse:
         return await _invoke(

@@ -101,6 +101,7 @@ function makeClient(): { client: ServerClient; http: Record<string, ReturnType<t
     workspaceAssetsList: vi.fn().mockResolvedValue([asset]),
     workspaceAssetGet: vi.fn().mockResolvedValue(asset),
     workspaceAssetsAddFiles: vi.fn().mockResolvedValue({ imported: [asset], errors: [] }),
+    workspaceFilesAdd: vi.fn().mockResolvedValue({ documentIds: ['document-1'], notes: [note], assets: [asset], errors: [] }),
     workspaceAssetPreview: vi.fn().mockResolvedValue({ content: 'preview', truncated: false }),
     workspaceAssetOpen: vi.fn().mockResolvedValue({ ack: true }),
     workspaceAssetReveal: vi.fn().mockResolvedValue({ ack: true }),
@@ -199,6 +200,23 @@ describe('server workspace IPC handlers', () => {
     expect(http.workspaceAssetReveal).toHaveBeenCalledWith(workspace.id, asset.id)
     expect(http.workspaceAssetDelete).toHaveBeenCalledWith(workspace.id, asset.id)
     expect(http.workspaceAssetGet).toHaveBeenCalledTimes(4)
+  })
+
+  it('forwards classified workspace file imports through HTTP', async () => {
+    const result = await handlers[IpcChannel.WorkspaceFilesAdd](
+      workspace.id,
+      ['/tmp/paper.pdf', '/tmp/note.md'],
+      { x: 2, y: 3 }
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      data: { documentIds: ['document-1'], notes: [note], assets: [asset], errors: [] }
+    })
+    expect(http.workspaceFilesAdd).toHaveBeenCalledWith(workspace.id, {
+      paths: ['/tmp/paper.pdf', '/tmp/note.md'],
+      placement: { x: 2, y: 3 }
+    })
   })
 
   it('forwards canvas, connection, and note operations with converted arguments', async () => {

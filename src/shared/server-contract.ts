@@ -1,6 +1,6 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "48d3e563bd3bd6fea1124d266a15582e3acb13a97bc6085577b6e49f03f02444" as const
+export const SERVER_PROTOCOL_DIGEST = "613a8744351f9cbaccbaab7e1b0f608e4c9d9665fd2d7f1c183cb48259ab71a3" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -442,6 +442,10 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "POST",
     "path": "/workspaces/{workspace_id}/connections"
+  },
+  {
+    "method": "POST",
+    "path": "/workspaces/{workspace_id}/files"
   },
   {
     "method": "POST",

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import os
 import shutil
 import time
+from pathlib import Path
 from typing import Any, Callable
 
+from refora_server.library.importer import hashPdf, validatePdfPath
 from refora_server.repositories.errors import RepoError
 from refora_server.repositories.workspace_assets import workspace_asset_media_type
 
 WORKSPACE_ASSET_TEXT_PREVIEW_LIMIT = 256 * 1024
 WORKSPACE_ASSET_DIRECTORY = "refora-assets"
+WORKSPACE_MARKDOWN_IMPORT_LIMIT = 16 * 1024 * 1024
 
 
 def _now_ms() -> int:
@@ -33,6 +37,20 @@ def _validate_source_file(raw_path: str) -> str:
     if os.path.islink(resolved) or not os.path.isfile(resolved):
         raise RepoError("invalid_path", "Workspace assets must be regular files")
     return resolved
+
+
+def _read_markdown_file(raw_path: str) -> tuple[str, str]:
+    resolved = _validate_source_file(raw_path)
+    path = Path(resolved)
+    if path.suffix.lower() not in {".md", ".markdown"}:
+        raise RepoError("invalid_path", "Workspace Markdown files must use .md or .markdown")
+    if path.stat().st_size > WORKSPACE_MARKDOWN_IMPORT_LIMIT:
+        raise RepoError("file_too_large", "Workspace Markdown file exceeds the 16 MiB limit")
+    try:
+        content = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise RepoError("invalid_encoding", "Workspace Markdown files must be UTF-8") from exc
+    return path.stem, content
 
 
 def _stream_file_hash(file_path: str) -> str:
@@ -137,6 +155,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     get_sandbox_path = deps.get("getSandboxPath") or deps.get("get_sandbox_path")
     agent_runtime = deps.get("agentRuntime")
     academic = deps.get("academic") or {}
+    importer = deps.get("importer")
 
     async def _connector_call(name: str, *args: Any) -> Any:
         operation = _connector_method(connector, name)
@@ -437,6 +456,97 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
                 )
         return {"imported": imported, "errors": errors}
 
+    async def import_workspace_files(
+        workspace_id: str,
+        paths: list[str],
+        placement: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _require_workspace(workspace_id)
+        unique_paths = list(dict.fromkeys(path for path in paths if isinstance(path, str) and path))
+        pdf_paths = [path for path in unique_paths if Path(path).suffix.lower() == ".pdf"]
+        markdown_paths = [
+            path for path in unique_paths if Path(path).suffix.lower() in {".md", ".markdown"}
+        ]
+        asset_paths = [
+            path for path in unique_paths
+            if Path(path).suffix.lower() not in {".pdf", ".md", ".markdown"}
+        ]
+        document_ids: list[str] = []
+        notes: list[dict[str, Any]] = []
+        assets: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        offset = 0
+
+        def placed(current_offset: int) -> dict[str, Any] | None:
+            if placement is None:
+                return None
+            return {
+                "x": float(placement["x"]) + (current_offset % 3) * 28,
+                "y": float(placement["y"]) + (current_offset // 3) * 28,
+            }
+
+        if pdf_paths:
+            import_files = importer.get("importFiles") if isinstance(importer, dict) else None
+            if not callable(import_files):
+                raise RepoError("not_ready", "PDF importer is unavailable")
+            result = import_files(pdf_paths)
+            if inspect.isawaitable(result):
+                result = await result
+            if not isinstance(result, dict):
+                raise RepoError("import_failed", "PDF importer returned an invalid result")
+            for value in result.get("imported", []):
+                document_id = value.get("id") if isinstance(value, dict) else value
+                if isinstance(document_id, str) and document_id not in document_ids:
+                    document_ids.append(document_id)
+            for skipped_path in result.get("skipped", []):
+                raw_path = skipped_path.get("path") if isinstance(skipped_path, dict) else skipped_path
+                resolved = validatePdfPath(raw_path) if isinstance(raw_path, str) else None
+                if resolved is None:
+                    continue
+                document = repos["documents"]["findByPath"](resolved)
+                if document is None:
+                    try:
+                        file_hash = await asyncio.to_thread(hashPdf, resolved)
+                        document = repos["documents"]["findByHash"](file_hash)
+                    except OSError:
+                        document = None
+                if document is not None and document["id"] not in document_ids:
+                    document_ids.append(document["id"])
+            for error in result.get("errors", []):
+                if isinstance(error, dict):
+                    errors.append({
+                        "path": str(error.get("path", "")),
+                        "message": str(error.get("message", "PDF import failed")),
+                    })
+            if document_ids:
+                _transaction(
+                    lambda: repos["workspaceItems"]["add"](
+                        workspace_id, "document", document_ids, placed(offset)
+                    )
+                )
+                offset += len(document_ids)
+
+        for raw_path in markdown_paths:
+            try:
+                title, content = _read_markdown_file(raw_path)
+                note = create_note(workspace_id, title, content, "markdown", placed(offset))
+                notes.append(note)
+                offset += 1
+            except Exception as exc:
+                errors.append({"path": raw_path, "message": str(exc)})
+
+        if asset_paths:
+            result = import_assets(workspace_id, asset_paths, placed(offset))
+            assets.extend(result["imported"])
+            errors.extend(result["errors"])
+
+        return {
+            "documentIds": document_ids,
+            "notes": notes,
+            "assets": assets,
+            "errors": errors,
+        }
+
     def _insert_asset_with_item(
         repos_: dict[str, Any],
         asset_record: dict[str, Any],
@@ -596,6 +706,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "listAssets": list_assets,
         "getAsset": get_asset,
         "importAssets": import_assets,
+        "importWorkspaceFiles": import_workspace_files,
         "previewAsset": preview_asset,
         "resolveAssetFile": resolve_asset_file,
         "openAsset": open_asset,

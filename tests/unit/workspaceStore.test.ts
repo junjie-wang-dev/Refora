@@ -106,6 +106,7 @@ const mockWorkspaceItemsMove = vi.fn()
 const mockWorkspaceAssetsList = vi.fn()
 const mockWorkspaceAssetsAddFiles = vi.fn()
 const mockWorkspaceAssetsDelete = vi.fn()
+const mockWorkspaceFilesAdd = vi.fn()
 const mockWorkspaceNotesList = vi.fn()
 const mockWorkspaceNotesCreate = vi.fn()
 const mockWorkspaceNotesDelete = vi.fn()
@@ -157,6 +158,7 @@ beforeEach(() => {
   mockWorkspaceAssetsList.mockReset()
   mockWorkspaceAssetsAddFiles.mockReset()
   mockWorkspaceAssetsDelete.mockReset()
+  mockWorkspaceFilesAdd.mockReset()
   mockWorkspaceNotesList.mockReset()
   mockWorkspaceNotesCreate.mockReset()
   mockWorkspaceNotesDelete.mockReset()
@@ -191,6 +193,7 @@ beforeEach(() => {
   mockWorkspaceAssetsList.mockResolvedValue([])
   mockWorkspaceAssetsAddFiles.mockResolvedValue({ imported: [], errors: [] })
   mockWorkspaceAssetsDelete.mockResolvedValue(undefined)
+  mockWorkspaceFilesAdd.mockResolvedValue({ documentIds: [], notes: [], assets: [], errors: [] })
   mockWorkspaceNotesList.mockResolvedValue([])
   mockWorkspaceNotesCreate.mockResolvedValue(makeNote())
   mockWorkspaceNotesDelete.mockResolvedValue(undefined)
@@ -232,6 +235,8 @@ beforeEach(() => {
   workspaceAssets.list = mockWorkspaceAssetsList
   workspaceAssets.addFiles = mockWorkspaceAssetsAddFiles
   workspaceAssets.delete = mockWorkspaceAssetsDelete
+
+  api.workspaceFiles = { add: mockWorkspaceFilesAdd }
 
   const workspaceNotes = api.workspaceNotes as Record<string, unknown>
   workspaceNotes.list = mockWorkspaceNotesList
@@ -869,6 +874,31 @@ describe('WorkspaceStore', () => {
       expect(useWorkspaceStore.getState().items).toEqual([])
       await deletion
       expect(mockWorkspaceAssetsDelete).toHaveBeenCalledWith(asset.id)
+    })
+
+    it('classifies dropped files and refreshes every affected workspace collection', async () => {
+      const placement = { x: 20, y: 30 }
+      mockWorkspaceFilesAdd.mockResolvedValue({
+        documentIds: ['doc-1'],
+        notes: [makeNote()],
+        assets: [makeAsset()],
+        errors: []
+      })
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+
+      await useWorkspaceStore.getState().addFiles(
+        ['/tmp/paper.pdf', '/tmp/notes.md', '/tmp/image.png'],
+        placement
+      )
+
+      expect(mockWorkspaceFilesAdd).toHaveBeenCalledWith(
+        'ws-1',
+        ['/tmp/paper.pdf', '/tmp/notes.md', '/tmp/image.png'],
+        placement
+      )
+      expect(mockWorkspaceItemsList).toHaveBeenCalledWith('ws-1')
+      expect(mockWorkspaceNotesList).toHaveBeenCalledWith('ws-1')
+      expect(mockWorkspaceAssetsList).toHaveBeenCalledWith('ws-1')
     })
 
     it('deletes notes optimistically and restores them on failure', async () => {

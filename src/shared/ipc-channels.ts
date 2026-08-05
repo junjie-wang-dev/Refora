@@ -91,6 +91,8 @@ export const IpcChannel = {
   WorkspaceAssetsReveal: 'workspaceAssets:reveal',
   WorkspaceAssetsDelete: 'workspaceAssets:delete',
 
+  WorkspaceFilesAdd: 'workspaceFiles:add',
+
   WorkspaceCanvasGet: 'workspaceCanvas:get',
   WorkspaceCanvasUpdate: 'workspaceCanvas:update',
 

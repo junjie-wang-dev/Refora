@@ -150,6 +150,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const addDocs = useWorkspaceStore((s) => s.addDocs)
   const addAssets = useWorkspaceStore((s) => s.addAssets)
+  const addFiles = useWorkspaceStore((s) => s.addFiles)
   const deleteAsset = useWorkspaceStore((s) => s.deleteAsset)
   const removeItem = useWorkspaceStore((s) => s.removeItem)
   const resizeItem = useWorkspaceStore((s) => s.resizeItem)
@@ -1019,7 +1020,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           .map((file) => api.getPathForFile(file))
           .filter((path) => path.length > 0)
         if (paths.length === 0) return
-        await addAssets(paths, placement)
+        await addFiles(paths, placement)
       }
     } catch (error) {
       setSummaryErrors((previous) => new Map(previous).set('__drop__', errorMessage(error, t('workspace.addFailed'))))

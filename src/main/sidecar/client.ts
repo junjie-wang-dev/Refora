@@ -27,6 +27,7 @@ import type {
   WorkspaceAsset,
   WorkspaceAssetImportResult,
   WorkspaceAssetTextPreview,
+  WorkspaceFileImportResult,
   WorkspaceConnection,
   WorkspaceConnectionAnchor,
   WorkspaceItem,
@@ -440,6 +441,7 @@ export interface ServerHttp {
   workspaceAssetsList(workspaceId: string): Promise<WorkspaceAsset[]>
   workspaceAssetGet(assetId: string): Promise<WorkspaceAsset>
   workspaceAssetsAddFiles(workspaceId: string, payload: WorkspaceAssetsFilesPayload): Promise<WorkspaceAssetImportResult>
+  workspaceFilesAdd(workspaceId: string, payload: WorkspaceAssetsFilesPayload): Promise<WorkspaceFileImportResult>
   workspaceAssetPreview(workspaceId: string, assetId: string): Promise<WorkspaceAssetTextPreview>
   workspaceAssetOpen(workspaceId: string, assetId: string): Promise<{ ack: boolean }>
   workspaceAssetReveal(workspaceId: string, assetId: string): Promise<{ ack: boolean }>
@@ -701,6 +703,7 @@ export function createServerClient(
     workspaceAssetsList: (id) => get<WorkspaceAsset[]>(`/workspaces/${id}/assets`),
     workspaceAssetGet: (id) => get<WorkspaceAsset>(`/workspace-assets/${id}`),
     workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${id}/assets/files`, payload),
+    workspaceFilesAdd: (id, payload) => post<WorkspaceFileImportResult>(`/workspaces/${id}/files`, payload),
     workspaceAssetPreview: (id, assetId) => get<WorkspaceAssetTextPreview>(`/workspaces/${id}/assets/${assetId}/preview`),
     workspaceAssetOpen: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/open`),
     workspaceAssetReveal: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/reveal`),

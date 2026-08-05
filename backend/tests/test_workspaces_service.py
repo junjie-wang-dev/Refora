@@ -13,6 +13,7 @@ from conftest import (
     make_workspace_notes_repo,
     make_workspaces_repo,
     open_migrated_db,
+    make_docs_repo,
 )
 from refora_server.repositories.errors import RepoError
 from refora_server.repositories.settings import SettingsRepository
@@ -35,6 +36,7 @@ def _build_repos(db, library_folder: str = ""):
         "workspaceCanvas": make_workspace_canvas_repo(db),
         "workspaceConnections": make_workspace_connections_repo(db),
         "workspaceNotes": make_workspace_notes_repo(db),
+        "documents": make_docs_repo(db, library_folder),
         "settings": _make_settings_repo(db),
     }
 
@@ -503,6 +505,87 @@ class TestAssetsImport:
         preview = service["previewAsset"](w["id"], asset_id)
         assert preview["truncated"] is False
         assert preview["content"] == "short"
+
+
+class TestWorkspaceFileImport:
+    @pytest.mark.asyncio
+    async def test_classifies_pdf_markdown_and_other_assets(
+        self, repos, db, library_dir
+    ):
+        from conftest import make_doc
+
+        sources = Path(library_dir) / "sources"
+        sources.mkdir()
+        pdf = sources / "paper.pdf"
+        markdown = sources / "research.markdown"
+        image = sources / "figure.png"
+        pdf.write_bytes(b"pdf")
+        markdown.write_text("# Findings\n", encoding="utf-8")
+        image.write_bytes(b"\x89PNG")
+        repos["documents"]["insert"](
+            make_doc(id="doc-1", file_path=str(pdf), file_name=pdf.name)
+        )
+
+        async def import_files(paths):
+            assert paths == [str(pdf)]
+            return {"imported": ["doc-1"], "skipped": [], "errors": []}
+
+        service = createWorkspacesService(
+            repos, {"importer": {"importFiles": import_files}}
+        )
+        workspace = service["createWorkspace"]("Mixed")
+
+        result = await service["importWorkspaceFiles"](
+            workspace["id"],
+            [str(pdf), str(markdown), str(image)],
+            {"x": 40.0, "y": 50.0},
+        )
+
+        assert result["documentIds"] == ["doc-1"]
+        assert result["notes"][0]["title"] == "research"
+        assert result["notes"][0]["contentMd"] == "# Findings\n"
+        assert result["assets"][0]["fileName"] == "figure.png"
+        assert result["errors"] == []
+        items = service["listItems"](workspace["id"])
+        assert [item["kind"] for item in items] == ["document", "note", "asset"]
+        assert [(item["x"], item["y"]) for item in items] == [
+            (40.0, 50.0),
+            (68.0, 50.0),
+            (96.0, 50.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_reuses_an_existing_document_for_a_skipped_pdf(
+        self, repos, db, library_dir
+    ):
+        from conftest import make_doc
+        from refora_server.library.importer import hashPdf
+
+        pdf = Path(library_dir) / "existing.pdf"
+        pdf.write_bytes(b"existing pdf")
+        repos["documents"]["insert"](
+            make_doc(
+                id="doc-existing",
+                file_path=str(pdf),
+                file_name=pdf.name,
+                file_hash=hashPdf(str(pdf)),
+            )
+        )
+
+        async def import_files(_paths):
+            return {"imported": [], "skipped": [str(pdf)], "errors": []}
+
+        service = createWorkspacesService(
+            repos, {"importer": {"importFiles": import_files}}
+        )
+        workspace = service["createWorkspace"]("Existing")
+
+        result = await service["importWorkspaceFiles"](
+            workspace["id"], [str(pdf)]
+        )
+
+        assert result["documentIds"] == ["doc-existing"]
+        assert service["listItems"](workspace["id"])[0]["docId"] == "doc-existing"
 
 
 class TestAssetsListingPreview:
