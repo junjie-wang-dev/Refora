@@ -144,7 +144,7 @@ function RunTimeline({
   }, [streaming])
   const ordered = [...steps]
     .filter((step) => step.kind !== 'run' && step.kind !== 'todo')
-    .sort((a, b) => a.seq - b.seq)
+    .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq)
   const hasReasoningStep = ordered.some((step) => step.kind === 'reasoning')
   const messageSteps = ordered.filter((step) => step.kind === 'message')
   const finalMessageStep = messageSteps.at(-1)
@@ -163,10 +163,14 @@ function RunTimeline({
     if (step.kind === 'message') return !!step.output
     return true
   }) || (!hasReasoningStep && !!fallbackReasoning)
-  const runStep = steps.find((step) => step.kind === 'run')
+  const runSteps = steps
+    .filter((step) => step.kind === 'run')
+    .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq)
+  const firstRunStep = runSteps[0]
+  const lastRunStep = runSteps.at(-1)
   const completedSteps = steps.filter((step) => step.endedAt != null)
-  const startedAt = runStep?.startedAt ?? (steps.length > 0 ? Math.min(...steps.map((step) => step.startedAt)) : null)
-  const endedAt = runStep?.endedAt ?? (completedSteps.length > 0 ? Math.max(...completedSteps.map((step) => step.endedAt!)) : null)
+  const startedAt = firstRunStep?.startedAt ?? (steps.length > 0 ? Math.min(...steps.map((step) => step.startedAt)) : null)
+  const endedAt = lastRunStep?.endedAt ?? (completedSteps.length > 0 ? Math.max(...completedSteps.map((step) => step.endedAt!)) : null)
   const duration = streaming
     ? formatElapsed(elapsedSeconds)
     : startedAt != null && endedAt != null
@@ -334,7 +338,7 @@ export default function ChatMessages({
     }
     const completedOrder = order.filter((runId) => {
       const steps = map.get(runId) ?? []
-      const runStep = steps.find((step) => step.kind === 'run')
+      const runStep = steps.filter((step) => step.kind === 'run').at(-1)
       return runStep
         ? runStep.status === 'done'
         : steps.some((step) => step.kind === 'message')

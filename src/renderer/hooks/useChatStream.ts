@@ -64,7 +64,7 @@ function recoveredStreamContent(
 ): string {
   return steps
     .filter((step) => step.runId === runId && step.kind === kind)
-    .sort((left, right) => left.seq - right.seq || left.startedAt - right.startedAt)
+    .sort((left, right) => left.startedAt - right.startedAt || left.seq - right.seq)
     .map((step) => step.output ?? '')
     .join('')
 }

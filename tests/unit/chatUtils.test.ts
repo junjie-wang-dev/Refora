@@ -117,10 +117,17 @@ describe('mergeTraceStep', () => {
     input: null, output: null, status: 'running', startedAt: seq, endedAt: null, seq
   })
 
-  it('appends a new step and sorts by seq', () => {
+  it('appends a new step and sorts by start time before seq', () => {
     const prev = [base('a', 2), base('b', 5)]
     const res = mergeTraceStep(prev, base('c', 3))
     expect(res.map((s) => s.id)).toEqual(['a', 'c', 'b'])
+  })
+
+  it('keeps resumed steps after earlier steps when seq restarts', () => {
+    const prev = [base('earlier', 20)]
+    const resumed = { ...base('resumed', 1), startedAt: 30 }
+    const res = mergeTraceStep(prev, resumed)
+    expect(res.map((s) => s.id)).toEqual(['earlier', 'resumed'])
   })
 
   it('replaces an existing step with the same id', () => {

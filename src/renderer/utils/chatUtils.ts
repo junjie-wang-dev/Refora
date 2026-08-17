@@ -124,7 +124,9 @@ export function localMessage(
 export function mergeTraceStep(prev: AgentTraceStep[], step: AgentTraceStep): AgentTraceStep[] {
   const idx = prev.findIndex((s) => s.id === step.id)
   if (idx === -1) {
-    return [...prev, step].sort((a, b) => a.seq - b.seq)
+    return [...prev, step].sort(
+      (a, b) => a.startedAt - b.startedAt || a.seq - b.seq
+    )
   }
   const next = prev.slice()
   next[idx] = step

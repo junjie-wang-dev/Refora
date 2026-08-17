@@ -1044,6 +1044,75 @@ describe('ChatMessages presentation', () => {
     expect(screen.queryByText('workspace.chat.traceCompletedError')).toBeNull()
     expect(screen.getByText('workspace.chat.traceLlmDone')).toBeInTheDocument()
   })
+
+  it('keeps resumed run steps chronological and expandable after completion', () => {
+    const messages: ChatMessage[] = [
+      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Final answer', createdAt: 100 }
+    ]
+    const base = {
+      threadId: 't1',
+      runId: 'run-resumed',
+      name: 'assistant_message',
+      input: null,
+      status: 'done' as const,
+      endedAt: 2,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null
+    }
+    const traceSteps: AgentTraceStep[] = [
+      {
+        ...base, id: 'run-1', kind: 'run', name: 'agent', output: 'Interrupted',
+        status: 'interrupted', startedAt: 1, endedAt: 30, seq: 0
+      },
+      {
+        ...base, id: 'progress', kind: 'message', output: 'Paper loaded.',
+        startedAt: 10, seq: 55
+      },
+      {
+        ...base, id: 'correction', kind: 'message', output: 'Correcting translation.',
+        startedAt: 20, seq: 94
+      },
+      {
+        ...base, id: 'run-2', kind: 'run', name: 'agent', output: 'Interrupted',
+        status: 'interrupted', startedAt: 40, endedAt: 60, seq: 0
+      },
+      {
+        ...base, id: 'retry', kind: 'message', output: 'Retrying publication.',
+        startedAt: 50, seq: 23
+      },
+      {
+        ...base, id: 'run-3', kind: 'run', name: 'agent', output: 'Final answer',
+        startedAt: 70, endedAt: 100, seq: 0
+      },
+      {
+        ...base, id: 'final', kind: 'message', output: 'Final answer',
+        startedAt: 90, endedAt: 100, seq: 37
+      }
+    ]
+
+    const { container } = renderMessages({ messages, traceSteps, streaming: false })
+    const timeline = container.querySelector('.chat-agent-timeline')
+    const timelineText = timeline?.textContent ?? ''
+
+    expect(timeline).toHaveTextContent('Paper loaded.')
+    expect(timeline).toHaveTextContent('Correcting translation.')
+    expect(timeline).toHaveTextContent('Retrying publication.')
+    expect(timeline).not.toHaveTextContent('Final answer')
+    expect(timelineText.indexOf('Paper loaded.')).toBeLessThan(
+      timelineText.indexOf('Correcting translation.')
+    )
+    expect(timelineText.indexOf('Correcting translation.')).toBeLessThan(
+      timelineText.indexOf('Retrying publication.')
+    )
+
+    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+    fireEvent.click(runToggle)
+    expect(screen.queryByText('Paper loaded.')).not.toBeInTheDocument()
+    expect(screen.getByText('Final answer')).toBeInTheDocument()
+    fireEvent.click(runToggle)
+    expect(screen.getByText('Paper loaded.')).toBeInTheDocument()
+  })
 })
 
 describe('ChatInput attachment loading', () => {
