@@ -10,7 +10,7 @@ describe('server IPC handler coverage', () => {
   it('registers every request channel exposed by preload', () => {
     const serverClient = { http: {} } as ServerClient
     const handlers = {
-      ...createServerAppHandlers(serverClient),
+      ...createServerAppHandlers(serverClient, { setThemeSource: () => undefined }),
       ...createServerLibraryHandlers({ serverClient }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient })

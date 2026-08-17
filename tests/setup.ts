@@ -29,6 +29,7 @@ const noop = async () => undefined
 ;(window as Record<string, unknown>).api = {
   getBootstrap: async () => ({
     language: 'en',
+    theme: 'dark',
     windowBounds: null,
     listColumnState: null,
     sidebarCollapsed: false,
@@ -91,6 +92,10 @@ const noop = async () => undefined
   settings: {
     get: async (_key: string, defaultValue: unknown) => defaultValue,
     set: noop,
+  },
+
+  appearance: {
+    setThemeSource: noop,
   },
 
   webSearch: {

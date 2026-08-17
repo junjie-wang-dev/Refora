@@ -91,6 +91,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.WatchToggle, args: ['watch-1', true], invoke: (value) => value.watch.toggle('watch-1', true) },
       { channel: IpcChannel.SettingsGet, args: ['language', 'en'], invoke: (value) => value.settings.get('language', 'en') },
       { channel: IpcChannel.SettingsSet, args: ['language', 'zh'], invoke: (value) => value.settings.set('language', 'zh') },
+      { channel: IpcChannel.AppearanceSetThemeSource, args: ['dark'], invoke: (value) => value.appearance.setThemeSource('dark') },
       { channel: IpcChannel.WebSearchConfigGet, args: [], invoke: (value) => value.webSearch.getConfig() },
       { channel: IpcChannel.WebSearchConfigUpdate, args: [{ provider: 'ddgs' }], invoke: (value) => value.webSearch.updateConfig({ provider: 'ddgs' }) },
       { channel: IpcChannel.WebSearchTest, args: [], invoke: (value) => value.webSearch.test() },

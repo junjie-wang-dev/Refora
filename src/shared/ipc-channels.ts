@@ -47,6 +47,7 @@ export const IpcChannel = {
 
   SettingsGet: 'settings:get',
   SettingsSet: 'settings:set',
+  AppearanceSetThemeSource: 'appearance:setThemeSource',
 
   WebSearchConfigGet: 'webSearch:config:get',
   WebSearchConfigUpdate: 'webSearch:config:update',

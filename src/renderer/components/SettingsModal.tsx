@@ -579,7 +579,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         className="flex h-[min(68vh,680px)] min-h-[520px] overflow-hidden"
         data-settings-layout
       >
-        <aside className="settings-titlebar-material flex w-52 shrink-0 flex-col border-r border-border p-3 pt-12">
+        <aside className="settings-sidebar-surface flex w-52 shrink-0 flex-col border-r border-border p-3 pt-12">
           <nav className="flex flex-col gap-1" aria-label={t('settings.title')}>
             {pages.map((page) => {
               const Icon = page.icon

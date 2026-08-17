@@ -99,6 +99,7 @@ describe('ipc-types shapes', () => {
       ok: true,
       data: {
         language: 'en',
+        theme: 'dark',
         windowBounds: null,
         listColumnState: null,
         sidebarCollapsed: false,

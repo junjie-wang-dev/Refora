@@ -230,8 +230,11 @@ export interface WindowBounds {
   isMaximized: boolean
 }
 
+export type ThemeMode = 'system' | 'dark' | 'light'
+
 export interface BootstrapData {
   language: 'zh' | 'en'
+  theme: ThemeMode
   windowBounds: WindowBounds | null
   listColumnState: ListColumnState | null
   sidebarCollapsed: boolean
@@ -847,6 +850,9 @@ export interface ReforaApi {
   settings: {
     get<T>(key: string, defaultValue: T): Promise<T>
     set(key: string, value: unknown): Promise<void>
+  }
+  appearance: {
+    setThemeSource(theme: ThemeMode): Promise<void>
   }
   webSearch: {
     getConfig(): Promise<WebSearchConfig>

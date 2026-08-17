@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, session, dialog, nativeImage, net, protocol } from 'electron'
+import { app, BrowserWindow, Menu, shell, session, dialog, nativeImage, nativeTheme, net, protocol } from 'electron'
 import { join, resolve as resolvePath } from 'node:path'
 import { createWriteStream, existsSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
@@ -575,6 +575,7 @@ void app.whenReady().then(async () => {
   registerWorkspaceAssetProtocol()
   registerDocumentProtocol()
   const bootstrap = await serverAssembly.getClient().http.appBootstrap()
+  nativeTheme.themeSource = bootstrap.theme
   if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
     activeLibraryFolder = resolvePath(bootstrap.libraryFolderPath)
     activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)

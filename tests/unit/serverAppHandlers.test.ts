@@ -11,6 +11,7 @@ describe('createServerAppHandlers', () => {
   it('forwards bootstrap and global search through the server client', async () => {
     const bootstrap = {
       language: 'en' as const,
+      theme: 'dark' as const,
       windowBounds: null,
       listColumnState: null,
       sidebarCollapsed: false,
@@ -28,7 +29,8 @@ describe('createServerAppHandlers', () => {
       globalSearch: vi.fn().mockResolvedValue(search),
       dialogOpenDirectory: vi.fn()
     }
-    const handlers = createServerAppHandlers(clientWith(http))
+    const setThemeSource = vi.fn()
+    const handlers = createServerAppHandlers(clientWith(http), { setThemeSource })
 
     await expect(handlers[IpcChannel.Bootstrap]()).resolves.toEqual({
       ok: true,
@@ -39,6 +41,17 @@ describe('createServerAppHandlers', () => {
       data: search
     })
     expect(http.globalSearch).toHaveBeenCalledWith('paper')
+
+    await expect(handlers[IpcChannel.AppearanceSetThemeSource]('dark')).resolves.toEqual({
+      ok: true,
+      data: undefined
+    })
+    expect(setThemeSource).toHaveBeenCalledWith('dark')
+
+    await expect(handlers[IpcChannel.AppearanceSetThemeSource]('invalid' as never)).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid_argument', message: 'Invalid theme source' }
+    })
   })
 
   it('maps directory dialog cancellation and server errors into Result envelopes', async () => {
@@ -53,7 +66,7 @@ describe('createServerAppHandlers', () => {
           code: 'native_unavailable'
         }))
     }
-    const handlers = createServerAppHandlers(clientWith(http))
+    const handlers = createServerAppHandlers(clientWith(http), { setThemeSource: vi.fn() })
 
     await expect(handlers[IpcChannel.DialogOpenDirectory]()).resolves.toEqual({
       ok: true,

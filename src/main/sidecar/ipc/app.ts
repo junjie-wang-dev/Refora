@@ -1,6 +1,10 @@
 import { IpcChannel } from '../../../shared/ipc-channels'
-import type { Result } from '../../../shared/ipc-types'
+import type { Result, ThemeMode } from '../../../shared/ipc-types'
 import type { ServerClient } from '../client'
+
+export interface ServerAppHandlerDeps {
+  setThemeSource: (theme: ThemeMode) => void
+}
 
 function toErrorResult(error: unknown): Result<never> {
   const message = error instanceof Error ? error.message : String(error)
@@ -19,7 +23,10 @@ async function forward<T>(request: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-export function createServerAppHandlers(serverClient: ServerClient) {
+export function createServerAppHandlers(
+  serverClient: ServerClient,
+  { setThemeSource }: ServerAppHandlerDeps
+) {
   const { http } = serverClient
 
   return {
@@ -29,6 +36,13 @@ export function createServerAppHandlers(serverClient: ServerClient) {
       forward(async () => {
         const result = await http.dialogOpenDirectory('Select Folder')
         return result.canceled ? null : result.path
+      }),
+    [IpcChannel.AppearanceSetThemeSource]: (theme: ThemeMode) =>
+      forward(async () => {
+        if (theme !== 'system' && theme !== 'dark' && theme !== 'light') {
+          throw Object.assign(new Error('Invalid theme source'), { code: 'invalid_argument' })
+        }
+        setThemeSource(theme)
       })
   }
 }

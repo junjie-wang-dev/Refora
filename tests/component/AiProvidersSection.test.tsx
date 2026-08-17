@@ -303,7 +303,7 @@ describe('AiProvidersSection', () => {
     const navigation = await screen.findByRole('navigation', { name: 'Settings' })
     const layout = document.querySelector('[data-settings-layout]')
     expect(layout).not.toHaveClass('rounded-xl', 'border')
-    expect(layout?.querySelector('aside')).toHaveClass('settings-titlebar-material')
+    expect(layout?.querySelector('aside')).toHaveClass('settings-sidebar-surface')
     expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument()
     expect(within(navigation).getByRole('button', { name: 'General' })).toHaveAttribute(
       'aria-current',

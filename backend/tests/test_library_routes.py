@@ -509,6 +509,7 @@ def test_bootstrap_global_search_and_directory_dialog_are_enveloped():
         "ok": True,
         "data": {
             "language": "en",
+            "theme": "dark",
             "windowBounds": None,
             "listColumnState": None,
             "sidebarCollapsed": False,

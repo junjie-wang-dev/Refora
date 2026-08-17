@@ -42,6 +42,7 @@ import type {
   ReforaApi,
   SearchResult,
   SummaryErrorEvent,
+  ThemeMode,
   WatchFolder,
   Workspace,
   WorkspaceAsset,
@@ -208,6 +209,11 @@ const api: ReforaApi = {
     get: <T>(key: string, defaultValue: T) =>
       invoke<T>(IpcChannel.SettingsGet, key, defaultValue),
     set: (key: string, value: unknown) => invoke<void>(IpcChannel.SettingsSet, key, value)
+  },
+
+  appearance: {
+    setThemeSource: (theme: ThemeMode) =>
+      invoke<void>(IpcChannel.AppearanceSetThemeSource, theme)
   },
 
   webSearch: {

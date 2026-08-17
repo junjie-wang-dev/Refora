@@ -354,6 +354,9 @@ def create_library_router(deps: Any) -> APIRouter:
             language = _json_setting(settings, "language", "en")
             if language not in {"zh", "en"}:
                 language = "en"
+            theme = _json_setting(settings, "theme", "system")
+            if theme not in {"system", "dark", "light"}:
+                theme = "system"
             window_bounds = _json_setting(settings, "windowBounds", None)
             list_column_state = _json_setting(settings, "listColumnState", None)
             sidebar_collapsed = _json_setting(settings, "sidebarCollapsed", "0")
@@ -362,6 +365,7 @@ def create_library_router(deps: Any) -> APIRouter:
                 library_folder_path = ""
             return {
                 "language": language,
+                "theme": theme,
                 "windowBounds": window_bounds if isinstance(window_bounds, dict) else None,
                 "listColumnState": list_column_state if isinstance(list_column_state, dict) else None,
                 "sidebarCollapsed": sidebar_collapsed is True or sidebar_collapsed == "1",

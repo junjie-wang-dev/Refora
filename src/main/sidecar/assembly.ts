@@ -1,4 +1,4 @@
-import { ipcMain, net, type BrowserWindow } from 'electron'
+import { ipcMain, nativeTheme, net, type BrowserWindow } from 'electron'
 import type { LibrarySwitchResult } from '../../shared/ipc-types'
 import { createServerAppHandlers } from './ipc/app'
 import { createServerAiHandlers } from './ipc/ai'
@@ -58,7 +58,11 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
       eventBridge.start()
 
       const handlers = {
-        ...createServerAppHandlers(serverClient),
+        ...createServerAppHandlers(serverClient, {
+          setThemeSource: (theme) => {
+            nativeTheme.themeSource = theme
+          }
+        }),
         ...createServerLibraryHandlers({
           serverClient,
           switchLibraryFolder: deps.switchLibraryFolder

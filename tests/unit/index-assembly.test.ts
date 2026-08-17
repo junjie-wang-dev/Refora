@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: mocks.ipcHandle, removeHandler: mocks.ipcRemoveHandler }
+  ipcMain: { handle: mocks.ipcHandle, removeHandler: mocks.ipcRemoveHandler },
+  nativeTheme: { themeSource: 'system' }
 }))
 
 vi.mock('../../src/main/sidecar/nativeRpc', () => ({
@@ -60,6 +61,7 @@ vi.mock('../../src/main/sidecar/ipc/ai', () => ({
 }))
 
 import { createServerAssembly } from '../../src/main/sidecar/assembly'
+import { nativeTheme } from 'electron'
 import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
 import { createServerClient } from '../../src/main/sidecar/client'
 import { createServerEventBridge } from '../../src/main/sidecar/ipc/eventBridge'
@@ -143,6 +145,9 @@ describe('main process server assembly', () => {
     expect(createServerClient).toHaveBeenCalledWith(lifecycle, expect.anything())
     expect(createServerEventBridge).toHaveBeenCalledTimes(1)
     expect(createServerAppHandlers).toHaveBeenCalledTimes(1)
+    const appHandlerDeps = vi.mocked(createServerAppHandlers).mock.calls[0]?.[1]
+    appHandlerDeps?.setThemeSource('dark')
+    expect(nativeTheme.themeSource).toBe('dark')
     expect(createServerLibraryHandlers).toHaveBeenCalledTimes(1)
     expect(createServerWorkspaceHandlers).toHaveBeenCalledTimes(1)
     expect(createServerAiHandlers).toHaveBeenCalledTimes(1)
