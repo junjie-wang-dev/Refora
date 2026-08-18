@@ -77,8 +77,12 @@
     "hint": "粘贴 DOI（10.xxxx/...）、arXiv ID（2401.12345）、arXiv/DOI 链接或直接 PDF 链接，将自动下载并添加到库中。",
     "import": "导入",
     "importing": "正在导入…",
+    "retry": "重试",
     "success": "导入成功",
     "failed": "导入失败：{{message}}",
+    "networkFailed": "网络不可用或响应过慢，请检查网络连接后重试。",
+    "backgroundHint": "你可以关闭此对话框，导入将在后台继续。",
+    "slowNetwork": "网络响应时间较长。你可以关闭此对话框并继续使用 Refora。",
     "cut": "剪切",
     "copy": "复制",
     "paste": "粘贴"

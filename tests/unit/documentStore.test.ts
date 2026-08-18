@@ -762,6 +762,22 @@ describe('DocumentStore', () => {
       expect(useDocumentStore.getState().toastMessage).toBe('Import failed: lookup failed')
     })
 
+    it('shows a friendly retry message for network failures', async () => {
+      mockFromIdentifier.mockRejectedValueOnce(
+        Object.assign(new Error('Could not resolve the download host'), {
+          code: 'identifier_network_error'
+        })
+      )
+
+      await expect(useDocumentStore.getState().importByIdentifier('2401.12345')).resolves.toBe(
+        'The network is unavailable or too slow. Check your connection and try again.'
+      )
+      expect(useDocumentStore.getState().identifierImporting).toBe(0)
+      expect(useDocumentStore.getState().toastMessage).toBe(
+        'The network is unavailable or too slow. Check your connection and try again.'
+      )
+    })
+
     it('does not clobber state when multiple imports run concurrently', async () => {
       let resolveFirst: (value: { added: string[] }) => void = () => {}
       let resolveSecond: (value: { added: string[] }) => void = () => {}

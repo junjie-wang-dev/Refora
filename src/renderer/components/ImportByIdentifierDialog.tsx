@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Modal, showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
@@ -15,24 +15,39 @@ export default function ImportByIdentifierDialog({ open, onClose }: ImportByIden
   const { t } = useTranslation()
   const [identifier, setIdentifier] = useState('')
   const [loading, setLoading] = useState(false)
+  const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const requestVersionRef = useRef(0)
   const importByIdentifier = useDocumentStore((s) => s.importByIdentifier)
 
   const handleClose = useCallback(() => {
-    if (loading) return
+    requestVersionRef.current += 1
     setIdentifier('')
+    setLoading(false)
+    setSlow(false)
     setError(null)
     onClose()
-  }, [loading, onClose])
+  }, [onClose])
+
+  useEffect(() => {
+    if (!loading) return
+    const timer = window.setTimeout(() => setSlow(true), 5_000)
+    return () => window.clearTimeout(timer)
+  }, [loading])
 
   const handleImport = useCallback(async () => {
     const trimmed = identifier.trim()
     if (!trimmed || loading) return
+    const requestVersion = requestVersionRef.current + 1
+    requestVersionRef.current = requestVersion
     setLoading(true)
+    setSlow(false)
     setError(null)
     const message = await importByIdentifier(trimmed)
+    if (requestVersionRef.current !== requestVersion) return
     setLoading(false)
+    setSlow(false)
     if (message) {
       setError(message)
       return
@@ -117,8 +132,8 @@ export default function ImportByIdentifierDialog({ open, onClose }: ImportByIden
       destroyOnClose
       footer={
         <div className="flex justify-end gap-2">
-          <UiButton variant="ghost" size="md" onClick={handleClose} disabled={loading}>
-            {t('common.cancel')}
+          <UiButton variant="ghost" size="md" onClick={handleClose}>
+            {loading ? t('common.close') : t('common.cancel')}
           </UiButton>
           <UiButton
             variant="primary"
@@ -126,7 +141,11 @@ export default function ImportByIdentifierDialog({ open, onClose }: ImportByIden
             disabled={loading || !identifier.trim()}
             onClick={handleImport}
           >
-            {loading ? t('identifierImport.importing') : t('identifierImport.import')}
+            {loading
+              ? t('identifierImport.importing')
+              : error
+                ? t('identifierImport.retry')
+                : t('identifierImport.import')}
           </UiButton>
         </div>
       }
@@ -149,6 +168,11 @@ export default function ImportByIdentifierDialog({ open, onClose }: ImportByIden
         <p className="text-xs text-muted leading-relaxed">
           {t('identifierImport.hint')}
         </p>
+        {loading && (
+          <p role="status" className="text-xs text-muted leading-relaxed">
+            {slow ? t('identifierImport.slowNetwork') : t('identifierImport.backgroundHint')}
+          </p>
+        )}
         {error && (
           <p role="alert" className="text-xs text-error leading-relaxed">
             {error}

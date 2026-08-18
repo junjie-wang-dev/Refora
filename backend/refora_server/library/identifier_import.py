@@ -30,6 +30,10 @@ PDF_MAGIC = b"%PDF"
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-zA-Z0-9+]+$")
 
 
+class IdentifierNetworkError(RuntimeError):
+    code = "identifier_network_error"
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -102,11 +106,22 @@ def _is_public_ip(address: str) -> bool:
     )
 
 
-async def isSafeUrl(value: str) -> bool:
+async def _validate_safe_url(value: str) -> bool:
     try:
         await resolvePublicAddress(value)
         return True
-    except (OSError, ValueError, asyncio.TimeoutError):
+    except ValueError:
+        return False
+    except (OSError, asyncio.TimeoutError) as error:
+        raise IdentifierNetworkError(
+            "Could not resolve the download host. Check your network connection and try again."
+        ) from error
+
+
+async def isSafeUrl(value: str) -> bool:
+    try:
+        return await _validate_safe_url(value)
+    except IdentifierNetworkError:
         return False
 
 
@@ -233,13 +248,18 @@ async def downloadPdf(url: str, destination_dir: str, file_name: str) -> str:
     current_url = url
     destination = Path(destination_dir) / file_name
     for redirect_count in range(MAX_REDIRECTS + 1):
-        address, _family = await resolvePublicAddress(current_url)
-        status, location, error = await asyncio.to_thread(
-            _pinned_request,
-            current_url,
-            address,
-            destination,
-        )
+        try:
+            address, _family = await resolvePublicAddress(current_url)
+            status, location, error = await asyncio.to_thread(
+                _pinned_request,
+                current_url,
+                address,
+                destination,
+            )
+        except (OSError, asyncio.TimeoutError) as request_error:
+            raise IdentifierNetworkError(
+                "Could not download the PDF. Check your network connection and try again."
+            ) from request_error
         if 300 <= status < 400:
             if not location:
                 raise ValueError(f"Redirect response {status} has no location")
@@ -394,7 +414,7 @@ async def importByIdentifier(
         pdf_url = input_value
         parsed_name = Path(urlparse(input_value).path).name
         file_name = parsed_name if parsed_name.lower().endswith(".pdf") else "download.pdf"
-    safe_url = options.get("isSafeUrl", isSafeUrl)
+    safe_url = options.get("isSafeUrl", _validate_safe_url)
     if not await _await(safe_url(pdf_url)):
         raise ValueError("The download URL is not allowed (must be a public http(s) address).")
     temporary_dir = tempfile.mkdtemp(prefix="identifier-", dir=str(Path(library_folder)))

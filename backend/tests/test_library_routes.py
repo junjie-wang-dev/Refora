@@ -350,6 +350,32 @@ def test_identifier_import_uses_exact_arxiv_lookup(monkeypatch):
     assert captured["metadata"]["year"] == "2017"
 
 
+def test_identifier_import_preserves_network_error_code(monkeypatch):
+    client, _fakes = make_client()
+
+    async def import_identifier(_repos, _identifier, _deps):
+        error = RuntimeError("Could not resolve the download host")
+        error.code = "identifier_network_error"
+        raise error
+
+    monkeypatch.setattr(library_routes, "importByIdentifier", import_identifier)
+
+    response = client.post(
+        "/import/identifier",
+        headers={"X-Refora-Token": "test-token"},
+        json={"identifier": "https://papers.example/paper.pdf"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "ok": False,
+        "error": {
+            "code": "identifier_network_error",
+            "message": "Could not resolve the download host",
+        },
+    }
+
+
 def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):
     client, fakes = make_client()
     source = tmp_path / "source.pdf"

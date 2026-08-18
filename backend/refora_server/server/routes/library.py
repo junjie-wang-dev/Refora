@@ -88,6 +88,8 @@ def _error(exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=409, content={"ok": False, "error": {"code": "conflict", "message": message}})
     if code in {"unavailable", "dependency_unavailable", "connector_timeout"}:
         return JSONResponse(status_code=503, content={"ok": False, "error": {"code": "unavailable", "message": message}})
+    if code == "identifier_network_error":
+        return JSONResponse(status_code=503, content={"ok": False, "error": {"code": code, "message": message}})
     if isinstance(exc, (ValueError, TypeError)) or code:
         return JSONResponse(status_code=400, content={"ok": False, "error": {"code": code or "validation", "message": message}})
     return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": message}})

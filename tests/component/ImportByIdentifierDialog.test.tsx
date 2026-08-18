@@ -31,7 +31,10 @@ describe('ImportByIdentifierDialog', () => {
     vi.mocked(showContextMenu).mockReset()
   })
 
-  afterEach(cleanup)
+  afterEach(() => {
+    vi.useRealTimers()
+    cleanup()
+  })
 
   it('delegates a trimmed identifier to the store and closes after success', async () => {
     const user = userEvent.setup()
@@ -98,7 +101,47 @@ describe('ImportByIdentifierDialog', () => {
     await user.click(screen.getByRole('button', { name: 'identifierImport.import' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Import failed: lookup failed')
+    expect(screen.getByRole('button', { name: 'identifierImport.retry' })).toBeEnabled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('can close immediately while an import is pending and ignores its eventual result', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    let resolveImport: (message: string | null) => void = () => {}
+    mocks.importByIdentifier.mockReturnValue(new Promise((resolve) => { resolveImport = resolve }))
+    const { rerender } = render(<ImportByIdentifierDialog open onClose={onClose} />)
+
+    await user.type(screen.getByPlaceholderText('identifierImport.placeholder'), '2401.12345')
+    await user.click(screen.getByRole('button', { name: 'identifierImport.import' }))
+
+    expect(screen.getByRole('status')).toHaveTextContent('identifierImport.backgroundHint')
+    await user.click(screen.getByRole('button', { name: 'common.close' }))
+    expect(onClose).toHaveBeenCalledOnce()
+
+    rerender(<ImportByIdentifierDialog open onClose={onClose} />)
+    expect(screen.getByPlaceholderText('identifierImport.placeholder')).toHaveValue('')
+    resolveImport('identifierImport.networkFailed')
+    await act(async () => {})
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('explains when the network is taking longer than expected', async () => {
+    vi.useFakeTimers()
+    let resolveImport: (message: string | null) => void = () => {}
+    mocks.importByIdentifier.mockReturnValue(new Promise((resolve) => { resolveImport = resolve }))
+    render(<ImportByIdentifierDialog open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByPlaceholderText('identifierImport.placeholder'), {
+      target: { value: '2401.12345' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'identifierImport.import' }))
+    await act(() => vi.advanceTimersByTimeAsync(5_000))
+
+    expect(screen.getByRole('status')).toHaveTextContent('identifierImport.slowNetwork')
+    resolveImport(null)
+    await act(async () => {})
   })
 
   it('offers cut, copy, and paste from the input context menu', async () => {

@@ -6,6 +6,7 @@ import pytest
 from conftest import make_docs_repo, open_migrated_db
 from refora_server.library import identifier_import
 from refora_server.library.identifier_import import (
+    IdentifierNetworkError,
     detectIdentifierType,
     downloadPdf,
     extractDoi,
@@ -120,6 +121,27 @@ async def test_safe_url_rejects_any_private_dns_answer(monkeypatch) -> None:
     )
 
     assert await isSafeUrl("https://papers.example/paper.pdf") is False
+
+
+@pytest.mark.asyncio
+async def test_direct_url_import_reports_dns_timeout_as_network_error(tmp_path: Path, monkeypatch) -> None:
+    library = tmp_path / "library"
+    documents = make_docs_repo(open_migrated_db(), str(library))
+
+    async def resolve(_url: str) -> tuple[str, int]:
+        raise TimeoutError("DNS lookup timed out")
+
+    monkeypatch.setattr(identifier_import, "resolvePublicAddress", resolve)
+
+    with pytest.raises(IdentifierNetworkError) as caught:
+        await importByIdentifier(
+            {"documents": documents},
+            "https://papers.example/paper.pdf",
+            {"getLibraryFolder": lambda: str(library)},
+        )
+
+    assert caught.value.code == "identifier_network_error"
+    assert "network connection" in str(caught.value)
 
 
 @pytest.mark.asyncio

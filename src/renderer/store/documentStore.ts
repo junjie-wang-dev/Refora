@@ -110,6 +110,21 @@ let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let documentRequestVersion = 0
 let searchRequestVersion = 0
 
+const IDENTIFIER_NETWORK_ERROR_CODES = new Set([
+  'arxiv_unreachable',
+  'identifier_network_error',
+  'network_error',
+  'semantic_scholar_unreachable',
+  'timeout',
+  'unavailable'
+])
+
+function ipcErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('code' in error)) return null
+  const code = (error as { code: unknown }).code
+  return typeof code === 'string' ? code : null
+}
+
 function findKnownDocument(state: DocumentState, docId: string): Document | undefined {
   return state.documents.find((doc) => doc.id === docId) ??
     state.searchResults.find((doc) => doc.id === docId)
@@ -450,10 +465,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       get().showToast(message)
       return message
     } catch (e) {
-      const message = i18n.t(
-        'identifierImport.failed',
-        { message: errorMessage(e, '') }
-      ) as string
+      const code = ipcErrorCode(e)
+      const message = code && IDENTIFIER_NETWORK_ERROR_CODES.has(code)
+        ? i18n.t('identifierImport.networkFailed') as string
+        : i18n.t(
+          'identifierImport.failed',
+          { message: errorMessage(e, '') }
+        ) as string
       get().showToast(message)
       return message
     } finally {
