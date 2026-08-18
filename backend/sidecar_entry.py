@@ -10,6 +10,11 @@ if sys.argv[1:] == ["--verify-artifact"]:
     sys.stdout.write(f"{json.dumps(verify_artifact(), sort_keys=True)}\n")
     raise SystemExit(0)
 
+if sys.argv[1:2] == ["mcp-stdio"]:
+    from refora_server.cli_runtime.mcp_server import main as mcp_main
+
+    raise SystemExit(mcp_main(sys.argv[2:]))
+
 from refora_server.server.run import main
 
 raise SystemExit(main())

@@ -396,16 +396,34 @@ export function AiProvidersSection() {
 
   const removeProvider = async (provider: AiProvider) => {
     try {
+      const profile = (await api.agentProfiles.list()).find(
+        (candidate) => candidate.apiProviderId === provider.id
+      )
       await api.aiProviders.delete(provider.id)
-      const [activeProviderId, chatSelectedProviderId] = await Promise.all([
+      const [
+        activeProviderId,
+        chatSelectedProviderId,
+        activeAgentProfileId,
+        chatSelectedAgentProfileId
+      ] = await Promise.all([
         api.settings.get<string>('activeProviderId', ''),
-        api.settings.get<string>('chatSelectedProviderId', '')
+        api.settings.get<string>('chatSelectedProviderId', ''),
+        api.settings.get<string>('activeAgentProfileId', ''),
+        api.settings.get<string>('chatSelectedAgentProfileId', '')
       ])
       if (provider.id === activeProviderId) {
         await api.settings.set('activeProviderId', '')
       }
       if (provider.id === chatSelectedProviderId) {
         await api.settings.set('chatSelectedProviderId', '')
+        await api.settings.set('chatSelectedModel', '')
+        await api.settings.set('chatSelectedVariant', '')
+      }
+      if (profile?.id === activeAgentProfileId) {
+        await api.settings.set('activeAgentProfileId', '')
+      }
+      if (profile?.id === chatSelectedAgentProfileId) {
+        await api.settings.set('chatSelectedAgentProfileId', '')
         await api.settings.set('chatSelectedModel', '')
         await api.settings.set('chatSelectedVariant', '')
       }

@@ -322,6 +322,8 @@ def test_field_contract_matches_agent_run_type(thread, db):
         "id",
         "threadId",
         "providerId",
+        "agentProfileId",
+        "runtimeSessionId",
         "modelId",
         "activeDocumentId",
         "status",

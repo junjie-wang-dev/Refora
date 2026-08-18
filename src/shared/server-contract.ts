@@ -1,8 +1,12 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "613a8744351f9cbaccbaab7e1b0f608e4c9d9665fd2d7f1c183cb48259ab71a3" as const
+export const SERVER_PROTOCOL_DIGEST = "702bf3d91b372a43380b19ee1e23471fd4b4990a0d1f4b3929e0f3e0353b4699" as const
 
 export const SERVER_HTTP_ROUTES = [
+  {
+    "method": "DELETE",
+    "path": "/ai/agent-profiles/{profile_id}"
+  },
   {
     "method": "DELETE",
     "path": "/ai/chat/threads/{thread_id}"
@@ -53,6 +57,10 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "GET",
+    "path": "/ai/agent-profiles"
+  },
+  {
+    "method": "GET",
     "path": "/ai/chat/runs/{run_id}"
   },
   {
@@ -70,6 +78,10 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "GET",
     "path": "/ai/chat/threads/{thread_id}/traces"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/cli-runtimes"
   },
   {
     "method": "GET",
@@ -217,6 +229,10 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "PATCH",
+    "path": "/ai/agent-profiles/{profile_id}"
+  },
+  {
+    "method": "PATCH",
     "path": "/ai/chat/threads/{thread_id}"
   },
   {
@@ -257,6 +273,18 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "POST",
+    "path": "/ai/agent-profiles"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/agent-profiles/{profile_id}/models"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/agent-profiles/{profile_id}/test"
+  },
+  {
+    "method": "POST",
     "path": "/ai/chat/cancel"
   },
   {
@@ -266,6 +294,14 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "POST",
     "path": "/ai/chat/send"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/cli-tools/{run_id}/call"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/cli-tools/{run_id}/list"
   },
   {
     "method": "POST",

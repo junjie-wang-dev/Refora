@@ -4,6 +4,10 @@ import uuid
 from typing import Any, Callable
 
 from refora_server.repositories.agent_interrupts import createAgentInterruptsRepository
+from refora_server.repositories.agent_profiles import (
+    createAgentProfilesRepository,
+    createAgentRuntimeSessionsRepository,
+)
 from refora_server.repositories.agent_memories import createAgentMemoriesRepository
 from refora_server.repositories.agent_runs import createAgentRunsRepository
 from refora_server.repositories.agent_tool_effects import createAgentToolEffectsRepository
@@ -100,6 +104,8 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
     agentInterrupts = createAgentInterruptsRepository(db)
     agentToolEffects = createAgentToolEffectsRepository(db)
     agentMemories = createAgentMemoriesRepository(db)
+    agentProfiles = createAgentProfilesRepository(db)
+    agentRuntimeSessions = createAgentRuntimeSessionsRepository(db)
     return {
         "transaction": transaction,
         "documents": documents,
@@ -124,4 +130,6 @@ def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str
         "agentInterrupts": agentInterrupts,
         "agentToolEffects": agentToolEffects,
         "agentMemories": agentMemories,
+        "agentProfiles": agentProfiles,
+        "agentRuntimeSessions": agentRuntimeSessions,
     }

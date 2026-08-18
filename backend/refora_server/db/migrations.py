@@ -183,6 +183,17 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
         return _has_objects(db, [("table", "pdf_annotations")])
     if version == 30:
         return _has_columns(db, "agent_runs", ["activeDocumentId"])
+    if version == 31:
+        return _has_columns(db, "chat_threads", ["agentProfileId"]) and _has_columns(
+            db, "agent_runs", ["agentProfileId", "runtimeSessionId"]
+        ) and _has_objects(
+            db,
+            [
+                ("table", "agent_profiles"),
+                ("table", "agent_runtime_sessions"),
+                ("index", "idx_agent_profiles_kind"),
+            ],
+        )
     return version <= current
 
 

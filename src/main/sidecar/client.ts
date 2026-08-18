@@ -3,6 +3,12 @@ import type { NativeRpc } from './nativeRpc'
 import type { NativeRpcInfo } from './nativeRpc'
 import type { IpcError, Result } from '../../shared/ipc-types'
 import type {
+  AgentProfile,
+  AgentProfileInput,
+  AgentProfilePatch,
+  AgentProfileTestResult,
+  CliModelInfo,
+  CliRuntimeInfo,
   AiProvider,
   AiProviderInput,
   AiUsageStats,
@@ -400,6 +406,14 @@ export interface ServerHttp {
   aiProvidersTest(providerId: string): Promise<{ ok: boolean; model?: string }>
   aiProvidersModels(request: ListModelsRequest): Promise<{ ok: boolean; models: string[]; error?: string }>
 
+  agentProfilesList(): Promise<AgentProfile[]>
+  agentProfilesCreate(input: AgentProfileInput): Promise<AgentProfile>
+  agentProfilesUpdate(profileId: string, patch: AgentProfilePatch): Promise<AgentProfile>
+  agentProfilesDelete(profileId: string): Promise<{ ack: boolean }>
+  agentProfilesTest(profileId: string): Promise<AgentProfileTestResult>
+  agentProfilesModels(profileId: string): Promise<{ ok: boolean; models: CliModelInfo[]; error?: string }>
+  agentProfilesScanRuntimes(): Promise<CliRuntimeInfo[]>
+
   aiDocTextGet(documentId: string): Promise<{ text: string }>
   aiSummarize(payload: SummarizePayload): Promise<{ summaryId: string }>
   aiSummaryGet(documentId: string): Promise<AiSummary | null>
@@ -661,6 +675,14 @@ export function createServerClient(
     aiProvidersDelete: (id) => del<{ ack: boolean }>(`/ai/providers/${id}`),
     aiProvidersTest: (id) => post<{ ok: boolean; model?: string }>(`/ai/providers/${id}/test`),
     aiProvidersModels: (provider) => post<{ ok: boolean; models: string[]; error?: string }>('/ai/providers/models', provider),
+
+    agentProfilesList: () => get<AgentProfile[]>('/ai/agent-profiles'),
+    agentProfilesCreate: (input) => post<AgentProfile>('/ai/agent-profiles', input),
+    agentProfilesUpdate: (id, input) => patch<AgentProfile>(`/ai/agent-profiles/${id}`, input),
+    agentProfilesDelete: (id) => del<{ ack: boolean }>(`/ai/agent-profiles/${id}`),
+    agentProfilesTest: (id) => post<AgentProfileTestResult>(`/ai/agent-profiles/${id}/test`),
+    agentProfilesModels: (id) => post<{ ok: boolean; models: CliModelInfo[]; error?: string }>(`/ai/agent-profiles/${id}/models`),
+    agentProfilesScanRuntimes: () => get<CliRuntimeInfo[]>('/ai/cli-runtimes'),
 
     aiDocTextGet: (id) => get<{ text: string }>(`/ai/doc-text/${id}`),
     aiSummarize: (payload) => post<{ summaryId: string }>('/ai/summarize', payload),

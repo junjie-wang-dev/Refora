@@ -27,6 +27,15 @@ vi.mock('react-i18next', () => ({
         'settings.mineru.elapsed': 'Elapsed',
         'settings.aiProviders.title': 'AI Providers',
         'settings.aiProviders.desc': 'Model providers and API keys',
+        'settings.modelSettings.tabsLabel': 'Model connection type',
+        'settings.modelSettings.cli': 'Local CLI',
+        'settings.modelSettings.api': 'API providers',
+        'settings.agentProfiles.title': 'Local CLI agents',
+        'settings.agentProfiles.desc': 'Detected CLI agents',
+        'settings.agentProfiles.rescan': 'Scan again',
+        'settings.agentProfiles.addCli': 'Add CLI agent',
+        'settings.agentProfiles.configure': 'Configure',
+        'settings.agentProfiles.notFound': 'Executable not found',
         'settings.libraryFolder': 'Library Folder',
         'settings.libraryFolderAutoImportHint': 'Auto import',
         'settings.chooseFolder': 'Choose Folder',
@@ -314,8 +323,10 @@ describe('AiProvidersSection', () => {
     fireEvent.click(within(navigation).getByRole('button', { name: 'AI Providers' }))
 
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'AI Providers' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Local CLI' })).toHaveAttribute('aria-selected', 'true')
     )
+    fireEvent.click(screen.getByRole('tab', { name: 'API providers' }))
+    expect(await screen.findByRole('heading', { name: 'AI Providers' })).toBeInTheDocument()
     expect(screen.queryByText('Library Folder')).not.toBeInTheDocument()
 
     fireEvent.click(within(navigation).getByRole('button', { name: 'Appearance' }))

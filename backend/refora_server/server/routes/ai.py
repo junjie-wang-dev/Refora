@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import logging
+import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -20,6 +22,9 @@ from refora_server.services.agent_memory import (
     normalize_memory_path,
     update_memory as update_scoped_memory,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RouteError(Exception):
@@ -70,6 +75,21 @@ def _error_response(error: Exception) -> JSONResponse:
         return _failure(code, str(error), status_code)
     if isinstance(error, ValueError):
         return _failure("validation", str(error), 400)
+    if isinstance(error, PermissionError):
+        return _failure("forbidden", str(error), 403)
+    if isinstance(error, sqlite3.DatabaseError):
+        message = str(error).lower()
+        if "malformed" in message or "not a database" in message:
+            return _failure(
+                "database_corrupt",
+                "Refora's local database is damaged. Quit Refora and restore or repair the library database.",
+                500,
+            )
+        return _failure(
+            "database_error",
+            "Refora could not read or update the local database.",
+            500,
+        )
     return _failure("internal", "Internal server error", 500)
 
 
@@ -140,7 +160,10 @@ def create_ai_router(deps: Any) -> APIRouter:
         try:
             return _success(await _resolve(action()))
         except Exception as error:
-            return _error_response(error)
+            response = _error_response(error)
+            if response.status_code >= 500:
+                logger.exception("AI route failed")
+            return response
 
     @router.get("/ai/doc-text/{document_id}")
     async def get_doc_text(
@@ -223,6 +246,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 "activeDocumentId",
                 "text",
                 "providerId",
+                "agentProfileId",
                 "model",
                 "replaceLastExchange",
                 "replaceRunId",
@@ -235,8 +259,16 @@ def create_ai_router(deps: Any) -> APIRouter:
                     "validation",
                     f"Unsupported chat intent fields: {', '.join(unknown_fields)}",
                 )
-            for field in ("runId", "text", "providerId"):
+            for field in ("runId", "text"):
                 _required_string(body.get(field), field)
+            if body.get("agentProfileId") is None and body.get("providerId") is None:
+                raise RouteError(
+                    "validation", "agentProfileId or providerId must be provided"
+                )
+            if body.get("agentProfileId") is not None:
+                _required_string(body.get("agentProfileId"), "agentProfileId")
+            if body.get("providerId") is not None:
+                _required_string(body.get("providerId"), "providerId")
             for internal_field in (
                 "provider",
                 "checkpointPath",
@@ -320,6 +352,48 @@ def create_ai_router(deps: Any) -> APIRouter:
                 "runId": _required_string(run_id, "runId"),
                 "threadId": _required_string(assembled["threadId"], "threadId"),
             }
+
+        return await execute(authorization, action)
+
+    @router.post("/ai/cli-tools/{run_id}/list")
+    async def list_cli_tools(
+        run_id: str,
+        request: Request,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        async def action() -> Any:
+            broker = _value(services, "cliToolBroker")
+            if broker is None:
+                raise RouteError("unavailable", "CLI tool broker is unavailable", 503)
+            token = request.headers.get("X-Refora-Run-Token", "")
+            return _value(broker, "list_tools")(run_id, token)
+
+        return await execute(authorization, action)
+
+    @router.post("/ai/cli-tools/{run_id}/call")
+    async def call_cli_tool(
+        run_id: str,
+        request: Request,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        async def action() -> Any:
+            broker = _value(services, "cliToolBroker")
+            if broker is None:
+                raise RouteError("unavailable", "CLI tool broker is unavailable", 503)
+            body = await _read_body(request)
+            name = _required_string(body.get("name"), "name")
+            arguments = body.get("arguments")
+            if not isinstance(arguments, dict):
+                raise RouteError("validation", "arguments must be an object")
+            tool_call_id = body.get("toolCallId")
+            if tool_call_id is not None:
+                tool_call_id = _required_string(tool_call_id, "toolCallId")
+            token = request.headers.get("X-Refora-Run-Token", "")
+            return await _resolve(
+                _value(broker, "call_tool")(
+                    run_id, token, name, arguments, tool_call_id
+                )
+            )
 
         return await execute(authorization, action)
 

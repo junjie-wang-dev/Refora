@@ -1593,6 +1593,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                             "threadId": thread_id,
                             "providerId": request.get("providerId")
                             or thread["providerId"],
+                            "agentProfileId": request.get("agentProfileId")
+                            or thread.get("agentProfileId"),
+                            "runtimeSessionId": request.get("runtimeSessionId"),
                             "modelId": model,
                             "activeDocumentId": request.get("activeDocumentId"),
                             "status": RUN_STATUS_QUEUED,
@@ -2219,6 +2222,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             **request,
             **stored,
             "decisions": normalized_decisions,
+            "cliApprovalReplay": [
+                {
+                    "name": action["name"],
+                    "args": action.get("args") or {},
+                    "decision": decision,
+                }
+                for action, decision in zip(interrupt["actions"], normalized_decisions)
+            ],
             "resolveInterruptId": interrupt["id"],
             "resolveInterruptDecisions": decisions,
             "threadId": persisted["threadId"],
@@ -2301,7 +2312,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             if isinstance(run.get("id"), str)
         ]
         for run_id in run_ids:
-            if run_id in background_tasks or run_id in active:
+            run = repos["agentRuns"]["get"](run_id)
+            if (
+                run_id in background_tasks
+                or run_id in active
+                or (run is not None and run.get("status") == RUN_STATUS_INTERRUPTED)
+            ):
                 await cancel(run_id)
         tasks = [
             background_tasks[run_id]

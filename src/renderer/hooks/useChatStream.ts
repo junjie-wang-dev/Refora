@@ -716,6 +716,7 @@ export function useChatStream({
         runId: requestedRunId,
         text,
         providerId: activeProviderId,
+        agentProfileId: activeProviderId,
         model,
         replaceLastExchange: replacement.replaceLastExchange,
         replaceRunId: replacement.replaceRunId ?? undefined,

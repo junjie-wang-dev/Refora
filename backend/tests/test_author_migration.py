@@ -24,7 +24,7 @@ def test_author_migration_normalizes_existing_rows_and_search_index() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 30
+    assert result.to_version == 31
     assert db.execute(
         "SELECT authors FROM documents WHERE id = 'paper'"
     ).fetchone()["authors"] == (

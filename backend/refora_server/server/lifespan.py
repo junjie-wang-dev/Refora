@@ -22,6 +22,8 @@ from refora_server.academic import (
 )
 from refora_server.academic.arxiv import FetchResponse
 from refora_server.agent.providers import create_agent, create_model
+from refora_server.cli_runtime import CliRuntimeEngine, create_cli_runtime_registry
+from refora_server.cli_runtime.tool_broker import CliToolBroker
 from refora_server.db.connection import close_database, get_search_mode, open_database
 from refora_server.db.settings_seed import seed_default_settings
 from refora_server.library.paths import resolveFromLibrary
@@ -29,6 +31,7 @@ from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
 from refora_server.services.agent_runtime import createAgentRuntime
+from refora_server.services.agent_profiles import createAgentProfilesService
 from refora_server.services.agent_intent import assemble_recovery
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 from refora_server.services.ai_providers import createAiProvidersService
@@ -258,6 +261,23 @@ def create_lifespan(
                 getSearchMode=get_search_mode,
             ),
         )
+        cli_registry = create_cli_runtime_registry()
+        cli_tool_broker = CliToolBroker(
+            state_dir or os.path.dirname(os.path.abspath(db_path)),
+            f"http://127.0.0.1:{getattr(app.state, 'port', 0)}",
+            os.environ.get("REFORA_SERVER_TOKEN", ""),
+        )
+        runtime_sessions = repos.get("agentRuntimeSessions") or {
+            "get": lambda *_args: None,
+            "put": lambda *_args: None,
+            "delete": lambda *_args: None,
+        }
+        cli_runtime = CliRuntimeEngine(
+            cli_registry,
+            cli_tool_broker,
+            runtime_sessions,
+            repos.get("agentRuns") or {},
+        )
         agent_runs = repos.get("agentRuns")
         list_active_runs = (
             agent_runs.get("listActive")
@@ -302,7 +322,9 @@ def create_lifespan(
         def cancel_agent_run(run_id: str) -> bool:
             cancel_agent_network(run_id)
             cancel_sandbox = sandbox.get("cancel")
-            return bool(cancel_sandbox(run_id)) if callable(cancel_sandbox) else False
+            sandbox_cancelled = bool(cancel_sandbox(run_id)) if callable(cancel_sandbox) else False
+            cli_cancelled = cli_runtime.cancel_nowait(run_id)
+            return sandbox_cancelled or cli_cancelled
 
         def finish_agent_run(run_id: str) -> None:
             run_cancel_events.pop(run_id, None)
@@ -706,6 +728,13 @@ def create_lifespan(
             "mineru": mineru,
             "ocr": ocr,
             "aiProviders": createAiProvidersService(repos),
+            "agentProfiles": (
+                createAgentProfilesService(repos, {"cliRuntime": cli_runtime})
+                if "agentProfiles" in repos
+                else {}
+            ),
+            "cliRuntime": cli_runtime,
+            "cliToolBroker": cli_tool_broker,
             "aiSummary": summary_service,
             "documentText": document_text,
             "documentPresence": document_presence,
@@ -1066,11 +1095,26 @@ def create_lifespan(
             thread_id: str,
             provider: dict[str, Any],
         ) -> str | None:
+            if provider.get("backendType") == "cli":
+                return None
             return await asyncio.to_thread(
                 services["threadTitle"]["generateThreadTitle"],
                 thread_id,
                 provider,
             )
+
+        def create_runtime_model(provider: dict[str, Any]) -> Any:
+            if provider.get("backendType") == "cli":
+                return None
+            return create_model(provider)
+
+        def create_runtime_agent(
+            model: Any, tools: list[Any], request: dict[str, Any]
+        ) -> Any:
+            provider = request.get("provider")
+            if isinstance(provider, dict) and provider.get("backendType") == "cli":
+                return cli_runtime.create_agent(tools, request)
+            return create_agent(model, tools, request)
 
         agent_runtime = createAgentRuntime(
             repos,
@@ -1078,8 +1122,8 @@ def create_lifespan(
                 "emit": events.broadcast,
                 "connector": connector,
                 "createTools": create_tools,
-                "createModel": create_model,
-                "createAgent": create_agent,
+                "createModel": create_runtime_model,
+                "createAgent": create_runtime_agent,
                 "generateTitle": generate_thread_title,
                 "cancelRun": cancel_agent_run,
                 "finishRun": finish_agent_run,
@@ -1169,6 +1213,7 @@ def create_lifespan(
                 recovery_task.cancel()
                 await asyncio.gather(recovery_task, return_exceptions=True)
             await agent_runtime["destroy"]()
+            await cli_runtime.destroy()
             await metadata_service["destroy"]()
             await document_presence["destroy"]()
             stop_watcher = watcher.get("stopScanning")

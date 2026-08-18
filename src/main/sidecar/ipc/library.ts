@@ -1,5 +1,8 @@
 import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
+  AgentProfileInput,
+  AgentProfilePatch,
+  CliRuntimeInfo,
   AiProviderInput,
   AiProviderPatch,
   DocumentPatch,
@@ -171,6 +174,38 @@ export function createServerLibraryHandlers({
           models: normalizeModelList(result.models, undefined, presetId ?? 'custom')
         }
       }),
+
+    [IpcChannel.AgentProfilesList]: () => forward(() => http.agentProfilesList()),
+    [IpcChannel.AgentProfilesCreate]: (input: AgentProfileInput) =>
+      forward(() => http.agentProfilesCreate(input)),
+    [IpcChannel.AgentProfilesUpdate]: (profileId: string, patch: AgentProfilePatch) =>
+      forward(() => http.agentProfilesUpdate(profileId, patch)),
+    [IpcChannel.AgentProfilesDelete]: (profileId: string) =>
+      forward(() => http.agentProfilesDelete(profileId)),
+    [IpcChannel.AgentProfilesTest]: (profileId: string) =>
+      forward(() => http.agentProfilesTest(profileId)),
+    [IpcChannel.AgentProfilesListModels]: (profileId: string) =>
+      forward<ListModelsResult>(async () => {
+        const result = await http.agentProfilesModels(profileId)
+        return result.ok
+          ? {
+              ok: true,
+              models: result.models.map((model) => ({
+                id: model.id,
+                providerName: model.label,
+                supportsVariants: false,
+                supportsReasoning: model.reasoningEfforts.length > 0,
+                reasoningEfforts: model.reasoningEfforts,
+                defaultReasoningEffort: model.defaultReasoningEffort,
+                supportsVision: true,
+                supportsTools: true,
+                supportedParameters: []
+              }))
+            }
+          : { ok: false, models: [], error: result.error ?? 'Failed to list CLI models' }
+      }),
+    [IpcChannel.AgentProfilesScanRuntimes]: () =>
+      forward<CliRuntimeInfo[]>(() => http.agentProfilesScanRuntimes()),
 
     [IpcChannel.ExportToJson]: (payload: { documentIds?: string[]; workspaceId?: string } = {}) =>
       forward(async () => JSON.stringify(await http.exportJson(payload), null, 2)),

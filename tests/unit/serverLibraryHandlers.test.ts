@@ -107,6 +107,7 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.AiProvidersDelete, args: ['provider-1'], method: 'aiProvidersDelete', forwarded: ['provider-1'] },
       { channel: IpcChannel.AiProvidersTest, args: ['provider-1'], method: 'aiProvidersTest', forwarded: ['provider-1'] },
       { channel: IpcChannel.AiProvidersListModels, args: [{ providerId: 'provider-1', presetId: 'openai' }], method: 'aiProvidersModels', forwarded: [{ providerId: 'provider-1', presetId: 'openai' }], data: { ok: true, models: [expect.objectContaining({ id: 'gpt-5' })] } },
+      { channel: IpcChannel.AgentProfilesScanRuntimes, args: [], method: 'agentProfilesScanRuntimes', forwarded: [] },
       { channel: IpcChannel.ExportToJson, args: [{ documentIds: ['doc-1'] }], method: 'exportJson', forwarded: [{ documentIds: ['doc-1'] }], data: '{\n  "version": 1\n}' },
       { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], method: 'exportBibtex', forwarded: [{ documentIds: ['doc-1'] }], data: '@article{one}' },
       { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], method: 'exportBibtexString', forwarded: [['doc-1']], data: '@article{two}' },

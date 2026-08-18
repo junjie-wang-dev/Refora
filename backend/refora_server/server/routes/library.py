@@ -233,6 +233,9 @@ def create_library_router(deps: Any) -> APIRouter:
     web_search_config = _value(deps, "web_search_config") or _value(repos, "webSearchConfig")
     providers = _value(deps, "ai_providers") or _value(services, "aiProviders")
     provider_repo = _value(deps, "ai_providers_repo") or _value(repos, "aiProviders")
+    agent_profiles = _value(services, "agentProfiles") or _dependency(
+        deps, "agentProfiles", "agent_profiles"
+    )
     exporter = _dependency(deps, "exporter", "export")
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
@@ -1139,15 +1142,33 @@ def create_library_router(deps: Any) -> APIRouter:
     @router.post("/ai/providers")
     async def create_provider(body: dict[str, Any]):
         async def action():
-            return await _call(provider_repo, "create", await encrypted_provider_input(body))
+            provider = await _call(
+                provider_repo, "create", await encrypted_provider_input(body)
+            )
+            if agent_profiles is not None:
+                await _call(agent_profiles, "ensureApiProfile", provider)
+            return provider
         return await run(action)
 
     @router.patch("/ai/providers/{provider_id}")
     async def patch_provider(provider_id: str, body: dict[str, Any]):
         async def action():
-            return await _call(
+            provider = await _call(
                 provider_repo, "update", provider_id, await encrypted_provider_input(body)
             )
+            if agent_profiles is not None:
+                profile = await _call(agent_profiles, "ensureApiProfile", provider)
+                await _call(
+                    agent_profiles,
+                    "update",
+                    profile["id"],
+                    {
+                        "name": provider["name"],
+                        "model": provider.get("model") or "",
+                        "reasoningEffort": provider.get("reasoningEffort") or "medium",
+                    },
+                )
+            return provider
         return await run(action)
 
     @router.delete("/ai/providers/{provider_id}")
@@ -1203,6 +1224,46 @@ def create_library_router(deps: Any) -> APIRouter:
             )
             return await _call(transient, "listModels", "__transient__", api_key)
         return await run(action)
+
+    @router.get("/ai/agent-profiles")
+    async def list_agent_profiles():
+        return await run(lambda: _call(agent_profiles, "list"))
+
+    @router.get("/ai/cli-runtimes")
+    async def scan_cli_runtimes():
+        async def action():
+            scan = _method(agent_profiles, "scanRuntimes")
+            return await asyncio.to_thread(scan)
+
+        return await run(action)
+
+    @router.post("/ai/agent-profiles")
+    async def create_agent_profile(body: dict[str, Any]):
+        return await run(
+            lambda: _call(agent_profiles, "create", _body_dict(body))
+        )
+
+    @router.patch("/ai/agent-profiles/{profile_id}")
+    async def patch_agent_profile(profile_id: str, body: dict[str, Any]):
+        return await run(
+            lambda: _call(agent_profiles, "update", profile_id, _body_dict(body))
+        )
+
+    @router.delete("/ai/agent-profiles/{profile_id}")
+    async def delete_agent_profile(profile_id: str):
+        async def action():
+            await _call(agent_profiles, "delete", profile_id)
+            return {"ack": True}
+
+        return await run(action)
+
+    @router.post("/ai/agent-profiles/{profile_id}/test")
+    async def test_agent_profile(profile_id: str):
+        return await run(lambda: _call(agent_profiles, "test", profile_id))
+
+    @router.post("/ai/agent-profiles/{profile_id}/models")
+    async def list_agent_profile_models(profile_id: str):
+        return await run(lambda: _call(agent_profiles, "listModels", profile_id))
 
     @router.post("/export/json")
     async def export_json(body: dict[str, Any]):

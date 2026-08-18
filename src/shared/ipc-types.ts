@@ -395,6 +395,10 @@ export type ModelVariantFormat = 'dash' | 'colon' | 'none'
 
 export type AiApiProtocol = 'openai-responses' | 'openai-compatible'
 
+export type AgentProfileKind = 'api' | 'cli'
+
+export type AgentWebSearchPolicy = 'auto' | 'native' | 'refora' | 'disabled'
+
 export type AiReasoningControl = 'openai' | 'thinking' | 'enable-thinking' | 'none'
 
 export type AiReasoningEffort =
@@ -405,6 +409,7 @@ export type AiReasoningEffort =
   | 'high'
   | 'xhigh'
   | 'max'
+  | 'ultra'
 
 export interface AiProvider {
   id: string
@@ -459,12 +464,80 @@ export interface AiProviderPatch {
   maxTokens?: number | null
 }
 
+export interface AgentProfile {
+  id: string
+  name: string
+  kind: AgentProfileKind
+  apiProviderId: string | null
+  cliRuntimeId: string | null
+  executablePath: string | null
+  model: string
+  reasoningEffort: AiReasoningEffort
+  nativeWebSearch: boolean
+  webSearchPolicy: AgentWebSearchPolicy
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AgentProfileInput {
+  name: string
+  kind: 'cli'
+  cliRuntimeId: string
+  executablePath?: string | null
+  model?: string
+  reasoningEffort?: AiReasoningEffort
+  nativeWebSearch?: boolean
+  webSearchPolicy?: AgentWebSearchPolicy
+}
+
+export interface AgentProfilePatch {
+  name?: string
+  executablePath?: string | null
+  model?: string
+  reasoningEffort?: AiReasoningEffort
+  nativeWebSearch?: boolean
+  webSearchPolicy?: AgentWebSearchPolicy
+}
+
+export interface AgentProfileTestResult {
+  ok: boolean
+  runtimeId?: string | null
+  executablePath?: string | null
+  version?: string | null
+  authenticated?: boolean | null
+  error?: string | null
+}
+
+export type CliReasoningMode = 'select' | 'managed'
+
+export interface CliModelInfo {
+  id: string
+  label: string
+  reasoningEfforts: AiReasoningEffort[]
+  defaultReasoningEffort: AiReasoningEffort | null
+}
+
+export interface CliRuntimeInfo extends AgentProfileTestResult {
+  runtimeId: string
+  label: string
+  defaultExecutable: string
+  available: boolean
+  reasoningMode: CliReasoningMode
+  capabilities: {
+    nativeWebSearch: boolean
+    mcp: boolean
+    sessionResume: boolean
+  }
+  models: CliModelInfo[]
+}
+
 export interface ProviderModelInfo {
   id: string
   providerName?: string
   supportsVariants: boolean
   supportsReasoning: boolean
   reasoningEfforts: AiReasoningEffort[]
+  defaultReasoningEffort?: AiReasoningEffort | null
   supportsVision: boolean
   supportsTools: boolean
   supportedParameters: string[]
@@ -564,6 +637,7 @@ export interface ChatThread {
   id: string
   workspaceId: string | null
   providerId: string
+  agentProfileId: string | null
   createdAt: number
   title: string | null
   headCheckpointId: string | null
@@ -590,6 +664,7 @@ export interface AgentTurnIntent {
   runId?: string
   text: string
   providerId: string
+  agentProfileId?: string
   model?: string
   replaceLastExchange?: boolean
   replaceRunId?: string
@@ -648,6 +723,8 @@ export interface AgentRun {
   id: string
   threadId: string
   providerId: string
+  agentProfileId: string | null
+  runtimeSessionId: string | null
   modelId: string
   activeDocumentId: string | null
   status: AgentRunStatus
@@ -945,6 +1022,15 @@ export interface ReforaApi {
     delete(id: string): Promise<void>
     test(id: string): Promise<{ ok: boolean; models?: string[] }>
     listModels(req: ListModelsRequest): Promise<ListModelsResult>
+  }
+  agentProfiles: {
+    list(): Promise<AgentProfile[]>
+    create(input: AgentProfileInput): Promise<AgentProfile>
+    update(id: string, patch: AgentProfilePatch): Promise<AgentProfile>
+    delete(id: string): Promise<void>
+    test(id: string): Promise<AgentProfileTestResult>
+    listModels(id: string): Promise<ListModelsResult>
+    scanRuntimes(): Promise<CliRuntimeInfo[]>
   }
   ai: {
     docTextGet(docId: string): Promise<string>

@@ -80,7 +80,8 @@ describe('ModelSelector', () => {
     const user = userEvent.setup()
     renderSelector()
     const trigger = screen.getByRole('button', { name: 'Select model / provider' })
-    expect(trigger).toHaveTextContent('Provider One/gpt-5-high')
+    expect(trigger).toHaveTextContent('gpt-5-high')
+    expect(trigger).toHaveTextContent('API')
     await user.click(trigger)
     await user.click(screen.getByRole('option', { name: 'Provider One/gpt-5-high' }))
 
@@ -107,6 +108,55 @@ describe('ModelSelector', () => {
     expect(defaultProps.onApplyModel).toHaveBeenCalledWith('model-alpha', '', 'provider-1')
   })
 
+  it('makes the active CLI model and runtime type explicit', async () => {
+    const user = userEvent.setup()
+    const cliProvider: AiProvider = {
+      ...provider,
+      presetId: 'codex-cli',
+      name: 'OpenAI Codex CLI',
+      model: 'default',
+      models: null,
+      baseModel: 'default',
+      variant: '',
+      variantFormat: 'none'
+    }
+    renderSelector({
+      providers: [cliProvider],
+      activeProviderId: cliProvider.id,
+      selectedModel: 'default',
+      selectedVariant: '',
+      requestModel: 'default',
+      providerModels: {
+        [cliProvider.id]: [
+          {
+            ...providerModel,
+            id: 'default',
+            providerName: 'CLI default (GPT-5.6-Luna)',
+            supportsVariants: false
+          },
+          {
+            ...providerModel,
+            id: 'gpt-5.6-luna',
+            providerName: 'GPT-5.6-Luna',
+            defaultReasoningEffort: 'low',
+            supportsVariants: false
+          }
+        ]
+      }
+    })
+
+    const trigger = screen.getByRole('button', { name: 'Select model / provider' })
+    expect(trigger).toHaveTextContent('CLI default (GPT-5.6-Luna)')
+    expect(trigger).toHaveTextContent('CLI')
+    expect(trigger).toHaveAttribute('title', 'OpenAI Codex CLI · default')
+    await user.click(trigger)
+
+    expect(screen.getByText('Choose model')).toBeInTheDocument()
+    expect(screen.getByText('GPT-5.6-Luna')).toBeInTheDocument()
+    await user.click(screen.getByRole('option', { name: 'OpenAI Codex CLI/gpt-5.6-luna' }))
+    expect(defaultProps.onApplyModel).toHaveBeenCalledWith('gpt-5.6-luna', '', 'provider-1')
+  })
+
   it('does not expose a custom model id input in chat', async () => {
     const user = userEvent.setup()
     renderSelector()
@@ -128,7 +178,7 @@ describe('ModelSelector', () => {
     expect(effortButton).toHaveClass('rounded-lg', 'px-2', 'py-1', 'text-label', 'hover:bg-hover')
     expect(modelButton).toHaveClass('rounded-lg', 'px-2', 'py-1', 'text-label', 'hover:bg-hover')
     expect(modelButton.parentElement).toHaveClass('min-w-0', 'flex-1', 'justify-end')
-    expect(modelButton).toHaveClass('w-full', 'min-w-0', 'max-w-[200px]')
+    expect(modelButton).toHaveClass('w-full', 'min-w-0', 'max-w-[230px]')
     expect(effortButton.parentElement).toHaveClass('min-w-0', 'max-w-[112px]', 'shrink-0')
     expect(effortButton).toHaveClass('min-w-0', 'max-w-full')
     expect(modelButton.querySelector('span')).toHaveClass('min-w-0', 'flex-1', 'truncate')

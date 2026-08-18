@@ -302,6 +302,56 @@
         "glossary": "术语表"
       }
     },
+    "modelSettings": {
+      "tabsLabel": "模型连接类型",
+      "cli": "本机 CLI",
+      "api": "API 提供商"
+    },
+    "agentProfiles": {
+      "title": "本机 CLI Agent",
+      "desc": "自动扫描这台 Mac 上受支持的 CLI Agent，并读取其可用模型能力",
+      "addCli": "添加 CLI Agent",
+      "addAnotherRuntime": "再添加一个",
+      "configure": "配置",
+      "configuredCli": "已配置的 CLI Agent",
+      "editCli": "编辑 CLI Agent",
+      "cliHint": "Codex 和 Gemini 在本机运行；Refora 工具执行高风险操作前会使用现有审批卡片确认。",
+      "rescan": "重新扫描",
+      "scanFail": "无法扫描本机 CLI Agent",
+      "notFound": "未找到可执行文件",
+      "modelCount": "{{count}} 个模型选项",
+      "detectedPath": "已检测：{{path}}",
+      "name": "名称",
+      "runtime": "CLI 运行时",
+      "executable": "可执行文件路径（可选）",
+      "model": "模型",
+      "reasoning": "推理强度",
+      "reasoningManaged": "由 Gemini CLI 自动管理",
+      "searchPolicy": "联网搜索策略",
+      "nativeSearch": "原生搜索",
+      "nativeSearchAvailable": "此运行时提供原生联网搜索",
+      "apiSearchTitle": "API 服务商搜索行为",
+      "apiSearchDesc": "启用原生搜索后，“自动”会使用提供商搜索，不再注入 Refora 搜索。",
+      "noApiProfiles": "请先在上方连接 API 提供商，再配置其搜索行为。",
+      "test": "测试 CLI",
+      "testOk": "CLI 已就绪",
+      "testFail": "CLI 测试失败",
+      "loadFail": "无法加载 Agent 运行方式",
+      "saveFail": "无法保存 Agent 运行方式",
+      "deleteFail": "无法删除 Agent 运行方式",
+      "status": {
+        "ready": "可用",
+        "detected": "已检测",
+        "authRequired": "需要登录",
+        "missing": "未安装"
+      },
+      "search": {
+        "auto": "自动",
+        "native": "服务商原生搜索",
+        "refora": "Refora 搜索",
+        "disabled": "关闭"
+      }
+    },
     "aiProviders": {
       "title": "AI 服务商",
       "desc": "配置 AI 模型服务商与 API 密钥",
@@ -391,7 +441,8 @@
         "medium": "中",
         "high": "高",
         "xhigh": "超高",
-        "max": "最大"
+        "max": "最大",
+        "ultra": "极致"
       },
       "providers": {
         "openai": "通过原生 Responses API 使用 GPT 模型",
@@ -629,6 +680,9 @@
     "chat": {
       "title": "对话",
       "selectProvider": "选择模型 / 服务商",
+      "chooseModel": "选择模型",
+      "localCli": "CLI",
+      "apiProvider": "API",
       "send": "发送",
       "thinking": "思考中…",
       "assistant": "AI 助手",

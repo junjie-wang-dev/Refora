@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CaretDown, Check } from '@phosphor-icons/react'
+import { CaretDown, Check, Cloud, Terminal } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import {
   COMMON_VARIANTS,
@@ -38,7 +38,8 @@ const REASONING_EFFORT_ORDER: AiReasoningEffort[] = [
   'medium',
   'high',
   'xhigh',
-  'max'
+  'max',
+  'ultra'
 ]
 
 function modelsForProvider(
@@ -54,6 +55,10 @@ function modelsForProvider(
   return available.filter(
     (model, index, all) => model.trim().length > 0 && all.indexOf(model) === index
   )
+}
+
+function isCliProvider(provider: AiProvider): boolean {
+  return provider.presetId.endsWith('-cli')
 }
 
 export default function ModelSelector({
@@ -86,12 +91,17 @@ export default function ModelSelector({
   const selectedModelInfo = (providerModels[activeProviderId] ?? []).find(
     (model) => model.id === requestModel || model.id === selectedModel
   )
+  const activeIsCli = activeProvider ? isCliProvider(activeProvider) : false
+  const activeModelId = requestModel || activeProvider?.model || ''
+  const activeModelLabel = activeIsCli && selectedModelInfo?.providerName
+    ? selectedModelInfo.providerName
+    : activeModelId
   const variantCapable =
     supportsModelVariants(selectedModel) || selectedModelInfo?.supportsVariants === true
   const displayModelLabel = providers.length === 0
     ? t('workspace.chat.notConfigured', 'Not configured')
-    : activeProvider && (requestModel || activeProvider.model)
-      ? `${activeProvider.name}/${requestModel || activeProvider.model}`
+    : activeProvider && activeModelId
+      ? activeModelLabel
       : t('workspace.chat.selectProvider', 'Select model / provider')
   const reasoningEffortLabel = t('workspace.chat.reasoningEffort', 'Reasoning effort')
   const reasoningEffortValue = t(
@@ -132,7 +142,7 @@ export default function ModelSelector({
       <div className="relative flex min-w-0 flex-1 justify-end" ref={menuRef}>
         <button
           type="button"
-          className="inline-flex w-full min-w-0 max-w-[200px] items-center gap-1 rounded-lg px-2 py-1 text-label text-foreground transition-colors duration-150 hover:bg-hover disabled:opacity-40"
+          className="inline-flex w-full min-w-0 max-w-[230px] items-center gap-1.5 rounded-lg px-2 py-1 text-label text-foreground transition-colors duration-150 hover:bg-hover disabled:opacity-40"
           onClick={() => {
             setReasoningMenuOpen(false)
             setModelMenuOpen((value) => !value)
@@ -141,14 +151,27 @@ export default function ModelSelector({
           aria-label={t('workspace.chat.selectProvider', 'Select model / provider')}
           aria-expanded={modelMenuOpen}
           aria-haspopup="listbox"
+          title={activeProvider ? `${activeProvider.name} · ${activeModelId}` : undefined}
         >
+          {activeProvider && (
+            activeIsCli
+              ? <Terminal className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+              : <Cloud className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
+          )}
           <span className="min-w-0 flex-1 truncate font-medium">{displayModelLabel}</span>
+          {activeProvider && (
+            <span className="shrink-0 rounded bg-panel-2 px-1 py-0.5 text-caption font-medium uppercase text-muted">
+              {activeIsCli
+                ? t('workspace.chat.localCli', 'CLI')
+                : t('workspace.chat.apiProvider', 'API')}
+            </span>
+          )}
           <CaretDown className="h-3 w-3 shrink-0 text-muted" />
         </button>
 
         {modelMenuOpen && (
           <div
-            className="absolute bottom-full right-0 z-50 mb-1 max-h-72 w-72 overflow-y-auto rounded-xl border border-border bg-panel p-2 shadow-lg"
+            className="absolute bottom-full right-0 z-50 mb-1 max-h-80 w-80 overflow-y-auto rounded-xl border border-border bg-panel p-2 shadow-lg"
             role="listbox"
             tabIndex={0}
             onKeyDown={(event) => {
@@ -170,17 +193,44 @@ export default function ModelSelector({
               }
             }}
           >
+            <div className="mb-2 border-b border-border px-1 pb-2">
+              <p className="text-xs font-semibold text-foreground">
+                {t('workspace.chat.chooseModel', 'Choose model')}
+              </p>
+              {activeProvider && (
+                <p className="mt-0.5 truncate text-caption text-muted">
+                  {activeProvider.name} · {activeModelId}
+                </p>
+              )}
+            </div>
             {providers.map((provider, index) => {
               const configuredModels = modelsForProvider(provider, providerModels)
+              const cliProvider = isCliProvider(provider)
               return (
                 <div key={provider.id} className={index > 0 ? 'mt-2' : ''}>
-                  <p className="px-1 pb-1 text-caption font-semibold uppercase tracking-wide text-muted">
-                    {provider.name}
-                    {loadingModels && provider.models == null ? '…' : ''}
-                  </p>
+                  <div className="flex items-center gap-1.5 px-1 pb-1">
+                    {cliProvider
+                      ? <Terminal className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+                      : <Cloud className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />}
+                    <p className="min-w-0 flex-1 truncate text-caption font-semibold text-muted">
+                      {provider.name}
+                      {loadingModels && provider.models == null ? '…' : ''}
+                    </p>
+                    <span className="rounded bg-panel-2 px-1 py-0.5 text-caption font-medium uppercase text-muted">
+                      {cliProvider
+                        ? t('workspace.chat.localCli', 'CLI')
+                        : t('workspace.chat.apiProvider', 'API')}
+                    </span>
+                  </div>
                   {configuredModels.map((model) => {
                     const parsed = parseModelId(model)
                     const baseModel = parsed.baseModel || model
+                    const modelInfo = (providerModels[provider.id] ?? []).find(
+                      (candidate) => candidate.id === model
+                    )
+                    const modelLabel = cliProvider && modelInfo?.providerName
+                      ? modelInfo.providerName
+                      : model
                     const selected =
                       provider.id === activeProviderId &&
                       baseModel === selectedModel &&
@@ -190,14 +240,22 @@ export default function ModelSelector({
                         key={`${provider.id}-${model}`}
                         type="button"
                         role="option"
+                        aria-label={`${provider.name}/${model}`}
                         aria-selected={selected}
-                        className={`mb-0.5 flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover ${
-                          selected ? 'bg-active' : ''
+                        className={`mb-0.5 flex w-full items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover ${
+                          selected ? 'border-accent bg-active' : 'border-transparent'
                         }`}
                         onClick={() => handleApply(baseModel, parsed.variant, provider.id)}
                       >
-                        <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                          {provider.name}/{model}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-medium text-foreground">
+                            {modelLabel}
+                          </span>
+                          {modelLabel !== model && (
+                            <span className="mt-0.5 block truncate text-caption text-muted">
+                              {model}
+                            </span>
+                          )}
                         </span>
                         {selected && <Check className="h-3 w-3 shrink-0 text-accent" />}
                       </button>
@@ -209,7 +267,7 @@ export default function ModelSelector({
 
             {variantCapable && (
               <>
-                <p className="mt-2 px-1 pb-1 text-caption font-semibold uppercase tracking-wide text-muted">
+                <p className="mt-2 border-t border-border px-1 pb-1 pt-2 text-caption font-semibold uppercase tracking-wide text-muted">
                   {t('workspace.chat.variant', 'Variant')}
                 </p>
                 <div className="flex flex-wrap gap-1 px-1 pb-1">

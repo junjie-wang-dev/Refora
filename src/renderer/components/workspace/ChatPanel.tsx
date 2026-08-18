@@ -4,6 +4,7 @@ import { Plus, X, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { api } from '../../ipc'
 import { errorMessage } from '../../../shared/ipc-types'
 import type {
+  AgentProfile,
   AiProvider,
   AiReasoningEffort,
   ProviderModelInfo
@@ -30,7 +31,8 @@ const AI_REASONING_EFFORTS = new Set<AiReasoningEffort>([
   'medium',
   'high',
   'xhigh',
-  'max'
+  'max',
+  'ultra'
 ])
 
 function providerReasoningEffort(provider: AiProvider): AiReasoningEffort {
@@ -58,11 +60,45 @@ function defaultModelForProvider(provider: AiProvider): { model: string; variant
 }
 
 function providerAllowsModel(provider: AiProvider, model: string): boolean {
-  if (!provider.models?.length) return true
-  return provider.models.some((candidate) => {
+  const configuredModels = provider.models?.length
+    ? provider.models
+    : [provider.model, provider.baseModel]
+  return configuredModels.some((candidate) => {
     const parsed = parseModelId(candidate)
     return candidate === model || parsed.baseModel === model
   })
+}
+
+function agentOption(profile: AgentProfile, provider?: AiProvider): AiProvider {
+  if (provider) {
+    return {
+      ...provider,
+      id: profile.id,
+      name: profile.name,
+      model: profile.model || provider.model,
+      baseModel: profile.model || provider.baseModel,
+      reasoningEffort: profile.reasoningEffort
+    }
+  }
+  const model = profile.model || 'default'
+  return {
+    id: profile.id,
+    presetId: `${profile.cliRuntimeId ?? 'cli'}-cli`,
+    name: profile.name,
+    baseUrl: '',
+    apiProtocol: 'openai-responses',
+    reasoningControl: profile.reasoningEffort === 'none' ? 'none' : 'openai',
+    reasoningEffort: profile.reasoningEffort,
+    model,
+    models: null,
+    baseModel: model,
+    variant: '',
+    variantFormat: 'none',
+    hasKey: true,
+    temperature: null,
+    maxTokens: null,
+    createdAt: profile.createdAt
+  }
 }
 
 interface ChatPanelProps {
@@ -82,6 +118,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const fetchThreads = useWorkspaceStore((s) => s.fetchThreads)
 
   const [providers, setProviders] = useState<AiProvider[]>([])
+  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
   const [activeProviderId, setActiveProviderId] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedVariant, setSelectedVariant] = useState('')
@@ -138,36 +175,79 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const loadProviders = useCallback(async () => {
     try {
       const [
-        list,
-        active,
-        savedProviderId,
+        profiles,
+        apiProviders,
+        activeProfileId,
+        savedProfileId,
+        legacyActiveProviderId,
+        legacySavedProviderId,
         savedModel,
         savedVariant,
         savedReasoningEffort
       ] = await Promise.all([
+        api.agentProfiles.list(),
         api.aiProviders.list(),
+        api.settings.get<string>('activeAgentProfileId', ''),
+        api.settings.get<string>('chatSelectedAgentProfileId', ''),
         api.settings.get<string>('activeProviderId', ''),
         api.settings.get<string>('chatSelectedProviderId', ''),
         api.settings.get<string>('chatSelectedModel', ''),
         api.settings.get<string>('chatSelectedVariant', ''),
         api.settings.get<AiReasoningEffort | ''>('chatReasoningEffort', '')
       ])
+      const apiProvidersById = new Map(
+        apiProviders.map((provider) => [provider.id, provider])
+      )
+      const resolvedProfiles = profiles.length > 0
+        ? profiles
+        : apiProviders.map((provider): AgentProfile => ({
+            id: provider.id,
+            name: provider.name,
+            kind: 'api',
+            apiProviderId: provider.id,
+            cliRuntimeId: null,
+            executablePath: null,
+            model: provider.model,
+            reasoningEffort: provider.reasoningEffort,
+            nativeWebSearch: false,
+            webSearchPolicy: 'auto',
+            createdAt: provider.createdAt,
+            updatedAt: provider.createdAt
+          }))
+      const list = resolvedProfiles.flatMap((profile) => {
+        if (profile.kind === 'cli') return [agentOption(profile)]
+        const provider = profile.apiProviderId
+          ? apiProvidersById.get(profile.apiProviderId)
+          : undefined
+        return provider ? [agentOption(profile, provider)] : []
+      })
+      setAgentProfiles(resolvedProfiles)
       setProviders(list)
       const providerIds = new Set(list.map((provider) => provider.id))
-      const activeIsValid = !!active && providerIds.has(active)
-      const savedProviderIsValid = !!savedProviderId && providerIds.has(savedProviderId)
+      const legacySavedProfileId = resolvedProfiles.find(
+        (profile) => profile.apiProviderId === legacySavedProviderId
+      )?.id
+      const legacyActiveProfileId = resolvedProfiles.find(
+        (profile) => profile.apiProviderId === legacyActiveProviderId
+      )?.id
+      const activeIsValid = !!activeProfileId && providerIds.has(activeProfileId)
+      const savedProviderIsValid = !!savedProfileId && providerIds.has(savedProfileId)
       const nextId =
-        (savedProviderIsValid && savedProviderId) ||
-        (activeIsValid && active) ||
+        (savedProviderIsValid && savedProfileId) ||
+        (activeIsValid && activeProfileId) ||
+        (legacySavedProfileId && providerIds.has(legacySavedProfileId) && legacySavedProfileId) ||
+        (legacyActiveProfileId && providerIds.has(legacyActiveProfileId) && legacyActiveProfileId) ||
         (list.length > 0 ? list[0].id : '')
       setActiveProviderId(nextId)
       const p = list.find((x) => x.id === nextId)
       if (p) {
         const fallback = defaultModelForProvider(p)
-        const useSavedModel =
-          savedProviderId === nextId && !!savedModel && providerAllowsModel(p, savedModel)
+        const useSavedModel = !!savedModel && (
+          savedProfileId === nextId ||
+          (legacySavedProfileId === nextId && providerAllowsModel(p, savedModel))
+        )
         const fallbackReasoningEffort = providerReasoningEffort(p)
-        const nextReasoningEffort = savedProviderId === nextId
+        const nextReasoningEffort = savedProfileId === nextId || legacySavedProfileId === nextId
           ? normalizeReasoningEffort(savedReasoningEffort, fallbackReasoningEffort)
           : fallbackReasoningEffort
         setSelectedModel(useSavedModel ? savedModel : fallback.model)
@@ -175,14 +255,20 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         setSelectedReasoningEffort(nextReasoningEffort)
       }
       if (nextId) {
-        void api.settings.set('activeProviderId', nextId)
-        void api.settings.set('chatSelectedProviderId', nextId)
+        void api.settings.set('activeAgentProfileId', nextId)
+        void api.settings.set('chatSelectedAgentProfileId', nextId)
+        const selectedProfile = resolvedProfiles.find((profile) => profile.id === nextId)
+        if (selectedProfile?.apiProviderId) {
+          void api.settings.set('activeProviderId', selectedProfile.apiProviderId)
+        }
         if (p) {
           const fallback = defaultModelForProvider(p)
-          const useSavedModel =
-            savedProviderId === nextId && !!savedModel && providerAllowsModel(p, savedModel)
+          const useSavedModel = !!savedModel && (
+            savedProfileId === nextId ||
+            (legacySavedProfileId === nextId && providerAllowsModel(p, savedModel))
+          )
           const fallbackReasoningEffort = providerReasoningEffort(p)
-          const nextReasoningEffort = savedProviderId === nextId
+          const nextReasoningEffort = savedProfileId === nextId || legacySavedProfileId === nextId
             ? normalizeReasoningEffort(savedReasoningEffort, fallbackReasoningEffort)
             : fallbackReasoningEffort
           void api.settings.set('chatSelectedModel', useSavedModel ? savedModel : fallback.model)
@@ -219,7 +305,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     void Promise.all(
       providers.map(async (provider) => {
         try {
-          const result = await api.aiProviders.listModels({ providerId: provider.id })
+          const profile = agentProfiles.find((candidate) => candidate.id === provider.id)
+          const result = profile?.kind === 'cli'
+            ? await api.agentProfiles.listModels(profile.id)
+            : await api.aiProviders.listModels({
+                providerId: profile?.apiProviderId ?? provider.id
+              })
           return [provider.id, result.ok ? result.models : []] as const
         } catch {
           return [provider.id, []] as const
@@ -236,7 +327,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     return () => {
       cancelled = true
     }
-  }, [providers])
+  }, [agentProfiles, providers])
 
   useEffect(() => {
     setSelectedAttachments([])
@@ -272,19 +363,41 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       const nextProviderId = providerId ?? activeProviderId
       if (!providers.some((provider) => provider.id === nextProviderId)) return
       const providerChanged = !!providerId && providerId !== activeProviderId
+      const nextProvider = providers.find((provider) => provider.id === nextProviderId)
+      const nextRequestModel = composeModelId(
+        baseModel,
+        variant,
+        nextProvider?.variantFormat ?? 'dash'
+      )
+      const nextModelInfo = (providerModels[nextProviderId] ?? []).find(
+        (model) => model.id === nextRequestModel || model.id === baseModel
+      )
+      const providerDefaultEffort = nextProvider
+        ? providerReasoningEffort(nextProvider)
+        : 'none'
+      const nextReasoningEffort = nextProvider?.reasoningControl === 'none'
+        ? 'none'
+        : nextModelInfo?.reasoningEfforts.length
+          ? !providerChanged && nextModelInfo.reasoningEfforts.includes(selectedReasoningEffort)
+            ? selectedReasoningEffort
+            : nextModelInfo.defaultReasoningEffort ??
+              (nextModelInfo.reasoningEfforts.includes(providerDefaultEffort)
+                ? providerDefaultEffort
+                : nextModelInfo.reasoningEfforts[0])
+          : providerDefaultEffort
       if (providerId && providerId !== activeProviderId) {
-        const nextProvider = providers.find((provider) => provider.id === providerId)
+        const nextProfile = agentProfiles.find((profile) => profile.id === providerId)
         setActiveProviderId(providerId)
-        void api.settings.set('activeProviderId', providerId)
-        if (nextProvider) {
-          const nextReasoningEffort = providerReasoningEffort(nextProvider)
-          setSelectedReasoningEffort(nextReasoningEffort)
-          void api.settings.set('chatReasoningEffort', nextReasoningEffort)
+        void api.settings.set('activeAgentProfileId', providerId)
+        if (nextProfile?.apiProviderId) {
+          void api.settings.set('activeProviderId', nextProfile.apiProviderId)
         }
       }
+      setSelectedReasoningEffort(nextReasoningEffort)
+      void api.settings.set('chatReasoningEffort', nextReasoningEffort)
       setSelectedModel(baseModel)
       setSelectedVariant(variant)
-      void api.settings.set('chatSelectedProviderId', nextProviderId)
+      void api.settings.set('chatSelectedAgentProfileId', nextProviderId)
       void api.settings.set('chatSelectedModel', baseModel)
       void api.settings.set('chatSelectedVariant', variant)
       if (providerChanged && (chat.hadMessagesRef.current || chat.messages.length > 0)) {
@@ -297,9 +410,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     },
     [
       activeProviderId,
+      agentProfiles,
       chat.messages.length,
+      providerModels,
       providers,
-      chat.hadMessagesRef
+      chat.hadMessagesRef,
+      selectedReasoningEffort
     ]
   )
 

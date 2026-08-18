@@ -136,6 +136,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.AiProvidersDelete, args: ['provider-1'], invoke: (value) => value.aiProviders.delete('provider-1') },
       { channel: IpcChannel.AiProvidersTest, args: ['provider-1'], invoke: (value) => value.aiProviders.test('provider-1') },
       { channel: IpcChannel.AiProvidersListModels, args: [{ providerId: 'provider-1' }], invoke: (value) => value.aiProviders.listModels({ providerId: 'provider-1' }) },
+      { channel: IpcChannel.AgentProfilesScanRuntimes, args: [], invoke: (value) => value.agentProfiles.scanRuntimes() },
       { channel: IpcChannel.AiDocTextGet, args: ['doc-1'], invoke: (value) => value.ai.docTextGet('doc-1') },
       { channel: IpcChannel.AiSummarize, args: ['doc-1'], invoke: (value) => value.ai.summarize('doc-1') },
       { channel: IpcChannel.AiSummaryGet, args: ['doc-1'], invoke: (value) => value.ai.summaryGet('doc-1') },

@@ -7,7 +7,7 @@ import { api } from '../ipc'
 import { changeLanguage, type AppLanguage } from '../i18n'
 import { errorMessage, type WorkspaceAgentMemory } from '../../shared/ipc-types'
 import { Input as UiInput } from './ui'
-import { AiProvidersSection as ProviderConnectionsSection } from './AiProvidersSection'
+import { ModelSettingsSection } from './ModelSettingsSection'
 import type { MineruEngineStatus, MineruInstallProgress } from '../../shared/mineru-types'
 import { IpcChannel } from '../../shared/ipc-channels'
 import { formatElapsedClock } from '../utils/format'
@@ -720,7 +720,9 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           {activePage === 'mineru' && <MineruSettingsSection onError={setError} />}
 
-          {activePage === 'aiProviders' && <ProviderConnectionsSection />}
+          {activePage === 'aiProviders' && (
+            <ModelSettingsSection />
+          )}
 
           {activePage === 'usage' && <UsageStatsSection onError={setError} />}
 

@@ -21,6 +21,7 @@ def _map_thread(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "workspaceId": row["workspaceId"],
         "providerId": row["providerId"],
+        "agentProfileId": row["agentProfileId"],
         "createdAt": row["createdAt"],
         "title": row["title"],
         "headCheckpointId": row["headCheckpointId"],
@@ -43,12 +44,16 @@ def createChatRepository(db):
         cur = db.execute("SELECT * FROM chat_threads WHERE id = ?", [id])
         return cur.fetchone()
 
-    def createThread(workspaceId: str | None, providerId: str) -> dict[str, Any]:
+    def createThread(
+        workspaceId: str | None,
+        providerId: str,
+        agentProfileId: str | None = None,
+    ) -> dict[str, Any]:
         id = _new_id()
         now = _now_ms()
         db.execute(
-            "INSERT INTO chat_threads (id, workspaceId, providerId, createdAt) VALUES (?, ?, ?, ?)",
-            [id, workspaceId, providerId, now],
+            "INSERT INTO chat_threads (id, workspaceId, providerId, agentProfileId, createdAt) VALUES (?, ?, ?, ?, ?)",
+            [id, workspaceId, providerId, agentProfileId or f"api-{providerId}", now],
         )
         row = _fetch_thread(id)
         assert row is not None
@@ -177,6 +182,18 @@ def createChatRepository(db):
             raise RepoError("not_found", f"thread not found: {threadId}")
         return _map_thread(row)
 
+    def updateAgentProfile(
+        threadId: str, providerId: str, agentProfileId: str
+    ) -> dict[str, Any]:
+        db.execute(
+            "UPDATE chat_threads SET providerId = ?, agentProfileId = ? WHERE id = ?",
+            [providerId, agentProfileId, threadId],
+        )
+        row = _fetch_thread(threadId)
+        if row is None:
+            raise RepoError("not_found", f"thread not found: {threadId}")
+        return _map_thread(row)
+
     def updateAgentState(
         threadId: str, headCheckpointId: str | None, agentStateVersion: int
     ) -> dict[str, Any]:
@@ -199,5 +216,6 @@ def createChatRepository(db):
         "deleteLastExchange": deleteLastExchange,
         "deleteThread": deleteThread,
         "updateTitle": updateTitle,
+        "updateAgentProfile": updateAgentProfile,
         "updateAgentState": updateAgentState,
     }

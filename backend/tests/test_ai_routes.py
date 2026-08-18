@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -708,3 +709,36 @@ def test_chat_send_adds_the_active_reader_document_to_agent_context() -> None:
     assert missing.status_code == 400
     assert missing.json()["error"]["code"] == "invalid_document"
     assert [sent["runId"] for sent in runtime.sent] == ["run-reader"]
+
+
+def test_chat_send_reports_database_corruption_instead_of_internal_error() -> None:
+    client, repos, _, _, runtime = make_client()
+
+    def malformed_summary(_document_id: str) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    repos.aiSummaries["getSummary"] = malformed_summary
+
+    response = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-corrupt-database",
+            "threadId": "thread-global",
+            "workspaceId": None,
+            "activeDocumentId": "doc-1",
+            "text": "Explain this paper",
+            "providerId": "provider-1",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "ok": False,
+        "error": {
+            "code": "database_corrupt",
+            "message": "Refora's local database is damaged. Quit Refora and restore or repair the library database.",
+        },
+    }
+    assert runtime.sent == []

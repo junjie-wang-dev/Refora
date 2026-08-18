@@ -110,6 +110,20 @@ class Fakes:
         }
         self.requested_arxiv_ids = []
         self.services = {
+            "agentProfiles": {
+                "list": lambda: [],
+                "ensureApiProfile": lambda provider: {
+                    "id": f"api-{provider['id']}",
+                    "kind": "api",
+                },
+                "scanRuntimes": lambda: [
+                    {
+                        "runtimeId": "codex",
+                        "label": "OpenAI Codex CLI",
+                        "available": True,
+                    }
+                ],
+            },
             "academic": {
                 "arxiv": {"getById": self.get_arxiv_by_id},
                 "identity": object(),
@@ -281,6 +295,7 @@ def test_registers_every_library_domain_protocol_route():
         ("POST", "/settings/web-search/test"), ("GET", "/ai/providers"), ("POST", "/ai/providers"),
         ("PATCH", "/ai/providers/{provider_id}"), ("DELETE", "/ai/providers/{provider_id}"),
         ("POST", "/ai/providers/{provider_id}/test"), ("POST", "/ai/providers/models"),
+        ("GET", "/ai/cli-runtimes"),
         ("POST", "/export/json"), ("POST", "/export/bibtex"), ("GET", "/export/bibtex-string"),
         ("POST", "/clipboard/write-text"), ("POST", "/clipboard/copy-markdown"),
         ("POST", "/clipboard/copy-workspace-asset"),
@@ -288,6 +303,25 @@ def test_registers_every_library_domain_protocol_route():
         ("POST", "/dialog/open-directory"),
     }
     assert expected <= routes
+
+
+def test_scans_cli_runtimes_through_agent_profile_service():
+    client, _ = make_client()
+    response = client.get(
+        "/ai/cli-runtimes",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert response.json() == {
+        "ok": True,
+        "data": [
+            {
+                "runtimeId": "codex",
+                "label": "OpenAI Codex CLI",
+                "available": True,
+            }
+        ],
+    }
 
 
 def test_identifier_import_uses_exact_arxiv_lookup(monkeypatch):
@@ -624,12 +658,19 @@ def test_settings_roundtrip_uses_json_values():
     updated = client.patch(
         "/settings",
         headers=headers,
-        json={"sidebarCollapsed": True, "listColumnState": {"columns": []}},
+        json={
+            "sidebarCollapsed": True,
+            "listColumnState": {"columns": []},
+            "activeAgentProfileId": "profile-cli",
+            "chatSelectedAgentProfileId": "profile-cli",
+        },
     )
     fetched = client.get("/settings", headers=headers)
 
     assert updated.json()["data"]["sidebarCollapsed"] is True
     assert updated.json()["data"]["listColumnState"] == {"columns": []}
+    assert updated.json()["data"]["activeAgentProfileId"] == "profile-cli"
+    assert updated.json()["data"]["chatSelectedAgentProfileId"] == "profile-cli"
     assert fetched.json()["data"]["theme"] == "dark"
     assert fetched.json()["data"]["sidebarCollapsed"] is True
 

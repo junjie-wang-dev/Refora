@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from refora_server.services.agent_memory import ensure_memory_files, read_memories
+from refora_server.services.agent_capabilities import resolve_agent_capabilities
 from refora_server.services.agent_tools import agent_tool_names
 from refora_server.services.chat_history import historyToMessages, truncateHistoryByTokens
 
@@ -291,6 +292,109 @@ def selected_provider_id(repos: Mapping[str, Any], requested: Any = None) -> str
     raise ValueError("No AI provider configured")
 
 
+def _setting_string(repos: Mapping[str, Any], key: str) -> str:
+    settings = repos.get("settings")
+    value = _value(settings, "get")(key, "")
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            if isinstance(decoded, str):
+                value = decoded
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    return value.strip() if isinstance(value, str) else ""
+
+
+def selected_agent_profile(
+    repos: Mapping[str, Any], requested: Any = None
+) -> dict[str, Any]:
+    profiles = repos.get("agentProfiles")
+    get_profile = _value(profiles, "get")
+    get_by_provider = _value(profiles, "getByApiProvider")
+
+    def resolve(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        profile_id = value.strip()
+        profile = get_profile(profile_id) if callable(get_profile) else None
+        if profile is None and callable(get_by_provider):
+            profile = get_by_provider(profile_id)
+        return profile
+
+    if profiles is None and isinstance(requested, str) and requested.strip():
+        provider_id = requested.strip()
+        return {
+            "id": f"api-{provider_id}",
+            "name": provider_id,
+            "kind": "api",
+            "apiProviderId": provider_id,
+            "cliRuntimeId": None,
+            "executablePath": None,
+            "model": "",
+            "reasoningEffort": "medium",
+            "nativeWebSearch": False,
+            "webSearchPolicy": "auto",
+        }
+
+    profile = resolve(requested)
+    if requested is not None and profile is None:
+        raise ValueError(f"Agent profile not found: {requested}")
+    if profile is not None:
+        return profile
+    profile = resolve(_setting_string(repos, "activeAgentProfileId"))
+    if profile is not None:
+        return profile
+    profile = resolve(_setting_string(repos, "activeProviderId"))
+    if profile is not None:
+        return profile
+    available = _value(profiles, "list")() if profiles is not None else []
+    if available:
+        return available[0]
+    provider_id = selected_provider_id(repos)
+    profile = resolve(provider_id)
+    if profile is not None:
+        return profile
+    raise ValueError("No AI agent profile configured")
+
+
+async def agent_profile_config(
+    profile: Mapping[str, Any],
+    services: Mapping[str, Any],
+    connector: Any,
+    *,
+    model: str | None = None,
+    features: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if profile.get("kind") == "api":
+        provider_id = profile.get("apiProviderId")
+        if not isinstance(provider_id, str) or not provider_id:
+            raise ValueError("API agent profile is missing its provider")
+        return {
+            **await provider_config(
+                services,
+                connector,
+                provider_id,
+                model=model,
+                features=features,
+            ),
+            "backendType": "api",
+        }
+    runtime_id = profile.get("cliRuntimeId")
+    if not isinstance(runtime_id, str) or not runtime_id:
+        raise ValueError("CLI agent profile is missing its runtime")
+    requested_effort = features.get("reasoningEffort") if isinstance(features, Mapping) else None
+    return {
+        "backendType": "cli",
+        "runtimeId": runtime_id,
+        "model": (model or "").strip() or profile.get("model") or "default",
+        "reasoningEffort": (
+            requested_effort
+            if isinstance(requested_effort, str)
+            else profile.get("reasoningEffort") or "medium"
+        ),
+    }
+
+
 async def assemble_turn(
     intent: Mapping[str, Any],
     *,
@@ -313,14 +417,16 @@ async def assemble_turn(
             raise ValueError("activeDocumentId must be a non-empty string")
         active_document_context = _active_document_context(repos, active_document_id)
 
-    provider_id = selected_provider_id(repos, intent.get("providerId"))
-    provider = await provider_config(
+    requested_profile_id = intent.get("agentProfileId") or intent.get("providerId")
+    profile = selected_agent_profile(repos, requested_profile_id)
+    provider = await agent_profile_config(
+        profile,
         services,
         connector,
-        provider_id,
         model=intent.get("model") if isinstance(intent.get("model"), str) else None,
         features=intent.get("features") if isinstance(intent.get("features"), Mapping) else None,
     )
+    provider_id = profile.get("apiProviderId") or profile["id"]
     requested_thread_id = intent.get("threadId")
     replace_last = intent.get("replaceLastExchange") is True
     if replace_last and not (
@@ -333,8 +439,22 @@ async def assemble_turn(
             raise ValueError(f"Thread not found: {requested_thread_id}")
         if thread.get("workspaceId") != workspace_id:
             raise ValueError("Thread does not belong to the requested workspace")
+        update_profile = _value(repos.get("chat"), "updateAgentProfile")
+        thread = (
+            update_profile(thread["id"], provider_id, profile["id"])
+            if callable(update_profile)
+            else {
+                **thread,
+                "providerId": provider_id,
+                "agentProfileId": profile["id"],
+            }
+        )
     else:
-        thread = _value(repos.get("chat"), "createThread")(workspace_id, provider_id)
+        create_thread = _value(repos.get("chat"), "createThread")
+        try:
+            thread = create_thread(workspace_id, provider_id, profile["id"])
+        except TypeError:
+            thread = create_thread(workspace_id, provider_id)
 
     thread_id = thread["id"]
     replace_run_id = intent.get("replaceRunId")
@@ -371,6 +491,18 @@ async def assemble_turn(
     features = intent.get("features")
     if isinstance(features, Mapping) and features.get("deepThinking") is True:
         prompt_parts.append("Prefer careful multi-step reasoning before answering.")
+    cli_runtime = services.get("cliRuntime")
+    runtime_native_web_search = False
+    if profile.get("kind") == "cli" and cli_runtime is not None:
+        registry = getattr(cli_runtime, "registry", None)
+        if registry is not None:
+            adapter = registry.get(profile["cliRuntimeId"])
+            runtime_native_web_search = adapter.capabilities.native_web_search
+    capabilities = resolve_agent_capabilities(
+        profile,
+        list(agent_tool_names()),
+        runtime_native_web_search=runtime_native_web_search,
+    )
 
     return {
         "runId": intent["runId"],
@@ -378,6 +510,8 @@ async def assemble_turn(
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
         "providerId": provider_id,
+        "agentProfileId": profile["id"],
+        "agentProfile": profile,
         "replaceLastExchange": replace_last,
         "replaceRunId": replace_run_id if isinstance(replace_run_id, str) else None,
         "checkpointPath": _checkpoint_path(db_path),
@@ -385,7 +519,7 @@ async def assemble_turn(
         "provider": provider,
         "systemPrompt": "\n\n".join(prompt_parts),
         "messages": messages,
-        "enabledToolNames": list(agent_tool_names()),
+        **capabilities,
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
         "memories": read_memories(repos, workspace_id),
         "includeResearchMemory": workspace_id is not None,
@@ -411,11 +545,11 @@ async def assemble_resume(
     requested_thread_id = request.get("threadId")
     if requested_thread_id != thread["id"]:
         raise ValueError("Run does not belong to the requested thread")
-    provider = await provider_config(
-        services,
-        connector,
-        run["providerId"],
-        model=run.get("modelId"),
+    profile = selected_agent_profile(
+        repos, run.get("agentProfileId") or run["providerId"]
+    )
+    provider = await agent_profile_config(
+        profile, services, connector, model=run.get("modelId")
     )
     workspace_id = thread.get("workspaceId")
     active_document_id = run.get("activeDocumentId")
@@ -426,15 +560,26 @@ async def assemble_resume(
     )
     ensure_memory_files(repos, workspace_id)
     prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
+    runtime_native_web_search = False
+    if profile.get("kind") == "cli" and services.get("cliRuntime") is not None:
+        adapter = services["cliRuntime"].registry.get(profile["cliRuntimeId"])
+        runtime_native_web_search = adapter.capabilities.native_web_search
+    capabilities = resolve_agent_capabilities(
+        profile,
+        list(agent_tool_names()),
+        runtime_native_web_search=runtime_native_web_search,
+    )
     return {
         **request,
         "threadId": thread["id"],
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
         "providerId": run["providerId"],
+        "agentProfileId": profile["id"],
+        "agentProfile": profile,
         "provider": provider,
         "systemPrompt": "\n\n".join(prompt_parts),
-        "enabledToolNames": list(agent_tool_names()),
+        **capabilities,
         "checkpointPath": _checkpoint_path(db_path),
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
         "memories": read_memories(repos, workspace_id),
@@ -455,11 +600,11 @@ async def assemble_recovery(
     thread = _value(repos.get("chat"), "getThread")(run["threadId"])
     if thread is None:
         raise ValueError("Thread not found")
-    provider = await provider_config(
-        services,
-        connector,
-        run["providerId"],
-        model=run.get("modelId"),
+    profile = selected_agent_profile(
+        repos, run.get("agentProfileId") or run["providerId"]
+    )
+    provider = await agent_profile_config(
+        profile, services, connector, model=run.get("modelId")
     )
     workspace_id = thread.get("workspaceId")
     active_document_id = run.get("activeDocumentId")
@@ -477,16 +622,29 @@ async def assemble_recovery(
         if message.get("id") == user_message_id and message.get("role") == "user"
     ]
     recover_latest = run.get("status") == "running"
+    if profile.get("kind") == "cli":
+        recover_latest = False
+    runtime_native_web_search = False
+    if profile.get("kind") == "cli" and services.get("cliRuntime") is not None:
+        adapter = services["cliRuntime"].registry.get(profile["cliRuntimeId"])
+        runtime_native_web_search = adapter.capabilities.native_web_search
+    capabilities = resolve_agent_capabilities(
+        profile,
+        list(agent_tool_names()),
+        runtime_native_web_search=runtime_native_web_search,
+    )
     return {
         "runId": run["id"],
         "threadId": thread["id"],
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
         "providerId": run["providerId"],
+        "agentProfileId": profile["id"],
+        "agentProfile": profile,
         "provider": provider,
         "systemPrompt": "\n\n".join(prompt_parts),
         "messages": [] if recover_latest else messages,
-        "enabledToolNames": list(agent_tool_names()),
+        **capabilities,
         "checkpointPath": _checkpoint_path(db_path),
         "checkpointBefore": run.get("checkpointBefore"),
         "recoverLatestCheckpoint": recover_latest,

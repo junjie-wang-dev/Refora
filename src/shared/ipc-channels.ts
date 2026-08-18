@@ -113,6 +113,14 @@ export const IpcChannel = {
   AiProvidersTest: 'ai:providers:test',
   AiProvidersListModels: 'ai:providers:listModels',
 
+  AgentProfilesList: 'ai:agentProfiles:list',
+  AgentProfilesCreate: 'ai:agentProfiles:create',
+  AgentProfilesUpdate: 'ai:agentProfiles:update',
+  AgentProfilesDelete: 'ai:agentProfiles:delete',
+  AgentProfilesTest: 'ai:agentProfiles:test',
+  AgentProfilesListModels: 'ai:agentProfiles:listModels',
+  AgentProfilesScanRuntimes: 'ai:agentProfiles:scanRuntimes',
+
   AiDocTextGet: 'ai:docText:get',
   AiSummarize: 'ai:summarize',
   AiSummaryGet: 'ai:summary:get',

@@ -339,6 +339,71 @@ const noop = async () => undefined
     listModels: async () => ({ ok: true, models: [] }),
   },
 
+  agentProfiles: {
+    list: async () => [],
+    create: async (input: {
+      name: string
+      cliRuntimeId: string
+      executablePath?: string | null
+      model?: string
+      reasoningEffort?: string
+      nativeWebSearch?: boolean
+      webSearchPolicy?: string
+    }) => ({
+      id: 'cli-profile',
+      name: input.name,
+      kind: 'cli' as const,
+      apiProviderId: null,
+      cliRuntimeId: input.cliRuntimeId,
+      executablePath: input.executablePath ?? null,
+      model: input.model ?? 'default',
+      reasoningEffort: input.reasoningEffort ?? 'medium',
+      nativeWebSearch: input.nativeWebSearch ?? true,
+      webSearchPolicy: input.webSearchPolicy ?? 'auto',
+      createdAt: 0,
+      updatedAt: 0
+    }),
+    update: async (id: string) => ({
+      id,
+      name: 'CLI',
+      kind: 'cli' as const,
+      apiProviderId: null,
+      cliRuntimeId: 'codex',
+      executablePath: null,
+      model: 'default',
+      reasoningEffort: 'medium' as const,
+      nativeWebSearch: true,
+      webSearchPolicy: 'auto' as const,
+      createdAt: 0,
+      updatedAt: 0
+    }),
+    delete: noop,
+    test: async () => ({ ok: true, runtimeId: 'codex' }),
+    listModels: async () => ({ ok: true, models: [] }),
+    scanRuntimes: async () => [
+      {
+        ok: true,
+        runtimeId: 'codex',
+        label: 'OpenAI Codex CLI',
+        defaultExecutable: 'codex',
+        available: true,
+        executablePath: '/usr/local/bin/codex',
+        version: 'codex-cli 1.0.0',
+        authenticated: true,
+        reasoningMode: 'select' as const,
+        capabilities: { nativeWebSearch: true, mcp: true, sessionResume: true },
+        models: [
+          {
+            id: 'default',
+            label: 'CLI default',
+            reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as const,
+            defaultReasoningEffort: 'medium' as const
+          }
+        ]
+      }
+    ]
+  },
+
   ai: {
     docTextGet: async () => '',
     summarize: noop,

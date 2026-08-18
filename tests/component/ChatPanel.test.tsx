@@ -11,6 +11,7 @@ import {
 } from '@testing-library/react'
 import { StrictMode } from 'react'
 import type {
+  AgentProfile,
   AgentTraceStep,
   AgentRun,
   AiProvider,
@@ -175,6 +176,8 @@ function makeRunStep(runId: string, status: AgentTraceStep['status']): AgentTrac
 
 function setupApi(messages: ChatMessage[]): void {
   const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+  w.api.agentProfiles.list = async () => []
+  w.api.agentProfiles.listModels = async () => ({ ok: true, models: [] })
   w.api.aiProviders.list = async () => [TEST_PROVIDER]
   w.api.aiProviders.listModels = async () => ({ ok: true, models: [] })
   w.api.settings.get = async (_key: string, defaultValue: unknown) => defaultValue
@@ -545,6 +548,142 @@ describe('ChatPanel tool message filtering', () => {
 })
 
 describe('ChatPanel provider restoration', () => {
+  it('restores a CLI profile and keeps its model paired with that profile', async () => {
+    setupApi([])
+    const cliProfile: AgentProfile = {
+      id: 'profile-codex',
+      name: 'OpenAI Codex CLI',
+      kind: 'cli',
+      apiProviderId: null,
+      cliRuntimeId: 'codex',
+      executablePath: '/usr/local/bin/codex',
+      model: 'default',
+      reasoningEffort: 'medium',
+      nativeWebSearch: true,
+      webSearchPolicy: 'auto',
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.agentProfiles.list = async () => [cliProfile]
+    w.api.agentProfiles.listModels = async () => ({
+      ok: true,
+      models: [{
+        id: 'gpt-5.6-luna',
+        providerName: 'GPT-5.6-Luna',
+        supportsVariants: false,
+        supportsReasoning: true,
+        reasoningEfforts: ['low', 'medium', 'high'],
+        supportsVision: true,
+        supportsTools: true,
+        supportedParameters: []
+      }]
+    })
+    w.api.settings.get = async (key: string, defaultValue: unknown) => {
+      if (key === 'activeAgentProfileId' || key === 'chatSelectedAgentProfileId') {
+        return cliProfile.id
+      }
+      if (key === 'activeProviderId' || key === 'chatSelectedProviderId') {
+        return TEST_PROVIDER.id
+      }
+      if (key === 'chatSelectedModel') return 'gpt-5.6-luna'
+      if (key === 'chatReasoningEffort') return 'high'
+      return defaultValue
+    }
+
+    render(<ChatPanel />)
+
+    const selector = await screen.findByRole('button', {
+      name: 'workspace.chat.selectProvider'
+    })
+    await waitFor(() => expect(selector).toHaveTextContent('GPT-5.6-Luna'))
+    expect(selector).toHaveTextContent('workspace.chat.localCli')
+
+    const input = screen.getByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
+    fireEvent.change(input, { target: { value: 'Use Codex' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(1))
+    expect(mockChatSend.mock.calls[0][0]).toMatchObject({
+      providerId: cliProfile.id,
+      agentProfileId: cliProfile.id,
+      model: 'gpt-5.6-luna'
+    })
+  })
+
+  it('uses the CLI catalog default when a switched model rejects the current effort', async () => {
+    setupApi([])
+    const cliProfile: AgentProfile = {
+      id: 'profile-codex',
+      name: 'OpenAI Codex CLI',
+      kind: 'cli',
+      apiProviderId: null,
+      cliRuntimeId: 'codex',
+      executablePath: '/usr/local/bin/codex',
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'high',
+      nativeWebSearch: true,
+      webSearchPolicy: 'auto',
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const settingsSet = vi.fn().mockResolvedValue(undefined)
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.agentProfiles.list = async () => [cliProfile]
+    w.api.agentProfiles.listModels = async () => ({
+      ok: true,
+      models: [
+        {
+          id: 'default',
+          providerName: 'CLI default',
+          supportsVariants: false,
+          supportsReasoning: true,
+          reasoningEfforts: ['low', 'medium'],
+          defaultReasoningEffort: 'low',
+          supportsVision: true,
+          supportsTools: true,
+          supportedParameters: []
+        },
+        {
+          id: 'gpt-5.6-luna',
+          providerName: 'GPT-5.6-Luna',
+          supportsVariants: false,
+          supportsReasoning: true,
+          reasoningEfforts: ['high'],
+          defaultReasoningEffort: 'high',
+          supportsVision: true,
+          supportsTools: true,
+          supportedParameters: []
+        }
+      ]
+    })
+    w.api.settings.get = async (key: string, defaultValue: unknown) => {
+      if (key === 'activeAgentProfileId' || key === 'chatSelectedAgentProfileId') {
+        return cliProfile.id
+      }
+      if (key === 'chatSelectedModel') return 'gpt-5.6-luna'
+      if (key === 'chatReasoningEffort') return 'high'
+      return defaultValue
+    }
+    w.api.settings.set = settingsSet
+
+    render(<ChatPanel />)
+
+    const selector = await screen.findByRole('button', {
+      name: 'workspace.chat.selectProvider'
+    })
+    await waitFor(() => expect(selector).toHaveTextContent('GPT-5.6-Luna'))
+    fireEvent.click(selector)
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI Codex CLI/default' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: 'workspace.chat.reasoningEffort'
+      })).toHaveTextContent('settings.aiProviders.effort.low')
+    })
+    expect(settingsSet).toHaveBeenCalledWith('chatReasoningEffort', 'low')
+  })
+
   it('restores a provider reasoning effort when the saved value is none', async () => {
     setupApi([])
     const settingsSet = vi.fn().mockResolvedValue(undefined)
@@ -607,6 +746,26 @@ describe('ChatPanel provider restoration', () => {
     expect(settingsSet).toHaveBeenCalledWith('activeProviderId', 'p1')
   })
 
+  it('does not apply a stale CLI model to a legacy API provider selection', async () => {
+    setupApi([])
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.settings.get = async (key: string, defaultValue: unknown) => {
+      if (key === 'activeProviderId' || key === 'chatSelectedProviderId') {
+        return TEST_PROVIDER.id
+      }
+      if (key === 'chatSelectedModel') return 'gpt-5.6-luna'
+      return defaultValue
+    }
+
+    render(<ChatPanel />)
+
+    const selector = await screen.findByRole('button', {
+      name: 'workspace.chat.selectProvider'
+    })
+    await waitFor(() => expect(selector).toHaveTextContent(TEST_PROVIDER.model))
+    expect(selector).not.toHaveTextContent('gpt-5.6-luna')
+  })
+
   it('refreshes the configured provider and model after settings changes', async () => {
     setupApi([])
     const ollamaProvider: AiProvider = {
@@ -636,12 +795,14 @@ describe('ChatPanel provider restoration', () => {
     const selector = await screen.findByRole('button', {
       name: 'workspace.chat.selectProvider'
     })
-    await waitFor(() => expect(selector).toHaveTextContent('Test Provider/gpt-4o'))
+    await waitFor(() => expect(selector).toHaveTextContent('gpt-4o'))
+    expect(selector).toHaveAttribute('title', 'Test Provider · gpt-4o')
 
     activeProviderId = ollamaProvider.id
     window.dispatchEvent(new Event(AI_PROVIDERS_CHANGED_EVENT))
 
-    await waitFor(() => expect(selector).toHaveTextContent('Ollama/Kimi2.6'))
+    await waitFor(() => expect(selector).toHaveTextContent('Kimi2.6'))
+    expect(selector).toHaveAttribute('title', 'Ollama · Kimi2.6')
   })
 
   it('uses a switched provider for a new run in the existing thread', async () => {
@@ -677,7 +838,7 @@ describe('ChatPanel provider restoration', () => {
     const selector = await screen.findByRole('button', {
       name: 'workspace.chat.selectProvider'
     })
-    await waitFor(() => expect(selector).toHaveTextContent('Test Provider/gpt-4o'))
+    await waitFor(() => expect(selector).toHaveTextContent('gpt-4o'))
     fireEvent.click(selector)
     fireEvent.click(screen.getByRole('option', { name: 'Ollama/Kimi2.6' }))
     expect(await screen.findByText('workspace.chat.providerSwitchHint')).toBeInTheDocument()

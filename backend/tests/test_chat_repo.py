@@ -362,6 +362,7 @@ def test_field_contract_matches_chat_thread_type(db):
         "id",
         "workspaceId",
         "providerId",
+        "agentProfileId",
         "createdAt",
         "title",
         "headCheckpointId",

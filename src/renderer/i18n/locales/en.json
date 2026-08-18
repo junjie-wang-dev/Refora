@@ -302,6 +302,57 @@
         "glossary": "Glossary"
       }
     },
+    "modelSettings": {
+      "tabsLabel": "Model connection type",
+      "cli": "Local CLI",
+      "api": "API providers"
+    },
+    "agentProfiles": {
+      "title": "Local CLI agents",
+      "desc": "Refora scans this Mac for supported CLI agents and reads their available model capabilities",
+      "addCli": "Add CLI agent",
+      "addAnotherRuntime": "Add another",
+      "configure": "Configure",
+      "configuredCli": "Configured CLI agents",
+      "editCli": "Edit CLI agent",
+      "cliHint": "Codex and Gemini run locally. Refora tools use the existing approval card before consequential actions.",
+      "rescan": "Scan again",
+      "scanFail": "Failed to scan local CLI agents",
+      "notFound": "Executable not found",
+      "modelCount_one": "{{count}} model option",
+      "modelCount_other": "{{count}} model options",
+      "detectedPath": "Detected: {{path}}",
+      "name": "Name",
+      "runtime": "CLI runtime",
+      "executable": "Executable path (optional)",
+      "model": "Model",
+      "reasoning": "Reasoning effort",
+      "reasoningManaged": "Managed automatically by Gemini CLI",
+      "searchPolicy": "Web search policy",
+      "nativeSearch": "Native search",
+      "nativeSearchAvailable": "This runtime provides native Web search",
+      "apiSearchTitle": "API provider search behavior",
+      "apiSearchDesc": "When native search is enabled, Automatic uses the provider search and does not inject Refora search.",
+      "noApiProfiles": "Connect an API provider above to configure its search behavior.",
+      "test": "Test CLI",
+      "testOk": "CLI is ready",
+      "testFail": "CLI test failed",
+      "loadFail": "Failed to load Agent runtimes",
+      "saveFail": "Failed to save Agent runtime",
+      "deleteFail": "Failed to delete Agent runtime",
+      "status": {
+        "ready": "Ready",
+        "detected": "Detected",
+        "authRequired": "Sign-in required",
+        "missing": "Not installed"
+      },
+      "search": {
+        "auto": "Automatic",
+        "native": "Provider native",
+        "refora": "Refora search",
+        "disabled": "Disabled"
+      }
+    },
     "aiProviders": {
       "title": "AI Providers",
       "desc": "Configure AI model providers and API keys",
@@ -391,7 +442,8 @@
         "medium": "Medium",
         "high": "High",
         "xhigh": "Extra high",
-        "max": "Maximum"
+        "max": "Maximum",
+        "ultra": "Ultra"
       },
       "providers": {
         "openai": "GPT models through the native Responses API",
@@ -629,6 +681,9 @@
     "chat": {
       "title": "Chat",
       "selectProvider": "Select model / provider",
+      "chooseModel": "Choose model",
+      "localCli": "CLI",
+      "apiProvider": "API",
       "send": "Send",
       "thinking": "Thinking…",
       "assistant": "AI assistant",

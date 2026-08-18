@@ -26,6 +26,8 @@ def _map_run(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "threadId": row["threadId"],
         "providerId": row["providerId"],
+        "agentProfileId": row["agentProfileId"],
+        "runtimeSessionId": row["runtimeSessionId"],
         "modelId": row["modelId"],
         "activeDocumentId": row["activeDocumentId"],
         "status": row["status"],
@@ -49,13 +51,15 @@ def createAgentRunsRepository(db):
         id = input.get("id") or _new_id()
         db.execute(
             "INSERT INTO agent_runs "
-            "(id, threadId, providerId, modelId, activeDocumentId, status, checkpointBefore, checkpointAfter, "
+            "(id, threadId, providerId, agentProfileId, runtimeSessionId, modelId, activeDocumentId, status, checkpointBefore, checkpointAfter, "
             "replacesRunId, userMessageId, assistantMessageId, startedAt, endedAt, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
             [
                 id,
                 input["threadId"],
                 input["providerId"],
+                input.get("agentProfileId") or f"api-{input['providerId']}",
+                input.get("runtimeSessionId"),
                 input["modelId"],
                 input.get("activeDocumentId"),
                 input.get("status") or RUN_STATUS_QUEUED,
@@ -98,13 +102,14 @@ def createAgentRunsRepository(db):
         db.execute(
             "UPDATE agent_runs "
             "SET status = ?, checkpointBefore = ?, checkpointAfter = ?, userMessageId = ?, "
-            "assistantMessageId = ?, endedAt = ?, error = ? WHERE id = ?",
+            "assistantMessageId = ?, runtimeSessionId = ?, endedAt = ?, error = ? WHERE id = ?",
             [
                 next_state["status"],
                 next_state["checkpointBefore"],
                 next_state["checkpointAfter"],
                 next_state["userMessageId"],
                 next_state["assistantMessageId"],
+                next_state["runtimeSessionId"],
                 next_state["endedAt"],
                 next_state["error"],
                 id,

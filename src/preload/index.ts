@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IpcChannel } from '../shared/ipc-channels'
 import type {
   AgentInterrupt,
+  AgentProfile,
+  AgentProfileInput,
+  AgentProfilePatch,
+  AgentProfileTestResult,
   AgentResumeRequest,
   AgentRun,
   AgentTraceStep,
@@ -25,6 +29,7 @@ import type {
   ChatTokenEvent,
   ChatTraceEvent,
   ChatTitleUpdatedEvent,
+  CliRuntimeInfo,
   Document,
   DocumentCounts,
   DocumentPatch,
@@ -356,6 +361,21 @@ const api: ReforaApi = {
       invoke<{ ok: boolean; models?: string[] }>(IpcChannel.AiProvidersTest, id),
     listModels: (req: ListModelsRequest) =>
       invoke<ListModelsResult>(IpcChannel.AiProvidersListModels, req)
+  },
+
+  agentProfiles: {
+    list: () => invoke<AgentProfile[]>(IpcChannel.AgentProfilesList),
+    create: (input: AgentProfileInput) =>
+      invoke<AgentProfile>(IpcChannel.AgentProfilesCreate, input),
+    update: (id: string, patch: AgentProfilePatch) =>
+      invoke<AgentProfile>(IpcChannel.AgentProfilesUpdate, id, patch),
+    delete: (id: string) => invoke<void>(IpcChannel.AgentProfilesDelete, id),
+    test: (id: string) =>
+      invoke<AgentProfileTestResult>(IpcChannel.AgentProfilesTest, id),
+    listModels: (id: string) =>
+      invoke<ListModelsResult>(IpcChannel.AgentProfilesListModels, id),
+    scanRuntimes: () =>
+      invoke<CliRuntimeInfo[]>(IpcChannel.AgentProfilesScanRuntimes)
   },
 
   ai: {
