@@ -196,10 +196,19 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
             "/memories/": ReadonlyMemoryBackend(request.get("memories") or {})
         },
     )
-    refora_tools = [tool for tool in tools if tool.name != "write_todos"]
+    use_native_web_search = request.get("useNativeWebSearch") is True
+    refora_tools = [
+        tool
+        for tool in tools
+        if tool.name != "write_todos"
+        and (not use_native_web_search or tool.name != "web_search")
+    ]
+    native_tools = [{"type": "web_search"}] if use_native_web_search else []
     read_tools = [
         tool for tool in refora_tools if classify(tool.name) is RiskClass.READ
     ]
+    subagent_tools = [*read_tools, *native_tools]
+    agent_tools = [*refora_tools, *native_tools]
     filesystem_permissions = [
         FilesystemPermission(
             operations=["write"],
@@ -221,7 +230,7 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
                 "under /memories/. Read relevant memory files before making claims "
                 "about preferences, prior decisions, terminology, or research state."
             ),
-            "tools": read_tools,
+            "tools": subagent_tools,
             "permissions": filesystem_permissions,
             "interrupt_on": {},
         }
@@ -261,7 +270,7 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
     }
     return create_deep_agent(
         model=model,
-        tools=refora_tools,
+        tools=agent_tools,
         system_prompt=system_prompt or None,
         backend=backend,
         skills=None,

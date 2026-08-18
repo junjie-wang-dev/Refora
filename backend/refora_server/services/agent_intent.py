@@ -395,6 +395,29 @@ async def agent_profile_config(
     }
 
 
+def _agent_capabilities(
+    profile: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    services: Mapping[str, Any],
+) -> dict[str, Any]:
+    runtime_native_web_search = False
+    cli_runtime = services.get("cliRuntime")
+    if profile.get("kind") == "cli" and cli_runtime is not None:
+        registry = getattr(cli_runtime, "registry", None)
+        if registry is not None:
+            adapter = registry.get(profile["cliRuntimeId"])
+            runtime_native_web_search = adapter.capabilities.native_web_search
+    return resolve_agent_capabilities(
+        profile,
+        list(agent_tool_names()),
+        api_native_web_search=(
+            profile.get("kind") == "api"
+            and provider.get("useResponsesApi") is True
+        ),
+        runtime_native_web_search=runtime_native_web_search,
+    )
+
+
 async def assemble_turn(
     intent: Mapping[str, Any],
     *,
@@ -491,18 +514,7 @@ async def assemble_turn(
     features = intent.get("features")
     if isinstance(features, Mapping) and features.get("deepThinking") is True:
         prompt_parts.append("Prefer careful multi-step reasoning before answering.")
-    cli_runtime = services.get("cliRuntime")
-    runtime_native_web_search = False
-    if profile.get("kind") == "cli" and cli_runtime is not None:
-        registry = getattr(cli_runtime, "registry", None)
-        if registry is not None:
-            adapter = registry.get(profile["cliRuntimeId"])
-            runtime_native_web_search = adapter.capabilities.native_web_search
-    capabilities = resolve_agent_capabilities(
-        profile,
-        list(agent_tool_names()),
-        runtime_native_web_search=runtime_native_web_search,
-    )
+    capabilities = _agent_capabilities(profile, provider, services)
 
     return {
         "runId": intent["runId"],
@@ -560,15 +572,7 @@ async def assemble_resume(
     )
     ensure_memory_files(repos, workspace_id)
     prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
-    runtime_native_web_search = False
-    if profile.get("kind") == "cli" and services.get("cliRuntime") is not None:
-        adapter = services["cliRuntime"].registry.get(profile["cliRuntimeId"])
-        runtime_native_web_search = adapter.capabilities.native_web_search
-    capabilities = resolve_agent_capabilities(
-        profile,
-        list(agent_tool_names()),
-        runtime_native_web_search=runtime_native_web_search,
-    )
+    capabilities = _agent_capabilities(profile, provider, services)
     return {
         **request,
         "threadId": thread["id"],
@@ -624,15 +628,7 @@ async def assemble_recovery(
     recover_latest = run.get("status") == "running"
     if profile.get("kind") == "cli":
         recover_latest = False
-    runtime_native_web_search = False
-    if profile.get("kind") == "cli" and services.get("cliRuntime") is not None:
-        adapter = services["cliRuntime"].registry.get(profile["cliRuntimeId"])
-        runtime_native_web_search = adapter.capabilities.native_web_search
-    capabilities = resolve_agent_capabilities(
-        profile,
-        list(agent_tool_names()),
-        runtime_native_web_search=runtime_native_web_search,
-    )
+    capabilities = _agent_capabilities(profile, provider, services)
     return {
         "runId": run["id"],
         "threadId": thread["id"],

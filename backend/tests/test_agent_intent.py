@@ -36,6 +36,30 @@ def test_checkpoint_continuation_sends_only_the_new_user_message():
     ]
 
 
+def test_api_profile_native_search_follows_responses_api_support():
+    profile = {
+        "kind": "api",
+        "nativeWebSearch": True,
+        "webSearchPolicy": "auto",
+    }
+
+    native = agent_intent._agent_capabilities(
+        profile,
+        {"useResponsesApi": True},
+        {},
+    )
+    fallback = agent_intent._agent_capabilities(
+        profile,
+        {"useResponsesApi": False},
+        {},
+    )
+
+    assert native["useNativeWebSearch"] is True
+    assert "web_search" not in native["enabledToolNames"]
+    assert fallback["useNativeWebSearch"] is False
+    assert "web_search" in fallback["enabledToolNames"]
+
+
 @pytest.mark.asyncio
 async def test_recovery_rebuilds_the_persisted_active_reader_context(
     monkeypatch,

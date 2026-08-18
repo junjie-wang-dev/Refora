@@ -112,6 +112,36 @@ def test_search_capability_resolver_deduplicates_native_search():
     assert "web_search" in resolved["enabledToolNames"]
 
 
+def test_api_native_search_requires_responses_api_support():
+    profile = {
+        "kind": "api",
+        "nativeWebSearch": True,
+        "webSearchPolicy": "auto",
+    }
+    fallback = resolve_agent_capabilities(
+        profile,
+        ["search_library", "web_search", "web_fetch"],
+    )
+
+    assert fallback["useNativeWebSearch"] is False
+    assert "web_search" in fallback["enabledToolNames"]
+
+    profile["webSearchPolicy"] = "native"
+    with pytest.raises(ValueError, match="Native Web search is not available"):
+        resolve_agent_capabilities(
+            profile,
+            ["search_library", "web_search", "web_fetch"],
+        )
+
+    native = resolve_agent_capabilities(
+        profile,
+        ["search_library", "web_search", "web_fetch"],
+        api_native_web_search=True,
+    )
+    assert native["useNativeWebSearch"] is True
+    assert native["enabledToolNames"] == ["search_library", "web_fetch"]
+
+
 def test_codex_invocation_is_run_scoped_and_never_bypasses_sandbox(monkeypatch, tmp_path):
     adapter = CodexCliAdapter()
     monkeypatch.setattr(adapter, "resolve_executable", lambda configured: "/usr/bin/codex")
@@ -207,6 +237,20 @@ class _WriteTool:
 class _ToolCallAwareWriteTool(_WriteTool):
     async def ainvoke(self, invocation):
         return invocation
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    ["../escaped", "nested/run", "run.with-dot", "", "x" * 129],
+)
+def test_cli_tool_broker_rejects_unsafe_run_ids(tmp_path, run_id):
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+
+    with pytest.raises(ValueError, match="run ID is invalid"):
+        broker.open_run(run_id, [_ReadTool()])
+
+    assert not (tmp_path / "escaped.json").exists()
+    assert broker._runs == {}
 
 
 @pytest.mark.asyncio

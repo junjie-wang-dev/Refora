@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import secrets
 import sys
 import uuid
@@ -13,6 +14,9 @@ from typing import Any
 from refora_server.agent.risk import RiskClass, classify
 
 
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
 class CliToolBroker:
     def __init__(self, state_dir: str, base_url: str, server_token: str) -> None:
         self._root = Path(state_dir) / "cli-mcp"
@@ -20,7 +24,17 @@ class CliToolBroker:
         self._server_token = server_token
         self._runs: dict[str, dict[str, Any]] = {}
 
+    def _artifact_path(self, run_id: str, suffix: str) -> Path:
+        if not isinstance(run_id, str) or _RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("CLI tool run ID is invalid")
+        root = self._root.resolve()
+        path = (root / f"{run_id}{suffix}").resolve()
+        if path.parent != root:
+            raise ValueError("CLI tool artifact path is invalid")
+        return path
+
     def open_run(self, run_id: str, tools: list[Any]) -> dict[str, Any] | None:
+        path = self._artifact_path(run_id, ".json")
         allowed = {
             tool.name: tool
             for tool in tools
@@ -39,7 +53,6 @@ class CliToolBroker:
             "artifacts": set(),
         }
         self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = self._root / f"{run_id}.json"
         payload = {
             "baseUrl": self._base_url,
             "serverToken": self._server_token,
@@ -80,7 +93,7 @@ class CliToolBroker:
         )
         if not safe_name:
             raise ValueError("CLI runtime configuration name is invalid")
-        path = self._root / f"{run_id}.{safe_name}.json"
+        path = self._artifact_path(run_id, f".{safe_name}.json")
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, json.dumps(value, separators=(",", ":")).encode("utf-8"))

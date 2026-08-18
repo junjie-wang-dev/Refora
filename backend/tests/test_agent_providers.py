@@ -22,7 +22,14 @@ class RecordingOpenAIModel(FakeMessagesListChatModel):
     bound_tool_names: list[list[str]] = Field(default_factory=list)
 
     def bind_tools(self, tools, **kwargs):
-        self.bound_tool_names.append([tool.name for tool in tools])
+        self.bound_tool_names.append(
+            [
+                str(tool.get("name") or tool.get("type"))
+                if isinstance(tool, dict)
+                else tool.name
+                for tool in tools
+            ]
+        )
         return self
 
     def _get_ls_params(self, **kwargs):
@@ -402,6 +409,40 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
     assert executed == []
 
 
+def test_create_agent_binds_native_web_search_without_local_tool_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_create_deep_agent(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(providers, "create_deep_agent", fake_create_deep_agent)
+    local_search = SimpleNamespace(name="web_search")
+    library_search = SimpleNamespace(name="search_library")
+
+    providers.create_agent(
+        object(),
+        [local_search, library_search],
+        {
+            "sandboxRoot": "/tmp/refora-sandbox",
+            "systemPrompt": "prompt",
+            "memories": {},
+            "useNativeWebSearch": True,
+        },
+    )
+
+    assert local_search not in captured["tools"]
+    assert library_search in captured["tools"]
+    assert {"type": "web_search"} in captured["tools"]
+    assert set(captured["interrupt_on"]) == {"search_library"}
+    for subagent in captured["subagents"]:
+        assert local_search not in subagent["tools"]
+        assert library_search in subagent["tools"]
+        assert {"type": "web_search"} in subagent["tools"]
+
+
 def test_only_builtin_execute_is_disabled() -> None:
     assert providers._DISABLED_BUILTIN_TOOLS == {"execute"}
 
@@ -483,6 +524,25 @@ def test_real_deep_agent_uses_stateful_todos_and_restricted_subagents(tmp_path) 
         } <= available
         assert "execute" not in available
         assert "task" not in available
+
+
+def test_real_deep_agent_binds_native_web_search_once(tmp_path) -> None:
+    model = RecordingOpenAIModel(responses=[AIMessage(content="Finished")])
+    tools = create_agent_tools(AgentToolContext(run_id="run-native"), {})
+    graph = providers.create_agent(
+        model,
+        tools,
+        {
+            "sandboxRoot": str((tmp_path / "sandbox").resolve()),
+            "systemPrompt": "Research current information.",
+            "memories": {},
+            "useNativeWebSearch": True,
+        },
+    )
+
+    graph.invoke({"messages": [HumanMessage(content="Find current evidence")]})
+
+    assert model.bound_tool_names[0].count("web_search") == 1
 
 
 def test_real_deep_agent_files_persist_and_cannot_escape_backend(tmp_path) -> None:

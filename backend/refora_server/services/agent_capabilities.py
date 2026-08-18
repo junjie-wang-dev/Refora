@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
 def resolve_agent_capabilities(
-    profile: dict[str, Any],
+    profile: Mapping[str, Any],
     tool_names: list[str],
     *,
+    api_native_web_search: bool = False,
     runtime_native_web_search: bool = False,
 ) -> dict[str, Any]:
     policy = profile.get("webSearchPolicy") or "auto"
     native_available = (
         profile.get("nativeWebSearch") is True
-        and (profile.get("kind") == "api" or runtime_native_web_search)
+        and (
+            (profile.get("kind") == "api" and api_native_web_search)
+            or (profile.get("kind") == "cli" and runtime_native_web_search)
+        )
     )
     if policy == "native" and not native_available:
         raise ValueError("Native Web search is not available for this agent profile")
