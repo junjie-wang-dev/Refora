@@ -668,6 +668,8 @@
     "markdownMode": "Markdown 模式",
     "markdownRead": "阅读",
     "markdownEdit": "编辑",
+    "markdownCopy": "复制",
+    "markdownSelectAll": "全选",
     "markdownEmpty": "这张 Markdown 卡片尚无内容。",
     "moveCard": "拖动卡片即可移动，可使用方向键微调位置。",
     "selectionActions": "选中卡片操作",

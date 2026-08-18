@@ -375,12 +375,6 @@
     letter-spacing: -0.015em;
   }
 
-  .workspace-note-preview {
-    border: 1px solid var(--workspace-card-border);
-    border-radius: 18px;
-    background: color-mix(in srgb, #ffffff 42%, var(--workspace-card-surface-base));
-  }
-
   .workspace-card-scroll {
     scrollbar-color: color-mix(in srgb, var(--workspace-card-accent) 45%, transparent) transparent;
     scrollbar-width: thin;

@@ -163,6 +163,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   const [docs, setDocs] = useState<Map<string, Document>>(new Map())
   const [summaries, setSummaries] = useState<Map<string, AiSummary>>(new Map())
+  const [loadedSummaryDocIds, setLoadedSummaryDocIds] = useState<Set<string>>(new Set())
   const [summarizing, setSummarizing] = useState<Set<string>>(new Set())
   const [summaryErrors, setSummaryErrors] = useState<Map<string, string>>(new Map())
   const [dropActive, setDropActive] = useState(false)
@@ -420,6 +421,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   useEffect(() => {
     let cancelled = false
     const workspaceIds = new Set(workspaceDocIds)
+    setLoadedSummaryDocIds((previous) => previous.size === 0 ? previous : new Set())
     void Promise.all(
       allDocIds.map(async (docId) => {
         try {
@@ -441,6 +443,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
               else next.delete(docId)
               return next
             })
+            setLoadedSummaryDocIds((previous) => new Set(previous).add(docId))
           }
         } catch (e) {
           if (cancelled) return
@@ -1177,6 +1180,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           <PaperCard
             doc={doc}
             summary={summary}
+            summaryLoading={!loadedSummaryDocIds.has(docId)}
             summarizing={summarizing.has(docId)}
             summaryError={summaryErrors.get(docId) ?? null}
             onSummarize={() => handleSummarize(docId)}
@@ -1303,6 +1307,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     handleOpenAsset,
     handleRevealAsset,
     handleSummarize,
+    loadedSummaryDocIds,
     noteMap,
     onOpenMarkdownCard,
     removeItem,

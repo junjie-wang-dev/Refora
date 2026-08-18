@@ -7,7 +7,9 @@ import {
   useState
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, PencilSimple } from '@phosphor-icons/react'
+import { showContextMenu } from '@lobehub/ui'
+import type { ContextMenuItem } from '@lobehub/ui'
+import { BookOpen, Copy, PencilSimple, SelectionAll } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import {
   REMARK_PLUGINS,
@@ -80,6 +82,7 @@ const WorkspaceMarkdownView = forwardRef<
   const [saveError, setSaveError] = useState<string | null>(null)
   const savedDraftRef = useRef<MarkdownDraft>({ title, contentMd })
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true))
+  const articleRef = useRef<HTMLElement>(null)
 
   const isReport = kind === 'report'
   const editable = kind !== 'summary' && Boolean(onUpdate)
@@ -154,6 +157,59 @@ const WorkspaceMarkdownView = forwardRef<
     }
     setSaveError(null)
     setMode(nextMode)
+  }
+
+  const handleReadContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+    event.preventDefault()
+    const article = articleRef.current
+    if (!article) return
+    const selection = window.getSelection()
+    const selectionInsideArticle = Boolean(
+      selection?.rangeCount
+      && selection.anchorNode
+      && selection.focusNode
+      && (selection.anchorNode === article || article.contains(selection.anchorNode))
+      && (selection.focusNode === article || article.contains(selection.focusNode))
+    )
+    const selectedText = selectionInsideArticle ? selection?.toString() ?? '' : ''
+    const items: ContextMenuItem[] = [
+      {
+        key: 'copy',
+        label: t('workspace.markdownCopy'),
+        icon: <Copy className="h-3.5 w-3.5" />,
+        disabled: !selectedText,
+        onClick: () => {
+          if (!selectedText) return
+          void window.api.clipboard.writeText(selectedText).catch(() => {})
+        }
+      },
+      {
+        key: 'selectAll',
+        label: t('workspace.markdownSelectAll'),
+        icon: <SelectionAll className="h-3.5 w-3.5" />,
+        disabled: !article.textContent,
+        onClick: () => {
+          const nextSelection = window.getSelection()
+          if (!nextSelection) return
+          const range = document.createRange()
+          range.selectNodeContents(article)
+          nextSelection.removeAllRanges()
+          nextSelection.addRange(range)
+        }
+      }
+    ]
+    if (editable) {
+      items.push(
+        { type: 'divider', key: 'divider' },
+        {
+          key: 'edit',
+          label: t('workspace.markdownEdit'),
+          icon: <PencilSimple className="h-3.5 w-3.5" />,
+          onClick: () => void changeMode('edit')
+        }
+      )
+    }
+    showContextMenu(items)
   }
 
   const handleBack = async () => {
@@ -265,7 +321,11 @@ const WorkspaceMarkdownView = forwardRef<
               />
             </div>
           ) : (
-            <article className="markdown-body select-text text-sm text-foreground [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-panel-2 [&_code]:px-1 [&_h1]:mt-0 [&_h1]:text-2xl [&_h2]:mt-8 [&_h3]:mt-6 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-panel-2 [&_pre]:p-3 [&_ul]:list-disc [&_ul]:pl-5">
+            <article
+              ref={articleRef}
+              className="markdown-body select-text text-sm text-foreground [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-panel-2 [&_code]:px-1 [&_h1]:mt-0 [&_h1]:text-2xl [&_h2]:mt-8 [&_h3]:mt-6 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-panel-2 [&_pre]:p-3 [&_ul]:list-disc [&_ul]:pl-5"
+              onContextMenu={handleReadContextMenu}
+            >
               <div className="mb-8 border-b border-border pb-5">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">{typeLabel}</p>
                 <h1 className="m-0 text-3xl font-semibold tracking-tight text-foreground">{savedDraft.title}</h1>

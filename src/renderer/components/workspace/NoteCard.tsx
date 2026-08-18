@@ -5,11 +5,25 @@ import type { ContextMenuItem } from '@lobehub/ui'
 import { Copy, Download, PencilSimple, Trash } from '@phosphor-icons/react'
 import { motion, MotionConfig } from 'motion/react'
 import ReactMarkdown from 'react-markdown'
-import { REMARK_PLUGINS, REHYPE_PLUGINS, MARKDOWN_COMPONENTS } from '../../utils/markdown'
+import {
+  REMARK_PLUGINS,
+  REHYPE_PLUGINS,
+  createReforaDocMarkdownComponents,
+  urlTransform
+} from '../../utils/markdown'
+import { useDocumentStore } from '../../store/documentStore'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
 import { Input as UiInput, Textarea as UiTextarea, cardClassName } from '../ui'
 import type { WorkspaceNote } from '../../../shared/ipc-types'
+import { openDocumentPdf } from '../../utils/openPdf'
+
+const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
+  (docId) => openDocumentPdf(docId),
+  () => useDocumentStore.getState().showToast(
+    'Failed to open document. It may have been moved or deleted.'
+  )
+)
 
 interface NoteCardProps {
   note: WorkspaceNote
@@ -202,12 +216,17 @@ export default function NoteCard({
           </div>
           <div
             data-card-scroll
-            className="workspace-card-scroll workspace-note-preview min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 text-xs text-muted [&_p]:my-0.5 [&_ul]:my-0.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:my-0"
+            className="workspace-card-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain text-xs text-muted [&_p]:my-0.5 [&_ul]:my-0.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:my-0"
             onWheel={(event) => event.stopPropagation()}
           >
             {note.contentMd ? (
               <div>
-                <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>
+                <ReactMarkdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  rehypePlugins={REHYPE_PLUGINS}
+                  components={MARKDOWN_COMPONENTS}
+                  urlTransform={urlTransform}
+                >
                   {boardPreview}
                 </ReactMarkdown>
               </div>
@@ -292,7 +311,12 @@ export default function NoteCard({
             </div>
             <div className="min-w-0 overflow-y-auto rounded-lg border border-border bg-panel-2 p-3 text-sm text-foreground [&_p]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-background [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4">
               {editContent ? (
-                <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>
+                <ReactMarkdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  rehypePlugins={REHYPE_PLUGINS}
+                  components={MARKDOWN_COMPONENTS}
+                  urlTransform={urlTransform}
+                >
                   {editContent}
                 </ReactMarkdown>
               ) : (
@@ -304,7 +328,12 @@ export default function NoteCard({
           <>
             <p className="mb-3 text-xs text-muted">{formatDate(note.updatedAt)}</p>
             <div className="max-h-[65vh] overflow-y-auto text-sm text-foreground [&_p]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-panel-2 [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4">
-              <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>
+              <ReactMarkdown
+                remarkPlugins={REMARK_PLUGINS}
+                rehypePlugins={REHYPE_PLUGINS}
+                components={MARKDOWN_COMPONENTS}
+                urlTransform={urlTransform}
+              >
                 {note.contentMd}
               </ReactMarkdown>
             </div>

@@ -332,9 +332,10 @@ describe('ReportCard', () => {
 })
 
 describe('Workspace card types', () => {
-  it('opens the PDF from the left preview and Markdown reading from the right details', () => {
+  it('opens the PDF from the left preview and generates a summary from empty right details', () => {
     const onOpenPdf = vi.fn()
     const onOpenSummary = vi.fn()
+    const onSummarize = vi.fn()
     const paper = {
       id: 'doc / 1',
       fileName: 'paper.pdf',
@@ -349,7 +350,7 @@ describe('Workspace card types', () => {
         summary={null}
         summarizing={false}
         summaryError={null}
-        onSummarize={() => {}}
+        onSummarize={onSummarize}
         onOpenPdf={onOpenPdf}
         onRemove={() => {}}
         onOpenSummary={onOpenSummary}
@@ -373,8 +374,28 @@ describe('Workspace card types', () => {
     expect(onOpenPdf).toHaveBeenCalledOnce()
     expect(onOpenSummary).not.toHaveBeenCalled()
     fireEvent.click(details)
-    expect(onOpenSummary).toHaveBeenCalledOnce()
+    expect(onSummarize).toHaveBeenCalledOnce()
+    expect(onOpenSummary).not.toHaveBeenCalled()
     expect(onOpenPdf).toHaveBeenCalledOnce()
+  })
+
+  it('does not request another summary while the paper is already summarizing', () => {
+    const onSummarize = vi.fn()
+    const { container } = render(
+      <PaperCard
+        doc={{ id: 'doc-1', fileName: 'paper.pdf', title: 'Paper title' } as Document}
+        summary={null}
+        summarizing
+        summaryError={null}
+        onSummarize={onSummarize}
+        onOpenPdf={() => {}}
+        onRemove={() => {}}
+      />
+    )
+
+    fireEvent.click(container.querySelector('[data-paper-details]') as HTMLElement)
+
+    expect(onSummarize).not.toHaveBeenCalled()
   })
 
   it('copies a paper as Markdown from its context menu', () => {
@@ -749,6 +770,39 @@ describe('NoteCard', () => {
     const items = mockShowContextMenu.mock.calls[0][0] as Array<{ key: string; onClick: () => void }>
     act(() => items.find((item) => item.key === 'copy')?.onClick())
     expect(onCopy).toHaveBeenCalledOnce()
+  })
+
+  it('uses the report Markdown preview style and opens document citations the same way', async () => {
+    const onOpen = vi.fn()
+    mockOpenPdf.mockResolvedValue(undefined)
+    const { container: noteContainer } = render(
+      <NoteCard
+        note={{
+          ...note,
+          contentMd: '[Source](refora://doc/source-doc)'
+        }}
+        onDelete={() => {}}
+        onUpdate={async () => true}
+        onOpen={onOpen}
+      />
+    )
+    const { container: reportContainer } = render(
+      <ReportCard
+        report={makeReport()}
+        onDelete={() => {}}
+        onUpdate={async () => true}
+      />
+    )
+
+    expect(noteContainer.querySelector('[data-card-scroll]')?.className).toBe(
+      reportContainer.querySelector('[data-card-scroll]')?.className
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+
+    await waitFor(() => {
+      expect(mockOpenPdf).toHaveBeenCalledWith('source-doc')
+    })
+    expect(onOpen).not.toHaveBeenCalled()
   })
 
   it('keeps the edited draft open when saving fails', async () => {

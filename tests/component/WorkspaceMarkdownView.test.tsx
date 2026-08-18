@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { showContextMenu } from '@lobehub/ui'
 import WorkspaceMarkdownView from '../../src/renderer/components/workspace/WorkspaceMarkdownView'
+
+vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key })
@@ -30,6 +33,8 @@ const mockOpenPdf = vi.fn()
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.mocked(showContextMenu).mockReset()
+  vi.restoreAllMocks()
   window.api.documents.openPdf = originalOpenPdf
 })
 
@@ -59,6 +64,57 @@ describe('WorkspaceMarkdownView', () => {
       'target',
       '_blank'
     )
+  })
+
+  it('provides copy, select-all, and edit actions from the reading context menu', async () => {
+    const writeText = vi.spyOn(window.api.clipboard, 'writeText').mockResolvedValue()
+    renderView()
+    const content = screen.getByText('Initial content')
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(content)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    fireEvent.contextMenu(content)
+
+    const items = vi.mocked(showContextMenu).mock.calls[0][0] as Array<{
+      key: string
+      disabled?: boolean
+      onClick?: () => void | Promise<void>
+    }>
+    expect(items.map((item) => item.key)).toEqual(['copy', 'selectAll', 'divider', 'edit'])
+    expect(items[0].disabled).toBe(false)
+
+    await act(async () => {
+      await items[0].onClick?.()
+    })
+    expect(writeText).toHaveBeenCalledWith('Initial content')
+
+    selection?.removeAllRanges()
+    items[1].onClick?.()
+    expect(selection?.toString()).toContain('Research notes')
+    expect(selection?.toString()).toContain('Initial content')
+
+    await act(async () => {
+      items[3].onClick?.()
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toBeInTheDocument()
+  })
+
+  it('keeps the summary reading context menu read-only and disables copy without a selection', () => {
+    window.getSelection()?.removeAllRanges()
+    renderView({ kind: 'summary', onUpdate: undefined })
+
+    fireEvent.contextMenu(screen.getByText('Initial content'))
+
+    const items = vi.mocked(showContextMenu).mock.calls[0][0] as Array<{
+      key: string
+      disabled?: boolean
+    }>
+    expect(items.map((item) => item.key)).toEqual(['copy', 'selectAll'])
+    expect(items[0].disabled).toBe(true)
   })
 
   it.each(['note', 'report'] as const)('renders sanitized HTML in a %s', (kind) => {

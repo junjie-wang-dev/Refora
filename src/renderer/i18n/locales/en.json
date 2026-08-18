@@ -669,6 +669,8 @@
     "markdownMode": "Markdown mode",
     "markdownRead": "Read",
     "markdownEdit": "Edit",
+    "markdownCopy": "Copy",
+    "markdownSelectAll": "Select All",
     "markdownEmpty": "This Markdown card is empty.",
     "moveCard": "Drag the card to move it. Use arrow keys to nudge it.",
     "selectionActions": "Selected card actions",

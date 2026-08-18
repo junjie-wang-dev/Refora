@@ -336,6 +336,43 @@ describe('Board card clipboard actions', () => {
     })
   })
 
+  it('waits for the stored summary lookup before allowing summary generation', async () => {
+    const document = {
+      id: 'doc-1',
+      fileName: 'paper.pdf',
+      title: 'Paper title'
+    } as Document
+    let resolveSummary: (summary: AiSummary | null) => void = () => undefined
+    const summaryLookup = new Promise<AiSummary | null>((resolve) => {
+      resolveSummary = resolve
+    })
+    const summarize = vi.fn().mockResolvedValue(undefined)
+    mockItems = [makeItem('item-paper', document.id, 0)]
+    const api = window.api as unknown as Record<string, unknown>
+    const documents = api.documents as Record<string, unknown>
+    const ai = api.ai as Record<string, unknown>
+    documents.get = vi.fn().mockResolvedValue(document)
+    ai.summaryGet = vi.fn().mockReturnValue(summaryLookup)
+    ai.summarize = summarize
+
+    const { container } = render(<Board />)
+    const details = container.querySelector('[data-paper-details]') as HTMLElement
+    expect(details).not.toHaveClass('cursor-pointer')
+    fireEvent.click(details)
+
+    expect(summarize).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveSummary(null)
+      await summaryLookup
+    })
+    await waitFor(() => expect(screen.getByText('Paper title')).toBeInTheDocument())
+    expect(details).toHaveClass('cursor-pointer')
+    fireEvent.click(details)
+
+    expect(summarize).toHaveBeenCalledWith(document.id)
+  })
+
   it('copies reports and Markdown notes as Markdown files', () => {
     const report: AiReport = {
       id: 'report-1',

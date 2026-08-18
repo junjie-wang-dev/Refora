@@ -11,6 +11,7 @@ import { formatAuthors } from '../../utils/format'
 interface PaperCardProps {
   doc: Document | null
   summary: AiSummary | null
+  summaryLoading?: boolean
   summarizing: boolean
   summaryError: string | null
   onSummarize: () => void
@@ -67,6 +68,7 @@ function PaperPreview({
 export default function PaperCard({
   doc,
   summary,
+  summaryLoading = false,
   summarizing,
   summaryError,
   onSummarize,
@@ -82,6 +84,17 @@ export default function PaperCard({
   const content = summary?.content ?? null
   const keyPoints = content?.keyPoints ?? []
   const previewVersion = doc ? `${doc.fileHash ?? 'unhashed'}-${doc.updatedAt}` : ''
+  const detailsClickable = content
+    ? Boolean(onOpenSummary)
+    : !summaryLoading && !summarizing
+
+  const handleDetailsClick = () => {
+    if (content) {
+      onOpenSummary?.()
+      return
+    }
+    if (!summaryLoading && !summarizing) onSummarize()
+  }
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -139,10 +152,10 @@ export default function PaperCard({
           <div
             data-paper-details
             data-card-drag-click
-            className={`flex min-w-0 flex-1 flex-col gap-2 p-3 ${onOpenSummary ? 'cursor-pointer' : ''}`}
+            className={`flex min-w-0 flex-1 flex-col gap-2 p-3 ${detailsClickable ? 'cursor-pointer' : ''}`}
             onClick={(event) => {
               event.stopPropagation()
-              onOpenSummary?.()
+              handleDetailsClick()
             }}
           >
             <div className="flex shrink-0 items-start gap-2">
