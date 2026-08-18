@@ -561,6 +561,19 @@
     "deletedAnnotations_other": "Deleted {{count}} annotations",
     "undo": "Undo",
     "retrySave": "Retry save",
+    "contextMenu": {
+      "copy": "Copy text",
+      "copySuccess": "Text copied",
+      "copyFailed": "Failed to copy text",
+      "highlight": "Highlight",
+      "ai": "AI",
+      "summary": "Summarize",
+      "explain": "Explain",
+      "addToAiContext": "Add to AI context",
+      "summaryPrompt": "Summarize the following selected passage:",
+      "explainPrompt": "Explain the following selected passage clearly:",
+      "contextPrompt": "Selected context from “{{title}}”, pages {{pages}}:"
+    },
     "saveStatus": {
       "idle": "Local",
       "saving": "Saving…",
@@ -568,7 +581,6 @@
       "error": "Save failed"
     },
     "tools": {
-      "read": "Read and select text",
       "select": "Select annotations",
       "highlight": "Highlight",
       "underline": "Underline",

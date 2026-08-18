@@ -42,6 +42,7 @@ vi.mock('react-i18next', () => ({
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
+import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
 import { AI_PROVIDERS_CHANGED_EVENT } from '../../src/renderer/utils/aiProviderEvents'
 
 const ChatPanelModule = await import('../../src/renderer/components/workspace/ChatPanel')
@@ -237,6 +238,7 @@ function setupStore(): void {
   })
   useDocumentStore.setState({ showToast: vi.fn() })
   usePdfReaderStore.setState({ activeDocumentId: null })
+  useChatDraftStore.setState({ pending: null })
 }
 
 beforeEach(() => {
@@ -266,6 +268,7 @@ afterEach(() => {
     threads: []
   })
   usePdfReaderStore.setState({ activeDocumentId: null })
+  useChatDraftStore.setState({ pending: null })
 })
 
 describe('parseReforaDocLink', () => {
@@ -364,6 +367,71 @@ describe('ChatPanel tab header', () => {
       activeDocumentId: 'doc-reader',
       text: 'Explain this paper'
     })
+  })
+
+  it('prefills AI selection requests and appends selected context without sending', async () => {
+    setupApi([])
+    useChatDraftStore.getState().request({
+      mode: 'prefill',
+      text: 'Summarize this passage:\n\n> Evidence'
+    })
+
+    render(<ChatPanel />)
+
+    const input = await screen.findByRole('textbox', {
+      name: 'workspace.chat.inputPlaceholder'
+    })
+    await waitFor(() => expect(input).toHaveValue(
+      'Summarize this passage:\n\n> Evidence'
+    ))
+    expect(mockChatSend).not.toHaveBeenCalled()
+    expect(useChatDraftStore.getState().pending).toBeNull()
+
+    fireEvent.change(input, { target: { value: 'Keep my existing question' } })
+    act(() => {
+      useChatDraftStore.getState().request({
+        mode: 'prefill',
+        text: 'Explain this passage:\n\n> Evidence'
+      })
+    })
+
+    await waitFor(() => expect(input).toHaveValue(
+      'Keep my existing question\n\nExplain this passage:\n\n> Evidence'
+    ))
+
+    act(() => {
+      useChatDraftStore.getState().request({
+        mode: 'append',
+        text: 'Selected context:\n\n> More evidence'
+      })
+    })
+
+    await waitFor(() => expect(input).toHaveValue(
+      'Keep my existing question\n\nExplain this passage:\n\n> Evidence' +
+      '\n\nSelected context:\n\n> More evidence'
+    ))
+    expect(mockChatSend).not.toHaveBeenCalled()
+  })
+
+  it('keeps an over-limit selection draft when send is attempted', async () => {
+    setupApi([])
+    const overLimitDraft = 'x'.repeat(32_001)
+    useChatDraftStore.getState().request({
+      mode: 'prefill',
+      text: overLimitDraft
+    })
+
+    render(<ChatPanel />)
+
+    const input = await screen.findByRole('textbox', {
+      name: 'workspace.chat.inputPlaceholder'
+    })
+    await waitFor(() => expect(input).toHaveValue(overLimitDraft))
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(mockChatSend).not.toHaveBeenCalled()
+    expect(input).toHaveValue(overLimitDraft)
+    expect(await screen.findByText('workspace.chat.inputTooLong')).toBeInTheDocument()
   })
 })
 

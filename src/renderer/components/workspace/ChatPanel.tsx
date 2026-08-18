@@ -12,9 +12,11 @@ import type {
 import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
+import { useChatDraftStore } from '../../store/chatDraftStore'
 import { Button as UiButton, PanelTabHeader } from '../ui'
 import { useChatStream } from '../../hooks/useChatStream'
 import { AI_PROVIDERS_CHANGED_EVENT } from '../../utils/aiProviderEvents'
+import { MAX_INPUT_LENGTH } from '../../utils/chatUtils'
 import ChatMessages from './ChatMessages'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
@@ -116,6 +118,8 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const startNewChat = useWorkspaceStore((s) => s.startNewChat)
   const threads = useWorkspaceStore((s) => s.threads)
   const fetchThreads = useWorkspaceStore((s) => s.fetchThreads)
+  const pendingChatDraft = useChatDraftStore((s) => s.pending)
+  const consumeChatDraft = useChatDraftStore((s) => s.consume)
 
   const [providers, setProviders] = useState<AiProvider[]>([])
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
@@ -139,6 +143,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const inputAreaRef = useRef<HTMLDivElement | null>(null)
+  const handledChatDraftIdsRef = useRef(new Set<number>())
 
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null
   const deepThinking =
@@ -170,7 +175,30 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     fetchThreads
   })
 
-  const canSend = !!activeProviderId && !!input.trim() && !chat.streaming && !chat.pendingInterrupt
+  const canSend = !!activeProviderId &&
+    !!input.trim() &&
+    input.trim().length <= MAX_INPUT_LENGTH &&
+    !chat.streaming &&
+    !chat.pendingInterrupt
+
+  useEffect(() => {
+    if (!pendingChatDraft || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
+    handledChatDraftIdsRef.current.add(pendingChatDraft.id)
+    setInput((current) => {
+      if (pendingChatDraft.mode === 'prefill' && !current.trim()) {
+        return pendingChatDraft.text
+      }
+      return [current.trimEnd(), pendingChatDraft.text].filter(Boolean).join('\n\n')
+    })
+    consumeChatDraft(pendingChatDraft.id)
+    const frame = window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.selectionStart = textarea.selectionEnd = textarea.value.length
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [consumeChatDraft, pendingChatDraft])
 
   const loadProviders = useCallback(async () => {
     try {
@@ -431,12 +459,16 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const handleSend = useCallback(() => {
     if (!input.trim() || chat.streaming) return
     const text = input.trim()
+    if (text.length > MAX_INPUT_LENGTH) {
+      chat.setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))
+      return
+    }
     const atts = [...selectedAttachments]
     setInput('')
     setSelectedAttachments([])
     setAttachMenuOpen(false)
     void chat.sendText(text, atts, activeThreadId)
-  }, [input, chat.streaming, selectedAttachments, activeThreadId, chat.sendText])
+  }, [activeThreadId, chat, input, selectedAttachments, t])
 
   const exportThread = useCallback(async (threadId: string) => {
     if (!threadId) return

@@ -560,6 +560,19 @@
     "deletedAnnotations_other": "已删除 {{count}} 条批注",
     "undo": "撤销",
     "retrySave": "重试保存",
+    "contextMenu": {
+      "copy": "复制文本",
+      "copySuccess": "已复制文本",
+      "copyFailed": "复制文本失败",
+      "highlight": "高亮",
+      "ai": "AI 功能",
+      "summary": "总结",
+      "explain": "解释",
+      "addToAiContext": "加入 AI 上下文",
+      "summaryPrompt": "请总结以下选中的内容：",
+      "explainPrompt": "请清晰解释以下选中的内容：",
+      "contextPrompt": "选自《{{title}}》第 {{pages}} 页的上下文："
+    },
     "saveStatus": {
       "idle": "本地",
       "saving": "正在保存…",
@@ -567,7 +580,6 @@
       "error": "保存失败"
     },
     "tools": {
-      "read": "阅读与选择文本",
       "select": "框选批注",
       "highlight": "高亮",
       "underline": "下划线",

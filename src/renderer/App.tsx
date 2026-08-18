@@ -21,6 +21,7 @@ import { getAntdTokenOverrides } from './theme/tokens'
 import { useDocumentStore } from './store/documentStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useOcrReaderStore } from './store/ocrReaderStore'
+import { useChatDraftStore } from './store/chatDraftStore'
 import { api } from './ipc'
 import type { ListColumnState } from '../shared/ipc-types'
 
@@ -130,6 +131,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const workspaceFullscreen = useWorkspaceStore((s) => s.fullscreen)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
+  const pendingChatDraft = useChatDraftStore((s) => s.pending)
   const ocrReaderOpen = useOcrReaderStore((s) => s.documentId !== null)
   const previousActiveWorkspaceIdRef = useRef(activeWorkspaceId)
 
@@ -145,6 +147,10 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     }
     previousActiveWorkspaceIdRef.current = activeWorkspaceId
   }, [activeWorkspaceId])
+
+  useEffect(() => {
+    if (pendingChatDraft) setChatOpen(true)
+  }, [pendingChatDraft])
 
   useEffect(() => {
     documentListResizeOriginRef.current = null

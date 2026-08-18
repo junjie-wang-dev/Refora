@@ -134,6 +134,8 @@ test.describe('Built-in PDF reader', () => {
     await page.mouse.down()
     await page.mouse.move(bounds!.x + 150, bounds!.y + 150, { steps: 6 })
     await page.mouse.up()
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+      .toBe('')
 
     const ink = pdfPage.locator('[data-annotation-kind="ink"]').last()
     await expect(ink).toHaveCount(1)
@@ -144,9 +146,85 @@ test.describe('Built-in PDF reader', () => {
     })).toHaveCount(0)
     await page.getByRole('button', { name: 'Freehand drawing', exact: true }).click()
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
-    await page.getByRole('button', { name: 'Read and select text', exact: true }).click()
+    await expect(page.getByRole('button', {
+      name: 'Read and select text',
+      exact: true
+    })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Freehand drawing', exact: true }))
       .not.toHaveAttribute('aria-pressed', 'true')
+
+    const selectableText = pdfPage.locator('.textLayer span')
+      .filter({ hasText: /\S{2}/ })
+      .first()
+    const textBounds = await selectableText.boundingBox()
+    expect(textBounds).not.toBeNull()
+    await page.mouse.move(
+      textBounds!.x + textBounds!.width * 0.1,
+      textBounds!.y + textBounds!.height / 2
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      textBounds!.x + textBounds!.width * 0.75,
+      textBounds!.y + textBounds!.height / 2,
+      { steps: 4 }
+    )
+    await page.mouse.up()
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
+      .not.toBe('')
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+    await selectableText.dblclick({
+      position: {
+        x: textBounds!.width * 0.4,
+        y: textBounds!.height / 2
+      }
+    })
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
+      .not.toBe('')
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+
+    const annotationToolbar = page.locator('[data-pdf-annotation-toolbar]')
+    const highlightTool = annotationToolbar.getByRole('button', {
+      name: 'Highlight',
+      exact: true
+    })
+    await highlightTool.click()
+    await page.mouse.move(
+      textBounds!.x + textBounds!.width * 0.1,
+      textBounds!.y + textBounds!.height / 2
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      textBounds!.x + textBounds!.width * 0.75,
+      textBounds!.y + textBounds!.height / 2,
+      { steps: 4 }
+    )
+    await page.mouse.up()
+    const textMark = pdfPage.getByRole('button', { name: 'Highlight', exact: true })
+    await expect(textMark).toBeVisible()
+    await highlightTool.click()
+    await expect(textMark).toHaveCSS('pointer-events', 'auto')
+    const textMarkBounds = await textMark.boundingBox()
+    expect(textMarkBounds).not.toBeNull()
+    await page.mouse.move(
+      textMarkBounds!.x + textMarkBounds!.width * 0.25,
+      textMarkBounds!.y + textMarkBounds!.height / 2
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      textMarkBounds!.x + textMarkBounds!.width * 0.75,
+      textMarkBounds!.y + textMarkBounds!.height / 2
+    )
+    await page.mouse.up()
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+      .toBe('')
+    const eraserTool = annotationToolbar.getByRole('button', {
+      name: 'Erase annotation',
+      exact: true
+    })
+    await eraserTool.click()
+    await textMark.click()
+    await expect(textMark).toHaveCount(0)
+    await eraserTool.click()
 
     await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     await page.getByRole('button', { name: 'Add text', exact: true }).click()
@@ -199,10 +277,9 @@ test.describe('Built-in PDF reader', () => {
     await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     const annotationInput = pdfPage.locator('[data-annotation-input-layer]')
-    await annotationInput.hover({ position: { x: 40, y: 80 } })
     const selectionBounds = await annotationInput.boundingBox()
     expect(selectionBounds).not.toBeNull()
-    await page.mouse.move(selectionBounds!.x + 40, selectionBounds!.y + 80)
+    await page.mouse.move(selectionBounds!.x + 10, selectionBounds!.y + 10)
     await page.mouse.down()
     await page.mouse.move(selectionBounds!.x + 260, selectionBounds!.y + 280, { steps: 6 })
     await expect(pdfPage.locator('[data-annotation-selection]')).toBeVisible()
@@ -253,6 +330,8 @@ test.describe('Built-in PDF reader', () => {
     await page.getByRole('button', { name: 'Add note', exact: true }).click()
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
     await pdfPage.click({ position: { x: 180, y: 120 } })
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     const noteComment = page.locator('[data-annotation-sidebar]')
       .getByPlaceholder('Add a comment…', { exact: true })
     await expect(noteComment).toBeFocused()

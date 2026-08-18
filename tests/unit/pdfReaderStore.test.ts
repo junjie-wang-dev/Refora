@@ -52,7 +52,7 @@ describe('PDF reader state', () => {
       color: '#f2c94c',
       fontSize: 14,
       strokeWidth: 2,
-      sidebarOpen: true,
+      sidebarOpen: false,
       selectedAnnotationId: null,
       selectedAnnotationIds: [],
       pendingCommentFocusId: null,
@@ -89,6 +89,28 @@ describe('PDF reader state', () => {
 
     usePdfReaderStore.getState().close('one')
     expect(usePdfReaderStore.getState().activeDocumentId).toBe('two')
+  })
+
+  it('keeps the annotations sidebar closed until the user toggles it', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    expect(usePdfReaderStore.getState().sidebarOpen).toBe(false)
+
+    const annotation = usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'note',
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: '',
+      point: { x: 0.5, y: 0.5 }
+    })
+    expect(usePdfReaderStore.getState().sidebarOpen).toBe(false)
+
+    usePdfReaderStore.getState().removeAnnotation('paper', annotation.id)
+    usePdfReaderStore.getState().undoLastDeletion()
+    expect(usePdfReaderStore.getState().sidebarOpen).toBe(false)
+
+    usePdfReaderStore.getState().toggleSidebar()
+    expect(usePdfReaderStore.getState().sidebarOpen).toBe(true)
   })
 
   it('persists rich annotation geometry and comments in local settings', async () => {

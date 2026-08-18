@@ -187,6 +187,7 @@ vi.mock('@renderer/components/ui', () => ({
 }))
 
 import App from '@renderer/App'
+import { useChatDraftStore } from '@renderer/store/chatDraftStore'
 
 function resizeDivider(divider: HTMLElement, delta: number) {
   divider.dataset.resizeDelta = String(delta)
@@ -222,11 +223,13 @@ describe('App root layout', () => {
     mocks.resizeObserverCallback = null
     mocks.settingsGet.mockImplementation((_key: string, fallback: unknown) => Promise.resolve(fallback))
     mocks.settingsSet.mockResolvedValue(undefined)
+    useChatDraftStore.setState({ pending: null })
     vi.stubGlobal('ResizeObserver', ResizeObserverTestMock)
   })
 
   afterEach(() => {
     cleanup()
+    useChatDraftStore.setState({ pending: null })
     vi.unstubAllGlobals()
   })
 
@@ -290,6 +293,21 @@ describe('App root layout', () => {
     expect(screen.queryByTestId('app-chat-panel')).not.toBeInTheDocument()
 
     fireEvent.click(openButton)
+
+    expect(screen.getByTestId('app-chat-panel')).toBeInTheDocument()
+  })
+
+  it('opens AI chat when the PDF reader requests a selection draft', () => {
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.closePanel' }))
+    expect(screen.queryByTestId('app-chat-panel')).not.toBeInTheDocument()
+
+    act(() => {
+      useChatDraftStore.getState().request({
+        mode: 'prefill',
+        text: 'Explain the selected passage'
+      })
+    })
 
     expect(screen.getByTestId('app-chat-panel')).toBeInTheDocument()
   })

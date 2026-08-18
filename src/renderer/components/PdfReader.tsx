@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject
@@ -18,6 +19,7 @@ import {
   CaretLeft,
   CaretRight,
   CheckCircle,
+  Copy,
   CursorText,
   Eraser,
   Highlighter,
@@ -27,6 +29,7 @@ import {
   NoteBlank,
   PencilSimple,
   Plus,
+  Sparkle,
   Textbox,
   TextStrikethrough,
   TextUnderline,
@@ -34,6 +37,7 @@ import {
   WarningCircle,
   X
 } from '@phosphor-icons/react'
+import { showContextMenu, type ContextMenuItem } from '@lobehub/ui'
 import { useTranslation } from 'react-i18next'
 import type {
   PDFDocumentProxy,
@@ -50,6 +54,8 @@ import {
   type PdfTool
 } from '../store/pdfReaderStore'
 import { api } from '../ipc'
+import { useChatDraftStore } from '../store/chatDraftStore'
+import { useDocumentStore } from '../store/documentStore'
 import { openDocumentPdf } from '../utils/openPdf'
 import {
   annotationSelectionRects,
@@ -101,6 +107,136 @@ function normalizedPoint(event: ReactPointerEvent, element: HTMLElement): PdfPoi
     x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
     y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
   }
+}
+
+interface PdfTextSelection {
+  text: string
+  pages: Array<{
+    page: number
+    text: string
+    rects: PdfRect[]
+  }>
+}
+
+interface PdfTextPosition {
+  node: Node
+  offset: number
+}
+
+interface PdfTextPointer {
+  clientX: number
+  clientY: number
+  moved: boolean
+}
+
+interface PdfTextClick {
+  at: number
+  clientX: number
+  clientY: number
+}
+
+function pdfTextPositionAtPoint(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number
+): PdfTextPosition | null {
+  if (typeof document.caretPositionFromPoint !== 'function') return null
+  const position = document.caretPositionFromPoint(clientX, clientY)
+  if (!position) return null
+  const element = position.offsetNode instanceof Element
+    ? position.offsetNode
+    : position.offsetNode.parentElement
+  if (!element?.closest('.textLayer') || !root.contains(element)) return null
+  return { node: position.offsetNode, offset: position.offset }
+}
+
+function updateTextSelection(start: PdfTextPosition, end: PdfTextPosition): void {
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  try {
+    range.setStart(start.node, start.offset)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    selection.extend(end.node, end.offset)
+  } catch {
+    selection.removeAllRanges()
+  }
+}
+
+function updateWordSelection(position: PdfTextPosition): void {
+  updateTextSelection(position, position)
+  const selection = window.getSelection()
+  if (!selection) return
+  try {
+    selection.modify('move', 'backward', 'word')
+    selection.modify('extend', 'forward', 'word')
+  } catch {
+    selection.removeAllRanges()
+  }
+}
+
+function selectedTextInLayer(range: Range, layer: HTMLElement, fallback: string): string {
+  try {
+    if (!range.intersectsNode(layer)) return ''
+    const pageRange = document.createRange()
+    pageRange.selectNodeContents(layer)
+    if (layer.contains(range.startContainer)) {
+      pageRange.setStart(range.startContainer, range.startOffset)
+    }
+    if (layer.contains(range.endContainer)) {
+      pageRange.setEnd(range.endContainer, range.endOffset)
+    }
+    return pageRange.toString().trim()
+  } catch {
+    return fallback
+  }
+}
+
+function textSelectionInReader(root: HTMLElement): PdfTextSelection | null {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const text = selection.toString().trim()
+  if (!text) return null
+  const range = selection.getRangeAt(0)
+  const clientRects = Array.from(range.getClientRects())
+  const pages = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-page-number]')
+  ).flatMap((element) => {
+    const bounds = element.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return []
+    const rects = clientRects
+      .map((rect) => {
+        const left = Math.max(bounds.left, rect.left)
+        const right = Math.min(bounds.right, rect.right)
+        const top = Math.max(bounds.top, rect.top)
+        const bottom = Math.min(bounds.bottom, rect.bottom)
+        return {
+          x: (left - bounds.left) / bounds.width,
+          y: (top - bounds.top) / bounds.height,
+          width: (right - left) / bounds.width,
+          height: (bottom - top) / bounds.height
+        }
+    })
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+    if (rects.length === 0) return []
+    const page = Number(element.dataset.pageNumber)
+    if (!Number.isInteger(page) || page < 1) return []
+    const layer = element.querySelector<HTMLElement>('.textLayer')
+    if (!layer) return []
+    const pageText = selectedTextInLayer(range, layer, text)
+    if (!pageText) return []
+    return [{ page, text: pageText, rects }]
+  })
+  return pages.length > 0 ? { text, pages } : null
+}
+
+function quoteSelection(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n')
 }
 
 type PdfViewport = ReturnType<PDFPageProxy['getViewport']>
@@ -180,6 +316,7 @@ function PdfPage({
   devicePixelRatio,
   scrollRootRef,
   documentId,
+  documentTitle,
   annotations,
   tool,
   color,
@@ -195,6 +332,7 @@ function PdfPage({
   devicePixelRatio: number
   scrollRootRef: RefObject<HTMLDivElement | null>
   documentId: string
+  documentTitle: string
   annotations: PdfAnnotation[]
   tool: PdfTool | null
   color: string
@@ -214,6 +352,9 @@ function PdfPage({
   const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null)
   const inkPointsRef = useRef<PdfPoint[] | null>(null)
   const selectionStartRef = useRef<PdfPoint | null>(null)
+  const textSelectionStartRef = useRef<PdfTextPosition | null>(null)
+  const textPointerRef = useRef<PdfTextPointer | null>(null)
+  const lastTextClickRef = useRef<PdfTextClick | null>(null)
   const removeAnnotation = usePdfReaderStore((state) => state.removeAnnotation)
   const selectAnnotation = usePdfReaderStore((state) => state.selectAnnotation)
   const selectedAnnotationIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
@@ -232,6 +373,10 @@ function PdfPage({
       : null,
     [devicePixelRatio, viewport]
   )
+  const textSelectionEnabled = tool === null ||
+    tool === 'highlight' ||
+    tool === 'underline' ||
+    tool === 'strikeout'
 
   useEffect(() => {
     let cancelled = false
@@ -291,45 +436,158 @@ function PdfPage({
       tool !== 'underline' &&
       tool !== 'strikeout'
     ) return
-    const element = pageElementRef.current
-    const selection = window.getSelection()
-    if (!element || !selection || selection.isCollapsed || selection.rangeCount === 0) return
-    const bounds = element.getBoundingClientRect()
-    const rects = Array.from(selection.getRangeAt(0).getClientRects())
-      .filter((rect) =>
-        rect.right > bounds.left &&
-        rect.left < bounds.right &&
-        rect.bottom > bounds.top &&
-        rect.top < bounds.bottom
-      )
-      .map((rect) => ({
-        x: Math.max(0, rect.left - bounds.left) / bounds.width,
-        y: Math.max(0, rect.top - bounds.top) / bounds.height,
-        width: Math.min(bounds.right, rect.right) - Math.max(bounds.left, rect.left),
-        height: Math.min(bounds.bottom, rect.bottom) - Math.max(bounds.top, rect.top)
-      }))
-      .map((rect) => ({
-        ...rect,
-        width: rect.width / bounds.width,
-        height: rect.height / bounds.height
-      }))
-      .filter((rect) => rect.width > 0 && rect.height > 0)
-    if (rects.length === 0) return
-    onAddAnnotation({
-      kind: tool,
-      page: pageNumber,
-      color,
-      text: selection.toString().trim(),
-      comment: '',
-      rects
+    const root = scrollRootRef.current
+    if (!root) return
+    const selection = textSelectionInReader(root)
+    if (!selection) return
+    selection.pages.forEach((selectedPage) => {
+      onAddAnnotation({
+        kind: tool,
+        page: selectedPage.page,
+        color,
+        text: selectedPage.text,
+        comment: '',
+        rects: selectedPage.rects
+      })
     })
-    selection.removeAllRanges()
-  }, [color, onAddAnnotation, pageNumber, tool])
+    window.getSelection()?.removeAllRanges()
+  }, [color, onAddAnnotation, scrollRootRef, tool])
+
+  const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const root = scrollRootRef.current
+    if (!root) return
+    const selection = textSelectionInReader(root)
+    if (!selection) return
+    event.preventDefault()
+    event.stopPropagation()
+    const clearSelection = () => window.getSelection()?.removeAllRanges()
+    const requestAiDraft = (mode: 'prefill' | 'append', prompt: string) => {
+      useChatDraftStore.getState().request({
+        mode,
+        text: `${prompt}\n\n${quoteSelection(selection.text)}`
+      })
+      clearSelection()
+    }
+    const items: ContextMenuItem[] = [
+      {
+        key: 'copy',
+        label: t('pdfReader.contextMenu.copy'),
+        icon: <Copy className="h-3.5 w-3.5" />,
+        onClick: () => {
+          void api.clipboard.writeText(selection.text).then(() => {
+            useDocumentStore.getState().showToast(t('pdfReader.contextMenu.copySuccess'))
+          }).catch(() => {
+            useDocumentStore.getState().showToast(t('pdfReader.contextMenu.copyFailed'))
+          })
+        }
+      },
+      {
+        key: 'highlight',
+        label: t('pdfReader.contextMenu.highlight'),
+        icon: <Highlighter className="h-3.5 w-3.5" />,
+        onClick: () => {
+          selection.pages.forEach((selectedPage) => {
+            onAddAnnotation({
+              kind: 'highlight',
+              page: selectedPage.page,
+              color,
+              text: selectedPage.text,
+              comment: '',
+              rects: selectedPage.rects
+            })
+          })
+          clearSelection()
+        }
+      },
+      { type: 'divider', key: 'ai-divider' },
+      {
+        key: 'ai',
+        type: 'submenu',
+        label: t('pdfReader.contextMenu.ai'),
+        icon: <Sparkle className="h-3.5 w-3.5" />,
+        children: [
+          {
+            key: 'ai-summary',
+            label: t('pdfReader.contextMenu.summary'),
+            icon: <ListBullets className="h-3.5 w-3.5" />,
+            onClick: () => requestAiDraft(
+              'prefill',
+              t('pdfReader.contextMenu.summaryPrompt')
+            )
+          },
+          {
+            key: 'ai-explain',
+            label: t('pdfReader.contextMenu.explain'),
+            icon: <CursorText className="h-3.5 w-3.5" />,
+            onClick: () => requestAiDraft(
+              'prefill',
+              t('pdfReader.contextMenu.explainPrompt')
+            )
+          },
+          {
+            key: 'ai-context',
+            label: t('pdfReader.contextMenu.addToAiContext'),
+            icon: <Plus className="h-3.5 w-3.5" />,
+            onClick: () => requestAiDraft(
+              'append',
+              t('pdfReader.contextMenu.contextPrompt', {
+                title: documentTitle,
+                pages: selection.pages.length === 1
+                  ? String(selection.pages[0].page)
+                  : `${selection.pages[0].page}–${selection.pages.at(-1)?.page}`
+              })
+            )
+          }
+        ]
+      }
+    ]
+    showContextMenu(items)
+  }, [color, documentTitle, onAddAnnotation, scrollRootRef, t])
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = pageElementRef.current
-    if (!element) return
+    if (!element || event.button !== 0) return
+    const target = event.target
+    if (
+      textSelectionEnabled &&
+      target instanceof Element &&
+      target.closest('.textLayer span, .textLayer br')
+    ) {
+      const root = scrollRootRef.current
+      const position = root
+        ? pdfTextPositionAtPoint(root, event.clientX, event.clientY)
+        : null
+      if (position) {
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        if (selectedAnnotationIds.length > 0) selectAnnotations([])
+        const previousClick = lastTextClickRef.current
+        const doubleClick = previousClick !== null &&
+          Date.now() - previousClick.at <= 500 &&
+          Math.hypot(
+            event.clientX - previousClick.clientX,
+            event.clientY - previousClick.clientY
+          ) <= 6
+        lastTextClickRef.current = null
+        textPointerRef.current = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          moved: false
+        }
+        textSelectionStartRef.current = position
+        if (doubleClick) updateWordSelection(position)
+        else updateTextSelection(position, position)
+      }
+      return
+    }
+    lastTextClickRef.current = null
+    event.preventDefault()
+    window.getSelection()?.removeAllRanges()
     if (tool === null) {
+      if (
+        target instanceof Element &&
+        target.closest('.textLayer span, .textLayer br, button, textarea, [data-annotation-kind]')
+      ) return
       event.currentTarget.setPointerCapture(event.pointerId)
       const point = normalizedPoint(event, element)
       selectionStartRef.current = point
@@ -370,6 +628,21 @@ function PdfPage({
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = pageElementRef.current
+    const textSelectionStart = textSelectionStartRef.current
+    const root = scrollRootRef.current
+    if (textSelectionStart && root && textSelectionEnabled) {
+      const textPointer = textPointerRef.current
+      if (
+        textPointer &&
+        Math.hypot(
+          event.clientX - textPointer.clientX,
+          event.clientY - textPointer.clientY
+        ) > 4
+      ) textPointer.moved = true
+      const position = pdfTextPositionAtPoint(root, event.clientX, event.clientY)
+      if (position) updateTextSelection(textSelectionStart, position)
+      return
+    }
     const selectionStart = selectionStartRef.current
     if (element && selectionStart && tool === null) {
       setSelectionRect(selectionRectFromPoints(
@@ -432,17 +705,35 @@ function PdfPage({
   }
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (tool === null) finishSelection(event)
+    if (textSelectionStartRef.current) {
+      const textPointer = textPointerRef.current
+      lastTextClickRef.current = textPointer && !textPointer.moved
+        ? {
+            at: Date.now(),
+            clientX: textPointer.clientX,
+            clientY: textPointer.clientY
+          }
+        : null
+      textPointerRef.current = null
+      textSelectionStartRef.current = null
+      addTextAnnotation()
+    } else if (tool === null) finishSelection(event)
     else if (tool === 'ink') finishInk()
   }
 
   const cancelPointer = () => {
+    textPointerRef.current = null
+    lastTextClickRef.current = null
+    textSelectionStartRef.current = null
     selectionStartRef.current = null
     setSelectionRect(null)
     cancelInk()
   }
 
   useEffect(() => {
+    textPointerRef.current = null
+    lastTextClickRef.current = null
+    textSelectionStartRef.current = null
     if (tool !== 'ink') {
       inkPointsRef.current = null
       setInkPoints(null)
@@ -489,7 +780,11 @@ function PdfPage({
         '--scale-factor': scale,
         '--total-scale-factor': scale
       } as CSSProperties}
-      onMouseUp={addTextAnnotation}
+      onContextMenu={handleContextMenu}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishPointer}
+      onPointerCancel={cancelPointer}
     >
       {page && viewport && canvasLayout?.tiles.map((tile) => (
         <PdfCanvasTileView
@@ -504,35 +799,35 @@ function PdfPage({
       <div
         ref={textLayerRef}
         className="textLayer absolute inset-0"
-        style={{ width: size.width, height: size.height }}
+        style={{
+          width: size.width,
+          height: size.height,
+          zIndex: textSelectionEnabled ? 10 : 0
+        }}
       />
       <div
         data-annotation-input-layer
         className={`absolute inset-0 ${
-          tool === null || tool === 'note' || tool === 'text' || tool === 'ink'
+          tool === 'note' || tool === 'text' || tool === 'ink'
             ? 'pointer-events-auto'
             : 'pointer-events-none'
         }`}
         style={{
+          zIndex: tool === 'note' || tool === 'text' || tool === 'ink' ? 20 : 0,
           cursor: tool === 'note'
             ? 'crosshair'
             : tool === 'text'
               ? 'text'
               : tool === 'ink'
                 ? 'cell'
-                : tool === null
-                  ? 'default'
-                  : undefined
+                : undefined
         }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishPointer}
-        onPointerCancel={cancelPointer}
       />
       <svg
         className={`absolute inset-0 h-full w-full ${
           tool === 'eraser' ? 'pointer-events-auto' : 'pointer-events-none'
         }`}
+        style={{ zIndex: tool === 'eraser' || tool === null ? 20 : 0 }}
         viewBox="0 0 1 1"
         preserveAspectRatio="none"
         aria-label={t('pdfReader.annotations')}
@@ -597,12 +892,11 @@ function PdfPage({
           <button
             key={`${annotation.id}-${index}`}
             type="button"
-            className={`absolute border-0 p-0 ${
-              tool === 'eraser'
+            tabIndex={index === 0 ? 0 : -1}
+            className={`absolute z-20 border-0 p-0 ${
+              tool === 'eraser' || tool === null
                 ? 'pointer-events-auto cursor-pointer'
-                : tool === null
-                  ? 'pointer-events-auto cursor-pointer'
-                  : 'pointer-events-none'
+                : 'pointer-events-none'
             }`}
             style={{
               left: `${rect.x * 100}%`,
@@ -621,7 +915,8 @@ function PdfPage({
                 ? '0 0 0 2px var(--color-accent)'
                 : undefined
             }}
-            aria-label={annotationLabel(annotation, t)}
+            aria-label={index === 0 ? annotationLabel(annotation, t) : undefined}
+            aria-hidden={index === 0 ? undefined : true}
             onClick={() => {
               if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
               else if (tool === null) selectAnnotation(annotation.id)
@@ -634,8 +929,10 @@ function PdfPage({
           <button
             key={annotation.id}
             type="button"
-            className={`absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-black/15 text-black shadow-sm ${
-              tool === 'eraser' || tool === null ? 'pointer-events-auto' : 'pointer-events-none'
+            className={`absolute z-20 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-black/15 text-black shadow-sm ${
+              tool === 'eraser' || tool === null
+                ? 'pointer-events-auto cursor-pointer'
+                : 'pointer-events-none'
             } ${
               selectedAnnotationIds.includes(annotation.id) ? 'ring-2 ring-accent' : ''
             }`}
@@ -684,9 +981,11 @@ function PdfPage({
               rows={rows}
               placeholder={t('pdfReader.textPlaceholder')}
               className={`pdf-text-annotation absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
-                tool === 'text' || tool === null || tool === 'eraser'
+                tool === 'text'
                   ? 'pointer-events-auto'
-                  : 'pointer-events-none'
+                  : tool === null || tool === 'eraser'
+                    ? 'pointer-events-auto cursor-pointer select-none'
+                    : 'pointer-events-none'
               } ${
                 selectedAnnotationIds.includes(annotation.id)
                   ? 'outline outline-1 outline-offset-2 outline-accent'
@@ -703,7 +1002,13 @@ function PdfPage({
               } as CSSProperties}
               aria-label={t('pdfReader.tools.text')}
               readOnly={tool !== 'text'}
-              onPointerDown={(event) => event.stopPropagation()}
+              onPointerDown={(event) => {
+                if (tool !== 'text') {
+                  event.preventDefault()
+                  window.getSelection()?.removeAllRanges()
+                }
+                event.stopPropagation()
+              }}
               onClick={() => {
                 if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
                 else if (tool === null) selectAnnotation(annotation.id)
@@ -974,7 +1279,6 @@ function AnnotationSidebar({
 }
 
 const TOOL_ICONS = {
-  read: CursorText,
   highlight: Highlighter,
   underline: TextUnderline,
   strikeout: TextStrikethrough,
@@ -985,7 +1289,6 @@ const TOOL_ICONS = {
 } satisfies Record<PdfTool, typeof CursorText>
 
 const TOOL_SHORTCUTS: Record<PdfTool, string> = {
-  read: 'V',
   highlight: 'H',
   underline: 'U',
   strikeout: 'S',
@@ -1060,7 +1363,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
   const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    tool !== null && tool !== 'read' && tool !== 'eraser'
+    tool !== null && tool !== 'eraser'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -1113,11 +1416,14 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     if (
       !compactLayout ||
       tool === null ||
-      tool === 'read' ||
       !usePdfReaderStore.getState().sidebarOpen
     ) return
     usePdfReaderStore.getState().toggleSidebar()
   }, [compactLayout, tool])
+
+  useEffect(() => {
+    if (tool !== null) window.getSelection()?.removeAllRanges()
+  }, [tool])
 
   useEffect(() => {
     if (!activeDocument) {
@@ -1312,11 +1618,14 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         return
       }
       if (event.key === 'Escape') {
-        usePdfReaderStore.getState().setTool(null)
+        event.preventDefault()
+        window.getSelection()?.removeAllRanges()
+        const state = usePdfReaderStore.getState()
+        if (state.tool !== null) state.setTool(null)
+        else state.selectAnnotations([])
         return
       }
       const shortcuts: Partial<Record<string, PdfTool | null>> = {
-        v: 'read',
         a: null,
         h: 'highlight',
         u: 'underline',
@@ -1712,9 +2021,10 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   devicePixelRatio={devicePixelRatio}
                   scrollRootRef={scrollRef}
                   documentId={activeDocument.id}
+                  documentTitle={activeDocument.title || activeDocument.fileName}
                   annotations={annotations.filter((annotation) => annotation.page === index + 1)}
                   tool={tool}
-                  color={color}
+                  color={displayedColor}
                   fontSize={fontSize}
                   strokeWidth={strokeWidth}
                   onAddAnnotation={addAnnotation}
