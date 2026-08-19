@@ -123,25 +123,61 @@ def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
     }
 
 
-def search_workspace_docs(executor: Any, args: dict[str, Any]) -> Any:
+def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
     ws = workspace(executor)
-    item_doc_ids = {item["docId"] for item in call(repo(executor.repos, "workspaceItems"), "list", ws) if item.get("docId")}
-    docs = call(repo(executor.repos, "documents"), "search", args.get("query", ""), 50) if args.get("query") else call(repo(executor.repos, "documents"), "list", {"mode": "all"})
-    summaries = repo(executor.repos, "aiSummaries")
-    return [
-        {
-            "docId": doc["id"],
-            "title": doc.get("title") or doc.get("fileName"),
-            "authors": doc.get("authors"),
-            "year": doc.get("year"),
-            "hasSummary": bool(
-                (summary := call(summaries, "getSummary", doc["id"]))
-                and summary.get("content")
-            ),
+    item = next(
+        (
+            current
+            for current in call(repo(executor.repos, "workspaceItems"), "list", ws)
+            if current.get("id") == args["itemId"]
+        ),
+        None,
+    )
+    if item is None:
+        raise ValueError("Item is not available in the current workspace")
+    kind = item.get("kind")
+    if kind == "document" and item.get("docId"):
+        document = call(repo(executor.repos, "documents"), "get", item["docId"])
+        if document is None:
+            raise ValueError("Document is not available in the current workspace")
+        summaries = value(executor.repos, "aiSummaries")
+        summary = (
+            call(summaries, "getSummary", item["docId"])
+            if summaries
+            else None
+        )
+        data = {
+            **document,
+            "docId": item["docId"],
+            "hasSummary": bool(summary and summary.get("content")),
+            "summary": summary.get("content") if summary else None,
         }
-        for doc in docs
-        if doc["id"] in item_doc_ids
-    ][:50]
+    elif kind == "report" and item.get("reportId"):
+        data = call(repo(executor.repos, "aiReports"), "get", item["reportId"])
+        if data is None or data.get("workspaceId") != ws:
+            raise ValueError("Report is not available in the current workspace")
+    elif kind == "note" and item.get("noteId"):
+        data = call(repo(executor.repos, "workspaceNotes"), "get", item["noteId"])
+        if data is None or data.get("workspaceId") != ws:
+            raise ValueError("Note is not available in the current workspace")
+    elif kind == "asset" and item.get("assetId"):
+        asset = call(repo(executor.repos, "workspaceAssets"), "get", item["assetId"])
+        if asset is None or asset.get("workspaceId") != ws:
+            raise ValueError("Asset is not available in the current workspace")
+        preview = (
+            call(
+                executor.deps,
+                "preview_workspace_asset",
+                ws,
+                item["assetId"],
+            )
+            if asset.get("previewKind") == "text"
+            else None
+        )
+        data = {**asset, "preview": preview}
+    else:
+        raise ValueError("Workspace item type is unsupported")
+    return {"itemId": item["id"], "kind": kind, "data": data}
 
 
 def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
@@ -253,14 +289,6 @@ def generate_report(executor: Any, args: dict[str, Any]) -> Any:
     }
 
 
-def list_workspace_assets(executor: Any, args: dict[str, Any]) -> Any:
-    return call(repo(executor.repos, "workspaceAssets"), "list", workspace(executor))
-
-
-def list_workspace_notes(executor: Any, args: dict[str, Any]) -> Any:
-    return call(repo(executor.repos, "workspaceNotes"), "list", workspace(executor))
-
-
 _CONNECTION_ITEM_SCHEMA = object_schema(
     {
         "sourceItemId": {"type": "string", "minLength": 1},
@@ -276,26 +304,22 @@ class WorkspaceTools(ToolGroup):
     name = "workspace"
     handlers = {
         "list_workspace_context": list_workspace_context,
-        "search_workspace_docs": search_workspace_docs,
+        "read_workspace_item": read_workspace_item,
         "add_docs_to_workspace": add_docs_to_workspace,
         "create_workspace_connections": create_workspace_connections,
         "generate_report": generate_report,
-        "list_workspace_assets": list_workspace_assets,
-        "list_workspace_notes": list_workspace_notes,
     }
     descriptions = {
         "list_workspace_context": "List the current workspace cards and connections. Returns itemIds for documents, reports, notes, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
-        "search_workspace_docs": "Search documents in the current workspace by title, authors, abstract, or keywords (full-text). Returns JSON [{docId, title, authors, year, hasSummary}]. Pass an empty string to list all workspace documents.",
+        "read_workspace_item": "Read one current workspace card by itemId from list_workspace_context. Returns full report or note content, document metadata and cached summary, or asset metadata and text preview.",
         "add_docs_to_workspace": "Add documents from the library to the current workspace board. Pass docIds as a comma-separated list or JSON array string. Returns JSON with added, alreadyInWorkspace, and missing arrays.",
         "create_workspace_connections": "Create directed connections between cards in the current workspace. Call list_workspace_context first and use only itemIds returned by it. Invalid, duplicate, and self connections are reported without creating them.",
         "generate_report": "Create and pin a structured report to the workspace board. Use this when the user asks for a report, survey, or comparison. sourceDocIds accepts a comma-separated list or a JSON array string of docIds.",
     }
     schemas = {
         "list_workspace_context": object_schema({}),
-        "search_workspace_docs": object_schema({"query": _TEXT}, ["query"]),
+        "read_workspace_item": object_schema({"itemId": _TEXT}, ["itemId"]),
         "add_docs_to_workspace": object_schema({"docIds": _TEXT}, ["docIds"]),
         "create_workspace_connections": object_schema({"connections": {"type": "array", "minItems": 1, "maxItems": 20, "items": _CONNECTION_ITEM_SCHEMA}}, ["connections"]),
         "generate_report": object_schema({"title": _TEXT, "contentMd": _TEXT, "sourceDocIds": {"type": "string", "description": "Comma-separated list or JSON array string of docIds"}}, ["title", "contentMd", "sourceDocIds"]),
-        "list_workspace_assets": object_schema({}),
-        "list_workspace_notes": object_schema({}),
     }

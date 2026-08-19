@@ -147,17 +147,27 @@ function RunTimeline({
     .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq)
   const hasReasoningStep = ordered.some((step) => step.kind === 'reasoning')
   const messageSteps = ordered.filter((step) => step.kind === 'message')
-  const finalMessageStep = messageSteps.at(-1)
+  const messageOutputs = messageSteps.map((step) => step.output ?? '')
+  const tracedAnswer = [
+    messageOutputs.join('\n\n'),
+    messageOutputs.join(''),
+    messageOutputs.at(-1) ?? ''
+  ]
+    .filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
+    .sort((left, right) => right.length - left.length)
+    .find((candidate) => fallbackAnswer.startsWith(candidate)) ?? null
+  const finalMessageStep = tracedAnswer !== null ? messageSteps.at(-1) : undefined
   const timelineSteps = ordered.filter(
     (step) => step.kind !== 'llm' && step.id !== finalMessageStep?.id
   )
-  const tracedAnswer = messageSteps.map((step) => step.output ?? '').join('')
   const answerRemainder = messageSteps.length === 0
     ? fallbackAnswer
-    : fallbackAnswer.startsWith(tracedAnswer)
+    : tracedAnswer !== null
       ? fallbackAnswer.slice(tracedAnswer.length)
-      : ''
-  const finalAnswer = `${finalMessageStep?.output ?? ''}${answerRemainder}`
+      : fallbackAnswer
+  const finalAnswer = finalMessageStep
+    ? `${finalMessageStep.output ?? ''}${answerRemainder}`
+    : answerRemainder
   const hasCollapsibleContent = timelineSteps.some((step) => {
     if (step.kind === 'reasoning') return !!step.output || step.status === 'running'
     if (step.kind === 'message') return !!step.output

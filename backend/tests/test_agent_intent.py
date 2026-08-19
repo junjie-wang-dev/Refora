@@ -19,6 +19,9 @@ def test_workspace_prompt_routes_structured_reports_directly_to_the_board():
     assert "call generate_report" in WORKSPACE_SYSTEM_PROMPT
     assert "directly on the Workspace board" in WORKSPACE_SYSTEM_PROMPT
     assert "do not substitute a sandbox Markdown file" in WORKSPACE_SYSTEM_PROMPT
+    assert "call list_workspace_context" in WORKSPACE_SYSTEM_PROMPT
+    assert "do not infer the complete workspace from the paper catalog" in WORKSPACE_SYSTEM_PROMPT
+    assert "read_workspace_item" in WORKSPACE_SYSTEM_PROMPT
 
 
 def test_checkpoint_continuation_sends_only_the_new_user_message():

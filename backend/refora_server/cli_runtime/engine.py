@@ -23,6 +23,14 @@ def _message_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _segment_separator(before: str, after: str) -> str:
+    if not before or not after:
+        return ""
+    trailing = len(before) - len(before.rstrip("\n"))
+    leading = len(after) - len(after.lstrip("\n"))
+    return "\n" * max(0, 2 - trailing - leading)
+
+
 def _build_prompt(request: dict[str, Any], resumed: bool) -> str:
     messages = request.get("messages") if isinstance(request.get("messages"), list) else []
     if resumed:
@@ -33,7 +41,7 @@ def _build_prompt(request: dict[str, Any], resumed: bool) -> str:
         ]
     parts: list[str] = []
     system_prompt = request.get("systemPrompt")
-    if not resumed and isinstance(system_prompt, str) and system_prompt.strip():
+    if isinstance(system_prompt, str) and system_prompt.strip():
         parts.append(f"[System instructions]\n{system_prompt.strip()}")
     for message in messages:
         if not isinstance(message, dict):
@@ -246,7 +254,16 @@ class CliRuntimeAgent:
                         runs["update"](request["runId"], {"runtimeSessionId": runtime_session_id})
                 for event in adapter.parse_event(payload):
                     if event.get("event") == "token" and isinstance(event.get("delta"), str):
+                        separator = ""
+                        if event.get("new_message") is True and self._final_text:
+                            separator = _segment_separator(
+                                "".join(self._final_text), event["delta"]
+                            )
+                            if separator:
+                                self._final_text.append(separator)
                         self._final_text.append(event["delta"])
+                        if separator:
+                            event = {**event, "delta": separator + event["delta"]}
                     yield event
                 result_text = adapter.result_text(payload)
                 if result_text and not self._final_text:

@@ -128,7 +128,11 @@ def test_workspace_search_reports_summary_availability():
         {"repos": repos},
     )
 
-    result = json.loads(executor.execute("search_workspace_docs", {"query": ""}))
+    result = json.loads(
+        executor.execute(
+            "search_documents", {"query": "", "scope": "workspace"}
+        )
+    )
 
     assert result[0]["hasSummary"] is True
 
@@ -204,3 +208,140 @@ def test_workspace_context_enriches_cards_and_connections():
     }
     assert result["items"][1]["reportId"] == "report-1"
     assert result["connections"][0]["connectionId"] == "connection-1"
+
+
+def test_workspace_item_reads_full_report_only_from_current_workspace():
+    reports = {
+        "report-current": {
+            "id": "report-current",
+            "workspaceId": "workspace",
+            "title": "Current report",
+            "contentMd": "# Complete report\n\nDetails",
+            "sourceDocIds": ["doc-1"],
+            "model": "model-1",
+            "createdAt": 1,
+        },
+        "report-other": {
+            "id": "report-other",
+            "workspaceId": "other-workspace",
+            "title": "Other report",
+            "contentMd": "Private",
+            "sourceDocIds": [],
+            "model": None,
+            "createdAt": 2,
+        },
+    }
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {
+            "repos": {
+                "workspaceItems": {
+                    "list": lambda _workspace_id: [
+                        {
+                            "id": "item-current",
+                            "kind": "report",
+                            "reportId": "report-current",
+                        },
+                        {
+                            "id": "item-other",
+                            "kind": "report",
+                            "reportId": "report-other",
+                        },
+                    ]
+                },
+                "aiReports": {"get": reports.get},
+            }
+        },
+    )
+
+    current = json.loads(
+        executor.execute("read_workspace_item", {"itemId": "item-current"})
+    )
+    other = json.loads(
+        executor.execute("read_workspace_item", {"itemId": "item-other"})
+    )
+
+    assert current["kind"] == "report"
+    assert current["data"]["contentMd"] == "# Complete report\n\nDetails"
+    assert other["error"]["message"] == "Report is not available in the current workspace"
+
+
+def test_workspace_item_asset_preview_uses_scoped_workspace_service():
+    calls = []
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {
+            "repos": {
+                "workspaceItems": {
+                    "list": lambda _workspace_id: [
+                        {
+                            "id": "item-asset",
+                            "kind": "asset",
+                            "assetId": "asset-1",
+                        }
+                    ]
+                },
+                "workspaceAssets": {
+                    "get": lambda _asset_id: {
+                        "id": "asset-1",
+                        "workspaceId": "workspace",
+                        "fileName": "data.csv",
+                        "previewKind": "text",
+                    }
+                },
+            },
+            "preview_workspace_asset": lambda workspace_id, asset_id: calls.append(
+                (workspace_id, asset_id)
+            )
+            or {"content": "alpha,beta", "truncated": False},
+        },
+    )
+
+    result = json.loads(
+        executor.execute("read_workspace_item", {"itemId": "item-asset"})
+    )
+
+    assert result["data"]["fileName"] == "data.csv"
+    assert result["data"]["preview"] == {
+        "content": "alpha,beta",
+        "truncated": False,
+    }
+    assert calls == [("workspace", "asset-1")]
+
+
+def test_workspace_item_returns_non_text_asset_metadata_without_previewing():
+    calls = []
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {
+            "repos": {
+                "workspaceItems": {
+                    "list": lambda _workspace_id: [
+                        {
+                            "id": "item-image",
+                            "kind": "asset",
+                            "assetId": "asset-image",
+                        }
+                    ]
+                },
+                "workspaceAssets": {
+                    "get": lambda _asset_id: {
+                        "id": "asset-image",
+                        "workspaceId": "workspace",
+                        "fileName": "figure.png",
+                        "previewKind": "image",
+                    }
+                },
+            },
+            "preview_workspace_asset": lambda *_args: calls.append(_args),
+        },
+    )
+
+    result = json.loads(
+        executor.execute("read_workspace_item", {"itemId": "item-image"})
+    )
+
+    assert result["data"]["fileName"] == "figure.png"
+    assert result["data"]["previewKind"] == "image"
+    assert result["data"]["preview"] is None
+    assert calls == []

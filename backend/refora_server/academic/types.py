@@ -16,11 +16,12 @@ PaperLocatorType = Literal[
 ACADEMIC_RESEARCH_TOOL_NAMES = (
     "search_arxiv",
     "get_arxiv_paper",
+    "get_related_academic_papers",
+    "explore_research_frontier",
     "resolve_academic_identity",
     "get_citing_papers",
     "get_referenced_papers",
     "get_semantic_recommendations",
-    "explore_research_frontier",
 )
 
 

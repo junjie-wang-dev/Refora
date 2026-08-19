@@ -93,15 +93,22 @@ def _without_secrets(value: Any) -> Any:
     return value
 
 
+def _is_academic_tool_name(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.removeprefix("refora.") in _ACADEMIC_TOOL_NAMES
+    )
+
+
 def _academic_call_name(value: Any) -> str | None:
     mapping = value if isinstance(value, dict) else _as_mapping(value)
     name = mapping.get("name")
-    if isinstance(name, str) and name in _ACADEMIC_TOOL_NAMES:
+    if _is_academic_tool_name(name):
         return name
     function = mapping.get("function")
     if isinstance(function, dict):
         name = function.get("name")
-        if isinstance(name, str) and name in _ACADEMIC_TOOL_NAMES:
+        if _is_academic_tool_name(name):
             return name
     return None
 
@@ -144,7 +151,7 @@ def _sanitize_academic_checkpoint_value(value: Any) -> Any:
     def sanitize(current: Any) -> Any:
         if isinstance(current, ToolMessage):
             if (
-                current.name in _ACADEMIC_TOOL_NAMES
+                _is_academic_tool_name(current.name)
                 or current.tool_call_id in academic_ids
             ):
                 return current.model_copy(
@@ -250,7 +257,7 @@ def _has_academic_checkpoint_value(
         return False
     seen.add(identity)
     if isinstance(value, ToolMessage):
-        return value.name in _ACADEMIC_TOOL_NAMES or value.tool_call_id in academic_ids
+        return _is_academic_tool_name(value.name) or value.tool_call_id in academic_ids
     mapping = value if isinstance(value, dict) else _as_mapping(value)
     if _academic_call_name(mapping):
         return True
@@ -286,7 +293,7 @@ def _externalize_academic_checkpoint_value(
 
     def visit(current: Any) -> Any:
         if isinstance(current, ToolMessage):
-            if current.name in _ACADEMIC_TOOL_NAMES or current.tool_call_id in academic_ids:
+            if _is_academic_tool_name(current.name) or current.tool_call_id in academic_ids:
                 return _with_academic_message_marker(
                     _sanitize_academic_checkpoint_value(current), store(current)
                 )
@@ -428,6 +435,14 @@ def _message_text(value: Any) -> str:
     return _message_text(content) if content is not None else ""
 
 
+def _segment_separator(before: str, after: str) -> str:
+    if not before or not after:
+        return ""
+    trailing = len(before) - len(before.rstrip("\n"))
+    leading = len(after) - len(after.lstrip("\n"))
+    return "\n" * max(0, 2 - trailing - leading)
+
+
 def _result_text(result: Any) -> str:
     if isinstance(result, dict):
         messages = result.get("messages")
@@ -486,7 +501,7 @@ def _tool_history_records(result: Any, state: dict[str, Any]) -> list[dict[str, 
             record = dict(calls.get(call_id) or {})
             if isinstance(name, str):
                 record["name"] = name
-            if record.get("name") in _ACADEMIC_TOOL_NAMES:
+            if _is_academic_tool_name(record.get("name")):
                 continue
             record["toolCallId"] = call_id
             record["output"] = _message_text(
@@ -576,7 +591,7 @@ def _tool_event_record(event: dict[str, Any]) -> dict[str, str | None] | None:
     data = event.get("data")
     data = data if isinstance(data, dict) else {}
     name = _tool_event_name(event)
-    if name is None or name in _ACADEMIC_TOOL_NAMES:
+    if name is None or _is_academic_tool_name(name):
         return None
     raw_input, raw_output = _tool_event_values(event)
     raw_input = _without_secrets(raw_input)
@@ -693,7 +708,7 @@ def _persist_tool_history(
         if (
             not isinstance(tool_call_id, str)
             or not isinstance(name, str)
-            or name in _ACADEMIC_TOOL_NAMES
+            or _is_academic_tool_name(name)
             or tool_call_id in persisted_ids
         ):
             continue
@@ -1080,12 +1095,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         safe_data = (
             ACADEMIC_PERSISTENCE_REDACTION
-            if name in _ACADEMIC_TOOL_NAMES
+            if _is_academic_tool_name(name)
             else _without_secrets(data)
         )
         safe_input = (
             None
-            if name in _ACADEMIC_TOOL_NAMES
+            if _is_academic_tool_name(name)
             else _without_secrets(input_data)
         )
         return repos["agentTraces"]["addStep"](
@@ -1658,6 +1673,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     if preview_key in seen_streamed_tool_slots:
                         continue
                     seen_streamed_tool_slots.add(preview_key)
+                    await finish_active_content()
                     context = _trace_context(event, open_event_traces)
                     step = add_trace(
                         request,
@@ -1777,12 +1793,23 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         await observe_streamed_tool_calls(
                             event_data.get("chunk", event_data), event
                         )
+                    if event.get("new_message") is True:
+                        await finish_active_content()
                     reasoning_delta = _event_delta(event, True)
                     if reasoning_delta:
                         await emit_reasoning_delta(reasoning_delta, event)
                     delta = _event_delta(event, False)
                     if delta:
-                        partial_text += delta
+                        starts_message_segment = (
+                            active_content is None
+                            or active_content["kind"] != "message"
+                        )
+                        separator = (
+                            _segment_separator(partial_text, delta)
+                            if starts_message_segment
+                            else ""
+                        )
+                        partial_text += separator + delta
                         step_id = await append_content(
                             "message",
                             "assistant_message",
@@ -1792,7 +1819,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         payload = {
                             "runId": run_id,
                             "threadId": thread_id,
-                            "token": delta,
+                            "token": separator + delta,
                         }
                         if step_id is not None:
                             payload["stepId"] = step_id
@@ -1806,6 +1833,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         await emit_reasoning_delta(delta, event)
                     continue
                 if event_name == "on_chat_model_start":
+                    await finish_active_content()
                     context = _trace_context(event, open_event_traces)
                     step = add_trace(
                         request,
@@ -1897,6 +1925,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     if isinstance(data, dict) and data.get("output") is not None:
                         result = data["output"]
                 if event_name == "on_tool_start":
+                    await finish_active_content()
                     name = _tool_event_name(event)
                     trace_input, _ = _tool_event_values(event)
                     context = _trace_context(event, open_event_traces)
@@ -1936,6 +1965,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         await emit_trace(request, step)
                     continue
                 if event_name == "on_tool_end":
+                    await finish_active_content()
                     record = _tool_event_record(event)
                     if record is not None:
                         tool_history.append(record)
@@ -1943,7 +1973,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     _, trace_output = _tool_event_values(event)
                     safe_output = (
                         ACADEMIC_PERSISTENCE_REDACTION
-                        if name in _ACADEMIC_TOOL_NAMES
+                        if _is_academic_tool_name(name)
                         else _without_secrets(trace_output)
                     )
                     failed = _tool_output_failed(trace_output)
@@ -1977,6 +2007,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         await emit_trace(request, step)
                     continue
                 if event_name == "on_tool_error":
+                    await finish_active_content()
                     record = _tool_event_record(event)
                     if record is not None:
                         tool_history.append(record)
@@ -1985,7 +2016,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     detail = event.get("error") or trace_output or event.get("data") or "Agent execution failed"
                     safe_output = (
                         ACADEMIC_PERSISTENCE_REDACTION
-                        if name in _ACADEMIC_TOOL_NAMES
+                        if _is_academic_tool_name(name)
                         else _without_secrets(detail)
                     )
                     event_key = _tool_event_key(event, name)

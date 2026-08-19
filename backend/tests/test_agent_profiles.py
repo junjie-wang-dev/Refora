@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -11,7 +12,8 @@ from refora_server.cli_runtime.definitions import (
     CodexCliAdapter,
     GeminiCliAdapter,
 )
-from refora_server.cli_runtime.engine import CliRuntimeEngine
+from refora_server.cli_runtime.engine import CliRuntimeEngine, _build_prompt
+from refora_server.cli_runtime.mcp_server import _handle
 from refora_server.cli_runtime.registry import CliRuntimeRegistry
 from refora_server.cli_runtime.types import CliInvocation, CliRuntimeCapabilities
 from refora_server.cli_runtime.tool_broker import CliToolBroker
@@ -95,17 +97,17 @@ def test_search_capability_resolver_deduplicates_native_search():
     }
     resolved = resolve_agent_capabilities(
         profile,
-        ["search_library", "web_search", "web_fetch"],
+        ["search_documents", "web_search", "web_fetch"],
         runtime_native_web_search=True,
     )
 
     assert resolved["useNativeWebSearch"] is True
-    assert resolved["enabledToolNames"] == ["search_library", "web_fetch"]
+    assert resolved["enabledToolNames"] == ["search_documents", "web_fetch"]
 
     profile["webSearchPolicy"] = "refora"
     resolved = resolve_agent_capabilities(
         profile,
-        ["search_library", "web_search", "web_fetch"],
+        ["search_documents", "web_search", "web_fetch"],
         runtime_native_web_search=True,
     )
     assert resolved["useNativeWebSearch"] is False
@@ -120,7 +122,7 @@ def test_api_native_search_requires_responses_api_support():
     }
     fallback = resolve_agent_capabilities(
         profile,
-        ["search_library", "web_search", "web_fetch"],
+        ["search_documents", "web_search", "web_fetch"],
     )
 
     assert fallback["useNativeWebSearch"] is False
@@ -130,16 +132,30 @@ def test_api_native_search_requires_responses_api_support():
     with pytest.raises(ValueError, match="Native Web search is not available"):
         resolve_agent_capabilities(
             profile,
-            ["search_library", "web_search", "web_fetch"],
+            ["search_documents", "web_search", "web_fetch"],
         )
 
     native = resolve_agent_capabilities(
         profile,
-        ["search_library", "web_search", "web_fetch"],
+        ["search_documents", "web_search", "web_fetch"],
         api_native_web_search=True,
     )
     assert native["useNativeWebSearch"] is True
-    assert native["enabledToolNames"] == ["search_library", "web_fetch"]
+    assert native["enabledToolNames"] == ["search_documents", "web_fetch"]
+
+
+def test_cli_uses_native_shell_instead_of_refora_execute():
+    cli = resolve_agent_capabilities(
+        {"kind": "cli", "webSearchPolicy": "refora"},
+        ["search_documents", "__execute"],
+    )
+    api = resolve_agent_capabilities(
+        {"kind": "api", "webSearchPolicy": "refora"},
+        ["search_documents", "__execute"],
+    )
+
+    assert cli["enabledToolNames"] == ["search_documents"]
+    assert api["enabledToolNames"] == ["search_documents", "__execute"]
 
 
 def test_codex_invocation_is_run_scoped_and_never_bypasses_sandbox(monkeypatch, tmp_path):
@@ -166,6 +182,7 @@ def test_codex_invocation_is_run_scoped_and_never_bypasses_sandbox(monkeypatch, 
         {
             "command": "/usr/bin/python3",
             "args": "-m\0refora_server.cli_runtime.mcp_server\0--config\0/tmp/run.json",
+            "cwd": str(tmp_path),
         },
     )
 
@@ -177,6 +194,47 @@ def test_codex_invocation_is_run_scoped_and_never_bypasses_sandbox(monkeypatch, 
     assert 'model_reasoning_effort="ultra"' in invocation.args
     assert "dangerously-bypass-approvals-and-sandbox" not in " ".join(invocation.args)
     assert any("mcp_servers.refora.command" in value for value in invocation.args)
+    assert any("mcp_servers.refora.cwd" in value for value in invocation.args)
+    assert 'mcp_servers.refora.default_tools_approval_mode="approve"' in invocation.args
+    assert "mcp_servers.refora.enabled=true" in invocation.args
+    assert "mcp_servers.refora.required=true" in invocation.args
+
+
+def test_codex_resumed_prompt_refreshes_workspace_system_instructions():
+    prompt = _build_prompt(
+        {
+            "systemPrompt": "Inspect the current workspace before answering.",
+            "messages": [
+                {"role": "user", "content": "Old question"},
+                {"role": "assistant", "content": "Old answer"},
+                {"role": "user", "content": "How many reports are there?"},
+            ],
+        },
+        True,
+    )
+
+    assert prompt == (
+        "[System instructions]\nInspect the current workspace before answering.\n\n"
+        "[User]\nHow many reports are there?"
+    )
+
+
+def test_refora_mcp_initialization_guides_workspace_tool_usage():
+    response = _handle(
+        {},
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        },
+    )
+
+    assert response is not None
+    result = response["result"]
+    assert result["protocolVersion"] == "2025-06-18"
+    assert "list_workspace_context" in result["instructions"]
+    assert "read_workspace_item" in result["instructions"]
 
 
 def test_codex_jsonl_events_map_to_agent_runtime_events():
@@ -187,7 +245,7 @@ def test_codex_jsonl_events_map_to_agent_runtime_events():
             "type": "item.completed",
             "item": {"id": "item-1", "type": "agent_message", "text": "Answer"},
         }
-    ) == [{"event": "token", "delta": "Answer"}]
+    ) == [{"event": "token", "delta": "Answer", "new_message": True}]
     assert adapter.parse_event(
         {
             "type": "item.updated",
@@ -201,13 +259,13 @@ def test_codex_jsonl_events_map_to_agent_runtime_events():
                 "id": "item-2",
                 "type": "mcp_tool_call",
                 "server": "refora",
-                "tool": "search_library",
+                "tool": "search_documents",
                 "arguments": {"query": "agents"},
             },
         }
     )[0]
     assert tool_event["event"] == "on_tool_start"
-    assert tool_event["name"] == "refora.search_library"
+    assert tool_event["name"] == "refora.search_documents"
 
 
 class _Schema:
@@ -217,7 +275,7 @@ class _Schema:
 
 
 class _ReadTool:
-    name = "search_library"
+    name = "search_documents"
     description = "Search the local library"
     args_schema = _Schema
 
@@ -253,6 +311,38 @@ def test_cli_tool_broker_rejects_unsafe_run_ids(tmp_path, run_id):
     assert broker._runs == {}
 
 
+def test_cli_tool_broker_mcp_entrypoint_has_explicit_import_root(tmp_path):
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    config = broker.open_run("run-1", [_ReadTool()])
+    assert config is not None
+    message = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        }
+    )
+
+    result = subprocess.run(
+        [config["command"], *config["args"].split(chr(0))],
+        input=f"{message}\n",
+        capture_output=True,
+        text=True,
+        cwd=config["cwd"],
+        env={"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"},
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert os.path.isfile(os.path.join(config["cwd"], "refora_server", "__init__.py"))
+    response = json.loads(result.stdout)
+    assert response["result"]["serverInfo"]["name"] == "refora"
+    assert "list_workspace_context" in response["result"]["instructions"]
+    broker.close_run("run-1")
+
+
 @pytest.mark.asyncio
 async def test_cli_tool_broker_approval_gates_consequential_tools(tmp_path):
     broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
@@ -262,8 +352,10 @@ async def test_cli_tool_broker_approval_gates_consequential_tools(tmp_path):
     assert os.stat(config_path).st_mode & 0o777 == 0o600
     run_token = broker._runs["run-1"]["token"]
     tools = broker.list_tools("run-1", run_token)
-    assert [tool["name"] for tool in tools] == ["search_library", "generate_report"]
-    assert await broker.call_tool("run-1", run_token, "search_library", {"query": "AI"}) == {
+    assert [tool["name"] for tool in tools] == ["search_documents", "generate_report"]
+    assert tools[0]["annotations"] == {"readOnlyHint": True}
+    assert tools[1]["annotations"] == {"readOnlyHint": False}
+    assert await broker.call_tool("run-1", run_token, "search_documents", {"query": "AI"}) == {
         "query": "AI",
         "count": 1,
     }
@@ -355,6 +447,7 @@ def test_gemini_invocation_uses_isolated_settings_and_maps_events(monkeypatch, t
         {
             "command": "/usr/bin/python3",
             "args": "-m\0refora_server.cli_runtime.mcp_server\0--config\0/tmp/run.json",
+            "cwd": str(tmp_path),
             "writeConfig": write_config,
         },
     )
@@ -362,6 +455,7 @@ def test_gemini_invocation_uses_isolated_settings_and_maps_events(monkeypatch, t
     assert invocation.env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"].endswith("settings.json")
     assert captured["gemini-settings"]["tools"]["core"] == []
     assert captured["gemini-settings"]["mcpServers"]["refora"]["trust"] is True
+    assert captured["gemini-settings"]["mcpServers"]["refora"]["cwd"] == str(tmp_path)
     assert adapter.session_id({"type": "init", "session_id": "gemini-session"}) == "gemini-session"
     assert adapter.parse_event(
         {"type": "message", "role": "assistant", "content": "Answer"}
@@ -436,6 +530,7 @@ class _ApprovalAdapter:
         script = (
             "import json,time;"
             "print(json.dumps({'type':'init'}),flush=True);"
+            "print(json.dumps({'type':'progress','text':'Preparing report.'}),flush=True);"
             "time.sleep(0.5);"
             "print(json.dumps({'type':'message','text':'Finished'}),flush=True)"
         )
@@ -449,9 +544,13 @@ class _ApprovalAdapter:
     def parse_event(self, payload):
         if payload.get("type") == "init":
             return [{"event": "on_chat_model_start", "name": self.id}]
+        if payload.get("type") == "progress":
+            return [
+                {"event": "token", "delta": payload["text"], "new_message": True}
+            ]
         if payload.get("type") == "message":
             return [
-                {"event": "token", "delta": payload["text"]},
+                {"event": "token", "delta": payload["text"], "new_message": True},
                 {"event": "on_chat_model_end", "name": self.id, "data": {}},
             ]
         return []
@@ -461,6 +560,80 @@ class _ApprovalAdapter:
 
     def result_text(self, payload):
         return None
+
+
+class _SegmentAdapter:
+    id = "segment-test"
+    label = "Segment test"
+    capabilities = CliRuntimeCapabilities(
+        native_web_search=False,
+        mcp=False,
+        session_resume=False,
+    )
+
+    def build_invocation(self, profile, request, prompt, session_id, mcp):
+        script = (
+            "import json;"
+            "print(json.dumps({'text':'Checking sources.'}),flush=True);"
+            "print(json.dumps({'text':'Final answer.'}),flush=True)"
+        )
+        return CliInvocation(
+            executable=sys.executable,
+            args=("-u", "-c", script),
+            cwd=request["sandboxRoot"],
+            stdin=prompt,
+        )
+
+    def parse_event(self, payload):
+        text = payload.get("text")
+        return [
+            {"event": "token", "delta": text, "new_message": True}
+        ] if isinstance(text, str) else []
+
+    def session_id(self, payload):
+        return None
+
+    def result_text(self, payload):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_cli_engine_separates_complete_assistant_messages(tmp_path):
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    sessions = {
+        "get": lambda *_args: None,
+        "put": lambda *_args: None,
+        "delete": lambda *_args: None,
+    }
+    engine = CliRuntimeEngine(
+        CliRuntimeRegistry([_SegmentAdapter()]),
+        broker,
+        sessions,
+        {"update": lambda *_args: None},
+    )
+    request = {
+        "runId": "run-segments",
+        "threadId": "thread-segments",
+        "sandboxRoot": str(tmp_path),
+        "messages": [{"role": "user", "content": "Inspect sources"}],
+        "agentProfile": {
+            "id": "profile-segments",
+            "cliRuntimeId": "segment-test",
+        },
+    }
+
+    events = [
+        event
+        async for event in engine.create_agent([], request).astream_events({})
+    ]
+
+    assert [event.get("delta") for event in events if event["event"] == "token"] == [
+        "Checking sources.",
+        "\n\nFinal answer.",
+    ]
+    assert events[-1]["result"]["content"] == (
+        "Checking sources.\n\nFinal answer."
+    )
 
 
 @pytest.mark.asyncio
@@ -490,6 +663,7 @@ async def test_cli_engine_resumes_the_same_process_after_tool_approval(tmp_path)
     agent = engine.create_agent([_WriteTool()], request)
     first_stream = agent.astream_events({})
     assert (await anext(first_stream))["event"] == "on_chat_model_start"
+    assert (await anext(first_stream))["delta"] == "Preparing report."
     run_token = broker._runs["run-approval"]["token"]
     call = asyncio.create_task(
         broker.call_tool(
@@ -511,5 +685,8 @@ async def test_cli_engine_resumes_the_same_process_after_tool_approval(tmp_path)
         "on_chat_model_end",
         "done",
     ]
-    assert resumed_events[-1]["result"]["content"] == "Finished"
+    assert resumed_events[0]["delta"] == "\n\nFinished"
+    assert resumed_events[-1]["result"]["content"] == (
+        "Preparing report.\n\nFinished"
+    )
     assert engine._agents == {}

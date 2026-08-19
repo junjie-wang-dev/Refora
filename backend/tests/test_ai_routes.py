@@ -5,7 +5,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from langchain_core.tools import StructuredTool
 
+from refora_server.cli_runtime.tool_broker import CliToolBroker
 from refora_server.db.errors import RepoError
 from refora_server.server.routes.ai import create_ai_router
 
@@ -391,6 +393,39 @@ def make_client(runtime: FakeRuntime | None = None):
 def request(client: TestClient, method: str, path: str, **kwargs: Any):
     headers = kwargs.pop("headers", {})
     return client.request(method, path, headers={"X-Refora-Token": "test-token", **headers}, **kwargs)
+
+
+def test_cli_tool_route_serializes_structured_tool_result(tmp_path) -> None:
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    tool = StructuredTool.from_function(
+        name="list_workspace_context",
+        description="List workspace context",
+        func=lambda: '{"workspaceId":"workspace-1","itemCount":0,"items":[]}',
+    )
+    config = broker.open_run("run-1", [tool])
+    assert config is not None
+    token = broker._runs["run-1"]["token"]
+    app = FastAPI()
+    app.include_router(
+        create_ai_router({"services": {"cliToolBroker": broker}})
+    )
+
+    response = TestClient(app).post(
+        "/ai/cli-tools/run-1/call",
+        headers={"X-Refora-Run-Token": token},
+        json={
+            "name": "list_workspace_context",
+            "arguments": {},
+            "toolCallId": "mcp-call-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "data": '{"workspaceId":"workspace-1","itemCount":0,"items":[]}',
+    }
+    broker.close_run("run-1")
 
 
 def test_token_dependency_returns_error_envelope() -> None:

@@ -142,7 +142,7 @@ export default function ModelSelector({
       <div className="relative flex min-w-0 flex-1 justify-end" ref={menuRef}>
         <button
           type="button"
-          className="inline-flex w-full min-w-0 max-w-[230px] items-center gap-1.5 rounded-lg px-2 py-1 text-label text-foreground transition-colors duration-150 hover:bg-hover disabled:opacity-40"
+          className="inline-flex min-w-0 max-w-[230px] items-center gap-1.5 rounded-lg px-2 py-1 text-label text-foreground transition-colors duration-150 hover:bg-hover disabled:opacity-40"
           onClick={() => {
             setReasoningMenuOpen(false)
             setModelMenuOpen((value) => !value)
@@ -158,14 +158,7 @@ export default function ModelSelector({
               ? <Terminal className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
               : <Cloud className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
           )}
-          <span className="min-w-0 flex-1 truncate font-medium">{displayModelLabel}</span>
-          {activeProvider && (
-            <span className="shrink-0 rounded bg-panel-2 px-1 py-0.5 text-caption font-medium uppercase text-muted">
-              {activeIsCli
-                ? t('workspace.chat.localCli', 'CLI')
-                : t('workspace.chat.apiProvider', 'API')}
-            </span>
-          )}
+          <span className="min-w-0 truncate font-medium">{displayModelLabel}</span>
           <CaretDown className="h-3 w-3 shrink-0 text-muted" />
         </button>
 
@@ -216,11 +209,6 @@ export default function ModelSelector({
                       {provider.name}
                       {loadingModels && provider.models == null ? '…' : ''}
                     </p>
-                    <span className="rounded bg-panel-2 px-1 py-0.5 text-caption font-medium uppercase text-muted">
-                      {cliProvider
-                        ? t('workspace.chat.localCli', 'CLI')
-                        : t('workspace.chat.apiProvider', 'API')}
-                    </span>
                   </div>
                   {configuredModels.map((model) => {
                     const parsed = parseModelId(model)

@@ -267,7 +267,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
     runtime_factory = Mock(return_value=runtime)
     tool_factory = Mock(
         return_value=[
-            SimpleNamespace(name="search_library"),
+            SimpleNamespace(name="search_documents"),
             SimpleNamespace(name="prepare_paper_ocr"),
             SimpleNamespace(name="list_workspace_context"),
             SimpleNamespace(name="web_search"),
@@ -361,7 +361,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             "workspaceId": None,
             "sandboxRoot": "/tmp/library/.refora/sandboxes/default",
             "enabledToolNames": [
-                "search_library",
+                "search_documents",
                 "list_workspace_context",
                 "web_search",
             ],
@@ -378,6 +378,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         assert callable(tool_dependencies["open_paper"])
         assert callable(tool_dependencies["find_related_papers"])
         assert callable(tool_dependencies["workspace_changed"])
+        assert callable(tool_dependencies["preview_workspace_asset"])
         assert callable(tool_dependencies["ai_summary"])
         search_academic = tool_dependencies["academic"]["arxiv"]["search"]
         assert await asyncio.to_thread(
@@ -451,7 +452,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         )
 
         runtime_tools = [
-            SimpleNamespace(name="search_library"),
+            SimpleNamespace(name="search_documents"),
             SimpleNamespace(name="prepare_paper_ocr"),
         ]
         assert dependencies["createAgent"]("model", runtime_tools, request) == "agent"
@@ -463,7 +464,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         )
         assert "/memories/" in agent_factory.call_args.kwargs["system_prompt"]
         assert set(agent_factory.call_args.kwargs["interrupt_on"]) == {
-            "search_library",
+            "search_documents",
             "prepare_paper_ocr",
         }
         assert agent_factory.call_args.kwargs["skills"] is None

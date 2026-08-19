@@ -24,6 +24,8 @@ def resolve_agent_capabilities(
     use_native = policy == "native" or (policy == "auto" and native_available)
     use_refora = policy == "refora" or (policy == "auto" and not use_native)
     enabled = list(tool_names)
+    if profile.get("kind") == "cli":
+        enabled = [name for name in enabled if name != "__execute"]
     if use_native:
         enabled = [name for name in enabled if name != "web_search"]
     elif not use_refora:

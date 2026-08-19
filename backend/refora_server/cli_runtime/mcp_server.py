@@ -66,6 +66,13 @@ def _handle(config: dict[str, Any], message: dict[str, Any]) -> dict[str, Any] |
                 "protocolVersion": params.get("protocolVersion") or "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "refora", "version": "1.0.0"},
+                "instructions": (
+                    "For questions about the selected workspace's current cards, counts, or "
+                    "contents, call list_workspace_context before answering. Use "
+                    "read_workspace_item with a returned itemId for report, note, document, "
+                    "or asset contents. Do not infer "
+                    "the complete workspace from the paper catalog alone."
+                ),
             },
         )
     if method == "ping":

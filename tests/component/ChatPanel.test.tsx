@@ -599,7 +599,7 @@ describe('ChatPanel citation links', () => {
 
 describe('ChatPanel tool message filtering', () => {
   it('does not render tool messages in the chat history', async () => {
-    const toolContent = JSON.stringify({ v: 2, name: 'search_workspace_docs', toolCallId: 'call_1', input: 'q', output: '[]' })
+    const toolContent = JSON.stringify({ v: 2, name: 'search_documents', toolCallId: 'call_1', input: 'q', output: '[]' })
     const msgs: ChatMessage[] = [
       { id: 'm1', threadId: 't1', role: 'user', content: 'hello', createdAt: 0 },
       { id: 'm2', threadId: 't1', role: 'tool', content: toolContent, createdAt: 1 },
@@ -610,7 +610,7 @@ describe('ChatPanel tool message filtering', () => {
 
     await screen.findByText('hello')
     await screen.findByText('hi there')
-    expect(screen.queryByText(/search_workspace_docs/)).toBeNull()
+    expect(screen.queryByText(/search_documents/)).toBeNull()
     expect(screen.queryByText(/toolCallId/)).toBeNull()
   })
 })
@@ -665,7 +665,8 @@ describe('ChatPanel provider restoration', () => {
       name: 'workspace.chat.selectProvider'
     })
     await waitFor(() => expect(selector).toHaveTextContent('GPT-5.6-Luna'))
-    expect(selector).toHaveTextContent('workspace.chat.localCli')
+    expect(selector).not.toHaveTextContent('workspace.chat.localCli')
+    expect(selector.querySelector('svg')).toBeInTheDocument()
 
     const input = screen.getByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
     fireEvent.change(input, { target: { value: 'Use Codex' } })
@@ -1191,9 +1192,35 @@ describe('ChatMessages presentation', () => {
     expect(screen.getByText('The methods differ.')).toBeInTheDocument()
   })
 
+  it('keeps a persisted API answer when it differs from an earlier streamed segment', () => {
+    const messages: ChatMessage[] = [
+      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Persisted final answer', createdAt: 4 }
+    ]
+    const base = {
+      threadId: 't1', runId: 'run-api', input: null, status: 'done' as const,
+      startedAt: 1, endedAt: 3, inputTokens: null, outputTokens: null,
+      totalTokens: null, parentStepId: null, agentName: null, namespace: null,
+      depth: 0, checkpointId: null
+    }
+    const traceSteps: AgentTraceStep[] = [
+      { ...base, id: 'run', kind: 'run', name: 'agent', output: 'Persisted final answer', seq: 0 },
+      { ...base, id: 'llm', kind: 'llm', name: 'model', output: '{}', seq: 1 },
+      { ...base, id: 'partial', kind: 'message', name: 'assistant_message', output: 'Earlier progress', seq: 2 }
+    ]
+
+    const { container } = renderMessages({ messages, traceSteps, streaming: false })
+    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+
+    expect(screen.getByText('Persisted final answer')).toBeInTheDocument()
+    expect(screen.getByText('Earlier progress')).toBeInTheDocument()
+    fireEvent.click(runToggle)
+    expect(screen.queryByText('Earlier progress')).toBeNull()
+    expect(screen.getByText('Persisted final answer')).toBeInTheDocument()
+  })
+
   it('renders reasoning, tools, and answer segments in trace order', () => {
     const messages: ChatMessage[] = [
-      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Final answer', createdAt: 2 }
+      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Checking sources.\n\nFinal answer', createdAt: 2 }
     ]
     const base = {
       threadId: 't1',
@@ -1210,7 +1237,7 @@ describe('ChatMessages presentation', () => {
       { ...base, id: 'llm', kind: 'llm', name: 'model_call', input: '{}', output: '', seq: 0 },
       { ...base, id: 'reasoning', kind: 'reasoning', name: 'model_reasoning', output: 'Inspect sources', seq: 1 },
       { ...base, id: 'progress', kind: 'message', name: 'assistant_message', output: 'Checking sources.', seq: 2 },
-      { ...base, id: 'tool', kind: 'tool', name: 'search_library', output: '[]', seq: 3 },
+      { ...base, id: 'tool', kind: 'tool', name: 'search_documents', input: '{"query":"","scope":"library"}', output: '[]', seq: 3 },
       { ...base, id: 'answer', kind: 'message', name: 'assistant_message', output: 'Final answer', seq: 4 }
     ]
 
@@ -2114,6 +2141,84 @@ describe('useChatStream lifecycle', () => {
     expect(result.current.error).toBe('Worker stopped')
   })
 
+  it('refreshes the completed run trace after the done event', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Explain the paper', [], 'thread-1')
+    })
+    const runId = result.current.activeRunId!
+    const completedRun = makeRunStep(runId, 'done')
+    const completedModel: AgentTraceStep = {
+      ...completedRun,
+      id: 'model-completed',
+      kind: 'llm',
+      name: 'model',
+      seq: 2,
+      inputTokens: 12,
+      outputTokens: 8,
+      totalTokens: 20
+    }
+    mockChatTraces.mockResolvedValue([completedRun, completedModel])
+
+    act(() => {
+      chatDoneHandler?.({
+        threadId: 'thread-1',
+        runId,
+        finalText: 'Answer'
+      })
+    })
+
+    expect(result.current.streaming).toBe(false)
+    await waitFor(() => {
+      expect(result.current.traceSteps).toEqual([completedRun, completedModel])
+    })
+    expect(mockChatTraces).toHaveBeenCalledWith('thread-1')
+  })
+
+  it('discards a completed trace refresh after regeneration starts', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Explain the paper', [], 'thread-1')
+    })
+    const completedRunId = result.current.activeRunId!
+    const completedRun = makeRunStep(completedRunId, 'done')
+    act(() => {
+      chatTraceHandler?.({
+        threadId: 'thread-1',
+        runId: completedRunId,
+        step: completedRun
+      })
+    })
+    let resolveCompletedTrace: ((steps: AgentTraceStep[]) => void) | undefined
+    mockChatTraces.mockImplementationOnce(
+      () => new Promise<AgentTraceStep[]>((resolve) => {
+        resolveCompletedTrace = resolve
+      })
+    )
+
+    act(() => {
+      chatDoneHandler?.({
+        threadId: 'thread-1',
+        runId: completedRunId,
+        finalText: 'First answer'
+      })
+    })
+    act(() => {
+      result.current.handleRegenerate()
+    })
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      resolveCompletedTrace?.([completedRun])
+      await Promise.resolve()
+    })
+
+    expect(result.current.traceSteps.some((step) => step.runId === completedRunId))
+      .toBe(false)
+  })
+
   it('converges a reloaded running trace from the persisted run snapshot', async () => {
     setupApi([])
     const runId = 'run-reloaded'
@@ -2252,8 +2357,8 @@ describe('AgentTracePanel structure', () => {
       threadId: 'thread-1',
       runId: 'run-1',
       kind: 'tool',
-      name: 'search_library',
-      input: '{"query":"graph","limit":3}',
+      name: 'search_documents',
+      input: '{"query":"graph","scope":"library"}',
       output: null,
       status: 'done',
       startedAt: 0,

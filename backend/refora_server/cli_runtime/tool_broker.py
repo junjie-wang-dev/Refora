@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 from refora_server.agent.risk import RiskClass, classify
 
 
@@ -76,6 +78,11 @@ class CliToolBroker:
         return {
             "command": sys.executable,
             "args": chr(0).join(args),
+            "cwd": str(
+                Path(sys.executable).resolve().parent
+                if frozen
+                else Path(__file__).resolve().parents[2]
+            ),
             "configPath": str(path),
             "writeConfig": lambda name, value: self.write_runtime_config(
                 run_id, name, value
@@ -141,6 +148,9 @@ class CliToolBroker:
                     "name": tool.name,
                     "description": getattr(tool, "description", "") or "",
                     "inputSchema": schema,
+                    "annotations": {
+                        "readOnlyHint": classify(tool.name) is RiskClass.READ,
+                    },
                 }
             )
         return result
@@ -206,12 +216,15 @@ class CliToolBroker:
             }
         async_invoke = getattr(tool, "ainvoke", None)
         if callable(async_invoke):
-            return await async_invoke(invocation)
-        invoke = getattr(tool, "invoke", None)
-        if not callable(invoke):
-            raise RuntimeError(f"CLI tool cannot be invoked: {tool.name}")
-        result = await asyncio.to_thread(invoke, invocation)
-        return await result if inspect.isawaitable(result) else result
+            result = await async_invoke(invocation)
+        else:
+            invoke = getattr(tool, "invoke", None)
+            if not callable(invoke):
+                raise RuntimeError(f"CLI tool cannot be invoked: {tool.name}")
+            result = await asyncio.to_thread(invoke, invocation)
+            if inspect.isawaitable(result):
+                result = await result
+        return result.content if isinstance(result, ToolMessage) else result
 
     async def call_tool(
         self,

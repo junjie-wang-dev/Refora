@@ -189,22 +189,46 @@ def test_tool_factory_covers_read_web_academic_workspace_and_memory_tools():
     tools = create_agent_tools(AgentToolContext(run_id="run"), {})
     names = {tool.name for tool in tools}
 
-    assert {"search_library", "read_paper_fulltext", "web_search", "web_fetch", "search_arxiv", "get_semantic_recommendations", "list_workspace_context", "list_workspace_assets", "list_workspace_notes", "generate_report", "propose_workspace_memory_update"} <= names
+    assert names == {
+        "search_documents",
+        "get_paper_context",
+        "read_paper",
+        "open_paper",
+        "find_related_papers",
+        "list_workspace_context",
+        "read_workspace_item",
+        "add_docs_to_workspace",
+        "create_workspace_connections",
+        "generate_report",
+        "prepare_paper_ocr",
+        "propose_workspace_memory_update",
+        "publish_workspace_artifacts",
+        "install_runtime_packages",
+        "__execute",
+        "search_arxiv",
+        "get_arxiv_paper",
+        "get_related_academic_papers",
+        "explore_research_frontier",
+        "web_search",
+        "web_fetch",
+    }
     assert "write_todos" not in names
 
 
 def test_library_tools_registered_with_document_and_summary_schemas():
     tools = {tool.name: tool for tool in create_agent_tools(AgentToolContext(run_id="run"), {})}
 
-    assert set({"search_library", "get_paper_metadata", "read_paper_fulltext", "read_paper_ocr_fulltext", "get_paper_summary", "request_summary", "open_paper", "find_related_papers"}) <= set(tools)
+    assert set({"search_documents", "get_paper_context", "read_paper", "open_paper", "find_related_papers"}) <= set(tools)
 
-    search = tools["search_library"].args_schema
+    search = tools["search_documents"].args_schema
     assert search["required"] == ["query"]
     assert search["additionalProperties"] is False
     assert search["properties"]["query"] == {"type": "string"}
+    assert search["properties"]["scope"]["enum"] == ["workspace", "library"]
 
-    fulltext = tools["read_paper_fulltext"].args_schema
+    fulltext = tools["read_paper"].args_schema
     assert fulltext["required"] == ["docId"]
+    assert fulltext["properties"]["source"]["enum"] == ["auto", "ocr", "extracted"]
     assert fulltext["properties"]["offset"] == {"type": "integer", "minimum": 0, "default": 0}
     assert fulltext["properties"]["limit"] == {"type": "integer", "minimum": 500, "maximum": 40000, "default": 40000}
 
@@ -220,35 +244,39 @@ def _library_executor(repos, deps_extra=None):
     return AgentToolExecutor(AgentToolContext(run_id="run"), deps)
 
 
-def test_search_library_queries_documents_repository_and_maps_doc_fields():
+def test_search_documents_queries_library_and_maps_doc_fields():
     docs = Functions(search=lambda query, limit: [{"id": "d1", "title": "Quantum", "authors": ["A"], "year": 2021}, {"id": "d2", "fileName": "notes.pdf"}])
     executor = _library_executor({"documents": docs})
 
-    result = json.loads(executor.execute("search_library", {"query": "quantum"}))
+    result = json.loads(executor.execute("search_documents", {"query": "quantum", "scope": "library"}))
 
-    assert result == [{"docId": "d1", "title": "Quantum", "authors": ["A"], "year": 2021}, {"docId": "d2", "title": "notes.pdf", "authors": None, "year": None}]
+    assert result == [{"docId": "d1", "title": "Quantum", "authors": ["A"], "year": 2021, "hasSummary": False}, {"docId": "d2", "title": "notes.pdf", "authors": None, "year": None, "hasSummary": False}]
     docs["search"].called_with = None
     assert docs["search"]("quantum", 20) is not None
 
 
-def test_search_library_caps_results_at_twenty():
+def test_search_documents_caps_library_results_at_twenty():
     docs = Functions(search=lambda query, limit: [{"id": f"d{i}"} for i in range(limit)])
     executor = _library_executor({"documents": docs})
 
-    result = json.loads(executor.execute("search_library", {"query": "x"}))
+    result = json.loads(executor.execute("search_documents", {"query": "x", "scope": "library"}))
 
     assert len(result) == 20
 
 
-def test_get_paper_metadata_returns_document_or_not_found():
+def test_get_paper_context_returns_metadata_summary_or_not_found():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "T"} if doc_id == "d1" else None)
-    executor = _library_executor({"documents": docs})
+    summaries = Functions(getSummary=lambda doc_id: {"content": "Summary"})
+    executor = _library_executor({"documents": docs, "aiSummaries": summaries})
 
-    assert json.loads(executor.execute("get_paper_metadata", {"docId": "d1"}))["id"] == "d1"
-    assert json.loads(executor.execute("get_paper_metadata", {"docId": "missing"})) == {"error": "Document not found."}
+    context = json.loads(executor.execute("get_paper_context", {"docId": "d1"}))
+    assert context["id"] == "d1"
+    assert context["hasSummary"] is True
+    assert context["summary"] == "Summary"
+    assert json.loads(executor.execute("get_paper_context", {"docId": "missing"})) == {"error": "Document not found."}
 
 
-def test_read_paper_fulltext_paginates_extracted_text():
+def test_read_paper_paginates_extracted_text():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
     extracted = []
     executor = _library_executor(
@@ -259,7 +287,7 @@ def test_read_paper_fulltext_paginates_extracted_text():
         },
     )
 
-    first = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1", "limit": 50}))
+    first = json.loads(executor.execute("read_paper", {"docId": "d1", "source": "extracted", "limit": 50}))
     assert first["offset"] == 0
     assert first["limit"] == 500
     assert first["totalChars"] == 100
@@ -271,22 +299,22 @@ def test_read_paper_fulltext_paginates_extracted_text():
         {"documents": docs},
         {"read_paper_fulltext": lambda _doc_id: "b" * 2000},
     )
-    page = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1", "offset": 0, "limit": 100}))
+    page = json.loads(executor.execute("read_paper", {"docId": "d1", "source": "extracted", "offset": 0, "limit": 100}))
     assert page["limit"] == 500
     assert page["nextOffset"] == 500
     assert page["text"] == "b" * 500
 
 
-def test_read_paper_fulltext_returns_error_when_document_missing():
+def test_read_paper_returns_error_when_document_missing():
     docs = Functions(get=lambda doc_id: None)
     executor = _library_executor({"documents": docs, "aiSummaries": Functions()})
 
-    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "ghost"}))
+    result = json.loads(executor.execute("read_paper", {"docId": "ghost"}))
 
     assert result == {"error": "Document not found."}
 
 
-def test_read_paper_ocr_fulltext_uses_ocr_dependency():
+def test_read_paper_ocr_source_uses_ocr_dependency():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "fileName": "f.pdf"})
     executor = _library_executor(
         {"documents": docs},
@@ -298,7 +326,7 @@ def test_read_paper_ocr_fulltext_uses_ocr_dependency():
         },
     )
 
-    result = json.loads(executor.execute("read_paper_ocr_fulltext", {"docId": "d1", "limit": 50}))
+    result = json.loads(executor.execute("read_paper", {"docId": "d1", "source": "ocr", "limit": 50}))
 
     assert result["title"] == "f.pdf"
     assert result["text"] == ("OCR" * 100)[:500]
@@ -308,7 +336,7 @@ def test_read_paper_ocr_fulltext_uses_ocr_dependency():
     assert result["resultKey"] == "result-1"
 
 
-def test_read_paper_ocr_fulltext_returns_cache_missing_contract():
+def test_read_paper_ocr_source_returns_cache_missing_contract():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "fileName": "f.pdf"})
     executor = _library_executor(
         {"documents": docs},
@@ -316,7 +344,7 @@ def test_read_paper_ocr_fulltext_returns_cache_missing_contract():
     )
 
     result = json.loads(
-        executor.execute("read_paper_ocr_fulltext", {"docId": "d1"})
+        executor.execute("read_paper", {"docId": "d1", "source": "ocr"})
     )
 
     assert result == {
@@ -328,14 +356,14 @@ def test_read_paper_ocr_fulltext_returns_cache_missing_contract():
     }
 
 
-def test_read_paper_ocr_fulltext_reports_missing_document():
+def test_read_paper_ocr_source_reports_missing_document():
     docs = Functions(get=lambda doc_id: None)
     executor = _library_executor({"documents": docs}, {"read_ocr_fulltext": lambda doc_id: "x"})
 
-    assert json.loads(executor.execute("read_paper_ocr_fulltext", {"docId": "ghost"})) == {"error": "Document not found."}
+    assert json.loads(executor.execute("read_paper", {"docId": "ghost", "source": "ocr"})) == {"error": "Document not found."}
 
 
-def test_read_paper_fulltext_prefers_ocr_when_cache_exists():
+def test_read_paper_auto_prefers_ocr_when_cache_exists():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
     pypdf_calls = []
     executor = _library_executor(
@@ -349,7 +377,7 @@ def test_read_paper_fulltext_prefers_ocr_when_cache_exists():
         },
     )
 
-    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+    result = json.loads(executor.execute("read_paper", {"docId": "d1"}))
 
     assert result["source"] == "mineru_ocr"
     assert "OCR markdown" in result["text"]
@@ -358,72 +386,45 @@ def test_read_paper_fulltext_prefers_ocr_when_cache_exists():
     assert pypdf_calls == []
 
 
-def test_read_paper_fulltext_reports_extraction_poor_for_empty_text():
+def test_read_paper_reports_extraction_poor_for_empty_text():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
     executor = _library_executor(
         {"documents": docs},
         {"read_paper_fulltext": lambda doc_id: ""},
     )
 
-    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+    result = json.loads(executor.execute("read_paper", {"docId": "d1"}))
 
     assert result["status"] == "extraction_poor"
-    assert result["nextTool"] == "read_paper_ocr_fulltext"
+    assert result["nextTool"] == "prepare_paper_ocr"
     assert result["source"] == "extracted"
 
 
-def test_read_paper_fulltext_reports_extraction_poor_for_short_text():
+def test_read_paper_reports_extraction_poor_for_short_text():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
     executor = _library_executor(
         {"documents": docs},
         {"read_paper_fulltext": lambda doc_id: "ab"},
     )
 
-    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+    result = json.loads(executor.execute("read_paper", {"docId": "d1"}))
 
     assert result["status"] == "extraction_poor"
-    assert result["nextTool"] == "read_paper_ocr_fulltext"
+    assert result["nextTool"] == "prepare_paper_ocr"
 
 
-def test_read_paper_fulltext_includes_source_extracted_for_pypdf():
+def test_read_paper_includes_source_extracted_for_pypdf():
     docs = Functions(get=lambda doc_id: {"id": doc_id, "title": "Paper"})
     executor = _library_executor(
         {"documents": docs},
         {"read_paper_fulltext": lambda doc_id: "sufficient text " * 100},
     )
 
-    result = json.loads(executor.execute("read_paper_fulltext", {"docId": "d1"}))
+    result = json.loads(executor.execute("read_paper", {"docId": "d1"}))
 
     assert result["source"] == "extracted"
     assert "profile" not in result
     assert "resultKey" not in result
-
-
-def test_get_paper_summary_returns_content_or_unavailable_notice():
-    summaries = Functions(getSummary=lambda doc_id: {"content": "the summary"} if doc_id == "d1" else ({"content": None} if doc_id == "d2" else None))
-    executor = _library_executor({"aiSummaries": summaries})
-
-    assert json.loads(executor.execute("get_paper_summary", {"docId": "d1"})) == "the summary"
-    assert json.loads(executor.execute("get_paper_summary", {"docId": "d2"})) == {"error": "No summary is available."}
-    assert json.loads(executor.execute("get_paper_summary", {"docId": "d3"})) == {"error": "No summary is available."}
-
-
-def test_request_summary_queues_when_service_available_and_reports_unavailable_otherwise():
-    queued = []
-    repos = {
-        "documents": Functions(get=lambda doc_id: {"id": doc_id}),
-        "aiSummaries": Functions(getSummary=lambda doc_id: None),
-    }
-
-    def queue(doc_id):
-        queued.append(doc_id)
-
-    executor = _library_executor(repos, {"ai_summary": queue})
-    assert json.loads(executor.execute("request_summary", {"docId": "d1"})) == {"status": "queued", "docId": "d1"}
-    assert queued == ["d1"]
-
-    executor = _library_executor(repos, {"ai_summary": None})
-    assert json.loads(executor.execute("request_summary", {"docId": "d1"})) == {"status": "unavailable", "docId": "d1"}
 
 
 def test_open_paper_delegates_to_dependency():
@@ -459,9 +460,10 @@ def test_library_tools_route_through_repos_helper_not_direct_attribute_access():
     repos = {"documents": docs, "aiSummaries": {"getSummary": lambda doc_id: {"content": "s"}}}
     executor = _library_executor(repos)
 
-    assert json.loads(executor.execute("search_library", {"query": "x"})) == [{"docId": "d1", "title": None, "authors": None, "year": None}]
-    assert json.loads(executor.execute("get_paper_metadata", {"docId": "d1"}))["id"] == "d1"
-    assert json.loads(executor.execute("get_paper_summary", {"docId": "d1"})) == "s"
+    assert json.loads(executor.execute("search_documents", {"query": "x", "scope": "library"})) == [{"docId": "d1", "title": None, "authors": None, "year": None, "hasSummary": True}]
+    context = json.loads(executor.execute("get_paper_context", {"docId": "d1"}))
+    assert context["id"] == "d1"
+    assert context["summary"] == "s"
 
 
 
@@ -608,23 +610,14 @@ def test_get_arxiv_paper_returns_markdown_chunk_structure():
     assert result["sections"][0]["title"] == "Intro"
 
 
-def test_resolve_academic_identity_passes_paper_locator():
-    executor, deps = _academic_executor()
-
-    result = json.loads(executor.execute("resolve_academic_identity", {"paper": {"type": "arxiv_id", "value": "2401.00001"}}))
-
-    assert result["canonicalId"] == _SEED.canonicalId
-    assert len(deps.identity_locators) == 1
-    assert deps.identity_locators[0] == PaperLocator(type="arxiv_id", value="2401.00001")
-
-
-def test_get_citing_papers_returns_incoming_page():
+def test_get_related_academic_papers_returns_incoming_page():
     executor, deps = _academic_executor()
 
     result = json.loads(
         executor.execute(
-            "get_citing_papers",
+            "get_related_academic_papers",
             {
+                "relation": "citing",
                 "paper": {"type": "arxiv_id", "value": "2401.00001"},
                 "publishedAfter": "2025-01-01",
             },
@@ -637,13 +630,14 @@ def test_get_citing_papers_returns_incoming_page():
     assert deps.citing_filters == [{"publishedAfter": "2025-01-01"}]
 
 
-def test_get_referenced_papers_returns_outgoing_page_with_candidates():
+def test_get_related_academic_papers_returns_outgoing_page_with_candidates():
     executor, deps = _academic_executor()
 
     result = json.loads(
         executor.execute(
-            "get_referenced_papers",
+            "get_related_academic_papers",
             {
+                "relation": "referenced",
                 "paper": {"type": "arxiv_id", "value": "2401.00001"},
                 "publishedAfter": "2024-01-01",
             },
@@ -657,10 +651,10 @@ def test_get_referenced_papers_returns_outgoing_page_with_candidates():
     assert deps.referenced_filters == [{"publishedAfter": "2024-01-01"}]
 
 
-def test_get_semantic_recommendations_returns_seed_and_items():
+def test_get_related_academic_papers_returns_recommendations():
     executor, deps = _academic_executor()
 
-    result = json.loads(executor.execute("get_semantic_recommendations", {"paper": {"type": "arxiv_id", "value": "2401.00001"}}))
+    result = json.loads(executor.execute("get_related_academic_papers", {"relation": "recommended", "paper": {"type": "arxiv_id", "value": "2401.00001"}}))
 
     assert result["seed"]["canonicalId"] == _SEED.canonicalId
     assert result["items"] == []

@@ -299,7 +299,7 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
 
     monkeypatch.setattr(providers, "create_deep_agent", fake_create_deep_agent)
     tools = [
-        SimpleNamespace(name="search_library"),
+        SimpleNamespace(name="search_documents"),
         SimpleNamespace(name="generate_report"),
         SimpleNamespace(name="prepare_paper_ocr"),
         SimpleNamespace(name="propose_workspace_memory_update"),
@@ -329,7 +329,7 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
         "data-analyst",
     }
     for subagent in captured["subagents"]:
-        assert [tool.name for tool in subagent["tools"]] == ["search_library"]
+        assert [tool.name for tool in subagent["tools"]] == ["search_documents"]
         assert subagent["interrupt_on"] == {}
     assert isinstance(captured["backend"], CompositeBackend)
     assert isinstance(captured["backend"].default, ReforaFilesystemBackend)
@@ -353,20 +353,20 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
     assert permission.mode == "allow"
     policies = captured["interrupt_on"]
     assert set(policies) == {
-        "search_library",
+        "search_documents",
         "generate_report",
         "prepare_paper_ocr",
         "propose_workspace_memory_update",
         "__execute",
     }
     assert [tool.name for tool in captured["tools"]] == [
-        "search_library",
+        "search_documents",
         "generate_report",
         "prepare_paper_ocr",
         "propose_workspace_memory_update",
         "__execute",
     ]
-    assert policies["search_library"]["when"](
+    assert policies["search_documents"]["when"](
         SimpleNamespace(tool_call={"args": {"query": "paper"}})
     ) is False
     assert policies["generate_report"]["when"](
@@ -420,7 +420,7 @@ def test_create_agent_binds_native_web_search_without_local_tool_collision(
 
     monkeypatch.setattr(providers, "create_deep_agent", fake_create_deep_agent)
     local_search = SimpleNamespace(name="web_search")
-    library_search = SimpleNamespace(name="search_library")
+    library_search = SimpleNamespace(name="search_documents")
 
     providers.create_agent(
         object(),
@@ -436,7 +436,7 @@ def test_create_agent_binds_native_web_search_without_local_tool_collision(
     assert local_search not in captured["tools"]
     assert library_search in captured["tools"]
     assert {"type": "web_search"} in captured["tools"]
-    assert set(captured["interrupt_on"]) == {"search_library"}
+    assert set(captured["interrupt_on"]) == {"search_documents"}
     for subagent in captured["subagents"]:
         assert local_search not in subagent["tools"]
         assert library_search in subagent["tools"]

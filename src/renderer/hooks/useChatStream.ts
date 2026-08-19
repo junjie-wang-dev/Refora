@@ -74,6 +74,19 @@ function reconcileStreamValue(current: string, recovered: string): string {
   return recovered
 }
 
+function replaceRunTraceSnapshot(
+  current: AgentTraceStep[],
+  snapshot: AgentTraceStep[],
+  runId: string
+): AgentTraceStep[] {
+  const completedRun = snapshot.filter((step) => step.runId === runId)
+  if (completedRun.length === 0) return current
+  return [
+    ...current.filter((step) => step.runId !== runId),
+    ...completedRun
+  ].sort((left, right) => left.startedAt - right.startedAt || left.seq - right.seq)
+}
+
 function reviewedOcrDocumentId(context: ResumeRetryContext): string | null {
   if (context.decision === 'reject') return null
   const action = context.interrupt.actions.find((candidate) => candidate.name === 'prepare_paper_ocr')
@@ -130,6 +143,7 @@ export function useChatStream({
   const hadMessagesRef = useRef(false)
   const stickToBottomRef = useRef(true)
   const disposedRef = useRef(false)
+  const traceSnapshotGenerationRef = useRef(0)
   const liveActivityStartedAtRef = useRef(new Map<string, number>())
   const deferredTraceTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>()
@@ -149,6 +163,7 @@ export function useChatStream({
   useEffect(() => {
     threadIdRef.current = activeThreadId
     if (!isSendingRef.current) {
+      traceSnapshotGenerationRef.current += 1
       for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
       deferredTraceTimersRef.current.clear()
       liveActivityStartedAtRef.current.clear()
@@ -306,7 +321,20 @@ export function useChatStream({
       ? options.finalText?.trim() || partial
       : preservedPartial
 
-    if (options.traces) setTraceSteps(options.traces)
+    if (options.traces) {
+      traceSnapshotGenerationRef.current += 1
+      setTraceSteps(options.traces)
+    } else {
+      const traceSnapshotGeneration = ++traceSnapshotGenerationRef.current
+      void api.ai.chatTraces(options.threadId).then((snapshot) => {
+        if (
+          disposedRef.current ||
+          threadIdRef.current !== options.threadId ||
+          traceSnapshotGenerationRef.current !== traceSnapshotGeneration
+        ) return
+        setTraceSteps((current) => replaceRunTraceSnapshot(current, snapshot, runId))
+      }).catch(() => undefined)
+    }
     setMessages((previous) => {
       const base = options.history ?? previous
       if (!completedText) return base
@@ -672,6 +700,7 @@ export function useChatStream({
       setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))
       return
     }
+    traceSnapshotGenerationRef.current += 1
     setMessages((prev) => [...prev, localMessage(existingThread ?? '', 'user', text)])
     setStreaming(true)
     isSendingRef.current = true

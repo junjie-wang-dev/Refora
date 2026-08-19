@@ -766,6 +766,8 @@
       "toolSearchWorkspaceDone": "已搜索工作空间",
       "toolListWorkspaceContext": "正在查看工作空间…",
       "toolListWorkspaceContextDone": "已查看工作空间",
+      "toolReadWorkspaceItem": "正在读取工作空间内容…",
+      "toolReadWorkspaceItemDone": "已读取工作空间内容",
       "toolSearchLibrary": "正在搜索文库…",
       "toolSearchLibraryDone": "已搜索文库",
       "toolFindRelatedPapers": "正在查找相关论文…",

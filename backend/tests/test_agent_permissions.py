@@ -7,7 +7,7 @@ from refora_server.agent.risk import RiskClass, classify
 
 
 def test_interactive_mode_allows_read_tools():
-    decision = PermissionEngine().evaluate("search_library", {"query": "agents"})
+    decision = PermissionEngine().evaluate("search_documents", {"query": "agents"})
 
     assert decision.allowed
     assert not decision.needs_user
@@ -31,7 +31,7 @@ def test_plan_mode_rejects_local_writes():
 
 
 def test_plan_mode_allows_read_tools():
-    decision = PermissionEngine(mode=Mode.PLAN).evaluate("search_library", {"query": "agents"})
+    decision = PermissionEngine(mode=Mode.PLAN).evaluate("search_documents", {"query": "agents"})
 
     assert decision.allowed
     assert not decision.needs_user
@@ -40,7 +40,6 @@ def test_plan_mode_allows_read_tools():
 @pytest.mark.parametrize(
     "tool_name",
     [
-        "request_summary",
         "generate_report",
         "add_docs_to_workspace",
         "create_workspace_connections",
@@ -96,25 +95,18 @@ def test_unknown_tools_are_approval_gated():
 
 def test_classify_refora_tools():
     expected = {
-        "search_library": RiskClass.READ,
-        "get_paper_metadata": RiskClass.READ,
-        "read_paper_fulltext": RiskClass.READ,
-        "read_paper_ocr_fulltext": RiskClass.READ,
-        "get_paper_summary": RiskClass.READ,
+        "search_documents": RiskClass.READ,
+        "get_paper_context": RiskClass.READ,
+        "read_paper": RiskClass.READ,
         "list_workspace_context": RiskClass.READ,
-        "search_workspace_docs": RiskClass.READ,
+        "read_workspace_item": RiskClass.READ,
         "find_related_papers": RiskClass.READ,
         "search_arxiv": RiskClass.READ,
         "get_arxiv_paper": RiskClass.READ,
-        "resolve_academic_identity": RiskClass.READ,
-        "get_citing_papers": RiskClass.READ,
-        "get_referenced_papers": RiskClass.READ,
-        "get_semantic_recommendations": RiskClass.READ,
+        "get_related_academic_papers": RiskClass.READ,
         "explore_research_frontier": RiskClass.READ,
         "web_search": RiskClass.READ,
         "web_fetch": RiskClass.READ,
-        "list_workspace_assets": RiskClass.READ,
-        "list_workspace_notes": RiskClass.READ,
         "open_paper": RiskClass.READ,
         "write_todos": RiskClass.READ,
         "ls": RiskClass.READ,
@@ -124,7 +116,6 @@ def test_classify_refora_tools():
         "task": RiskClass.READ,
         "write_file": RiskClass.WRITE_LOCAL,
         "edit_file": RiskClass.WRITE_LOCAL,
-        "request_summary": RiskClass.WRITE_LOCAL,
         "generate_report": RiskClass.WRITE_LOCAL,
         "add_docs_to_workspace": RiskClass.WRITE_LOCAL,
         "create_workspace_connections": RiskClass.WRITE_LOCAL,

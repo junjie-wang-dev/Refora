@@ -767,6 +767,8 @@
       "toolSearchWorkspaceDone": "Searched workspace",
       "toolListWorkspaceContext": "Inspecting workspace…",
       "toolListWorkspaceContextDone": "Inspected workspace",
+      "toolReadWorkspaceItem": "Reading workspace item…",
+      "toolReadWorkspaceItemDone": "Read workspace item",
       "toolSearchLibrary": "Searching library…",
       "toolSearchLibraryDone": "Searched library",
       "toolFindRelatedPapers": "Finding related papers…",

@@ -49,7 +49,7 @@ describe('AgentTracePanel', () => {
   })
 
   it('expands to show steps on header click', () => {
-    const steps = [step({ id: 'a', kind: 'llm' }), step({ id: 'b', kind: 'tool', name: 'search_library' })]
+    const steps = [step({ id: 'a', kind: 'llm' }), step({ id: 'b', kind: 'tool', name: 'search_documents', input: JSON.stringify({ query: '', scope: 'library' }) })]
     render(<AgentTracePanel steps={steps} streaming={false} />)
     expect(headerButton().getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(headerButton())
@@ -113,6 +113,21 @@ describe('AgentTracePanel', () => {
     expect(screen.getAllByText('Ran command')).toHaveLength(2)
     expect(screen.getByText('Installed packages')).toBeInTheDocument()
     expect(screen.getByText('Published artifacts')).toBeInTheDocument()
+  })
+
+  it('normalizes Codex CLI tool names to the shared API labels', () => {
+    const steps = [
+      step({ id: 'search', kind: 'tool', name: 'refora.search_documents', input: JSON.stringify({ query: 'agents', scope: 'workspace' }) }),
+      step({ id: 'shell', kind: 'tool', name: 'codex_shell', input: JSON.stringify({ command: 'pwd' }) }),
+      step({ id: 'web', kind: 'tool', name: 'native_web_search', input: JSON.stringify({ query: 'new papers' }) })
+    ]
+    render(<AgentTracePanel steps={steps} streaming={false} />)
+    fireEvent.click(headerButton())
+
+    expect(screen.getByText('Searched workspace')).toBeInTheDocument()
+    expect(screen.getByText('“agents”')).toBeInTheDocument()
+    expect(screen.getByText('Ran command')).toBeInTheDocument()
+    expect(screen.getByText('Searched the web')).toBeInTheDocument()
   })
 
   it('shows the executed command in the collapsed row and preserves raw JSON details', () => {
@@ -211,7 +226,7 @@ describe('AgentTracePanel', () => {
       step({
         id: 'citations',
         kind: 'tool',
-        name: 'get_citing_papers',
+        name: 'get_related_academic_papers',
         input: null,
         output: 'Academic research data kept transient for this run.'
       })
@@ -229,8 +244,8 @@ describe('AgentTracePanel', () => {
       step({
         id: 'ocr-read',
         kind: 'tool',
-        name: 'read_paper_ocr_fulltext',
-        input: JSON.stringify({ docId: 'doc-1', offset: 8000, limit: 8000 })
+        name: 'read_paper',
+        input: JSON.stringify({ docId: 'doc-1', source: 'ocr', offset: 8000, limit: 8000 })
       }),
       step({
         id: 'ocr-prepare',

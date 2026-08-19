@@ -822,7 +822,7 @@ def create_lifespan(
                     "profile": result["profile"],
                     "resultKey": result["resultKey"],
                     "totalChars": len(markdown),
-                    "message": "Balanced OCR cache is ready. Continue with read_paper_ocr_fulltext.",
+                    "message": "Balanced OCR cache is ready. Continue with read_paper using source=ocr.",
                 }
 
             def open_paper(document_id: str) -> dict[str, Any]:
@@ -1058,6 +1058,9 @@ def create_lifespan(
                     cancel_event,
                 ),
                 "execute_sandbox": execute_sandbox,
+                "preview_workspace_asset": lambda workspace_id, asset_id: services[
+                    "workspaces"
+                ]["previewAsset"](workspace_id, asset_id),
                 "workspace_changed": workspace_changed,
                 "report_created": report_created,
                 "model": (
@@ -1078,13 +1081,15 @@ def create_lifespan(
             if not request.get("workspaceId"):
                 enabled -= {
                     "list_workspace_context",
-                    "search_workspace_docs",
+                    "read_workspace_item",
                     "add_docs_to_workspace",
                     "create_workspace_connections",
                     "generate_report",
-                    "list_workspace_assets",
-                    "list_workspace_notes",
+                    "explore_research_frontier",
                 }
+            profile = request.get("agentProfile")
+            if isinstance(profile, dict) and profile.get("kind") == "cli":
+                enabled.discard("__execute")
             if not web_search.get("isEnabled", lambda: False)():
                 enabled -= {"web_search", "web_fetch"}
             if "install_runtime_packages" not in sandbox:

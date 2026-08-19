@@ -13,7 +13,6 @@ from refora_server.agent.risk import RiskClass, RiskOverrides, classify, is_cons
 _SHELL_OPERATORS = (";", "&", "|", ">", "<", "`", "$(", "(", "\n", "\r")
 _INTERACTIVE_LOCAL_TOOLS = frozenset(
     {
-        "request_summary",
         "generate_report",
         "add_docs_to_workspace",
         "create_workspace_connections",

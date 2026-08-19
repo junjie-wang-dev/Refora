@@ -149,7 +149,9 @@ function formatToolLabel(
   t: TFunc
 ): ToolLabelResult | null {
   if (step.kind !== 'tool' || !step.name) return null
-  const name = step.name
+  const name = step.name.startsWith('refora.')
+    ? step.name.slice('refora.'.length)
+    : step.name
   const parsed = parseToolInput(step.input)
   const objParam = asRecord(parsed)
   const stringParam = typeof parsed === 'string' ? parsed.trim() : ''
@@ -158,6 +160,20 @@ function formatToolLabel(
   const docId = firstString(objParam, ['docId', 'documentId'])
 
   switch (name) {
+    case 'search_documents': {
+      const workspaceScope = objParam.scope === 'workspace'
+      return {
+        icon: 'search',
+        text: workspaceScope
+          ? running
+            ? t('workspace.chat.toolSearchWorkspace', 'Searching workspace…')
+            : t('workspace.chat.toolSearchWorkspaceDone', 'Searched workspace')
+          : running
+            ? t('workspace.chat.toolSearchLibrary', 'Searching library…')
+            : t('workspace.chat.toolSearchLibraryDone', 'Searched library'),
+        detail: quotedDetail(query)
+      }
+    }
     case 'search_workspace_docs':
       return {
         icon: 'search',
@@ -172,6 +188,14 @@ function formatToolLabel(
         text: running
           ? t('workspace.chat.toolListWorkspaceContext', 'Inspecting workspace…')
           : t('workspace.chat.toolListWorkspaceContextDone', 'Inspected workspace')
+      }
+    case 'read_workspace_item':
+      return {
+        icon: 'read',
+        text: running
+          ? t('workspace.chat.toolReadWorkspaceItem', 'Reading workspace item…')
+          : t('workspace.chat.toolReadWorkspaceItemDone', 'Read workspace item'),
+        detail: firstString(objParam, ['itemId']) || undefined
       }
     case 'search_library':
       return {
@@ -189,10 +213,26 @@ function formatToolLabel(
           : t('workspace.chat.toolFindRelatedPapersDone', 'Found related papers'),
         detail: docId || undefined
       }
+    case 'read_paper':
     case 'read_paper_fulltext': {
       const offset = typeof objParam.offset === 'number' ? objParam.offset : 0
       const limit = typeof objParam.limit === 'number' ? objParam.limit : 8000
       const chunkIdx = Math.floor(offset / limit) + 1
+      if (name === 'read_paper' && objParam.source === 'ocr') {
+        return {
+          icon: 'read',
+          text: running
+            ? t('workspace.chat.toolReadingOcrChunk', {
+                chunk: chunkIdx,
+                defaultValue: 'Reading OCR cache… (chunk {{chunk}})'
+              })
+            : t('workspace.chat.toolReadingOcrChunkDone', {
+                chunk: chunkIdx,
+                defaultValue: 'Read OCR cache (chunk {{chunk}})'
+              }),
+          detail: docId || undefined
+        }
+      }
       if (docId) {
         return {
           icon: 'read',
@@ -272,6 +312,7 @@ function formatToolLabel(
         detail: (stringParam || docId) || undefined
       }
     case 'get_paper_metadata':
+    case 'get_paper_context':
       return {
         icon: 'metadata',
         text: running
@@ -331,6 +372,7 @@ function formatToolLabel(
     case '__execute':
     case 'execute':
     case 'run_bash':
+    case 'codex_shell':
       return {
         icon: 'terminal',
         text: running
@@ -394,6 +436,7 @@ function formatToolLabel(
     }
     case 'web_search':
     case 'search_web':
+    case 'native_web_search':
       return {
         icon: 'web',
         text: running
@@ -428,6 +471,7 @@ function formatToolLabel(
           : t('workspace.chat.toolAccessWebsiteDone', 'Accessed website'),
         detail: 'arxiv.org'
       }
+    case 'get_related_academic_papers':
     case 'get_citing_papers':
     case 'get_referenced_papers':
     case 'get_semantic_recommendations':

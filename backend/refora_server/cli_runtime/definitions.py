@@ -263,9 +263,17 @@ class CodexCliAdapter(CliRuntimeAdapter):
                     "-c",
                     f"mcp_servers.refora.args={_toml_array(mcp['args'].split(chr(0)))}",
                     "-c",
+                    f"mcp_servers.refora.cwd={_toml_string(mcp['cwd'])}",
+                    "-c",
                     "mcp_servers.refora.startup_timeout_sec=10",
                     "-c",
                     "mcp_servers.refora.tool_timeout_sec=120",
+                    "-c",
+                    'mcp_servers.refora.default_tools_approval_mode="approve"',
+                    "-c",
+                    "mcp_servers.refora.enabled=true",
+                    "-c",
+                    "mcp_servers.refora.required=true",
                 ]
             )
         command_args.append("-")
@@ -301,7 +309,9 @@ class CodexCliAdapter(CliRuntimeAdapter):
         item_id = item.get("id") if isinstance(item.get("id"), str) else None
         if item_type == "agent_message" and event_type == "item.completed":
             text = item.get("text")
-            return [{"event": "token", "delta": text}] if isinstance(text, str) and text else []
+            return [
+                {"event": "token", "delta": text, "new_message": True}
+            ] if isinstance(text, str) and text else []
         if item_type == "reasoning" and event_type == "item.completed":
             text = item.get("text")
             if not isinstance(text, str):
@@ -411,6 +421,7 @@ class GeminiCliAdapter(CliRuntimeAdapter):
                         "refora": {
                             "command": mcp["command"],
                             "args": mcp["args"].split(chr(0)),
+                            "cwd": mcp["cwd"],
                             "trust": True,
                         }
                     },

@@ -50,7 +50,7 @@ def request(**overrides):
         },
         "systemPrompt": "test",
         "messages": [{"role": "user", "content": "Explain this"}],
-        "enabledToolNames": ["search_library"],
+        "enabledToolNames": ["search_documents"],
         "sandboxRoot": None,
         "memories": {},
         "includeResearchMemory": False,
@@ -117,7 +117,7 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         yield {"event": "reasoning", "delta": "considering"}
         yield {
             "event": "on_tool_start",
-            "name": "search_library",
+            "name": "search_documents",
             "run_id": "call-search-1",
             "data": {
                 "input": {
@@ -128,7 +128,7 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         }
         yield {
             "event": "on_tool_end",
-            "name": "search_library",
+            "name": "search_documents",
             "run_id": "call-search-1",
             "parent_ids": ["parent-1"],
             "data": {
@@ -179,7 +179,7 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
     tool_payload = json.loads(messages[1]["content"])
     assert tool_payload == {
         "v": 2,
-        "name": "search_library",
+        "name": "search_documents",
         "toolCallId": "call-search-1",
         "input": '{"query":"test"}',
         "output": '{"apiKey":"[redacted]","items":[1]}',
@@ -227,6 +227,70 @@ def test_send_persists_checkpoints_messages_traces_and_events(repos, db):
         if event == "ai.chat.run-status"
     ]
     assert statuses == ["queued", "running", "completed"]
+
+
+def test_tool_boundaries_keep_cli_message_segments_chronological(repos, db):
+    insert_thread(db)
+    seen = []
+
+    async def stream(agent, req, mode):
+        yield {
+            "event": "token",
+            "delta": "Checking sources.",
+            "new_message": True,
+        }
+        yield {
+            "event": "on_tool_start",
+            "name": "refora.search_documents",
+            "run_id": "call-search-1",
+            "data": {"input": {"query": "agents"}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "refora.search_documents",
+            "run_id": "call-search-1",
+            "data": {"output": {"items": []}},
+        }
+        yield {
+            "event": "token",
+            "delta": "Final answer.",
+            "new_message": True,
+        }
+        yield {
+            "event": "done",
+            "result": {"content": "Checking sources.\n\nFinal answer."},
+        }
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+            "stream": stream,
+            "emit": lambda event, payload: seen.append((event, payload)),
+        },
+    )
+
+    result = asyncio.run(runtime["send"](request()))
+
+    assert result["status"] == "completed"
+    traces = repos["agentTraces"]["listByRun"]("run-1")
+    visible = [trace for trace in traces if trace["kind"] != "run"]
+    assert [trace["kind"] for trace in visible] == ["message", "tool", "message"]
+    assert [trace["output"] for trace in visible if trace["kind"] == "message"] == [
+        "Checking sources.",
+        "Final answer.",
+    ]
+    tokens = [
+        payload["token"]
+        for event, payload in seen
+        if event == "ai.chat.token"
+    ]
+    assert tokens == ["Checking sources.", "\n\nFinal answer."]
+    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == (
+        "Checking sources.\n\nFinal answer."
+    )
 
 
 def test_send_persists_the_provider_selected_for_this_run(repos, db):
@@ -382,7 +446,7 @@ def test_checkpoint_serializer_redacts_academic_calls_and_outputs():
             ),
             ToolMessage(
                 content="local result",
-                name="search_library",
+                name="search_documents",
                 tool_call_id="local-call",
             ),
         ]
@@ -1021,13 +1085,16 @@ def test_memory_edit_decision_is_validated_and_normalized_for_langgraph(repos, d
     ]
 
 
-def test_academic_tool_output_is_not_traced_or_persisted_as_chat_history(repos, db):
+@pytest.mark.parametrize("tool_name", ["search_arxiv", "refora.search_arxiv"])
+def test_academic_tool_output_is_not_traced_or_persisted_as_chat_history(
+    repos, db, tool_name
+):
     insert_thread(db)
 
     async def stream(agent, req, mode):
         yield {
             "event": "on_tool_end",
-            "name": "search_arxiv",
+            "name": tool_name,
             "run_id": "academic-call",
             "data": {
                 "input": {"query": "private topic"},
@@ -1040,7 +1107,7 @@ def test_academic_tool_output_is_not_traced_or_persisted_as_chat_history(repos, 
                 "messages": [
                     ToolMessage(
                         content="private abstract",
-                        name="search_arxiv",
+                        name=tool_name,
                         tool_call_id="academic-call",
                     ),
                     AIMessage(content="Answer"),
@@ -1069,6 +1136,7 @@ def test_academic_tool_output_is_not_traced_or_persisted_as_chat_history(repos, 
         for step in repos["agentTraces"]["listByRun"]("run-1")
         if step["kind"] == "tool"
     )
+    assert tool_trace["input"] is None
     assert tool_trace["output"] == ACADEMIC_PERSISTENCE_REDACTION
 
 
@@ -1630,18 +1698,18 @@ def test_llm_todo_and_failed_tool_traces_are_paired(repos, db):
         }
         yield {
             "event": "on_tool_start",
-            "name": "search_library",
+            "name": "search_documents",
             "run_id": "tool-1",
             "data": {"input": {"query": "test"}},
         }
         yield {
             "event": "on_tool_end",
-            "name": "search_library",
+            "name": "search_documents",
             "run_id": "tool-1",
             "data": {
                 "output": ToolMessage(
                     content='{"error":{"code":"failed","message":"no result"}}',
-                    name="search_library",
+                    name="search_documents",
                     tool_call_id="tool-1",
                     status="error",
                 )

@@ -81,8 +81,10 @@ describe('ModelSelector', () => {
     renderSelector()
     const trigger = screen.getByRole('button', { name: 'Select model / provider' })
     expect(trigger).toHaveTextContent('gpt-5-high')
-    expect(trigger).toHaveTextContent('API')
+    expect(trigger).not.toHaveTextContent('API')
+    expect(trigger.querySelector('svg')).toBeInTheDocument()
     await user.click(trigger)
+    expect(screen.queryByText('API')).not.toBeInTheDocument()
     await user.click(screen.getByRole('option', { name: 'Provider One/gpt-5-high' }))
 
     expect(defaultProps.onApplyModel).toHaveBeenCalledWith('gpt-5', 'high', 'provider-1')
@@ -108,7 +110,7 @@ describe('ModelSelector', () => {
     expect(defaultProps.onApplyModel).toHaveBeenCalledWith('model-alpha', '', 'provider-1')
   })
 
-  it('makes the active CLI model and runtime type explicit', async () => {
+  it('uses an icon instead of a CLI label for the active CLI model', async () => {
     const user = userEvent.setup()
     const cliProvider: AiProvider = {
       ...provider,
@@ -147,11 +149,12 @@ describe('ModelSelector', () => {
 
     const trigger = screen.getByRole('button', { name: 'Select model / provider' })
     expect(trigger).toHaveTextContent('CLI default (GPT-5.6-Luna)')
-    expect(trigger).toHaveTextContent('CLI')
+    expect(trigger.querySelector('svg')).toBeInTheDocument()
     expect(trigger).toHaveAttribute('title', 'OpenAI Codex CLI · default')
     await user.click(trigger)
 
     expect(screen.getByText('Choose model')).toBeInTheDocument()
+    expect(screen.queryByText('CLI')).not.toBeInTheDocument()
     expect(screen.getByText('GPT-5.6-Luna')).toBeInTheDocument()
     await user.click(screen.getByRole('option', { name: 'OpenAI Codex CLI/gpt-5.6-luna' }))
     expect(defaultProps.onApplyModel).toHaveBeenCalledWith('gpt-5.6-luna', '', 'provider-1')
@@ -178,10 +181,12 @@ describe('ModelSelector', () => {
     expect(effortButton).toHaveClass('rounded-lg', 'px-2', 'py-1', 'text-label', 'hover:bg-hover')
     expect(modelButton).toHaveClass('rounded-lg', 'px-2', 'py-1', 'text-label', 'hover:bg-hover')
     expect(modelButton.parentElement).toHaveClass('min-w-0', 'flex-1', 'justify-end')
-    expect(modelButton).toHaveClass('w-full', 'min-w-0', 'max-w-[230px]')
+    expect(modelButton).toHaveClass('min-w-0', 'max-w-[230px]')
+    expect(modelButton).not.toHaveClass('w-full')
     expect(effortButton.parentElement).toHaveClass('min-w-0', 'max-w-[112px]', 'shrink-0')
     expect(effortButton).toHaveClass('min-w-0', 'max-w-full')
-    expect(modelButton.querySelector('span')).toHaveClass('min-w-0', 'flex-1', 'truncate')
+    expect(modelButton.querySelector('span')).toHaveClass('min-w-0', 'truncate')
+    expect(modelButton.querySelector('span')).not.toHaveClass('flex-1')
     expect(effortButton.querySelector('span')).toHaveClass('min-w-0', 'flex-1', 'truncate')
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     await user.click(effortButton)

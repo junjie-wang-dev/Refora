@@ -33,7 +33,7 @@ class OcrMemoryTools(ToolGroup):
         "propose_workspace_memory_update": propose_workspace_memory_update,
     }
     descriptions = {
-        "prepare_paper_ocr": "Run the local MinerU balanced OCR pipeline for a paper and prepare a reusable structured Markdown cache. Call this only after read_paper_ocr_fulltext reports that no suitable OCR cache exists and OCR is necessary. Call this tool directly without asking for approval in assistant text. The application pauses and requests explicit user approval before the tool executes.",
+        "prepare_paper_ocr": "Run the local MinerU balanced OCR pipeline for a paper and prepare a reusable structured Markdown cache. Call this only after read_paper with source=ocr reports that no suitable OCR cache exists and OCR is necessary. The application requests explicit user approval before execution.",
     }
     schemas = {
         "prepare_paper_ocr": object_schema({"docId": _DOC_ID}, ["docId"]),
