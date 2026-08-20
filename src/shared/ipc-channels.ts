@@ -49,6 +49,13 @@ export const IpcChannel = {
   SettingsSet: 'settings:set',
   AppearanceSetThemeSource: 'appearance:setThemeSource',
 
+  SyncStatus: 'sync:status',
+  SyncSignIn: 'sync:signIn',
+  SyncSignUp: 'sync:signUp',
+  SyncResendConfirmation: 'sync:resendConfirmation',
+  SyncSignOut: 'sync:signOut',
+  SyncSetEnabled: 'sync:setEnabled',
+
   WebSearchConfigGet: 'webSearch:config:get',
   WebSearchConfigUpdate: 'webSearch:config:update',
   WebSearchTest: 'webSearch:test',
@@ -154,6 +161,7 @@ export const IpcChannel = {
   EventMenuImportIdentifier: 'menu:import-identifier',
   EventLibraryScanning: 'library:scanning',
   EventLibrarySwitched: 'library:switched',
+  EventSyncAuthConfirmation: 'sync:auth-confirmation',
   EventAiSummaryUpdated: 'ai:summary:updated',
   EventAiSummaryError: 'ai:summary:error',
   EventAiChatToken: 'ai:chat:token',

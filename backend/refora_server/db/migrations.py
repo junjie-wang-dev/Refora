@@ -98,6 +98,17 @@ def _has_objects(db: SqliteLike, objects: list[tuple[str, str]]) -> bool:
     return all(db.has_object(obj_type, name) for obj_type, name in objects)
 
 
+def _sync_library_identity_schema_present(db: SqliteLike) -> bool:
+    return _has_columns(
+        db,
+        "sync_state",
+        ["libraryId", "remoteLibraryId", "enabled", "updatedAt"],
+    ) and not any(
+        db.has_object("table", table)
+        for table in ("sync_outbox", "sync_entity_versions", "sync_conflicts")
+    )
+
+
 def migration_schema_present(db: SqliteLike, version: int) -> bool:
     current = db.get_user_version()
     if version == 12:
@@ -194,6 +205,36 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
                 ("index", "idx_agent_profiles_kind"),
             ],
         )
+    if version == 32:
+        if _sync_library_identity_schema_present(db):
+            return True
+        return _has_objects(
+            db,
+            [
+                ("table", "sync_state"),
+                ("table", "sync_outbox"),
+                ("table", "sync_entity_versions"),
+                ("table", "sync_conflicts"),
+                ("index", "idx_sync_outbox_pending"),
+                ("index", "idx_sync_conflicts_unresolved"),
+            ],
+        )
+    if version == 33:
+        if _sync_library_identity_schema_present(db):
+            return True
+        return _has_columns(db, "sync_state", ["enabled"]) and _has_objects(
+            db,
+            [
+                ("trigger", "sync_outbox_validate_insert"),
+                ("trigger", "sync_outbox_validate_update"),
+                ("trigger", "sync_entity_versions_validate_insert"),
+                ("trigger", "sync_entity_versions_validate_update"),
+                ("trigger", "sync_conflicts_validate_insert"),
+                ("trigger", "sync_conflicts_validate_update"),
+            ],
+        )
+    if version == 34:
+        return _sync_library_identity_schema_present(db)
     return version <= current
 
 

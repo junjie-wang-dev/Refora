@@ -81,6 +81,13 @@ import type {
   WebSearchConfigPatch,
   WebSearchTestResult
 } from '../shared/webSearch'
+import type {
+  SyncAuthConfirmation,
+  SyncCredentials,
+  SyncEmailRequest,
+  SyncServiceStatus,
+  SyncSignUpResult
+} from '../shared/sync-types'
 
 class IpcResponseError extends Error {
   readonly code: string
@@ -105,6 +112,17 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const subscriptions = new Map<unknown, { channel: string; ipcListener: (...args: unknown[]) => void }>()
+let pendingAuthConfirmation: SyncAuthConfirmation | null = null
+let authConfirmationSubscriber: ((payload: SyncAuthConfirmation) => void) | null = null
+
+ipcRenderer.on(IpcChannel.EventSyncAuthConfirmation, (...args: unknown[]) => {
+  const payload = args[1] as SyncAuthConfirmation
+  if (authConfirmationSubscriber) {
+    authConfirmationSubscriber(payload)
+  } else {
+    pendingAuthConfirmation = payload
+  }
+})
 
 const SINGLE_SUBSCRIBER_CHANNELS = new Set([
   IpcChannel.EventWindowFocusChanged,
@@ -136,6 +154,10 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): void {
 }
 
 function unsubscribe(channel: string, cb: unknown): void {
+  if (channel === IpcChannel.EventSyncAuthConfirmation && authConfirmationSubscriber === cb) {
+    authConfirmationSubscriber = null
+    return
+  }
   const sub = subscriptions.get(cb)
   if (sub) {
     ipcRenderer.removeListener(channel, sub.ipcListener)
@@ -214,6 +236,19 @@ const api: ReforaApi = {
     get: <T>(key: string, defaultValue: T) =>
       invoke<T>(IpcChannel.SettingsGet, key, defaultValue),
     set: (key: string, value: unknown) => invoke<void>(IpcChannel.SettingsSet, key, value)
+  },
+
+  sync: {
+    status: () => invoke<SyncServiceStatus>(IpcChannel.SyncStatus),
+    signIn: (credentials: SyncCredentials) =>
+      invoke<SyncServiceStatus>(IpcChannel.SyncSignIn, credentials),
+    signUp: (credentials: SyncCredentials) =>
+      invoke<SyncSignUpResult>(IpcChannel.SyncSignUp, credentials),
+    resendConfirmation: (request: SyncEmailRequest) =>
+      invoke<void>(IpcChannel.SyncResendConfirmation, request),
+    signOut: () => invoke<SyncServiceStatus>(IpcChannel.SyncSignOut),
+    setEnabled: (enabled: boolean) =>
+      invoke<SyncServiceStatus>(IpcChannel.SyncSetEnabled, enabled)
   },
 
   appearance: {
@@ -434,6 +469,14 @@ const api: ReforaApi = {
       subscribe(IpcChannel.EventLibraryScanning, cb),
     onLibrarySwitched: (cb: (payload: LibrarySwitchResult) => void) =>
       subscribe(IpcChannel.EventLibrarySwitched, cb),
+    onSyncAuthConfirmation: (cb: (payload: SyncAuthConfirmation) => void) => {
+      authConfirmationSubscriber = cb
+      if (pendingAuthConfirmation) {
+        const payload = pendingAuthConfirmation
+        pendingAuthConfirmation = null
+        cb(payload)
+      }
+    },
     onAiSummaryUpdated: (cb: (docId: string) => void) =>
       subscribe(IpcChannel.EventAiSummaryUpdated, cb),
     onAiSummaryError: (cb: (payload: SummaryErrorEvent) => void) =>

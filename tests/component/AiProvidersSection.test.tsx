@@ -11,6 +11,50 @@ vi.mock('react-i18next', () => ({
         'settings.sectionGeneral.desc': 'Library and network',
         'settings.sectionAppearance.title': 'Appearance',
         'settings.sectionAppearance.desc': 'Theme and language',
+        'settings.sync.title': 'Cloud Sync',
+        'settings.sync.desc': 'Metadata sync controls',
+        'settings.sync.loading': 'Loading account status',
+        'settings.sync.loadFailed': 'Failed to load account status',
+        'settings.sync.tryAgain': 'Try again',
+        'settings.sync.accountConnected': 'Account connected',
+        'settings.sync.engineUnavailableTitle': 'Metadata sync is not available yet',
+        'settings.sync.engineUnavailableDescription': 'The data engine is disabled.',
+        'settings.sync.noUploadTitle': 'No library data is being uploaded',
+        'settings.sync.noUploadDescription': 'PDFs and metadata remain on this Mac.',
+        'settings.sync.enable': 'Enable metadata sync',
+        'settings.sync.disabledHint': 'No library data is sent.',
+        'settings.sync.enabledHint': 'Metadata sync is allowed.',
+        'settings.sync.scopeHint': 'PDF files are excluded.',
+        'settings.sync.privacyTitle': 'Local-first by design',
+        'settings.sync.manageAccount': 'Manage account',
+        'settings.sync.accountRequiredTitle': 'Sign in before enabling sync',
+        'settings.sync.accountRequiredDescription': 'Open your account first.',
+        'settings.sync.openAccount': 'Open account',
+        'account.loading': 'Loading account',
+        'account.welcomeBack': 'Welcome back',
+        'account.signInDescription': 'Sign in on this device.',
+        'account.createTitle': 'Create your Refora account',
+        'account.createDescription': 'Your library stays local.',
+        'account.authMode': 'Account action',
+        'account.signIn': 'Sign in',
+        'account.createAccount': 'Create account',
+        'account.email': 'Email',
+        'account.emailPlaceholder': 'you@example.com',
+        'account.password': 'Password',
+        'account.confirmPassword': 'Confirm password',
+        'account.passwordMismatch': 'The passwords do not match.',
+        'account.showPassword': 'Show password',
+        'account.hidePassword': 'Hide password',
+        'account.localFirstHint': 'Sync stays off until enabled.',
+        'account.confirmationTitle': 'Check your inbox',
+        'account.confirmationDescription': 'Open the confirmation email.',
+        'account.resendConfirmation': 'Resend confirmation email',
+        'account.confirmationResent': 'Confirmation email sent',
+        'account.resendFailed': 'Failed to resend confirmation',
+        'account.backToSignIn': 'Back to sign in',
+        'account.emailConfirmedTitle': 'Email confirmed',
+        'account.emailConfirmedDescription': 'Your account is ready.',
+        'account.continueToSignIn': 'Continue to sign in',
         'settings.mineru.title': 'MinerU OCR',
         'settings.mineru.desc': 'Local structured parsing',
         'settings.mineru.installLocation': 'Install location',
@@ -78,6 +122,12 @@ const { AiProvidersSection } = await import(
 const { default: SettingsModal } = await import(
   '../../src/renderer/components/SettingsModal'
 )
+const { default: AccountModal } = await import(
+  '../../src/renderer/components/AccountModal'
+)
+const { useSyncAccountStore } = await import(
+  '../../src/renderer/store/syncAccountStore'
+)
 
 const api = (window as unknown as { api: ReforaApi }).api
 
@@ -125,6 +175,14 @@ describe('AiProvidersSection', () => {
     )
     api.settings.get = vi.fn().mockResolvedValue('')
     api.settings.set = set.mockResolvedValue(undefined)
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      syncAvailable: false,
+      signedIn: true,
+      enabled: false,
+      state: 'disabled',
+      account: { id: 'user-1', email: 'reader@example.com' }
+    })
     api.mineru.status = vi.fn().mockResolvedValue({
       state: 'notInstalled',
       installRoot: '/Volumes/Models',
@@ -141,6 +199,12 @@ describe('AiProvidersSection', () => {
     api.mineru.install = vi.fn()
     api.mineru.cancelInstall = vi.fn()
     api.events.onMineruInstallProgress = vi.fn()
+    useSyncAccountStore.setState({
+      status: null,
+      loading: false,
+      loadFailed: false,
+      confirmation: null
+    })
   })
 
   afterEach(() => {
@@ -333,6 +397,158 @@ describe('AiProvidersSection', () => {
 
     expect(screen.getByText('Theme')).toBeInTheDocument()
     expect(screen.getByText('Language')).toBeInTheDocument()
+
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Cloud Sync' }))
+
+    expect(await screen.findByText('Metadata sync is not available yet')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Enable metadata sync' })).not.toBeInTheDocument()
+    expect(screen.getByText('No library data is being uploaded')).toBeInTheDocument()
+  })
+
+  it('uses a focused sign-up flow and confirms the password before submission', async () => {
+    api.sync.resendConfirmation = vi.fn().mockResolvedValue(undefined)
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'signedOut',
+      account: null
+    })
+    api.sync.signUp = vi.fn().mockResolvedValue({
+      confirmationRequired: true,
+      status: {
+        configured: true,
+        syncAvailable: false,
+        signedIn: false,
+        enabled: false,
+        state: 'signedOut',
+        account: null
+      }
+    })
+
+    render(
+      <AccountModal
+        open
+        onClose={vi.fn()}
+        onOpenSyncSettings={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Welcome back')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Create account' }))
+    expect(screen.getByText('Create your Refora account')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'reader@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret-1' } })
+    const confirmation = screen.getByLabelText('Confirm password')
+    fireEvent.change(confirmation, { target: { value: 'secret-2' } })
+    fireEvent.submit(confirmation.closest('form') as HTMLFormElement)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('The passwords do not match.')
+    expect(api.sync.signUp).not.toHaveBeenCalled()
+
+    fireEvent.change(confirmation, { target: { value: 'secret-1' } })
+    fireEvent.submit(confirmation.closest('form') as HTMLFormElement)
+
+    expect(await screen.findByText('Check your inbox')).toBeInTheDocument()
+    expect(api.sync.signUp).toHaveBeenCalledWith({
+      email: 'reader@example.com',
+      password: 'secret-1'
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Resend confirmation email' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Confirmation email sent')
+    expect(api.sync.resendConfirmation).toHaveBeenCalledWith({ email: 'reader@example.com' })
+  })
+
+  it('keeps authentication out of Cloud Sync settings', async () => {
+    const onOpenAccount = vi.fn()
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'signedOut',
+      account: null
+    })
+    useSyncAccountStore.setState({
+      status: null,
+      loading: false,
+      loadFailed: false,
+      confirmation: null
+    })
+
+    render(
+      <SettingsModal
+        open
+        onClose={vi.fn()}
+        initialPage="sync"
+        onOpenAccount={onOpenAccount}
+      />
+    )
+
+    expect(await screen.findByText('Sign in before enabling sync')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open account' }))
+    expect(onOpenAccount).toHaveBeenCalledTimes(1)
+  })
+
+  it('turns a desktop auth callback into a clear confirmation result', async () => {
+    const signedOutStatus = {
+      configured: true,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'signedOut' as const,
+      account: null
+    }
+    api.sync.status = vi.fn().mockResolvedValue(signedOutStatus)
+    useSyncAccountStore.setState({
+      status: signedOutStatus,
+      loading: false,
+      loadFailed: false,
+      confirmation: { status: 'confirmed', message: null }
+    })
+
+    render(
+      <AccountModal
+        open
+        onClose={vi.fn()}
+        onOpenSyncSettings={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Email confirmed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to sign in' }))
+    expect(await screen.findByText('Welcome back')).toBeInTheDocument()
+  })
+
+  it('shows a confirmation result even when another account session is already loaded', async () => {
+    const signedInStatus = {
+      configured: true,
+      syncAvailable: false,
+      signedIn: true,
+      enabled: false,
+      state: 'disabled' as const,
+      account: { id: 'user-1', email: 'reader@example.com' }
+    }
+    api.sync.status = vi.fn().mockResolvedValue(signedInStatus)
+    useSyncAccountStore.setState({
+      status: signedInStatus,
+      loading: false,
+      loadFailed: false,
+      confirmation: { status: 'confirmed', message: null }
+    })
+
+    render(
+      <AccountModal
+        open
+        onClose={vi.fn()}
+        onOpenSyncSettings={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Email confirmed')).toBeInTheDocument()
   })
 
   it('shows the MinerU install path and progress in Settings', async () => {

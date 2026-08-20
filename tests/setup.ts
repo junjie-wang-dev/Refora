@@ -94,6 +94,53 @@ const noop = async () => undefined
     set: noop,
   },
 
+  sync: {
+    status: async () => ({
+      configured: false,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'unconfigured' as const,
+      account: null,
+    }),
+    signIn: async () => ({
+      configured: true,
+      syncAvailable: false,
+      signedIn: true,
+      enabled: false,
+      state: 'disabled' as const,
+      account: { id: 'user-1', email: 'user@example.com' },
+    }),
+    signUp: async () => ({
+      confirmationRequired: true,
+      status: {
+        configured: true,
+        syncAvailable: false,
+        signedIn: false,
+        enabled: false,
+        state: 'signedOut' as const,
+        account: null,
+      },
+    }),
+    resendConfirmation: noop,
+    signOut: async () => ({
+      configured: true,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'signedOut' as const,
+      account: null,
+    }),
+    setEnabled: async (enabled: boolean) => ({
+      configured: true,
+      syncAvailable: false,
+      signedIn: true,
+      enabled,
+      state: enabled ? 'ready' as const : 'disabled' as const,
+      account: { id: 'user-1', email: 'user@example.com' },
+    }),
+  },
+
   appearance: {
     setThemeSource: noop,
   },
@@ -479,6 +526,7 @@ const noop = async () => undefined
     onMenuImportIdentifier: (_cb: unknown) => undefined,
     onLibraryScanning: (_cb: unknown) => undefined,
     onLibrarySwitched: (_cb: unknown) => undefined,
+    onSyncAuthConfirmation: (_cb: unknown) => undefined,
     onAiSummaryUpdated: (_cb: unknown) => undefined,
     onAiSummaryError: (_cb: unknown) => undefined,
     onAiReportCreated: (_cb: unknown) => undefined,

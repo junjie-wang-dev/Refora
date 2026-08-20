@@ -4,6 +4,7 @@ import { ConfigProvider } from '@lobehub/ui'
 import { motion } from 'motion/react'
 import Splash from './components/Splash'
 import App from './App'
+import RecoveryApp from './components/RecoveryApp'
 import { initI18n } from './i18n'
 import type { BootstrapData } from '../shared/ipc-types'
 import './styles/index.css'
@@ -40,11 +41,22 @@ function mountApp(bootstrap: Pick<BootstrapData, 'language' | 'listColumnState' 
   )
 }
 
+function mountRecoveryApp() {
+  initI18n(navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
+  root.render(
+    <React.StrictMode>
+      <ConfigProvider motion={motion}>
+        <RecoveryApp />
+      </ConfigProvider>
+    </React.StrictMode>
+  )
+}
+
 window.api
   .getBootstrap()
   .then((bootstrap) => {
     mountApp(bootstrap)
   })
   .catch(() => {
-    mountApp({ language: 'en', listColumnState: null, sidebarCollapsed: false, firstRun: true })
+    mountRecoveryApp()
   })

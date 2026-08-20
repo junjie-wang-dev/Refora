@@ -34,10 +34,14 @@ interface InvocationCase {
 
 describe('preload IPC bridge', () => {
   let api: ReforaApi
+  let authConfirmationListener: ((event: unknown, payload: unknown) => void) | undefined
 
   beforeAll(async () => {
     await import('../../src/preload/index')
     api = bridgeState.api as ReforaApi
+    authConfirmationListener = electronMocks.on.mock.calls.find(
+      ([channel]) => channel === IpcChannel.EventSyncAuthConfirmation
+    )?.[1] as ((event: unknown, payload: unknown) => void) | undefined
   })
 
   beforeEach(() => {
@@ -91,6 +95,12 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.WatchToggle, args: ['watch-1', true], invoke: (value) => value.watch.toggle('watch-1', true) },
       { channel: IpcChannel.SettingsGet, args: ['language', 'en'], invoke: (value) => value.settings.get('language', 'en') },
       { channel: IpcChannel.SettingsSet, args: ['language', 'zh'], invoke: (value) => value.settings.set('language', 'zh') },
+      { channel: IpcChannel.SyncStatus, args: [], invoke: (value) => value.sync.status() },
+      { channel: IpcChannel.SyncSignIn, args: [{ email: 'user@example.com', password: 'secret' }], invoke: (value) => value.sync.signIn({ email: 'user@example.com', password: 'secret' }) },
+      { channel: IpcChannel.SyncSignUp, args: [{ email: 'user@example.com', password: 'secret' }], invoke: (value) => value.sync.signUp({ email: 'user@example.com', password: 'secret' }) },
+      { channel: IpcChannel.SyncResendConfirmation, args: [{ email: 'user@example.com' }], invoke: (value) => value.sync.resendConfirmation({ email: 'user@example.com' }) },
+      { channel: IpcChannel.SyncSignOut, args: [], invoke: (value) => value.sync.signOut() },
+      { channel: IpcChannel.SyncSetEnabled, args: [true], invoke: (value) => value.sync.setEnabled(true) },
       { channel: IpcChannel.AppearanceSetThemeSource, args: ['dark'], invoke: (value) => value.appearance.setThemeSource('dark') },
       { channel: IpcChannel.WebSearchConfigGet, args: [], invoke: (value) => value.webSearch.getConfig() },
       { channel: IpcChannel.WebSearchConfigUpdate, args: [{ provider: 'ddgs' }], invoke: (value) => value.webSearch.updateConfig({ provider: 'ddgs' }) },
@@ -237,6 +247,17 @@ describe('preload IPC bridge', () => {
       api.events.off(channel, callback)
       expect(electronMocks.removeListener).toHaveBeenLastCalledWith(channel, listener)
     }
+  })
+
+  it('buffers an auth callback until the renderer subscribes', () => {
+    const callback = vi.fn()
+    const payload = { status: 'confirmed', message: null }
+
+    authConfirmationListener?.({ sender: 'ignored' }, payload)
+    api.events.onSyncAuthConfirmation(callback)
+
+    expect(callback).toHaveBeenCalledWith(payload)
+    api.events.off(IpcChannel.EventSyncAuthConfirmation, callback)
   })
 
   it('replaces duplicate callbacks and single-subscriber chat listeners', () => {

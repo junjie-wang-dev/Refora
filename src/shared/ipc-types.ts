@@ -14,6 +14,13 @@ import type {
   WebSearchConfigPatch,
   WebSearchTestResult
 } from './webSearch'
+import type {
+  SyncAuthConfirmation,
+  SyncCredentials,
+  SyncEmailRequest,
+  SyncServiceStatus,
+  SyncSignUpResult
+} from './sync-types'
 
 export interface IpcError {
   code: string
@@ -857,6 +864,7 @@ export interface DocumentEvents {
   onMenuImportIdentifier(cb: () => void): void
   onLibraryScanning(cb: (payload: ImportProgress) => void): void
   onLibrarySwitched(cb: (payload: LibrarySwitchResult) => void): void
+  onSyncAuthConfirmation(cb: (payload: SyncAuthConfirmation) => void): void
   onAiSummaryUpdated(cb: (docId: string) => void): void
   onAiSummaryError(cb: (payload: SummaryErrorEvent) => void): void
   onAiChatToken(cb: (payload: ChatTokenEvent) => void): void
@@ -927,6 +935,14 @@ export interface ReforaApi {
   settings: {
     get<T>(key: string, defaultValue: T): Promise<T>
     set(key: string, value: unknown): Promise<void>
+  }
+  sync: {
+    status(): Promise<SyncServiceStatus>
+    signIn(credentials: SyncCredentials): Promise<SyncServiceStatus>
+    signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
+    resendConfirmation(request: SyncEmailRequest): Promise<void>
+    signOut(): Promise<SyncServiceStatus>
+    setEnabled(enabled: boolean): Promise<SyncServiceStatus>
   }
   appearance: {
     setThemeSource(theme: ThemeMode): Promise<void>

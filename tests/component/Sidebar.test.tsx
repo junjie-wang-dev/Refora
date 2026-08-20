@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ListFilter, Category, Document } from '../../src/shared/ipc-types'
+import type { ListFilter, Category, Document, ReforaApi } from '../../src/shared/ipc-types'
 
 const defaultCategories: Category[] = [
   { id: 'cat1', name: 'ML', sortOrder: 0, createdAt: 0, count: 5 },
@@ -65,15 +65,28 @@ vi.mock('../../src/renderer/components/SettingsModal', () => ({
   default: vi.fn(() => null)
 }))
 
+vi.mock('../../src/renderer/components/AccountModal', () => ({
+  default: vi.fn(() => null)
+}))
+
 vi.mock('../../src/renderer/components/ImportByIdentifierDialog', () => ({
   default: vi.fn(() => null)
 }))
 
 import Sidebar from '../../src/renderer/components/Sidebar'
+import AccountModal from '../../src/renderer/components/AccountModal'
+import SettingsModal from '../../src/renderer/components/SettingsModal'
+import { useSyncAccountStore } from '../../src/renderer/store/syncAccountStore'
 
 const renderSidebar = () => render(<Sidebar collapsed={false} onToggleCollapse={vi.fn()} />)
+const api = (window as unknown as { api: ReforaApi }).api
 
 describe('Sidebar', () => {
+  let authConfirmationCallback: ((payload: {
+    status: 'confirmed' | 'error'
+    message: string | null
+  }) => void) | undefined
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.state.categories = defaultCategories
@@ -83,6 +96,23 @@ describe('Sidebar', () => {
     mocks.state.documentCounts = { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 }
     mocks.state.importProgress = null
     mocks.state.identifierImporting = 0
+    useSyncAccountStore.setState({
+      status: null,
+      loading: false,
+      loadFailed: false,
+      confirmation: null
+    })
+    api.events.onSyncAuthConfirmation = vi.fn((cb) => {
+      authConfirmationCallback = cb
+    })
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      syncAvailable: false,
+      signedIn: false,
+      enabled: false,
+      state: 'signedOut',
+      account: null
+    })
   })
 
   afterEach(() => {
@@ -95,6 +125,48 @@ describe('Sidebar', () => {
     expect(screen.getByText('sidebar.recentlyRead')).toBeInTheDocument()
     expect(screen.getByText('sidebar.recentlyAdded')).toBeInTheDocument()
     expect(screen.getByText('sidebar.starred')).toBeInTheDocument()
+  })
+
+  it('opens the dedicated account window from the sidebar account entry', async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    await user.click(screen.getByRole('button', { name: 'sidebar.account.open' }))
+
+    expect(vi.mocked(AccountModal).mock.calls.some(([props]) => (
+      props.open
+    ))).toBe(true)
+    expect(vi.mocked(SettingsModal).mock.calls.some(([props]) => props.open)).toBe(false)
+  })
+
+  it('shows the signed-in email and sync state in the sidebar footer', async () => {
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      syncAvailable: false,
+      signedIn: true,
+      enabled: false,
+      state: 'disabled',
+      account: { id: 'user-1', email: 'reader@example.com' }
+    })
+
+    renderSidebar()
+
+    expect(await screen.findByText('reader@example.com')).toBeInTheDocument()
+    expect(screen.getByText('sidebar.account.syncUnavailable')).toBeInTheDocument()
+  })
+
+  it('opens the account window when macOS delivers an auth confirmation link', () => {
+    renderSidebar()
+
+    act(() => {
+      authConfirmationCallback?.({ status: 'confirmed', message: null })
+    })
+
+    expect(useSyncAccountStore.getState().confirmation).toEqual({
+      status: 'confirmed',
+      message: null
+    })
+    expect(vi.mocked(AccountModal).mock.calls.some(([props]) => props.open)).toBe(true)
   })
 
   it('shows the per-mode document count on every smart list item', () => {

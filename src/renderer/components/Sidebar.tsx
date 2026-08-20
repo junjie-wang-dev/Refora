@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { FilePlus, FileArrowDown, ArrowLineLeft, ArrowLineRight, CircleNotch } from '@phosphor-icons/react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
-import SettingsModal from './SettingsModal'
+import SettingsModal, { type SettingsPage } from './SettingsModal'
 import ImportByIdentifierDialog from './ImportByIdentifierDialog'
 import { Button as UiButton, IconTooltip } from './ui'
 import { api } from '../ipc'
@@ -12,6 +12,8 @@ import SidebarSmartItems from './SidebarSmartItems'
 import SidebarWorkspaces from './SidebarWorkspaces'
 import SidebarCategories from './SidebarCategories'
 import SidebarFooter from './SidebarFooter'
+import AccountModal from './AccountModal'
+import { useSyncAccountStore } from '../store/syncAccountStore'
 
 interface SidebarProps {
   collapsed: boolean
@@ -25,9 +27,23 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const fetchDocuments = useDocumentStore((s) => s.fetchDocuments)
   const importProgress = useDocumentStore((s) => s.importProgress)
   const identifierImporting = useDocumentStore((s) => s.identifierImporting)
+  const setAuthConfirmation = useSyncAccountStore((state) => state.setConfirmation)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
+  const [showAccount, setShowAccount] = useState(false)
   const [showIdentifierImport, setShowIdentifierImport] = useState(false)
   const isMac = document.documentElement.dataset.platform === 'mac'
+
+  const openSettings = useCallback((page: SettingsPage) => {
+    setShowAccount(false)
+    setSettingsPage(page)
+    setShowSettings(true)
+  }, [])
+
+  const openAccount = useCallback(() => {
+    setShowSettings(false)
+    setShowAccount(true)
+  }, [])
 
   const handleAddFiles = useCallback(async () => {
     try {
@@ -45,6 +61,15 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     api.events.onMenuImportIdentifier(cb)
     return () => api.events.off(IpcChannel.EventMenuImportIdentifier, cb)
   }, [])
+
+  useEffect(() => {
+    const cb = (confirmation: Parameters<typeof setAuthConfirmation>[0]) => {
+      setAuthConfirmation(confirmation)
+      openAccount()
+    }
+    api.events.onSyncAuthConfirmation(cb)
+    return () => api.events.off(IpcChannel.EventSyncAuthConfirmation, cb)
+  }, [openAccount, setAuthConfirmation])
 
   if (collapsed) {
     const toolbarLeft = isMac ? 92 : 8
@@ -94,7 +119,17 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     return (
       <>
         {toolbar}
-        <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+        <SettingsModal
+          open={showSettings}
+          onClose={() => setShowSettings(false)}
+          initialPage={settingsPage}
+          onOpenAccount={openAccount}
+        />
+        <AccountModal
+          open={showAccount}
+          onClose={() => setShowAccount(false)}
+          onOpenSyncSettings={() => openSettings('sync')}
+        />
         <ImportByIdentifierDialog open={showIdentifierImport} onClose={() => setShowIdentifierImport(false)} />
       </>
     )
@@ -171,10 +206,23 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         <SidebarCategories />
       </nav>
 
-      <SidebarFooter onOpenSettings={() => setShowSettings(true)} />
+      <SidebarFooter
+        onOpenAccount={openAccount}
+        onOpenSettings={() => openSettings('general')}
+      />
 
 
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        initialPage={settingsPage}
+        onOpenAccount={openAccount}
+      />
+      <AccountModal
+        open={showAccount}
+        onClose={() => setShowAccount(false)}
+        onOpenSyncSettings={() => openSettings('sync')}
+      />
       <ImportByIdentifierDialog open={showIdentifierImport} onClose={() => setShowIdentifierImport(false)} />
     </aside>
   )

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, session, dialog, nativeImage, nativeTheme, net, protocol } from 'electron'
+import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
 import { join, resolve as resolvePath } from 'node:path'
 import { createWriteStream, existsSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
@@ -16,6 +16,11 @@ import type { ServerPythonRuntime } from './sidecar/runtime'
 import { createServerLifecycle } from './sidecar/lifecycle'
 import { createServerAssembly, type ServerAssembly } from './sidecar/assembly'
 import { createServerStateDirectory } from './sidecar/stateDirectory'
+import { createSyncRuntime } from './services/syncRuntime'
+import type { SyncAccountService } from './services/syncAccount'
+import { parseAuthConfirmationDeepLink } from './services/authDeepLink'
+import type { SyncAuthConfirmation } from '../shared/sync-types'
+import { createSyncHandlers } from './sidecar/ipc/sync'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -33,10 +38,56 @@ const IS_MAC = process.platform === 'darwin'
 let serverAssembly: ServerAssembly | null = null
 let serverPythonRuntime: ServerPythonRuntime | null = null
 let pdfTextService: PdfTextService | null = null
+let syncAccountService: SyncAccountService | null = null
 let activeDbPath = ''
 let activeLibraryFolder = ''
 let win: BrowserWindow | null = null
 let isQuitting = false
+let pendingAuthConfirmation: SyncAuthConfirmation | null = null
+let syncHandlerChannels: string[] = []
+
+function registerSyncAccountHandlers(service: SyncAccountService): void {
+  const handlers = createSyncHandlers(service)
+  syncHandlerChannels = Object.keys(handlers)
+  for (const [channel, handler] of Object.entries(handlers)) {
+    ipcMain.handle(channel, (_event, ...args) =>
+      (handler as (...handlerArgs: unknown[]) => unknown)(...args)
+    )
+  }
+}
+
+function unregisterSyncAccountHandlers(): void {
+  for (const channel of syncHandlerChannels) ipcMain.removeHandler(channel)
+  syncHandlerChannels = []
+}
+
+function deliverAuthConfirmation(): void {
+  const target = win
+  if (!pendingAuthConfirmation || !target || target.isDestroyed()) return
+  if (target.webContents.isDestroyed() || target.webContents.isLoadingMainFrame()) return
+  target.webContents.send(IpcChannel.EventSyncAuthConfirmation, pendingAuthConfirmation)
+  pendingAuthConfirmation = null
+  if (target.isMinimized()) target.restore()
+  target.show()
+  target.focus()
+}
+
+function handleAuthDeepLink(value: string): boolean {
+  const confirmation = parseAuthConfirmationDeepLink(value)
+  if (!confirmation) return false
+  pendingAuthConfirmation = confirmation
+  deliverAuthConfirmation()
+  return true
+}
+
+app.on('open-url', (event, url) => {
+  if (!handleAuthDeepLink(url)) return
+  event.preventDefault()
+})
+
+for (const argument of process.argv.slice(1)) {
+  if (handleAuthDeepLink(argument)) break
+}
 
 function detectLanguage(): 'zh' | 'en' {
   try {
@@ -314,6 +365,7 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
   bw.webContents.on('did-finish-load', () => {
     bw.show()
     sendWindowFocus(bw.isFocused())
+    deliverAuthConfirmation()
   })
   bw.on('focus', () => sendWindowFocus(true))
   bw.on('blur', () => sendWindowFocus(false))
@@ -534,6 +586,7 @@ void app.whenReady().then(async () => {
   isDev = !app.isPackaged
   initLogger()
   logger.info(`app:ready (dev=${isDev})`)
+  if (app.isPackaged) app.setAsDefaultProtocolClient('refora')
   applyCsp()
 
   serverPythonRuntime = createServerPythonRuntime({
@@ -551,6 +604,11 @@ void app.whenReady().then(async () => {
     }
   })
   pdfTextService = createPdfTextService()
+  syncAccountService = createSyncRuntime({
+    userDataDir: app.getPath('userData'),
+    fetch: (input, init) => net.fetch(input, init)
+  })
+  registerSyncAccountHandlers(syncAccountService)
 
   if (isDev) {
     const devIconPath = join(__dirname, '../../build/icon.png')
@@ -566,22 +624,30 @@ void app.whenReady().then(async () => {
     : ''
   activeDbPath = dbPath
   activeLibraryFolder = libraryFolder
-  serverAssembly = await createPythonServerAssembly(
-    dbPath,
-    libraryFolder,
-    switchLibraryFolderPython
-  )
-  await serverAssembly.start()
   registerWorkspaceAssetProtocol()
   registerDocumentProtocol()
-  const bootstrap = await serverAssembly.getClient().http.appBootstrap()
-  nativeTheme.themeSource = bootstrap.theme
-  if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
-    activeLibraryFolder = resolvePath(bootstrap.libraryFolderPath)
-    activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
-    writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
+  let savedBounds: { x?: number; y?: number; width?: number; height?: number } | null = null
+  try {
+    serverAssembly = await createPythonServerAssembly(
+      dbPath,
+      libraryFolder,
+      switchLibraryFolderPython
+    )
+    await serverAssembly.start()
+    const bootstrap = await serverAssembly.getClient().http.appBootstrap()
+    nativeTheme.themeSource = bootstrap.theme
+    if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
+      activeLibraryFolder = resolvePath(bootstrap.libraryFolderPath)
+      activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
+      writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
+    }
+    savedBounds = bootstrap.windowBounds
+  } catch (error) {
+    logger.error(`local library startup failed: ${error instanceof Error ? error.message : String(error)}`)
+    const failedAssembly = serverAssembly
+    serverAssembly = null
+    await failedAssembly?.stop().catch(() => undefined)
   }
-  const savedBounds = bootstrap.windowBounds
   win = createWindow(savedBounds)
 
   Menu.setApplicationMenu(buildMenu())
@@ -598,6 +664,7 @@ void app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  unregisterSyncAccountHandlers()
   const assembly = serverAssembly
   serverAssembly = null
   void assembly?.stop()

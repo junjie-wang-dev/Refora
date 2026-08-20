@@ -23,6 +23,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "pg8000>=1.31,<2.0",
   "pytest>=8.0,<9.0",
   "pytest-asyncio>=0.23,<1.0",
 ]

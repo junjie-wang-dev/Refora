@@ -17,11 +17,15 @@
     "typecheck": "npm run check:server-contract && tsc -b",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
-    "test:backend": "uv run --project backend --locked pytest -c backend/pyproject.toml backend/tests",
+    "test:backend": "uv run --project backend --locked python -m pytest -c backend/pyproject.toml backend/tests",
     "test:server-integration": "vitest run --config vitest.server-integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "test:e2e:workspace-card": "electron-vite build && playwright test tests/e2e/workspace-card-pointer.spec.ts --workers=1",
+    "supabase:migrations": "node scripts/supabase-remote.mjs migration list",
+    "supabase:push:dry-run": "node scripts/supabase-remote.mjs db push --dry-run",
+    "supabase:push": "node scripts/supabase-remote.mjs db push",
+    "supabase:test": "node scripts/supabase-remote.mjs test rpc",
     "package": "sh scripts/package-macos.sh"
   },
   "dependencies": {

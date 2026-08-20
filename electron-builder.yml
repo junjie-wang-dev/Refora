@@ -1,5 +1,9 @@
 appId: com.refora.app
 productName: Refora
+protocols:
+  - name: Refora authentication callback
+    schemes:
+      - refora
 directories:
   output: dist
   buildResources: build

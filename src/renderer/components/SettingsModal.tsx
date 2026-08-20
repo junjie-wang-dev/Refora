@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, type ReactNode } from 'react'
 import { Modal, Button, Select } from '@lobehub/ui'
-import { Brain, ChartDonut, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
+import { Brain, ChartDonut, CloudArrowUp, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
 import { api } from '../ipc'
 import { changeLanguage, type AppLanguage } from '../i18n'
@@ -15,10 +15,13 @@ import { useWorkspaceStore } from '../store/workspaceStore'
 import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
 import type { PdfOpenMode } from '../utils/openPdf'
+import { SyncSettings } from './SyncSettings'
 
 interface SettingsModalProps {
   open: boolean
   onClose: () => void
+  initialPage?: SettingsPage
+  onOpenAccount?: () => void
 }
 
 const THEME_OPTIONS = [
@@ -42,9 +45,10 @@ const MINERU_INSTALL_STAGES = [
   'finalizing'
 ] as const
 
-type SettingsPage =
+export type SettingsPage =
   | 'general'
   | 'appearance'
+  | 'sync'
   | 'mineru'
   | 'aiProviders'
   | 'usage'
@@ -408,7 +412,12 @@ function MineruSettingsSection({ onError }: { onError: (message: string | null) 
   )
 }
 
-export default function SettingsModal({ open, onClose }: SettingsModalProps) {
+export default function SettingsModal({
+  open,
+  onClose,
+  initialPage = 'general',
+  onOpenAccount
+}: SettingsModalProps) {
   const { t, i18n } = useTranslation()
   const { mode: themeMode, setMode: setThemeMode } = useTheme()
   const [libraryFolderPath, setLibraryFolderPath] = useState('')
@@ -423,10 +432,10 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (open) {
       setError(null)
-      setActivePage('general')
+      setActivePage(initialPage)
       void loadSettings()
     }
-  }, [open])
+  }, [initialPage, open])
 
   const loadSettings = async () => {
     try {
@@ -530,6 +539,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       label: t('settings.sectionAppearance.title'),
       description: t('settings.sectionAppearance.desc'),
       icon: Palette
+    },
+    {
+      id: 'sync' as const,
+      label: t('settings.sync.title'),
+      description: t('settings.sync.desc'),
+      icon: CloudArrowUp
     },
     {
       id: 'mineru' as const,
@@ -715,6 +730,18 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   {t('settings.sidebarCollapsed')}
                 </span>
               </label>
+            </SettingsSection>
+          )}
+
+          {activePage === 'sync' && (
+            <SettingsSection
+              title={t('settings.sync.title')}
+              description={t('settings.sync.desc')}
+            >
+              <SyncSettings
+                onError={setError}
+                onOpenAccount={() => onOpenAccount?.()}
+              />
             </SettingsSection>
           )}
 
