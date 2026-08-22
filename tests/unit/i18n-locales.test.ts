@@ -12,6 +12,31 @@ const NAMESPACES = [
   'dialog'
 ] as const
 
+const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/
+
+function collectLeaves(
+  value: unknown,
+  prefix = '',
+  result = new Map<string, string[]>()
+): Map<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result
+  for (const [key, child] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    if (child && typeof child === 'object' && !Array.isArray(child)) {
+      collectLeaves(child, path, result)
+      continue
+    }
+    const logicalPath = path.replace(PLURAL_SUFFIX, '')
+    const placeholders = typeof child === 'string'
+      ? [...child.matchAll(/{{\s*([^},\s]+)/g)].map((match) => match[1]).sort().join(',')
+      : ''
+    const signatures = result.get(logicalPath) ?? []
+    signatures.push(placeholders)
+    result.set(logicalPath, signatures)
+  }
+  return result
+}
+
 describe('i18n locale files (master plan §8 namespaces)', () => {
   it('en.json has all namespaces', () => {
     for (const ns of NAMESPACES) {
@@ -26,10 +51,14 @@ describe('i18n locale files (master plan §8 namespaces)', () => {
   })
 
   it('en and zh share the same keys in every namespace', () => {
-    for (const ns of NAMESPACES) {
-      const enKeys = Object.keys(en[ns]).sort()
-      const zhKeys = Object.keys(zh[ns]).sort()
-      expect(enKeys).toEqual(zhKeys)
+    const enLeaves = collectLeaves(en)
+    const zhLeaves = collectLeaves(zh)
+
+    expect([...enLeaves.keys()].sort()).toEqual([...zhLeaves.keys()].sort())
+    for (const key of enLeaves.keys()) {
+      expect([...new Set(enLeaves.get(key))].sort()).toEqual(
+        [...new Set(zhLeaves.get(key))].sort()
+      )
     }
   })
 

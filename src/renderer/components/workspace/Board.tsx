@@ -1028,9 +1028,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         if (ids.length === 0) return
         await addDocs(ids, placement)
       } else {
-        const paths = Array.from(e.dataTransfer.files)
-          .map((file) => api.getPathForFile(file))
-          .filter((path) => path.length > 0)
+        const paths = (await Promise.all(
+          Array.from(e.dataTransfer.files).map((file) => api.getPathForFile(file))
+        )).filter((path) => path.length > 0)
         if (paths.length === 0) return
         await addFiles(paths, placement)
       }

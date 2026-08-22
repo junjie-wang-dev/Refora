@@ -8,6 +8,8 @@ import { createServerWorkspaceHandlers } from './ipc/workspaces'
 import { createNativeRpc, type NativeRpc } from './nativeRpc'
 import { createServerClient, type ServerClient } from './client'
 import type { ServerLifecycle } from './lifecycle'
+import type { RendererPathCapabilities } from '../services/fileCapabilities'
+import { isTrustedIpcSender } from '../services/webSecurity'
 import {
   SERVER_PROTOCOL_DIGEST,
   SERVER_PROTOCOL_VERSION
@@ -19,6 +21,7 @@ export interface ServerAssemblyDeps {
   nativeManagedRoots?: string[]
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
+  rendererPathCapabilities?: RendererPathCapabilities
 }
 
 export interface ServerAssembly {
@@ -64,21 +67,33 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         ...createServerAppHandlers(serverClient, {
           setThemeSource: (theme) => {
             nativeTheme.themeSource = theme
-          }
+          },
+          authorizeFile: deps.rendererPathCapabilities?.authorizeFile,
+          authorizeDirectory: deps.rendererPathCapabilities?.authorizeDirectory
         }),
         ...createServerLibraryHandlers({
           serverClient,
           switchLibraryFolder: deps.switchLibraryFolder,
-          onSettingUpdated: deps.onSettingUpdated
+          onSettingUpdated: deps.onSettingUpdated,
+          consumeFile: deps.rendererPathCapabilities?.consumeFile,
+          consumeDirectory: deps.rendererPathCapabilities?.consumeDirectory
         }),
-        ...createServerWorkspaceHandlers(serverClient),
+        ...createServerWorkspaceHandlers(serverClient, {
+          consumeFile: deps.rendererPathCapabilities?.consumeFile
+        }),
         ...createServerAiHandlers({ serverClient })
       }
       handlerChannels = Object.keys(handlers)
       for (const [channel, handler] of Object.entries(handlers)) {
-        ipcMain.handle(channel, (_event, ...args) =>
-          (handler as (...handlerArgs: unknown[]) => unknown)(...args)
-        )
+        ipcMain.handle(channel, (event, ...args) => {
+          if (!isTrustedIpcSender(event, deps.getWin)) {
+            return {
+              ok: false,
+              error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
+            }
+          }
+          return (handler as (...handlerArgs: unknown[]) => unknown)(...args)
+        })
       }
     } catch (error) {
       eventBridge?.stop()
@@ -99,6 +114,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     handlerChannels = []
     await nativeRpc?.stop()
     await deps.lifecycle.stop()
+    deps.rendererPathCapabilities?.clear()
   }
 
   function getClient(): ServerClient {

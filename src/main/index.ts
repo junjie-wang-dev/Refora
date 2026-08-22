@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
-import { isAbsolute, join, resolve as resolvePath } from 'node:path'
-import { createWriteStream, existsSync, statSync, writeFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
+import { createWriteStream, existsSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
@@ -23,6 +23,8 @@ import type { SyncAuthConfirmation } from '../shared/sync-types'
 import { createSyncHandlers } from './sidecar/ipc/sync'
 import { createLibrarySwitcher } from './services/librarySwitcher'
 import { createShutdownHandler } from './services/shutdown'
+import { createRendererPathCapabilities } from './services/fileCapabilities'
+import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -48,6 +50,7 @@ let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let syncHandlerChannels: string[] = []
 let menuLanguage: 'zh' | 'en' = 'en'
 let flushWindowState: () => Promise<void> = async () => undefined
+const rendererPathCapabilities = createRendererPathCapabilities()
 
 const MENU_COPY = {
   en: {
@@ -100,9 +103,15 @@ function registerSyncAccountHandlers(service: SyncAccountService): void {
   const handlers = createSyncHandlers(service)
   syncHandlerChannels = Object.keys(handlers)
   for (const [channel, handler] of Object.entries(handlers)) {
-    ipcMain.handle(channel, (_event, ...args) =>
-      (handler as (...handlerArgs: unknown[]) => unknown)(...args)
-    )
+    ipcMain.handle(channel, (event, ...args) => {
+      if (!isTrustedIpcSender(event, () => win)) {
+        return {
+          ok: false,
+          error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
+        }
+      }
+      return (handler as (...handlerArgs: unknown[]) => unknown)(...args)
+    })
   }
 }
 
@@ -155,11 +164,7 @@ function reportMenuError(action: string, error: unknown): void {
 }
 
 function applyCsp(): void {
-  const prod =
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: refora-asset: refora-document:; media-src 'self' refora-asset:; connect-src 'self'"
-  const dev =
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: refora-asset: refora-document:; media-src 'self' refora-asset:; connect-src 'self' ws://localhost:*"
-  const csp = app.isPackaged ? prod : dev
+  const csp = contentSecurityPolicy(app.isPackaged)
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -401,12 +406,7 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
       vibrancy: 'header',
       visualEffectState: 'followWindow'
     }),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
+    webPreferences: secureWebPreferences(join(__dirname, '../preload/index.js'))
   })
 
   const sendWindowFocus = (focused: boolean) => {
@@ -549,6 +549,7 @@ async function createPythonServerAssembly(
     }),
     getWin: () => win,
     nativeManagedRoots: [libraryFolder, app.getPath('userData')],
+    rendererPathCapabilities,
     switchLibraryFolder,
     onSettingUpdated: (key, value) => {
       if (key !== 'language' || (value !== 'zh' && value !== 'en')) return
@@ -578,7 +579,7 @@ async function createPythonServerAssembly(
 }
 
 const switchLibraryFolderPython = createLibrarySwitcher({
-  resolveFolder: resolvePath,
+  resolveFolder: realpathSync,
   isDirectory: (folder) => {
     try {
       return existsSync(folder) && statSync(folder).isDirectory()
@@ -652,7 +653,7 @@ void app.whenReady().then(async () => {
   const dbPath = resolveStartupDbPath()
   const preferredLibrary = readLibraryFolderPath(app.getPath('userData'))
   const libraryFolder = preferredLibrary && existsSync(preferredLibrary)
-    ? resolvePath(preferredLibrary)
+    ? realpathSync(preferredLibrary)
     : ''
   activeDbPath = dbPath
   activeLibraryFolder = libraryFolder
@@ -670,7 +671,7 @@ void app.whenReady().then(async () => {
     menuLanguage = bootstrap.language
     nativeTheme.themeSource = bootstrap.theme
     if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
-      activeLibraryFolder = resolvePath(bootstrap.libraryFolderPath)
+      activeLibraryFolder = realpathSync(bootstrap.libraryFolderPath)
       activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
       writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
     }

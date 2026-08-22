@@ -61,7 +61,7 @@ vi.mock('../../src/main/sidecar/ipc/ai', () => ({
 }))
 
 import { createServerAssembly } from '../../src/main/sidecar/assembly'
-import { nativeTheme } from 'electron'
+import { nativeTheme, type BrowserWindow } from 'electron'
 import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
 import { createServerClient } from '../../src/main/sidecar/client'
 import { createServerEventBridge } from '../../src/main/sidecar/ipc/eventBridge'
@@ -180,6 +180,41 @@ describe('main process server assembly', () => {
       'native.stop',
       'lifecycle.stop'
     ])
+  })
+
+  it('rejects IPC from any sender other than the active main frame', async () => {
+    const mainFrame = {}
+    const webContents = {
+      isDestroyed: () => false,
+      mainFrame
+    }
+    const window = {
+      isDestroyed: () => false,
+      webContents
+    } as unknown as BrowserWindow
+    const lifecycle = {
+      start: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8123', token: 'token', port: 8123 })),
+      getServerBaseUrl: vi.fn(),
+      stop: vi.fn()
+    }
+    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+    await assembly.start()
+    const invokeHandler = mocks.ipcHandle.mock.calls[0][1] as (
+      event: unknown,
+      ...args: unknown[]
+    ) => unknown
+
+    expect(await invokeHandler({ sender: {}, senderFrame: {} })).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthorized_sender',
+        message: 'IPC request did not originate from the main window'
+      }
+    })
+
+    await invokeHandler({ sender: webContents, senderFrame: mainFrame })
+    const appHandler = vi.mocked(createServerAppHandlers).mock.results[0].value.app
+    expect(appHandler).toHaveBeenCalledOnce()
   })
 
   it('rejects a mismatched Python protocol and releases startup resources', async () => {

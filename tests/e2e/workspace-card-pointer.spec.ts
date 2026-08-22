@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import electronExe from 'electron'
+import { authorizeFilePath } from './path-capability'
 
 const testMain = path.resolve(__dirname, 'electron-main.mjs')
 
@@ -220,6 +221,10 @@ test.describe('Workspace card pointer gestures', () => {
   test.beforeAll(async () => {
     userDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-user-data-'))
     libraryFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-pointer-'))
+    fs.writeFileSync(
+      path.join(userDataFolder, 'refora-prefs.json'),
+      JSON.stringify({ libraryFolderPath: libraryFolder })
+    )
     const launchEnv = {
       ...process.env,
       REFORA_E2E_USER_DATA_DIR: userDataFolder
@@ -257,9 +262,8 @@ test.describe('Workspace card pointer gestures', () => {
     const noteTitle = 'Pointer gesture note'
     const noteContent = 'Reader opened from the browser-generated click.'
     const setup = await electronPage.evaluate(
-      async ({ folder, workspaceName: name, noteTitle: title, noteContent: content }) => {
+      async ({ workspaceName: name, noteTitle: title, noteContent: content }) => {
         const electronApi = (window as Window & { api: ElectronApi }).api
-        await electronApi.library.switch(folder)
         const workspace = await electronApi.workspaces.create(name)
         const note = await electronApi.workspaceNotes.create(
           workspace.id,
@@ -273,7 +277,7 @@ test.describe('Workspace card pointer gestures', () => {
         if (!item) throw new Error('Workspace note item was not created')
         return { workspaceId: workspace.id, item }
       },
-      { folder: libraryFolder, workspaceName, noteTitle, noteContent }
+      { workspaceName, noteTitle, noteContent }
     )
 
     await electronPage.reload({ waitUntil: 'domcontentloaded' })
@@ -310,10 +314,10 @@ test.describe('Workspace card pointer gestures', () => {
     const workspaceName = 'PDF preview workspace'
     const pdfPath = process.env.REFORA_E2E_PREVIEW_PDF ??
       path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const setup = await electronPage.evaluate(
-      async ({ folder, workspaceName: name, pdfPath: sourcePath }) => {
+      async ({ workspaceName: name, pdfPath: sourcePath }) => {
         const electronApi = (window as Window & { api: ElectronApi }).api
-        await electronApi.library.switch(folder)
         const imported = await electronApi.import.addFiles([sourcePath])
         if (imported.added.length !== 1) {
           throw new Error(`PDF import failed: ${JSON.stringify(imported)}`)
@@ -335,7 +339,7 @@ test.describe('Workspace card pointer gestures', () => {
           item: resizedItem
         }
       },
-      { folder: libraryFolder, workspaceName, pdfPath }
+      { workspaceName, pdfPath: authorizedPdfPath }
     )
 
     const summaryDb = new DatabaseSync(path.join(libraryFolder, 'refora.db'))

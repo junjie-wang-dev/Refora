@@ -292,7 +292,11 @@ const api: ReforaApi = {
     switch: (path: string) => invoke<LibrarySwitchResult>(IpcChannel.LibrarySwitch, path)
   },
 
-  getPathForFile: (file: unknown) => webUtils.getPathForFile(file as File),
+  getPathForFile: async (file: unknown) => {
+    const path = webUtils.getPathForFile(file as File)
+    if (!path) return ''
+    return invoke<string>(IpcChannel.FileAuthorizeDropped, path)
+  },
 
   export: {
     toJson: () => invoke<string>(IpcChannel.ExportToJson),

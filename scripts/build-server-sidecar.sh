@@ -24,7 +24,7 @@ rm -rf "$OUTPUT_DIR" "$WORK_DIR"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 UV_PROJECT_ENVIRONMENT="$WORK_DIR/venv" \
-UV_CACHE_DIR=${UV_CACHE_DIR:-"${TMPDIR:-/tmp}/refora-uv-cache"} uv run \
+UV_CACHE_DIR=${UV_CACHE_DIR:-"$WORK_DIR/uv-cache"} uv run \
   --project "$PROJECT_DIR" \
   --locked \
   --no-dev \

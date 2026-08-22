@@ -26,7 +26,7 @@ def _same_path(a: str, b: str) -> bool:
 
 
 def _resolve(p: str) -> str:
-    return os.path.normpath(os.path.abspath(p))
+    return os.path.realpath(os.path.normpath(os.path.abspath(p)))
 
 
 def toLibraryRelative(absPath: str, libraryFolder: str) -> str:
@@ -35,7 +35,7 @@ def toLibraryRelative(absPath: str, libraryFolder: str) -> str:
     if not os.path.isabs(absPath):
         return absPath
     normLib = _resolve(libraryFolder)
-    rel = os.path.relpath(absPath, normLib)
+    rel = os.path.relpath(_resolve(absPath), normLib)
     if rel == "" or rel == ".." or rel.startswith(".." + _SEP):
         return absPath
     return rel
@@ -45,7 +45,7 @@ def resolveFromLibrary(relOrAbs: str, libraryFolder: str) -> str:
     if not relOrAbs:
         return relOrAbs
     if os.path.isabs(relOrAbs):
-        return relOrAbs
+        return _resolve(relOrAbs)
     if not libraryFolder:
         return relOrAbs
     return _resolve(os.path.join(libraryFolder, relOrAbs))

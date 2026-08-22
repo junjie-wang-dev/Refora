@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
+import { authorizeFilePath } from './path-capability'
 
 const testMain = path.resolve(__dirname, 'electron-main.mjs')
 const fixtures = path.resolve(__dirname, '..', 'fixtures')
@@ -34,6 +35,8 @@ test.describe('Built-in PDF reader', () => {
     })
     page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
+    const first = await authorizeFilePath(page, path.join(fixtures, 'valid.pdf'))
+    const second = await authorizeFilePath(page, path.join(fixtures, 'with-doi.pdf'))
     const imported = await page.evaluate(async ({ first, second }) => {
       const api = (window as unknown as {
         api: {
@@ -56,10 +59,7 @@ test.describe('Built-in PDF reader', () => {
       await api.workspaces.create('Reader workspace')
       await api.workspaces.create('Unopened workspace')
       return api.documents.list({ mode: 'all' })
-    }, {
-      first: path.join(fixtures, 'valid.pdf'),
-      second: path.join(fixtures, 'with-doi.pdf')
-    })
+    }, { first, second })
     firstDocumentId = imported.find((document) => document.fileName === 'valid.pdf')?.id ?? ''
     secondDocumentId = imported.find((document) => document.fileName === 'with-doi.pdf')?.id ?? ''
     await page.reload()

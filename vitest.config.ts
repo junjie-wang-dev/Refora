@@ -38,7 +38,31 @@ export default defineConfig({
         lines: 70,
         branches: 55,
         functions: 70,
-        statements: 70
+        statements: 70,
+        'src/main/services/webSecurity.ts': {
+          lines: 100,
+          branches: 85,
+          functions: 100,
+          statements: 100
+        },
+        'src/main/services/fileCapabilities.ts': {
+          lines: 90,
+          branches: 75,
+          functions: 90,
+          statements: 90
+        },
+        'src/main/services/safeStorageProxy.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100
+        },
+        'src/main/sidecar/client.ts': {
+          lines: 60,
+          branches: 60,
+          functions: 38,
+          statements: 59
+        }
       }
     }
   }

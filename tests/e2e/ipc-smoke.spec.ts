@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
+import { authorizeFilePath } from './path-capability'
 
 const testMain = path.resolve(__dirname, 'electron-main.mjs')
 
@@ -96,10 +97,11 @@ test.describe('IPC Smoke', () => {
 
   test('document:updated event fires on update', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPath = await authorizeFilePath(electronPage, pdfPath)
     const result = await electronPage.evaluate(
       async (absPath: string) =>
         (window as Window & { api: ElectronApi }).api.import.addFiles([absPath]),
-      pdfPath,
+      authorizedPath,
     )
     const ids = result.added
     expect(ids.length).toBeGreaterThan(0)

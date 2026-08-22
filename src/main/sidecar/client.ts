@@ -768,6 +768,7 @@ export function createServerClient(
   let connectPromise: Promise<void> | null = null
   let reconnectAttempts = 0
   let manualClose = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   const subscribedTopics = new Set<string>()
 
   function ensureListeners(event: WsEventName): Set<WsEventListener> {
@@ -949,6 +950,7 @@ export function createServerClient(
 
   function scheduleReconnect(): void {
     if (manualClose) return
+    if (reconnectTimer) return
     if (reconnectAttempts >= wsReconnectMaxAttempts) {
       logger.error(`serverClient:reconnect exhausted (${wsReconnectMaxAttempts} attempts)`)
       return
@@ -959,24 +961,25 @@ export function createServerClient(
       WS_RECONNECT_MAX_MS
     )
     logger.warn(`serverClient:reconnect in ${backoff}ms (attempt ${reconnectAttempts}/${wsReconnectMaxAttempts})`)
-    setTimeout(() => {
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
       if (manualClose) return
-      connectPromise = doConnect().catch((e) => {
-        logger.warn(`serverClient:reconnect failed: ${e instanceof Error ? e.message : String(e)}`)
-        connectPromise = null
+      const pending = doConnect().catch((error) => {
+        logger.warn(`serverClient:reconnect failed: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => {
+        if (connectPromise === pending) connectPromise = null
       })
+      connectPromise = pending
     }, backoff)
   }
 
   async function doConnect(): Promise<void> {
     connection = await getConnection()
+    if (manualClose) throw makeError('ws_closed', 'WebSocket connection was cancelled')
     const url = `ws://127.0.0.1:${connection.port}/ws`
-    ws = new WebSocketCtor(url, [`refora-token.${connection.token}`])
+    const socket = new WebSocketCtor(url, [`refora-token.${connection.token}`])
+    ws = socket
     await new Promise<void>((resolve, reject) => {
-      if (!ws) {
-        reject(makeError('ws_error', 'WebSocket not initialized'))
-        return
-      }
       const onOpen = (): void => {
         cleanup()
         reconnectAttempts = 0
@@ -992,39 +995,56 @@ export function createServerClient(
         cleanup()
         reject(makeError('ws_error', `Failed to connect to ${url}`))
       }
-      const cleanup = (): void => {
-        ws?.removeEventListener('open', onOpen)
-        ws?.removeEventListener('error', onError)
+      const onClose = (): void => {
+        cleanup()
+        reject(makeError('ws_closed', `Connection closed before opening: ${url}`))
       }
-      ws.addEventListener('open', onOpen)
-      ws.addEventListener('error', onError)
+      const cleanup = (): void => {
+        socket.removeEventListener('open', onOpen)
+        socket.removeEventListener('error', onError)
+        socket.removeEventListener('close', onClose)
+      }
+      socket.addEventListener('open', onOpen)
+      socket.addEventListener('error', onError)
+      socket.addEventListener('close', onClose)
     })
 
-    if (!ws) return
-    ws.addEventListener('message', (event: MessageEvent) => {
+    if (manualClose || ws !== socket) return
+    socket.addEventListener('message', (event: MessageEvent) => {
       const data = typeof event.data === 'string' ? event.data : ''
       handleMessage(data)
     })
-    ws.addEventListener('close', () => {
-      if (manualClose) return
+    socket.addEventListener('close', () => {
+      if (manualClose || ws !== socket) return
+      ws = null
       scheduleReconnect()
     })
-    ws.addEventListener('error', (event: Event) => {
+    socket.addEventListener('error', (event: Event) => {
       logger.warn(`serverClient:ws-error ${event.type}`)
     })
   }
 
   const wsApi: ServerWs = {
     async connect(): Promise<void> {
+      manualClose = false
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       if (ws && ws.readyState === WebSocket.OPEN) return
       if (connectPromise) return connectPromise
-      connectPromise = doConnect().finally(() => {
-        connectPromise = null
+      const pending = doConnect().finally(() => {
+        if (connectPromise === pending) connectPromise = null
       })
-      return connectPromise
+      connectPromise = pending
+      return pending
     },
     disconnect(): void {
       manualClose = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       connectPromise = null
       reconnectAttempts = 0
       if (ws) {
@@ -1035,7 +1055,6 @@ export function createServerClient(
         }
         ws = null
       }
-      manualClose = false
     },
     isConnected(): boolean {
       return ws !== null && ws.readyState === WebSocket.OPEN

@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
+import { authorizeFilePath } from './path-capability'
 
 const testMain = path.resolve(__dirname, 'electron-main.mjs')
 const fixturesDir = path.resolve(__dirname, '..', 'fixtures')
@@ -55,10 +56,11 @@ test.describe('Import E2E', () => {
 
   test('imports a single valid PDF and document appears in list', async () => {
     const validPath = path.resolve(fixturesDir, 'valid.pdf')
+    const authorizedPath = await authorizeFilePath(electronPage, validPath)
     const ids = await electronPage.evaluate(async (p: string) => {
       const w = window as Window & { api: { import: { addFiles(paths: string[]): Promise<PdfImportResult> } } }
       return (await w.api.import.addFiles([p])).added
-    }, validPath)
+    }, authorizedPath)
     expect(ids).toHaveLength(1)
 
     const docs = await electronPage.evaluate(async () => {
@@ -73,9 +75,15 @@ test.describe('Import E2E', () => {
     const encryptedPath = path.resolve(fixturesDir, 'encrypted.pdf')
     const corruptedPath = path.resolve(fixturesDir, 'corrupted.pdf')
     const withDoiPath = path.resolve(fixturesDir, 'with-doi.pdf')
-    const filePaths = [encryptedPath, corruptedPath, withDoiPath]
+    const filePaths: string[] = []
+    for (const value of [encryptedPath, corruptedPath, withDoiPath]) {
+      filePaths.push(await authorizeFilePath(electronPage, value))
+    }
+    expect(filePaths).toEqual(
+      [encryptedPath, corruptedPath, withDoiPath].map((value) => fs.realpathSync(value))
+    )
 
-    const events = await electronPage.evaluate(async (paths: string[]) => {
+    const progressResult = await electronPage.evaluate(async (paths: string[]) => {
       const w = window as Window & {
         api: {
           import: { addFiles(ps: string[]): Promise<PdfImportResult> }
@@ -84,19 +92,29 @@ test.describe('Import E2E', () => {
           }
         }
       }
-      return new Promise<Array<{ current: number; total: number; message?: string }>>((resolve) => {
+      return new Promise<{
+        events: Array<{ current: number; total: number; message?: string }>
+        error: { code?: string; message?: string } | null
+      }>((resolve) => {
         const captured: Array<{ current: number; total: number; message?: string }> = []
-        const timeout = setTimeout(() => resolve(captured), 20000)
+        const timeout = setTimeout(() => resolve({ events: captured, error: null }), 20000)
         w.api.events.onImportProgress((payload) => {
+          if (payload.total !== paths.length) return
           captured.push(payload)
           if (payload.current === payload.total) {
             clearTimeout(timeout)
-            resolve(captured)
+            resolve({ events: captured, error: null })
           }
         })
-        void w.api.import.addFiles(paths)
+        void w.api.import.addFiles(paths).catch((error) => {
+          clearTimeout(timeout)
+          const value = error as { code?: string; message?: string }
+          resolve({ events: captured, error: { code: value.code, message: value.message } })
+        })
       })
     }, filePaths)
+    expect(progressResult.error).toBeNull()
+    const events = progressResult.events
 
     expect(events.length).toBeGreaterThan(0)
 
@@ -116,22 +134,32 @@ test.describe('Import E2E', () => {
       duplicatePath,
       Buffer.concat([fs.readFileSync(validPath), Buffer.from('\n% duplicate\n')])
     )
-    const result = await electronPage.evaluate(async (p: string) => {
+    const authorizedDuplicate = await authorizeFilePath(electronPage, duplicatePath)
+    const first = await electronPage.evaluate(async (p: string) => {
       const w = window as Window & {
         api: {
           import: { addFiles(paths: string[]): Promise<PdfImportResult> }
           documents: {
             get(id: string): Promise<DocumentItem>
-            list(filter: { mode: string }): Promise<DocumentItem[]>
           }
         }
       }
-      const first = await w.api.import.addFiles([p])
-      const imported = await w.api.documents.get(first.added[0])
-      const second = await w.api.import.addFiles([imported.filePath])
+      const importedIds = await w.api.import.addFiles([p])
+      const imported = await w.api.documents.get(importedIds.added[0])
+      return { added: importedIds.added, filePath: imported.filePath }
+    }, authorizedDuplicate)
+    const authorizedStoredPath = await authorizeFilePath(electronPage, first.filePath)
+    const result = await electronPage.evaluate(async ({ firstAdded, storedPath }) => {
+      const w = window as Window & {
+        api: {
+          import: { addFiles(paths: string[]): Promise<PdfImportResult> }
+          documents: { list(filter: { mode: string }): Promise<DocumentItem[]> }
+        }
+      }
+      const second = await w.api.import.addFiles([storedPath])
       const documents = await w.api.documents.list({ mode: 'all' })
-      return { first: first.added, second: second.added, documents }
-    }, duplicatePath)
+      return { first: firstAdded, second: second.added, documents }
+    }, { firstAdded: first.added, storedPath: authorizedStoredPath })
     expect(result.first).toHaveLength(1)
     expect(result.second).toHaveLength(0)
     expect(result.documents.length).toBeGreaterThanOrEqual(1)
@@ -146,10 +174,11 @@ test.describe('Import E2E', () => {
     })).length
 
     const encryptedPath = path.resolve(fixturesDir, 'encrypted.pdf')
+    const authorizedPath = await authorizeFilePath(electronPage, encryptedPath)
     const ids = await electronPage.evaluate(async (p: string) => {
       const w = window as Window & { api: { import: { addFiles(paths: string[]): Promise<PdfImportResult> } } }
       return (await w.api.import.addFiles([p])).added
-    }, encryptedPath)
+    }, authorizedPath)
     expect(ids).toHaveLength(0)
 
     const docCountAfter = (await electronPage.evaluate(async () => {
@@ -166,10 +195,11 @@ test.describe('Import E2E', () => {
     })).length
 
     const corruptedPath = path.resolve(fixturesDir, 'corrupted.pdf')
+    const authorizedPath = await authorizeFilePath(electronPage, corruptedPath)
     const ids = await electronPage.evaluate(async (p: string) => {
       const w = window as Window & { api: { import: { addFiles(paths: string[]): Promise<PdfImportResult> } } }
       return (await w.api.import.addFiles([p])).added
-    }, corruptedPath)
+    }, authorizedPath)
     expect(ids).toHaveLength(0)
 
     const docCountAfter = (await electronPage.evaluate(async () => {

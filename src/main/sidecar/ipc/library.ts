@@ -28,6 +28,8 @@ export interface ServerLibraryHandlerDeps {
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
   readPdfRange?: (filePath: string, begin: number, end: number) => Promise<PdfRangeChunk>
+  consumeFile?: (path: string, extensions?: readonly string[]) => string
+  consumeDirectory?: (path: string) => string
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -51,7 +53,9 @@ export function createServerLibraryHandlers({
   serverClient,
   switchLibraryFolder,
   onSettingUpdated,
-  readPdfRange = readPdfFileRange
+  readPdfRange = readPdfFileRange,
+  consumeFile,
+  consumeDirectory
 }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
@@ -106,14 +110,22 @@ export function createServerLibraryHandlers({
     [IpcChannel.DocumentsRefreshMetadata]: (documentId: string) =>
       forward(() => http.documentsRefreshMetadata(documentId)),
     [IpcChannel.DocumentsRelocateFile]: (documentId: string, path: string) =>
-      forward(() => http.documentsRelocate(documentId, { path })),
+      forward(() => http.documentsRelocate(documentId, {
+        path: path && consumeFile ? consumeFile(path, ['.pdf']) : path
+      })),
     [IpcChannel.DocumentsRestoreFile]: (documentId: string) =>
       forward(() => http.documentsRestoreFile(documentId)),
 
-    [IpcChannel.ImportAddFiles]: (paths: string[]) => forward(() => http.importFiles({ paths })),
-    [IpcChannel.ImportAddFolder]: (path: string) => forward(() => http.importFolder({ path })),
+    [IpcChannel.ImportAddFiles]: (paths: string[]) => forward(() => http.importFiles({
+      paths: consumeFile ? paths.map((path) => consumeFile(path, ['.pdf'])) : paths
+    })),
+    [IpcChannel.ImportAddFolder]: (path: string) => forward(() => http.importFolder({
+      path: consumeDirectory ? consumeDirectory(path) : path
+    })),
     [IpcChannel.ImportFromJson]: (file: string) =>
-      forward(async () => (await http.importJson(file)).imported),
+      forward(async () => (await http.importJson(
+        consumeFile ? consumeFile(file, ['.json']) : file
+      )).imported),
     [IpcChannel.ImportFromZotero]: (payload: ImportBibPayload = { paths: [] }) =>
       forward(() => http.importZotero(payload)),
     [IpcChannel.ImportFromMendeley]: (payload: ImportBibPayload = { paths: [] }) =>
@@ -137,13 +149,23 @@ export function createServerLibraryHandlers({
       forward(() => http.categoriesUnassign(categoryId, { documentIds: [documentId] })),
 
     [IpcChannel.WatchList]: () => forward(() => http.watchList()),
-    [IpcChannel.WatchAdd]: (path: string) => forward(() => http.watchAdd({ path })),
+    [IpcChannel.WatchAdd]: (path: string) => forward(() => http.watchAdd({
+      path: consumeDirectory ? consumeDirectory(path) : path
+    })),
     [IpcChannel.WatchRemove]: (watchId: string) => forward(() => http.watchRemove(watchId)),
     [IpcChannel.WatchToggle]: (watchId: string, enabled: boolean) =>
       forward(() => http.watchToggle(watchId, { enabled })),
 
-    [IpcChannel.LibrarySwitch]: (path: string) =>
-      switchLibraryFolder ? forward<LibrarySwitchResult>(() => switchLibraryFolder(path)) : forward(() => http.librarySwitch({ path })),
+    [IpcChannel.LibrarySwitch]: (path: string) => {
+      if (switchLibraryFolder) {
+        return forward<LibrarySwitchResult>(() => switchLibraryFolder(
+          consumeDirectory ? consumeDirectory(path) : path
+        ))
+      }
+      return forward(() => http.librarySwitch({
+        path: consumeDirectory ? consumeDirectory(path) : path
+      }))
+    },
 
     [IpcChannel.SettingsGet]: (key: string, defaultValue: unknown) =>
       forward(async () => {

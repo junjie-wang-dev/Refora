@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
+import { authorizeFilePath } from './path-capability'
 
 const testMain = path.resolve(__dirname, 'electron-main.mjs')
 
@@ -45,10 +46,11 @@ test.describe('Document CRUD', () => {
 
   test('create → list → read', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]
@@ -77,10 +79,11 @@ test.describe('Document CRUD', () => {
 
   test('update title + editedFields tracking', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]
@@ -118,10 +121,11 @@ test.describe('Document CRUD', () => {
 
   test('update forbidden field rejected', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]
@@ -147,10 +151,11 @@ test.describe('Document CRUD', () => {
 
   test('set star', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]
@@ -172,10 +177,11 @@ test.describe('Document CRUD', () => {
 
   test('delete + list confirms gone', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]
@@ -195,17 +201,22 @@ test.describe('Document CRUD', () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
     const thirdPdfPath = path.join(userDataFolder, 'third.pdf')
     fs.writeFileSync(thirdPdfPath, Buffer.concat([fs.readFileSync(pdfPath), Buffer.from('\n% third\n')]))
+    const firstPath = await authorizeFilePath(electronPage, pdfPath)
+    const secondPath = await authorizeFilePath(
+      electronPage,
+      path.resolve(__dirname, '..', 'fixtures', 'with-doi.pdf')
+    )
+    const thirdPath = await authorizeFilePath(electronPage, thirdPdfPath)
     const ids = await electronPage.evaluate(
-      async ({ firstPath, thirdPath }: { firstPath: string; thirdPath: string }) => {
+      async (paths: { firstPath: string; secondPath: string; thirdPath: string }) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const a = (window as any).api
-        const id1 = (await a.import.addFiles([firstPath])).added[0]
-        const secondPath = firstPath.replace('valid.pdf', 'with-doi.pdf')
-        const id2 = (await a.import.addFiles([secondPath])).added[0]
-        const id3 = (await a.import.addFiles([thirdPath])).added[0]
+        const id1 = (await a.import.addFiles([paths.firstPath])).added[0]
+        const id2 = (await a.import.addFiles([paths.secondPath])).added[0]
+        const id3 = (await a.import.addFiles([paths.thirdPath])).added[0]
         return [id1, id2, id3]
       },
-      { firstPath: pdfPath, thirdPath: thirdPdfPath },
+      { firstPath, secondPath, thirdPath },
     )
     expect(ids.length).toBe(3)
 
@@ -225,10 +236,11 @@ test.describe('Document CRUD', () => {
 
   test('categories CRUD round-trip', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const authorizedPdfPath = await authorizeFilePath(electronPage, pdfPath)
     const ids = await electronPage.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (absPath: string) => ((await (window as any).api.import.addFiles([absPath])) as { added: string[] }).added,
-      pdfPath,
+      authorizedPdfPath,
     )
     expect(ids.length).toBe(1)
     const docId = ids[0]

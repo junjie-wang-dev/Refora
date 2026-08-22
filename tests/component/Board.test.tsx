@@ -126,7 +126,7 @@ beforeEach(() => {
     mockWorkspaceItemsChangedHandler = cb
   })
   events.off = vi.fn()
-  api.getPathForFile = vi.fn((file: { name?: string }) => file.name ? `/tmp/${file.name}` : '')
+  api.getPathForFile = vi.fn(async (file: { name?: string }) => file.name ? `/tmp/${file.name}` : '')
   const workspaceAssets = api.workspaceAssets as Record<string, unknown>
   workspaceAssets.textPreview = vi.fn().mockResolvedValue({ content: '', truncated: false })
   workspaceAssets.previewUrl = vi.fn((id: string) => `refora-asset://asset/${id}`)

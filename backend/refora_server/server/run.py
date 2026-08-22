@@ -16,7 +16,7 @@ from .lifespan import create_lifespan
 
 
 def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
-    configured = os.path.abspath(library_folder) if library_folder else ""
+    configured = os.path.realpath(os.path.abspath(library_folder)) if library_folder else ""
     if configured:
         return db_path, configured
     if not os.path.isfile(db_path):
@@ -33,20 +33,22 @@ def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
         return db_path, ""
     if not isinstance(value, str) or not value:
         return db_path, ""
-    resolved = os.path.abspath(value)
+    resolved = os.path.realpath(os.path.abspath(value))
     if not os.path.isdir(resolved):
         return db_path, ""
     return os.path.join(resolved, os.path.basename(db_path)), resolved
 
 
-def _bind_port(host: str, port: int) -> int:
-    if port and port > 0:
-        return port
+def _bind_socket(host: str, port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind((host, 0))
-    chosen = sock.getsockname()[1]
-    sock.close()
-    return chosen
+    try:
+        sock.bind((host, port if port and port > 0 else 0))
+        sock.listen(2048)
+        sock.setblocking(False)
+        return sock
+    except Exception:
+        sock.close()
+        raise
 
 
 def _write_state_file(state_dir: Path, port: int, token: str) -> Path:
@@ -108,7 +110,8 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path, library_folder = resolve_startup_paths(db_path, library_folder)
 
-    chosen_port = _bind_port(host, port)
+    listener = _bind_socket(host, port)
+    chosen_port = listener.getsockname()[1]
     token = generate_token()
     _write_state_file(Path(state_dir), chosen_port, token)
 
@@ -137,7 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     config = uvicorn.Config(app, host=host, port=chosen_port, log_config=None)
     server = uvicorn.Server(config)
     app.state.request_shutdown = lambda: setattr(server, "should_exit", True)
-    server.run()
+    try:
+        server.run(sockets=[listener])
+    finally:
+        listener.close()
     return 0
 
 

@@ -178,6 +178,32 @@ describe('createServerLibraryHandlers', () => {
     })
   })
 
+  it('requires authorized renderer paths before forwarding file operations', async () => {
+    const { client, methods } = createClient()
+    const consumeFile = vi.fn((path: string) => `/approved${path}`)
+    const consumeDirectory = vi.fn((path: string) => `/approved${path}`)
+    const handlers = createServerLibraryHandlers({
+      serverClient: client,
+      consumeFile,
+      consumeDirectory
+    })
+
+    await handlers[IpcChannel.ImportAddFiles](['/tmp/paper.pdf'])
+    await handlers[IpcChannel.ImportFromJson]('/tmp/data.json')
+    await handlers[IpcChannel.LibrarySwitch]('/tmp/library')
+
+    expect(consumeFile).toHaveBeenCalledWith('/tmp/paper.pdf', ['.pdf'])
+    expect(consumeFile).toHaveBeenCalledWith('/tmp/data.json', ['.json'])
+    expect(consumeDirectory).toHaveBeenCalledWith('/tmp/library')
+    expect(methods.get('importFiles')).toHaveBeenCalledWith({
+      paths: ['/approved/tmp/paper.pdf']
+    })
+    expect(methods.get('importJson')).toHaveBeenCalledWith('/approved/tmp/data.json')
+    expect(methods.get('librarySwitch')).toHaveBeenCalledWith({
+      path: '/approved/tmp/library'
+    })
+  })
+
   it('forwards the built-in PDF reader flag to the server', async () => {
     const { client, methods } = createClient()
     const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<

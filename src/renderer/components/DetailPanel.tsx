@@ -230,6 +230,12 @@ function InlineField({
     }
   }, [editing])
 
+  useEffect(() => {
+    return () => {
+      if (statusRef.current) clearTimeout(statusRef.current)
+    }
+  }, [])
+
   const save = useCallback(async () => {
     const trimmed = text.trim()
     const current = (value ?? '')

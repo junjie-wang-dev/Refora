@@ -189,10 +189,23 @@ describe('preload IPC bridge', () => {
     })
   })
 
-  it('delegates local file path resolution to Electron webUtils', () => {
+  it('delegates local file path resolution to Electron webUtils and authorizes it in main', async () => {
     const file = { name: 'paper.pdf' }
-    expect(api.getPathForFile(file)).toBe('/tmp/paper.pdf')
+    electronMocks.invoke.mockResolvedValueOnce({ ok: true, data: '/private/tmp/paper.pdf' })
+
+    await expect(api.getPathForFile(file)).resolves.toBe('/private/tmp/paper.pdf')
     expect(electronMocks.getPathForFile).toHaveBeenCalledWith(file)
+    expect(electronMocks.invoke).toHaveBeenCalledWith(
+      IpcChannel.FileAuthorizeDropped,
+      '/tmp/paper.pdf'
+    )
+  })
+
+  it('does not invoke main when Electron cannot resolve a dropped file path', async () => {
+    electronMocks.getPathForFile.mockReturnValueOnce('')
+
+    await expect(api.getPathForFile({})).resolves.toBe('')
+    expect(electronMocks.invoke).not.toHaveBeenCalled()
   })
 
   it('builds encoded read-only preview URLs without invoking IPC', () => {

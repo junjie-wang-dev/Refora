@@ -232,7 +232,7 @@ const noop = async () => undefined
     }),
   },
 
-  getPathForFile: (_file: unknown) => '',
+  getPathForFile: async (_file: unknown) => '',
 
   export: {
     toJson: async () => '',

@@ -407,7 +407,7 @@ export default function DocumentList({
     const paths: string[] = []
     for (let i = 0; i < files.length; i++) {
       try {
-        const p = api.getPathForFile(files[i] as File)
+        const p = await api.getPathForFile(files[i] as File)
         if (p && p.toLowerCase().endsWith('.pdf')) {
           paths.push(p)
         }

@@ -985,7 +985,7 @@ export interface ReforaApi {
   library: {
     switch(path: string): Promise<LibrarySwitchResult>
   }
-  getPathForFile(file: unknown): string
+  getPathForFile(file: unknown): Promise<string>
   export: {
     toJson(): Promise<string>
     toBibtex(ids: string[]): Promise<string>

@@ -12,6 +12,10 @@ import type {
 import type { OcrJob, OcrProfile } from '../../../shared/mineru-types'
 import type { ServerClient } from '../client'
 
+export interface ServerWorkspaceHandlerDeps {
+  consumeFile?: (path: string, extensions?: readonly string[]) => string
+}
+
 function errorResult(error: unknown): Result<never> {
   if (error && typeof error === 'object' && 'code' in error && 'message' in error) {
     const { code, message } = error as { code: unknown; message: unknown }
@@ -33,7 +37,10 @@ async function wrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-export function createServerWorkspaceHandlers(serverClient: ServerClient) {
+export function createServerWorkspaceHandlers(
+  serverClient: ServerClient,
+  { consumeFile }: ServerWorkspaceHandlerDeps = {}
+) {
   const { http } = serverClient
 
   async function workspaceForItem(itemId: string): Promise<string> {
@@ -104,7 +111,10 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
       workspaceId: string,
       paths: string[],
       placement?: WorkspaceItemPlacement
-    ) => wrap(() => http.workspaceAssetsAddFiles(workspaceId, { paths, placement })),
+    ) => wrap(() => http.workspaceAssetsAddFiles(workspaceId, {
+      paths: consumeFile ? paths.map((path) => consumeFile(path)) : paths,
+      placement
+    })),
     [IpcChannel.WorkspaceAssetsTextPreview]: (assetId: string) =>
       wrap(async () => http.workspaceAssetPreview(await workspaceForAsset(assetId), assetId)),
     [IpcChannel.WorkspaceAssetsOpen]: (assetId: string) =>
@@ -124,7 +134,10 @@ export function createServerWorkspaceHandlers(serverClient: ServerClient) {
       workspaceId: string,
       paths: string[],
       placement?: WorkspaceItemPlacement
-    ) => wrap(() => http.workspaceFilesAdd(workspaceId, { paths, placement })),
+    ) => wrap(() => http.workspaceFilesAdd(workspaceId, {
+      paths: consumeFile ? paths.map((path) => consumeFile(path)) : paths,
+      placement
+    })),
 
     [IpcChannel.WorkspaceCanvasGet]: (workspaceId: string) =>
       wrap(async () => (await http.workspaceCanvasGet(workspaceId)) as WorkspaceCanvasViewport),

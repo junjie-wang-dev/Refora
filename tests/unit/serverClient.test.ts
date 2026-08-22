@@ -92,6 +92,7 @@ function makeFetchSpy(responder: (req: CapturedRequest) => Response): {
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
+  static deferClose = false
   static OPEN = 1
   static CLOSED = 3
   static CONNECTING = 0
@@ -127,8 +128,16 @@ class FakeWebSocket {
   }
 
   close(): void {
-    this.readyState = FakeWebSocket.CLOSED
-    this.emit('close', {})
+    const finish = () => {
+      this.readyState = FakeWebSocket.CLOSED
+      this.emit('close', {})
+    }
+    if (FakeWebSocket.deferClose) {
+      this.readyState = FakeWebSocket.CLOSING
+      queueMicrotask(finish)
+    } else {
+      finish()
+    }
   }
 
   emit(type: string, event: { data?: unknown }): void {
@@ -156,6 +165,7 @@ describe('serverClient', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     FakeWebSocket.instances = []
+    FakeWebSocket.deferClose = false
     lifecycle = makeLifecycle()
     nativeRpc = makeNativeRpc()
   })
@@ -715,6 +725,7 @@ describe('serverClient', () => {
 
     it('does not reconnect after manual disconnect', async () => {
       vi.useFakeTimers()
+      FakeWebSocket.deferClose = true
       const client = createServerClient(lifecycle, nativeRpc, {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
         wsReconnectMaxAttempts: 3
@@ -726,8 +737,52 @@ describe('serverClient', () => {
       await connectPromise
 
       client.ws.disconnect()
+      await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(5_000)
       expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+
+    it('cancels a pending reconnect after manual disconnect', async () => {
+      vi.useFakeTimers()
+      const client = createServerClient(lifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        wsReconnectMaxAttempts: 3
+      })
+      const connectPromise = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      FakeWebSocket.instances[0].open()
+      await connectPromise
+
+      FakeWebSocket.instances[0].close()
+      client.ws.disconnect()
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+
+    it('preserves an immediate reconnect when the canceled connection closes later', async () => {
+      vi.useFakeTimers()
+      FakeWebSocket.deferClose = true
+      const client = createServerClient(lifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        wsReconnectMaxAttempts: 3
+      })
+      const firstConnect = client.ws.connect()
+      const firstRejection = expect(firstConnect).rejects.toMatchObject({ code: 'ws_closed' })
+      await vi.advanceTimersByTimeAsync(0)
+
+      client.ws.disconnect()
+      const secondConnect = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      const duplicateConnect = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+
+      FakeWebSocket.instances[1].open()
+      await Promise.all([firstRejection, secondConnect, duplicateConnect])
+      expect(client.ws.isConnected()).toBe(true)
     })
   })
 })

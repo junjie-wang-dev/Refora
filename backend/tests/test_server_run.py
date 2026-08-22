@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 
-from refora_server.server.run import resolve_startup_paths
+import pytest
+
+from refora_server.server.run import _bind_socket, resolve_startup_paths
 
 
 def test_resolve_startup_paths_migrates_legacy_library_setting(tmp_path) -> None:
@@ -36,6 +39,34 @@ def test_resolve_startup_paths_keeps_explicit_library(tmp_path) -> None:
 
     assert db_path == str(tmp_path / "refora.db")
     assert library_folder == str(library)
+
+
+def test_resolve_startup_paths_canonicalizes_explicit_library(tmp_path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(library, target_is_directory=True)
+
+    _, library_folder = resolve_startup_paths(
+        str(alias / "refora.db"),
+        str(alias),
+    )
+
+    assert library_folder == str(library.resolve())
+
+
+def test_bind_socket_keeps_the_selected_port_reserved() -> None:
+    listener = _bind_socket("127.0.0.1", 0)
+    competing = None
+    try:
+        port = listener.getsockname()[1]
+        competing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        with pytest.raises(OSError):
+            competing.bind(("127.0.0.1", port))
+    finally:
+        if competing is not None:
+            competing.close()
+        listener.close()
 
 
 def test_resolve_startup_paths_ignores_missing_legacy_library(tmp_path) -> None:

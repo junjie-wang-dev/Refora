@@ -42,6 +42,7 @@ export const IpcChannel = {
   WatchToggle: 'watch:toggle',
 
   DialogOpenDirectory: 'dialog:openDirectory',
+  FileAuthorizeDropped: 'file:authorizeDropped',
 
   LibrarySwitch: 'library:switch',
 

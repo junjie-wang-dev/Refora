@@ -4,6 +4,8 @@ import type { ServerClient } from '../client'
 
 export interface ServerAppHandlerDeps {
   setThemeSource: (theme: ThemeMode) => void
+  authorizeFile?: (path: string) => string
+  authorizeDirectory?: (path: string) => string
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -25,7 +27,7 @@ async function forward<T>(request: () => Promise<T>): Promise<Result<T>> {
 
 export function createServerAppHandlers(
   serverClient: ServerClient,
-  { setThemeSource }: ServerAppHandlerDeps
+  { setThemeSource, authorizeFile, authorizeDirectory }: ServerAppHandlerDeps
 ) {
   const { http } = serverClient
 
@@ -35,8 +37,11 @@ export function createServerAppHandlers(
     [IpcChannel.DialogOpenDirectory]: () =>
       forward(async () => {
         const result = await http.dialogOpenDirectory('Select Folder')
-        return result.canceled ? null : result.path
+        if (result.canceled || !result.path) return null
+        return authorizeDirectory ? authorizeDirectory(result.path) : result.path
       }),
+    [IpcChannel.FileAuthorizeDropped]: (path: string) =>
+      forward(async () => authorizeFile ? authorizeFile(path) : path),
     [IpcChannel.AppearanceSetThemeSource]: (theme: ThemeMode) =>
       forward(async () => {
         if (theme !== 'system' && theme !== 'dark' && theme !== 'light') {

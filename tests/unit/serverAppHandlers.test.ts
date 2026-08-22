@@ -81,4 +81,30 @@ describe('createServerAppHandlers', () => {
       error: { code: 'native_unavailable', message: 'Native unavailable' }
     })
   })
+
+  it('registers dropped files and selected directories before returning paths', async () => {
+    const http = {
+      appBootstrap: vi.fn(),
+      globalSearch: vi.fn(),
+      dialogOpenDirectory: vi.fn().mockResolvedValue({ canceled: false, path: '/tmp/library' })
+    }
+    const authorizeFile = vi.fn(() => '/private/tmp/paper.pdf')
+    const authorizeDirectory = vi.fn(() => '/private/tmp/library')
+    const handlers = createServerAppHandlers(clientWith(http), {
+      setThemeSource: vi.fn(),
+      authorizeFile,
+      authorizeDirectory
+    })
+
+    await expect(handlers[IpcChannel.FileAuthorizeDropped]('/tmp/paper.pdf')).resolves.toEqual({
+      ok: true,
+      data: '/private/tmp/paper.pdf'
+    })
+    await expect(handlers[IpcChannel.DialogOpenDirectory]()).resolves.toEqual({
+      ok: true,
+      data: '/private/tmp/library'
+    })
+    expect(authorizeFile).toHaveBeenCalledWith('/tmp/paper.pdf')
+    expect(authorizeDirectory).toHaveBeenCalledWith('/tmp/library')
+  })
 })

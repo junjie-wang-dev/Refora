@@ -46,6 +46,18 @@ def test_isInsideLibrary_resolves_relative():
     assert isInsideLibrary("/lib/sub/../doc.pdf", "/lib")
 
 
+def test_isInsideLibrary_resolves_symlinked_ancestors(tmp_path):
+    real_library = tmp_path / "real-library"
+    real_library.mkdir()
+    alias = tmp_path / "library-alias"
+    alias.symlink_to(real_library, target_is_directory=True)
+    document = real_library / "doc.pdf"
+    document.write_bytes(b"pdf")
+
+    assert isInsideLibrary(str(document), str(alias))
+    assert toLibraryRelative(str(document), str(alias)) == "doc.pdf"
+
+
 def test_isInsideLibrary_case_insensitive():
     if not CASE_INSENSITIVE:
         pytest.skip("case-sensitive platform")
