@@ -39,6 +39,8 @@ def repos():
 
 
 def test_search_parses_duckduckgo_html_and_filters_domains(repos) -> None:
+    repos["webSearchConfig"]["update"]({"provider": "ddgs"})
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == httpx.URL(
             "https://html.duckduckgo.com/html/?q=neural+retrieval+%28site%3Aexample.com%29&kl=wt-wt&kp=-1"
@@ -188,6 +190,8 @@ async def test_async_search_decrypts_on_the_server_loop_and_cancels_http(
 
 
 def test_test_returns_a_single_probe_result(repos) -> None:
+    repos["webSearchConfig"]["update"]({"provider": "ddgs"})
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["q"] == "configured probe"
         return httpx.Response(200, text=DDG_HTML, request=request)

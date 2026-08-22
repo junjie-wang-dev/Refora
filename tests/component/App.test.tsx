@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
     selectedIds: [] as string[],
     listMode: { mode: 'all' } as { mode: string },
     init: vi.fn(),
-    destroy: vi.fn()
+    destroy: vi.fn(),
+    showToast: vi.fn()
   },
   workspaceState: {
     activeWorkspaceId: 'ws-1' as string | null,
@@ -49,6 +50,12 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key
   })
+}))
+
+vi.mock('@renderer/i18n', () => ({
+  default: {
+    t: (key: string) => key
+  }
 }))
 
 vi.mock('antd', () => ({
@@ -236,7 +243,56 @@ describe('App root layout', () => {
   afterEach(() => {
     cleanup()
     useChatDraftStore.setState({ pending: null })
+    vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('does not persist layout defaults before saved settings hydrate', async () => {
+    vi.useFakeTimers()
+    let release: () => void = () => undefined
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mocks.settingsGet.mockImplementation(async (_key: string, fallback: unknown) => {
+      await pending
+      return fallback
+    })
+
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+      await Promise.resolve()
+    })
+    expect(mocks.settingsSet).not.toHaveBeenCalled()
+
+    await act(async () => {
+      release()
+      await pending
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+    expect(mocks.settingsSet).toHaveBeenCalledTimes(5)
+  })
+
+  it('does not overwrite settings when hydration fails', async () => {
+    vi.useFakeTimers()
+    mocks.settingsGet.mockRejectedValue(new Error('unavailable'))
+
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      vi.advanceTimersByTime(1000)
+    })
+    expect(mocks.settingsSet).not.toHaveBeenCalled()
+    expect(mocks.documentState.showToast).toHaveBeenCalledWith(
+      'common.settingsLoadFailed'
+    )
   })
 
   it('keeps the sidebar outside the search bar and all main panels below it', async () => {

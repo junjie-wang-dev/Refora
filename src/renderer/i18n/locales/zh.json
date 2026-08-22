@@ -592,7 +592,9 @@
     "copyCode": "复制代码",
     "movedToTrash": "已移至废纸篓（{{count}}）",
     "deleteFailed": "删除文献失败",
-    "close": "关闭"
+    "close": "关闭",
+    "settingsLoadFailed": "无法加载已保存的布局设置",
+    "settingsSaveFailed": "无法保存布局设置"
   },
   "dialog": {
     "duplicateWarning": "已存在相同内容的文件: {{name}}。跳过此文件？",

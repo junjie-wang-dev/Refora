@@ -52,6 +52,13 @@ export interface ListFilter {
   mode: ListMode
   categoryId?: string
   sort?: { field: SortField; dir: 'asc' | 'desc' }
+  limit?: number
+  offset?: number
+}
+
+export interface PageRequest {
+  limit: number
+  offset: number
 }
 
 export interface DocumentCounts {
@@ -895,7 +902,7 @@ export interface ReforaApi {
   documents: {
     list(filter: ListFilter): Promise<Document[]>
     counts(): Promise<DocumentCounts>
-    search(q: string): Promise<SearchResult>
+    search(q: string, page?: PageRequest): Promise<SearchResult>
     get(id: string): Promise<Document | null>
     update(id: string, patch: DocumentPatch): Promise<Document>
     setStarred(id: string, value: boolean): Promise<void>

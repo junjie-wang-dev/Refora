@@ -7,6 +7,7 @@ from typing import Any
 
 class RiskClass(str, Enum):
     READ = "read"
+    NETWORK_READ = "network_read"
     WRITE_LOCAL = "write_local"
     EXEC = "exec"
     EXTERNAL = "external"
@@ -22,12 +23,12 @@ _BASE: dict[str, RiskClass] = {
     "list_workspace_context": RiskClass.READ,
     "read_workspace_item": RiskClass.READ,
     "find_related_papers": RiskClass.READ,
-    "search_arxiv": RiskClass.READ,
-    "get_arxiv_paper": RiskClass.READ,
-    "get_related_academic_papers": RiskClass.READ,
-    "explore_research_frontier": RiskClass.READ,
-    "web_search": RiskClass.READ,
-    "web_fetch": RiskClass.READ,
+    "search_arxiv": RiskClass.NETWORK_READ,
+    "get_arxiv_paper": RiskClass.NETWORK_READ,
+    "get_related_academic_papers": RiskClass.NETWORK_READ,
+    "explore_research_frontier": RiskClass.NETWORK_READ,
+    "web_search": RiskClass.NETWORK_READ,
+    "web_fetch": RiskClass.NETWORK_READ,
     "open_paper": RiskClass.READ,
     "write_todos": RiskClass.READ,
     "ls": RiskClass.READ,

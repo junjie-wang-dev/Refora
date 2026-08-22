@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FilePlus, FolderOpen, NotePencil, Sticker } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -12,8 +12,9 @@ import WorkspaceMarkdownView, {
 } from './WorkspaceMarkdownView'
 import WorkspaceReaderTabs, { type WorkspaceReaderTab } from './WorkspaceReaderTabs'
 import { aiSummaryMarkdown } from '../../utils/workspaceCardMarkdown'
-import PdfReader from '../PdfReader'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
+
+const PdfReader = lazy(() => import('../PdfReader'))
 
 type ActiveMarkdownCard = WorkspaceMarkdownCard & { mode: WorkspaceMarkdownCardMode }
 
@@ -368,7 +369,9 @@ export default function WorkspacePanel() {
         ) : null}
         {activePdfDocumentId ? (
           <div className={panelView === 'pdf' ? 'h-full' : 'hidden'}>
-            <PdfReader embedded />
+            <Suspense fallback={<div className="h-full bg-background" />}>
+              <PdfReader embedded />
+            </Suspense>
           </div>
         ) : null}
       </div>

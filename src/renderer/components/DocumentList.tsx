@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useRef, useState, useCallback, type ReactNode } from 'react'
+import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { CaretUp, CaretDown, Star, Warning, Lightning, Check, FileText, FolderOpen, Copy, ArrowClockwise, Trash, MagnifyingGlass, TreeStructure, Plus, FilePlus } from '@phosphor-icons/react'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
@@ -199,6 +199,8 @@ export default function DocumentList({
   const categories = useDocumentStore((s) => s.categories)
   const createCategory = useDocumentStore((s) => s.createCategory)
   const fetchDocuments = useDocumentStore((s) => s.fetchDocuments)
+  const loadMoreDocuments = useDocumentStore((s) => s.loadMoreDocuments)
+  const loadMoreSearchResults = useDocumentStore((s) => s.loadMoreSearchResults)
 
   const parentRef = useRef<HTMLDivElement>(null)
 
@@ -223,6 +225,25 @@ export default function DocumentList({
     estimateSize: () => rowHeight,
     overscan: 5
   })
+  const virtualItems = virtualizer.getVirtualItems()
+  const lastVirtualIndex = virtualItems.length > 0
+    ? virtualItems[virtualItems.length - 1].index
+    : -1
+
+  useEffect(() => {
+    if (displayDocs.length === 0 || lastVirtualIndex < displayDocs.length - 10) return
+    if (isSearching) {
+      void loadMoreSearchResults?.()
+    } else {
+      void loadMoreDocuments?.()
+    }
+  }, [
+    displayDocs.length,
+    isSearching,
+    lastVirtualIndex,
+    loadMoreDocuments,
+    loadMoreSearchResults
+  ])
 
   const toggleColumn = useCallback(
     (id: ColumnId) => {
@@ -519,7 +540,7 @@ export default function DocumentList({
               position: 'relative'
             }}
           >
-            {virtualizer.getVirtualItems().map((vr) => {
+            {virtualItems.map((vr) => {
               const doc = displayDocs[vr.index]
               const isSelected = selectedIds.includes(doc.id)
               const isMissing = doc.fileMissing === 1

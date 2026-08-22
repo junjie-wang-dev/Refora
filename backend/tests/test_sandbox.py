@@ -13,6 +13,8 @@ from refora_server.services.sandbox import (
     SandboxExecutor,
     SandboxOptions,
     _build_preexec,
+    _process_group_rss_bytes,
+    _run_installer,
     _sandbox_profile,
     execute,
 )
@@ -26,10 +28,27 @@ def sandbox_options(tmp_path: Path) -> SandboxOptions:
         cpu_seconds=5,
     )
     probe = execute("printf probe", options)
-    if probe["error"] == "sandbox_unavailable" or "sandbox_apply: Operation not permitted" in probe["stderr"]:
+    if (
+        probe["error"] in {"sandbox_unavailable", "memory_monitor_unavailable"}
+        or "sandbox_apply: Operation not permitted" in probe["stderr"]
+    ):
         pytest.skip("sandbox-exec cannot be nested in this test environment")
     assert probe["status"] == "ok", probe
     return options
+
+
+def make_sandbox_wrapper(root: Path) -> Path:
+    wrapper = root / "sandbox-exec"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" != -p ]; then exit 64; fi\n"
+        "printf '%s' \"$2\" > \"$REFORA_OUTPUTS/installer-profile.txt\"\n"
+        "shift 2\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def test_profile_is_deny_by_default_and_has_no_broad_user_or_temp_access(tmp_path: Path):
@@ -69,6 +88,19 @@ def test_preexec_limits_additional_processes_with_finite_soft_limit(monkeypatch)
     _build_preexec(30, 512, 16)()
 
     assert (resource.RLIMIT_NPROC, (556, 4000)) in changes
+
+
+def test_process_group_memory_sums_resident_bytes(monkeypatch):
+    monkeypatch.setattr(
+        "refora_server.services.sandbox.subprocess.run",
+        lambda *args, **kwargs: type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "42 100\n99 200\n42 300\ninvalid\n"},
+        )(),
+    )
+
+    assert _process_group_rss_bytes(42) == 400 * 1024
 
 
 def test_execute_normal_output_and_status(sandbox_options: SandboxOptions):
@@ -118,6 +150,30 @@ def test_execute_cpu_limit_terminates_busy_loop(tmp_path: Path, sandbox_options:
         }
     )
     result = execute("while :; do :; done", options)
+    assert result["status"] == "resource_limit"
+    assert result["timedOut"] is False
+
+
+def test_execute_memory_monitor_terminates_process_group(
+    tmp_path: Path,
+    sandbox_options: SandboxOptions,
+    monkeypatch,
+):
+    options = SandboxOptions(
+        **{
+            **sandbox_options.__dict__,
+            "sandbox_root": str(tmp_path / "memory-sandbox"),
+            "timeout_seconds": 10,
+            "memory_mb": 32,
+        }
+    )
+    monkeypatch.setattr(
+        "refora_server.services.sandbox._memory_limit_reached",
+        lambda process_group_id, memory_mb: True,
+    )
+
+    result = execute("sleep 30", options)
+
     assert result["status"] == "resource_limit"
     assert result["timedOut"] is False
 
@@ -321,9 +377,49 @@ def test_package_install_requires_exact_versions(tmp_path: Path):
         )
 
 
+def test_runtime_installer_memory_monitor_terminates_process_group(
+    tmp_path: Path,
+    monkeypatch,
+):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    root = tmp_path / "sandbox"
+    outputs = root / "outputs"
+    outputs.mkdir(parents=True)
+    monkeypatch.setattr(
+        "refora_server.services.sandbox._memory_limit_reached",
+        lambda process_group_id, memory_mb: True,
+    )
+
+    result = _run_installer(
+        ["/bin/sleep", "30"],
+        cwd=root,
+        env={
+            "HOME": str(root),
+            "PATH": "/usr/bin:/bin",
+            "REFORA_OUTPUTS": str(outputs),
+        },
+        timeout_seconds=10,
+        max_output_bytes=4096,
+        cancel_event=threading.Event(),
+        sandbox_executable=str(make_sandbox_wrapper(tools)),
+        cpu_seconds=5,
+        memory_mb=32,
+        file_size_mb=16,
+    )
+
+    assert result["status"] == "resource_limit"
+    assert result["timedOut"] is False
+
+
 def test_python_package_install_disables_source_builds_and_uses_sandbox_environment(
     tmp_path: Path,
+    monkeypatch,
 ):
+    monkeypatch.setattr(
+        "refora_server.services.sandbox._memory_limit_reached",
+        lambda process_group_id, memory_mb: False,
+    )
     tools = tmp_path / "tools"
     tools.mkdir()
     python = tools / "python"
@@ -345,6 +441,7 @@ def test_python_package_install_disables_source_builds_and_uses_sandbox_environm
     executor = SandboxExecutor(
         SandboxOptions(
             sandbox_root=str(root),
+            sandbox_executable=str(make_sandbox_wrapper(tools)),
             python_executable=str(python),
             uv_executable=str(uv),
             node_executable=str(tmp_path / "missing-node"),
@@ -362,9 +459,20 @@ def test_python_package_install_disables_source_builds_and_uses_sandbox_environm
     assert "--no-config pip install" in log
     assert "--only-binary :all: requests==2.32.3" in log
     assert str(root / "env" / "python") in log
+    profile = (root / "outputs" / "installer-profile.txt").read_text(encoding="utf-8")
+    assert "(deny default)" in profile
+    assert "(allow network-outbound)" in profile
+    assert f'(allow file-write* (subpath "{root.resolve()}"))' in profile
 
 
-def test_node_package_install_is_exact_and_disables_lifecycle_scripts(tmp_path: Path):
+def test_node_package_install_is_exact_and_disables_lifecycle_scripts(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "refora_server.services.sandbox._memory_limit_reached",
+        lambda process_group_id, memory_mb: False,
+    )
     tools = tmp_path / "tools"
     tools.mkdir()
     node = tools / "node"
@@ -380,6 +488,7 @@ def test_node_package_install_is_exact_and_disables_lifecycle_scripts(tmp_path: 
     executor = SandboxExecutor(
         SandboxOptions(
             sandbox_root=str(root),
+            sandbox_executable=str(make_sandbox_wrapper(tools)),
             python_executable=str(tmp_path / "missing-python"),
             uv_executable=str(tmp_path / "missing-uv"),
             node_executable=str(node),

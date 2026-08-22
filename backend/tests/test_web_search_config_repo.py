@@ -23,9 +23,9 @@ def repo(db: sqlite3.Connection):
     return createWebSearchConfigRepository(db)
 
 
-def test_get_returns_default_ddgs_after_migration(repo) -> None:
+def test_get_returns_disabled_default_after_migration(repo) -> None:
     row = repo["get"]()
-    assert row["provider"] == "ddgs"
+    assert row["provider"] == "disabled"
     assert row["tavilyApiKeyEnc"] is None
     assert row["braveApiKeyEnc"] is None
     assert row["updatedAt"] == 0
@@ -37,7 +37,7 @@ def test_default_seed_row_exists_in_db(db: sqlite3.Connection) -> None:
         "FROM web_search_config WHERE id = 1"
     ).fetchone()
     assert raw["id"] == 1
-    assert raw["provider"] == "ddgs"
+    assert raw["provider"] == "disabled"
     assert raw["tavilyApiKeyEnc"] is None
     assert raw["braveApiKeyEnc"] is None
     assert raw["updatedAt"] == 0
@@ -58,7 +58,7 @@ def test_update_tavily_api_key_bytes_roundtrip(repo, db: sqlite3.Connection) -> 
     updated = repo["update"]({"tavilyApiKeyEnc": key})
     assert updated["tavilyApiKeyEnc"] == key
     assert updated["braveApiKeyEnc"] is None
-    assert updated["provider"] == "ddgs"
+    assert updated["provider"] == "disabled"
 
     raw = db.execute(
         "SELECT tavilyApiKeyEnc FROM web_search_config WHERE id = 1"
@@ -129,4 +129,40 @@ def test_registered_in_repository_factory() -> None:
 
     repos = create_repositories(conn)
     assert "webSearchConfig" in repos
-    assert repos["webSearchConfig"]["get"]()["provider"] == "ddgs"
+    assert repos["webSearchConfig"]["get"]()["provider"] == "disabled"
+
+
+def test_opt_in_migration_preserves_explicit_ddgs_selection() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    run_migrations(_SqliteAdapter(conn))
+    conn.execute(
+        "UPDATE web_search_config SET provider = 'ddgs', updatedAt = 123 WHERE id = 1"
+    )
+    conn.execute("PRAGMA user_version = 34")
+
+    run_migrations(_SqliteAdapter(conn))
+
+    row = conn.execute(
+        "SELECT provider, updatedAt FROM web_search_config WHERE id = 1"
+    ).fetchone()
+    assert row["provider"] == "ddgs"
+    assert row["updatedAt"] == 123
+
+
+def test_opt_in_migration_disables_only_the_automatic_ddgs_default() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    run_migrations(_SqliteAdapter(conn))
+    conn.execute(
+        "UPDATE web_search_config SET provider = 'ddgs', updatedAt = 0 WHERE id = 1"
+    )
+    conn.execute("PRAGMA user_version = 34")
+
+    run_migrations(_SqliteAdapter(conn))
+
+    row = conn.execute(
+        "SELECT provider, updatedAt FROM web_search_config WHERE id = 1"
+    ).fetchone()
+    assert row["provider"] == "disabled"
+    assert row["updatedAt"] == 0

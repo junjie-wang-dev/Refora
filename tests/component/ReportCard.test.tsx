@@ -571,7 +571,7 @@ describe('WorkspacePanel tab header', () => {
 
     render(<WorkspacePanel />)
 
-    expect(screen.getByRole('button', { name: 'PDF reader' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'PDF reader' })).toBeInTheDocument()
     expect(screen.getByText('Board').parentElement).toHaveClass('hidden')
     expect(screen.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: 'Research' })).toHaveAttribute('aria-selected', 'false')

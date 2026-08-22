@@ -10,6 +10,7 @@ import type {
   ListFilter,
   ListModelsRequest,
   ListModelsResult,
+  PageRequest,
   PdfAnnotation,
   PdfRangeChunk,
   Result
@@ -63,10 +64,15 @@ export function createServerLibraryHandlers({
           : {}),
         ...(filter.sort
           ? { sortField: filter.sort.field, sortDir: filter.sort.dir }
-          : {})
+          : {}),
+        ...(filter.limit === undefined ? {} : { limit: filter.limit }),
+        ...(filter.offset === undefined ? {} : { offset: filter.offset })
       })),
     [IpcChannel.DocumentsCount]: () => forward(() => http.documentsCount()),
-    [IpcChannel.DocumentsSearch]: (query: string) => forward(() => http.documentsSearch(query)),
+    [IpcChannel.DocumentsSearch]: (query: string, page?: PageRequest) =>
+      forward(() => page
+        ? http.documentsSearch(query, page)
+        : http.documentsSearch(query)),
     [IpcChannel.DocumentsGet]: (documentId: string) => forward(() => http.documentsGet(documentId)),
     [IpcChannel.DocumentsUpdate]: (documentId: string, patch: DocumentPatch) =>
       forward(() => http.documentsUpdate(documentId, patch)),

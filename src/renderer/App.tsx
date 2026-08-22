@@ -24,6 +24,7 @@ import { useOcrReaderStore } from './store/ocrReaderStore'
 import { useChatDraftStore } from './store/chatDraftStore'
 import { usePdfReaderStore } from './store/pdfReaderStore'
 import { api } from './ipc'
+import i18n from './i18n'
 import type { ListColumnState } from '../shared/ipc-types'
 
 const SIDEBAR_MIN = 180
@@ -101,6 +102,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const [documentListCompactWidth, setDocumentListCompactWidth] = useState(DOC_LIST_COMPACT_DEFAULT)
   const [documentListCompact, setDocumentListCompact] = useState(false)
   const [documentListResizeOrigin, setDocumentListResizeOrigin] = useState<boolean | null>(null)
+  const [settingsHydrated, setSettingsHydrated] = useState(false)
   const documentListCompactWidthRef = useRef(DOC_LIST_COMPACT_DEFAULT)
   const documentListDragWidthRef = useRef(DOC_LIST_COMPACT_DEFAULT)
   const documentListCompactRef = useRef(false)
@@ -203,6 +205,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   }, [])
 
   useEffect(() => {
+    let active = true
     void Promise.all([
       api.settings.get<number>('sidebarWidth', SIDEBAR_DEFAULT),
       api.settings.get<number>('detailWidth', DETAIL_DEFAULT),
@@ -210,6 +213,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
       api.settings.get<number>('workspaceChatWidth', CHAT_DEFAULT),
       api.settings.get<number>('documentListCompactWidth', DOC_LIST_COMPACT_DEFAULT),
     ]).then(([s, d, w, c, compactWidth]) => {
+      if (!active) return
       setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, s)))
       const nextDetailWidth = Math.max(DETAIL_MIN, Math.min(DETAIL_MAX, d))
       detailWidthRef.current = nextDetailWidth
@@ -225,43 +229,60 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
       documentListCompactWidthRef.current = nextCompactWidth
       documentListDragWidthRef.current = nextCompactWidth
       setDocumentListCompactWidth(nextCompactWidth)
+      setSettingsHydrated(true)
+    }).catch(() => {
+      if (active) useDocumentStore.getState().showToast(i18n.t('common.settingsLoadFailed'))
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const persistSetting = useCallback((key: string, value: unknown) => {
+    void api.settings.set(key, value).catch(() => {
+      useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
     })
   }, [])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     const timer = setTimeout(() => {
-      void api.settings.set('sidebarWidth', sidebarWidth)
+      persistSetting('sidebarWidth', sidebarWidth)
     }, 500)
     return () => clearTimeout(timer)
-  }, [sidebarWidth])
+  }, [persistSetting, settingsHydrated, sidebarWidth])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     const timer = setTimeout(() => {
-      void api.settings.set('detailWidth', detailWidth)
+      persistSetting('detailWidth', detailWidth)
     }, 500)
     return () => clearTimeout(timer)
-  }, [detailWidth])
+  }, [detailWidth, persistSetting, settingsHydrated])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     const timer = setTimeout(() => {
-      void api.settings.set('workspaceWidth', workspaceWidth)
+      persistSetting('workspaceWidth', workspaceWidth)
     }, 500)
     return () => clearTimeout(timer)
-  }, [workspaceWidth])
+  }, [persistSetting, settingsHydrated, workspaceWidth])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     const timer = setTimeout(() => {
-      void api.settings.set('workspaceChatWidth', chatWidth)
+      persistSetting('workspaceChatWidth', chatWidth)
     }, 500)
     return () => clearTimeout(timer)
-  }, [chatWidth])
+  }, [chatWidth, persistSetting, settingsHydrated])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     const timer = setTimeout(() => {
-      void api.settings.set('documentListCompactWidth', documentListCompactWidth)
+      persistSetting('documentListCompactWidth', documentListCompactWidth)
     }, 500)
     return () => clearTimeout(timer)
-  }, [documentListCompactWidth])
+  }, [documentListCompactWidth, persistSetting, settingsHydrated])
 
   const collapseDocumentListAtWidth = useCallback((width: number) => {
     if (!Number.isFinite(width) || width <= 0 || width > DOC_LIST_COLLAPSE_THRESHOLD) return

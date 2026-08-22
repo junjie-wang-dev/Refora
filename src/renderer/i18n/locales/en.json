@@ -593,7 +593,9 @@
     "copyCode": "Copy code",
     "movedToTrash": "Moved to Trash ({{count}})",
     "deleteFailed": "Failed to delete document",
-    "close": "Close"
+    "close": "Close",
+    "settingsLoadFailed": "Failed to load saved layout settings",
+    "settingsSaveFailed": "Failed to save layout settings"
   },
   "dialog": {
     "duplicateWarning": "A file with identical content already exists: {{name}}. Skip this file?",

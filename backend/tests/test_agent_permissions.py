@@ -20,6 +20,36 @@ def test_interactive_mode_requires_approval_for_external_tools():
     assert decision.needs_user
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "search_arxiv",
+        "get_arxiv_paper",
+        "get_related_academic_papers",
+        "explore_research_frontier",
+        "web_search",
+        "web_fetch",
+    ],
+)
+def test_network_reads_require_approval_in_every_mode(tool_name):
+    for mode in Mode:
+        decision = PermissionEngine(mode=mode).evaluate(tool_name, {})
+        assert not decision.allowed
+        assert decision.needs_user
+        assert decision.reason == "network access requires approval"
+
+
+def test_network_read_can_be_allowed_for_the_session():
+    engine = PermissionEngine(mode=Mode.PLAN)
+    engine.allow_tool_for_session("web_search")
+
+    decision = engine.evaluate("web_search", {"query": "agents"})
+
+    assert decision.allowed
+    assert not decision.needs_user
+    assert decision.reason == "network access allowed for session"
+
+
 def test_plan_mode_rejects_local_writes():
     decision = PermissionEngine(mode=Mode.PLAN).evaluate(
         "generate_report",
@@ -114,12 +144,12 @@ def test_classify_refora_tools():
         "list_workspace_context": RiskClass.READ,
         "read_workspace_item": RiskClass.READ,
         "find_related_papers": RiskClass.READ,
-        "search_arxiv": RiskClass.READ,
-        "get_arxiv_paper": RiskClass.READ,
-        "get_related_academic_papers": RiskClass.READ,
-        "explore_research_frontier": RiskClass.READ,
-        "web_search": RiskClass.READ,
-        "web_fetch": RiskClass.READ,
+        "search_arxiv": RiskClass.NETWORK_READ,
+        "get_arxiv_paper": RiskClass.NETWORK_READ,
+        "get_related_academic_papers": RiskClass.NETWORK_READ,
+        "explore_research_frontier": RiskClass.NETWORK_READ,
+        "web_search": RiskClass.NETWORK_READ,
+        "web_fetch": RiskClass.NETWORK_READ,
         "open_paper": RiskClass.READ,
         "write_todos": RiskClass.READ,
         "ls": RiskClass.READ,

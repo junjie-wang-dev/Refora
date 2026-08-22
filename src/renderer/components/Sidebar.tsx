@@ -1,10 +1,9 @@
-import { useState, useCallback, useEffect } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FilePlus, FileArrowDown, ArrowLineLeft, ArrowLineRight, CircleNotch } from '@phosphor-icons/react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
-import SettingsModal, { type SettingsPage } from './SettingsModal'
-import ImportByIdentifierDialog from './ImportByIdentifierDialog'
+import type { SettingsPage } from './SettingsModal'
 import { Button as UiButton, IconTooltip } from './ui'
 import { api } from '../ipc'
 import { IpcChannel } from '../../shared/ipc-channels'
@@ -12,8 +11,11 @@ import SidebarSmartItems from './SidebarSmartItems'
 import SidebarWorkspaces from './SidebarWorkspaces'
 import SidebarCategories from './SidebarCategories'
 import SidebarFooter from './SidebarFooter'
-import AccountModal from './AccountModal'
 import { useSyncAccountStore } from '../store/syncAccountStore'
+
+const SettingsModal = lazy(() => import('./SettingsModal'))
+const AccountModal = lazy(() => import('./AccountModal'))
+const ImportByIdentifierDialog = lazy(() => import('./ImportByIdentifierDialog'))
 
 interface SidebarProps {
   collapsed: boolean
@@ -119,18 +121,26 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     return (
       <>
         {toolbar}
-        <SettingsModal
-          open={showSettings}
-          onClose={() => setShowSettings(false)}
-          initialPage={settingsPage}
-          onOpenAccount={openAccount}
-        />
-        <AccountModal
-          open={showAccount}
-          onClose={() => setShowAccount(false)}
-          onOpenSyncSettings={() => openSettings('sync')}
-        />
-        <ImportByIdentifierDialog open={showIdentifierImport} onClose={() => setShowIdentifierImport(false)} />
+        <Suspense fallback={null}>
+          {showSettings ? (
+            <SettingsModal
+              open
+              onClose={() => setShowSettings(false)}
+              initialPage={settingsPage}
+              onOpenAccount={openAccount}
+            />
+          ) : null}
+          {showAccount ? (
+            <AccountModal
+              open
+              onClose={() => setShowAccount(false)}
+              onOpenSyncSettings={() => openSettings('sync')}
+            />
+          ) : null}
+          {showIdentifierImport ? (
+            <ImportByIdentifierDialog open onClose={() => setShowIdentifierImport(false)} />
+          ) : null}
+        </Suspense>
       </>
     )
   }
@@ -212,18 +222,26 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       />
 
 
-      <SettingsModal
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        initialPage={settingsPage}
-        onOpenAccount={openAccount}
-      />
-      <AccountModal
-        open={showAccount}
-        onClose={() => setShowAccount(false)}
-        onOpenSyncSettings={() => openSettings('sync')}
-      />
-      <ImportByIdentifierDialog open={showIdentifierImport} onClose={() => setShowIdentifierImport(false)} />
+      <Suspense fallback={null}>
+        {showSettings ? (
+          <SettingsModal
+            open
+            onClose={() => setShowSettings(false)}
+            initialPage={settingsPage}
+            onOpenAccount={openAccount}
+          />
+        ) : null}
+        {showAccount ? (
+          <AccountModal
+            open
+            onClose={() => setShowAccount(false)}
+            onOpenSyncSettings={() => openSettings('sync')}
+          />
+        ) : null}
+        {showIdentifierImport ? (
+          <ImportByIdentifierDialog open onClose={() => setShowIdentifierImport(false)} />
+        ) : null}
+      </Suspense>
     </aside>
   )
 }

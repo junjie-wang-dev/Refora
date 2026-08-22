@@ -437,7 +437,11 @@ def create_library_router(deps: Any) -> APIRouter:
         if offset < 0:
             raise ValueError("offset must not be negative")
         if q.strip():
-            items = await _call(documents, "search", q.strip(), limit or 500)
+            if offset > 0:
+                return await _call(
+                    documents, "search", q.strip(), limit or 500, offset
+                )
+            return await _call(documents, "search", q.strip(), limit or 500)
         else:
             valid_modes = {"all", "recentlyRead", "recentlyAdded", "starred", "category"}
             if mode and mode not in valid_modes:
@@ -451,6 +455,8 @@ def create_library_router(deps: Any) -> APIRouter:
                 filter_ = {"mode": "starred"}
             elif starred and starred.lower() not in {"false", "0"}:
                 raise ValueError("starred must be true or false")
+            if starred.lower() in {"false", "0"}:
+                filter_["starred"] = False
             if sort_field or sort_dir:
                 if sort_field not in {
                     "title",
@@ -462,10 +468,11 @@ def create_library_router(deps: Any) -> APIRouter:
                 } or sort_dir not in {"asc", "desc"}:
                     raise ValueError("sortField and a valid sortDir are required")
                 filter_["sort"] = {"field": sort_field, "dir": sort_dir}
-            items = await _call(documents, "list", filter_)
-            if starred.lower() in {"false", "0"}:
-                items = [item for item in items if not item.get("starred")]
-        return items[offset:] if limit is None else items[offset : offset + limit]
+            if limit is not None:
+                filter_["limit"] = limit
+            if offset > 0:
+                filter_["offset"] = offset
+            return await _call(documents, "list", filter_)
 
     @router.get("/documents")
     async def list_documents(
@@ -492,8 +499,20 @@ def create_library_router(deps: Any) -> APIRouter:
         )
 
     @router.get("/documents/search")
-    async def search_documents(q: str = ""):
-        return await run(lambda: _call(documents, "search", _string({"q": q}, "q"), 500))
+    async def search_documents(q: str = "", limit: int = 500, offset: int = 0):
+        async def action():
+            if limit < 1 or limit > 500:
+                raise ValueError("limit must be between 1 and 500")
+            if offset < 0:
+                raise ValueError("offset must not be negative")
+            return await _call(
+                documents,
+                "search",
+                _string({"q": q}, "q"),
+                limit,
+                *([offset] if offset > 0 else []),
+            )
+        return await run(action)
 
     @router.get("/documents/{document_id}")
     async def get_document(document_id: str):
@@ -534,8 +553,11 @@ def create_library_router(deps: Any) -> APIRouter:
         return await run(action)
 
     async def trash_documents(ids: list[str]):
+        items = []
         for document_id in ids:
             item = await _call(documents, "get", document_id)
+            items.append(item)
+        for item in items:
             if isinstance(item, Mapping) and item.get("fileMissing") != 1:
                 path = item.get("filePath")
                 if (
@@ -550,17 +572,22 @@ def create_library_router(deps: Any) -> APIRouter:
                     except Exception:
                         pass
 
-            def _cleanup():
-                _method(documents, "delete")(document_id)
+        def _cleanup():
+            if callable(_value(documents, "bulkDelete")):
+                _method(documents, "bulkDelete")(ids)
+            else:
+                for document_id in ids:
+                    _method(documents, "delete")(document_id)
+            for document_id in ids:
                 if callable(_value(ai_summaries, "delete")):
                     _value(ai_summaries, "delete")(document_id)
                 if callable(_value(ai_reports, "removeDocFromSources")):
                     _value(ai_reports, "removeDocFromSources")(document_id)
 
-            if callable(transaction):
-                transaction(_cleanup)
-            else:
-                _cleanup()
+        if callable(transaction):
+            transaction(_cleanup)
+        else:
+            _cleanup()
         return {"ack": True}
 
     @router.delete("/documents/{document_id}")
@@ -578,7 +605,11 @@ def create_library_router(deps: Any) -> APIRouter:
             category_id = parsed.get("categoryId")
             if category_id is not None and not isinstance(category_id, str):
                 raise ValueError("categoryId must be a string or null")
-            for document_id in _ids(parsed):
+            document_ids = _ids(parsed)
+            if callable(_value(categories, "setForDocuments")):
+                await _call(categories, "setForDocuments", document_ids, category_id)
+                return {"ack": True}
+            for document_id in document_ids:
                 if category_id is None:
                     for category in await _call(categories, "listForDocument", document_id):
                         await _call(categories, "unassign", document_id, category["id"])
@@ -602,7 +633,11 @@ def create_library_router(deps: Any) -> APIRouter:
     @router.post("/documents/bulk-refresh-metadata")
     async def bulk_refresh_document_metadata(body: dict[str, Any]):
         async def action():
-            for document_id in _ids(_body_dict(body)):
+            document_ids = _ids(_body_dict(body))
+            if callable(_value(metadata, "bulkRefreshMetadata")):
+                await _call(metadata, "bulkRefreshMetadata", document_ids)
+                return {"ack": True}
+            for document_id in document_ids:
                 await refresh(document_id)
             return {"ack": True}
         return await run(action)
@@ -673,13 +708,24 @@ def create_library_router(deps: Any) -> APIRouter:
                 )
                 index += 1
             restored_path = shutil.move(source_path, str(destination))
-            await _call(
-                documents,
-                "updateFilePath",
-                document_id,
-                restored_path,
-                destination.name,
-            )
+            try:
+                await _call(
+                    documents,
+                    "updateFilePath",
+                    document_id,
+                    restored_path,
+                    destination.name,
+                )
+            except BaseException as update_error:
+                try:
+                    if os.path.exists(source_path):
+                        raise RuntimeError("Original PDF path was occupied during rollback")
+                    shutil.move(restored_path, source_path)
+                except BaseException as rollback_error:
+                    raise RuntimeError(
+                        f"Failed to update restored PDF and rollback the file move: {rollback_error}"
+                    ) from update_error
+                raise
             return await document(document_id)
         return await run(action)
 
@@ -975,7 +1021,12 @@ def create_library_router(deps: Any) -> APIRouter:
         return await run(action)
 
     async def assign_category(category_id: str, body: dict[str, Any], operation: str):
-        for document_id in _ids(_body_dict(body), "documentIds"):
+        document_ids = _ids(_body_dict(body), "documentIds")
+        bulk_operation = "assignMany" if operation == "assign" else "unassignMany"
+        if callable(_value(categories, bulk_operation)):
+            await _call(categories, bulk_operation, document_ids, category_id)
+            return {"ack": True}
+        for document_id in document_ids:
             await _call(categories, operation, document_id, category_id)
         return {"ack": True}
 

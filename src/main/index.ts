@@ -21,6 +21,8 @@ import type { SyncAccountService } from './services/syncAccount'
 import { parseAuthConfirmationDeepLink } from './services/authDeepLink'
 import type { SyncAuthConfirmation } from '../shared/sync-types'
 import { createSyncHandlers } from './sidecar/ipc/sync'
+import { createLibrarySwitcher } from './services/librarySwitcher'
+import { createShutdownHandler } from './services/shutdown'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -42,10 +44,10 @@ let syncAccountService: SyncAccountService | null = null
 let activeDbPath = ''
 let activeLibraryFolder = ''
 let win: BrowserWindow | null = null
-let isQuitting = false
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let syncHandlerChannels: string[] = []
 let menuLanguage: 'zh' | 'en' = 'en'
+let flushWindowState: () => Promise<void> = async () => undefined
 
 const MENU_COPY = {
   en: {
@@ -422,12 +424,12 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
   bw.on('blur', () => sendWindowFocus(false))
 
   let saveBoundsTimeout: ReturnType<typeof setTimeout> | null = null
-  const saveBounds = () => {
+  const saveBounds = async (): Promise<void> => {
     const assembly = serverAssembly
-    if (!assembly || isQuitting || bw.isDestroyed()) return
+    if (!assembly || bw.isDestroyed()) return
     try {
       const bounds = bw.getBounds()
-      void assembly.getClient().http.settingsUpdate({
+      await assembly.getClient().http.settingsUpdate({
         windowBounds: {
           x: bounds.x,
           y: bounds.y,
@@ -435,13 +437,12 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
           height: bounds.height,
           isMaximized: bw.isMaximized()
         }
-      }).catch((error) => {
-        logger.warn(`saveBounds: ${error instanceof Error ? error.message : String(error)}`)
       })
     } catch (e) {
       logger.warn(`saveBounds: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
+  flushWindowState = saveBounds
   const debouncedSaveBounds = () => {
     if (saveBoundsTimeout) clearTimeout(saveBoundsTimeout)
     saveBoundsTimeout = setTimeout(saveBounds, 500)
@@ -454,7 +455,10 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
       clearTimeout(saveBoundsTimeout)
       saveBoundsTimeout = null
     }
-    saveBounds()
+    void saveBounds()
+  })
+  bw.on('closed', () => {
+    if (flushWindowState === saveBounds) flushWindowState = async () => undefined
   })
 
   bw.webContents.setWindowOpenHandler(({ url }) => {
@@ -544,6 +548,7 @@ async function createPythonServerAssembly(
       }
     }),
     getWin: () => win,
+    nativeManagedRoots: [libraryFolder, app.getPath('userData')],
     switchLibraryFolder,
     onSettingUpdated: (key, value) => {
       if (key !== 'language' || (value !== 'zh' && value !== 'en')) return
@@ -572,80 +577,41 @@ async function createPythonServerAssembly(
   }
 }
 
-let librarySwitching = false
-
-async function switchLibraryFolderPython(folder: string): Promise<LibrarySwitchResult> {
-  if (librarySwitching) {
-    throw Object.assign(new Error('Library switch already in progress'), { code: 'busy' })
-  }
-  librarySwitching = true
-  const resolvedFolder = folder ? resolvePath(folder) : ''
-  if (!resolvedFolder || !existsSync(resolvedFolder) || !statSync(resolvedFolder).isDirectory()) {
-    librarySwitching = false
-    throw Object.assign(new Error(`Invalid library folder: ${resolvedFolder}`), {
-      code: 'invalid_library'
-    })
-  }
-  const previousAssembly = serverAssembly
-  const previousDbPath = activeDbPath
-  const previousLibraryFolder = activeLibraryFolder
-  const targetDbPath = dbPathForLibraryFolder(resolvedFolder)
-  const dbExisted = dbExistsInLibraryFolder(resolvedFolder)
-  let nextAssembly: ServerAssembly | null = null
-  try {
-    await previousAssembly?.stop()
-    nextAssembly = await createPythonServerAssembly(
-      targetDbPath,
-      resolvedFolder,
-      switchLibraryFolderPython
-    )
-    await nextAssembly.start()
-    let scanned = 0
-    let imported = 0
-    let skipped = 0
-    const errors: Array<{ path: string; message: string }> = []
-    if (!dbExisted) {
-      const result = await nextAssembly.getClient().http.importFolder({
-        path: resolvedFolder,
-        recursive: true
-      })
-      imported = result.added.length
-      skipped = result.skipped.length
-      scanned = imported + skipped + result.errors.length
-      errors.push(...result.errors)
+const switchLibraryFolderPython = createLibrarySwitcher({
+  resolveFolder: resolvePath,
+  isDirectory: (folder) => {
+    try {
+      return existsSync(folder) && statSync(folder).isDirectory()
+    } catch {
+      return false
     }
-    serverAssembly = nextAssembly
-    activeDbPath = targetDbPath
-    activeLibraryFolder = resolvedFolder
-    writeLibraryFolderPath(app.getPath('userData'), resolvedFolder)
-    const result: LibrarySwitchResult = {
-      libraryFolderPath: resolvedFolder,
-      dbExisted,
-      scanned,
-      imported,
-      skipped,
-      errors
-    }
+  },
+  dbPathForFolder: dbPathForLibraryFolder,
+  dbExistsInFolder: dbExistsInLibraryFolder,
+  createAssembly: createPythonServerAssembly,
+  getState: () => ({
+    assembly: serverAssembly,
+    dbPath: activeDbPath,
+    libraryFolder: activeLibraryFolder
+  }),
+  setState: (state) => {
+    serverAssembly = state.assembly
+    activeDbPath = state.dbPath
+    activeLibraryFolder = state.libraryFolder
+  },
+  persistLibraryFolder: (folder) => writeLibraryFolderPath(app.getPath('userData'), folder),
+  emitSwitched: (result) => {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IpcChannel.EventLibrarySwitched, result)
     }
-    return result
-  } catch (error) {
-    await nextAssembly?.stop().catch(() => undefined)
-    if (previousAssembly) {
-      const restored = await createPythonServerAssembly(
-        previousDbPath,
-        previousLibraryFolder,
-        switchLibraryFolderPython
-      )
-      await restored.start()
-      serverAssembly = restored
+  },
+  onRecoveryFailed: (error) => {
+    logger.error(`library recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.reload()
     }
-    throw error
-  } finally {
-    librarySwitching = false
   }
-}
+})
 
 void app.whenReady().then(async () => {
   isDev = !app.isPackaged
@@ -729,20 +695,28 @@ void app.whenReady().then(async () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
-  isQuitting = true
-  unregisterSyncAccountHandlers()
-  const assembly = serverAssembly
-  serverAssembly = null
-  void assembly?.stop()
-  pdfTextService?.destroy()
-  pdfTextService = null
-  serverPythonRuntime?.destroy()
-  serverPythonRuntime = null
-  if (win) {
+const handleBeforeQuit = createShutdownHandler({
+  flushWindowState: () => flushWindowState(),
+  unregisterHandlers: unregisterSyncAccountHandlers,
+  stopServices: async () => {
+    const assembly = serverAssembly
+    serverAssembly = null
+    await assembly?.stop()
+  },
+  destroyRuntimes: () => {
+    pdfTextService?.destroy()
+    pdfTextService = null
+    serverPythonRuntime?.destroy()
+    serverPythonRuntime = null
     win = null
+  },
+  quit: () => app.quit(),
+  reportError: (error) => {
+    logger.error(`shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
   }
 })
+
+app.on('before-quit', handleBeforeQuit)
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

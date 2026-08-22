@@ -30,6 +30,7 @@ def _make_watcher(
             "onNewPdf": on_new_pdf,
             "getLibraryFolder": lambda: library_folder,
             "pollInterval": poll_interval,
+            "observerPollInterval": poll_interval,
             "stabilityThresholdMs": stability_threshold_ms,
             "debounceMs": debounce_ms,
         },
@@ -398,6 +399,7 @@ def test_event_driven_debounces_burst(tmp_path):
             {
                 "onNewPdf": on_new_pdf,
                 "getLibraryFolder": lambda: "",
+                "observerPollInterval": 0.05,
                 "stabilityThresholdMs": 60,
                 "debounceMs": 120,
             },
@@ -477,6 +479,30 @@ def test_event_driven_remove_stops_observer(tmp_path):
 
         asyncio.run(run())
         assert captured == []
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
+def test_event_driven_can_restart_immediately_after_a_full_stop(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        repos = {"watchFolders": wf_repo}
+        svc = _make_watcher(repos)
+        svc["add"](str(tmp_path))
+
+        async def run():
+            for _ in range(5):
+                svc["startScanning"]()
+                await asyncio.sleep(0)
+                observers = tuple(svc["_state"]["observers"].values())
+                assert observers
+                svc["stopScanning"]()
+                assert svc["_state"]["observers"] == {}
+                assert all(not observer.is_alive() for observer in observers)
+
+        asyncio.run(run())
     finally:
         db.close()
 

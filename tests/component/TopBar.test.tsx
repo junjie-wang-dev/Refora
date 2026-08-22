@@ -89,7 +89,7 @@ describe('Sidebar actions', () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByTitle('tooltip.openSettings'))
-    expect(screen.getByRole('dialog', { name: 'settings' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'settings' })).toBeInTheDocument()
     expect(screen.queryByText('topbar.exportJson')).not.toBeInTheDocument()
     expect(screen.queryByText('topbar.exportBibtex')).not.toBeInTheDocument()
   })
@@ -139,7 +139,7 @@ describe('Sidebar actions', () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByLabelText('tooltip.importFromIdentifier'))
-    expect(screen.getByRole('dialog', { name: 'identifier import' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'identifier import' })).toBeInTheDocument()
   })
 
   it('calls api.import.addFiles when add file button is clicked', async () => {

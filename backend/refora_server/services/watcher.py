@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+import sys
 import threading
 from typing import Any, Awaitable, Callable, TypedDict
 
@@ -11,13 +12,17 @@ from refora_server.repositories.errors import RepoError
 
 try:
     from watchdog.events import FileSystemEventHandler
-    from watchdog.observers import Observer
+    from watchdog.observers import Observer as NativeObserver
+    from watchdog.observers.polling import PollingObserver
+
+    Observer = PollingObserver if sys.platform == "darwin" else NativeObserver
 
     _WATCHDOG_AVAILABLE = True
 except Exception:
     _WATCHDOG_AVAILABLE = False
     FileSystemEventHandler = object  # type: ignore[assignment, misc]
     Observer = None  # type: ignore[assignment, misc]
+    PollingObserver = None  # type: ignore[assignment, misc]
 
 
 def _isPdf(path: str) -> bool:
@@ -31,6 +36,7 @@ _AWAIT_WRITE_FINISH_MS = 2000
 _AWAIT_WRITE_POLL_MS = 100
 _DEBOUNCE_MS = 500
 _LIBRARY_RECONCILE_INTERVAL_S = 30.0
+_OBSERVER_LIFECYCLE_LOCK = threading.RLock()
 
 
 def _listPdfsRecursive(folder: str, skip_managed: bool = False) -> list[str]:
@@ -91,6 +97,7 @@ class WatcherServiceDeps(TypedDict, total=False):
     onNewPdf: OnNewPdf
     getLibraryFolder: Callable[[], str]
     pollInterval: float
+    observerPollInterval: float
     stabilityThresholdMs: int
     debounceMs: int
 
@@ -100,6 +107,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     on_new_pdf: OnNewPdf = deps.get("onNewPdf", lambda _paths: None)
     get_library_folder: Callable[[], str] = deps.get("getLibraryFolder", lambda: "")
     poll_interval: float = float(deps.get("pollInterval", 5.0))
+    observer_poll_interval = float(deps.get("observerPollInterval", 1.0))
     stability_threshold_ms = int(deps.get("stabilityThresholdMs", _AWAIT_WRITE_FINISH_MS))
     debounce_ms = int(deps.get("debounceMs", _DEBOUNCE_MS))
 
@@ -109,6 +117,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "seen": {},
         "watchdog": _WATCHDOG_AVAILABLE,
         "observers": {},
+        "observerLock": threading.RLock(),
         "loop": None,
         "lock": None,
         "stabilizers": {},
@@ -355,34 +364,40 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     ) -> None:
         if not _WATCHDOG_AVAILABLE or not state["running"]:
             return
-        observers: dict[str, Any] = state["observers"]
-        if folderId in observers:
-            return
-        if not folderPath or not os.path.isdir(folderPath):
-            return
-        library_folder = get_library_folder()
-        handler = _PdfHandler(folderPath, library_folder, isLibrary=isLibrary)
-        try:
-            observer = Observer()
-            observer.schedule(handler, folderPath, recursive=True)
-            observer.start()
-        except Exception:
-            return
-        observers[folderId] = observer
+        observer_lock: threading.RLock = state["observerLock"]
+        with _OBSERVER_LIFECYCLE_LOCK, observer_lock:
+            observers: dict[str, Any] = state["observers"]
+            if folderId in observers:
+                return
+            if not folderPath or not os.path.isdir(folderPath):
+                return
+            library_folder = get_library_folder()
+            handler = _PdfHandler(folderPath, library_folder, isLibrary=isLibrary)
+            try:
+                observer = (
+                    Observer(timeout=observer_poll_interval)
+                    if Observer is PollingObserver
+                    else Observer()
+                )
+                observer.schedule(handler, folderPath, recursive=True)
+                observer.start()
+            except Exception:
+                return
+            observers[folderId] = observer
 
     def _stopObserver(folderId: str) -> None:
-        observers: dict[str, Any] = state["observers"]
-        observer = observers.pop(folderId, None)
-        if observer is None:
-            return
-        try:
+        observer_lock: threading.RLock = state["observerLock"]
+        with _OBSERVER_LIFECYCLE_LOCK, observer_lock:
+            observers: dict[str, Any] = state["observers"]
+            observer = observers.get(folderId)
+            if observer is None:
+                return
             observer.stop()
-        except Exception:
-            pass
-        try:
-            observer.join(timeout=1.0)
-        except Exception:
-            pass
+            observer.join()
+            is_alive = getattr(observer, "is_alive", None)
+            if callable(is_alive) and is_alive():
+                raise RuntimeError("File system observer did not stop")
+            observers.pop(folderId, None)
 
     def _startLibraryObserver() -> None:
         if not _WATCHDOG_AVAILABLE or not state["running"]:

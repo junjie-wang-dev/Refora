@@ -70,6 +70,11 @@ class PermissionEngine:
         arguments = arguments or {}
         risk = classify(tool_name, metadata, self.risk_overrides)
 
+        if risk is RiskClass.NETWORK_READ:
+            if tool_name in self.session_allow_tools:
+                return Decision(True, "network access allowed for session")
+            return Decision(False, "network access requires approval", needs_user=True)
+
         if self.mode in READ_ONLY_MODES and is_consequential(risk):
             return Decision(False, f"{self.mode.value} mode is read-only")
 

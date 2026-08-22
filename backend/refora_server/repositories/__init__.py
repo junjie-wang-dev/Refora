@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sqlite3
 import threading
 import uuid
@@ -41,71 +43,138 @@ class RepositoryDeps:
         self.getSearchMode = getSearchMode or (lambda: "trigram")
 
 
+class _SerializedCursor:
+    def __init__(self, cursor: Any, lock: threading.RLock) -> None:
+        self._cursor = cursor
+        self._lock = lock
+
+    def fetchone(self) -> Any:
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchmany(self, size: int | None = None) -> Any:
+        with self._lock:
+            if size is None:
+                return self._cursor.fetchmany()
+            return self._cursor.fetchmany(size)
+
+    def fetchall(self) -> Any:
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def close(self) -> None:
+        with self._lock:
+            self._cursor.close()
+
+    def __iter__(self) -> _SerializedCursor:
+        return self
+
+    def __next__(self) -> Any:
+        with self._lock:
+            return next(self._cursor)
+
+    def __getattr__(self, name: str) -> Any:
+        with self._lock:
+            return getattr(self._cursor, name)
+
+
+class _SerializedConnection:
+    def __init__(self, db: Any, lock: threading.RLock) -> None:
+        self._db = db
+        self._lock = lock
+
+    @property
+    def in_transaction(self) -> bool:
+        with self._lock:
+            return bool(getattr(self._db, "in_transaction", False))
+
+    def execute(self, *args: Any, **kwargs: Any) -> _SerializedCursor:
+        with self._lock:
+            return _SerializedCursor(self._db.execute(*args, **kwargs), self._lock)
+
+    def executemany(self, *args: Any, **kwargs: Any) -> _SerializedCursor:
+        with self._lock:
+            return _SerializedCursor(
+                self._db.executemany(*args, **kwargs), self._lock
+            )
+
+    def executescript(self, *args: Any, **kwargs: Any) -> _SerializedCursor:
+        with self._lock:
+            return _SerializedCursor(
+                self._db.executescript(*args, **kwargs), self._lock
+            )
+
+    def __getattr__(self, name: str) -> Any:
+        with self._lock:
+            return getattr(self._db, name)
+
+
 def create_repositories(db: Any, deps: RepositoryDeps | None = None) -> dict[str, Any]:
     if deps is None:
         deps = RepositoryDeps()
     transaction_lock = threading.RLock()
+    serialized_db = _SerializedConnection(db, transaction_lock)
 
     def transaction(operation: Callable[[], Any]) -> Any:
         with transaction_lock:
-            nested = bool(getattr(db, "in_transaction", False))
+            nested = serialized_db.in_transaction
             savepoint = f"refora_{uuid.uuid4().hex}" if nested else None
             try:
                 if savepoint is None:
-                    db.execute("BEGIN IMMEDIATE")
+                    serialized_db.execute("BEGIN IMMEDIATE")
                 else:
-                    db.execute(f"SAVEPOINT {savepoint}")
+                    serialized_db.execute(f"SAVEPOINT {savepoint}")
                 result = operation()
                 if savepoint is None:
-                    db.execute("COMMIT")
+                    serialized_db.execute("COMMIT")
                 else:
-                    db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    serialized_db.execute(f"RELEASE SAVEPOINT {savepoint}")
                 return result
             except BaseException:
                 if savepoint is None:
-                    if bool(getattr(db, "in_transaction", False)):
-                        db.execute("ROLLBACK")
+                    if serialized_db.in_transaction:
+                        serialized_db.execute("ROLLBACK")
                 else:
                     try:
-                        db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        serialized_db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     except sqlite3.Error:
                         pass
                     try:
-                        db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                        serialized_db.execute(f"RELEASE SAVEPOINT {savepoint}")
                     except sqlite3.Error:
                         pass
                 raise
 
     documents = createDocumentsRepository(
-        db,
+        serialized_db,
         {
             "getLibraryFolder": deps.getLibraryFolder,
             "getSearchMode": deps.getSearchMode,
         },
     )
-    categories = createCategoriesRepository(db)
-    settings = create_settings_repository(db)
-    watchFolders = createWatchFoldersRepository(db)
-    aiProviders = createAiProvidersRepository(db)
-    workspaces = createWorkspacesRepository(db)
-    documentOcr = createDocumentOcrRepository(db)
-    pdfAnnotations = createPdfAnnotationsRepository(db)
-    webSearchConfig = createWebSearchConfigRepository(db)
-    aiSummaries = createAiSummariesRepository(db)
-    aiReports = createAiReportsRepository(db)
-    workspaceNotes = createWorkspaceNotesRepository(db)
-    workspaceAssets = createWorkspaceAssetsRepository(db)
-    workspaceCanvas = createWorkspaceCanvasRepository(db)
-    workspaceItems = createWorkspaceItemsRepository(db)
-    workspaceConnections = createWorkspaceConnectionsRepository(db)
-    chat = createChatRepository(db)
-    agentRuns = createAgentRunsRepository(db)
-    agentTraces = createAgentTracesRepository(db)
-    agentInterrupts = createAgentInterruptsRepository(db)
-    agentToolEffects = createAgentToolEffectsRepository(db)
-    agentMemories = createAgentMemoriesRepository(db)
-    agentProfiles = createAgentProfilesRepository(db)
-    agentRuntimeSessions = createAgentRuntimeSessionsRepository(db)
+    categories = createCategoriesRepository(serialized_db)
+    settings = create_settings_repository(serialized_db)
+    watchFolders = createWatchFoldersRepository(serialized_db)
+    aiProviders = createAiProvidersRepository(serialized_db)
+    workspaces = createWorkspacesRepository(serialized_db)
+    documentOcr = createDocumentOcrRepository(serialized_db)
+    pdfAnnotations = createPdfAnnotationsRepository(serialized_db)
+    webSearchConfig = createWebSearchConfigRepository(serialized_db)
+    aiSummaries = createAiSummariesRepository(serialized_db)
+    aiReports = createAiReportsRepository(serialized_db)
+    workspaceNotes = createWorkspaceNotesRepository(serialized_db)
+    workspaceAssets = createWorkspaceAssetsRepository(serialized_db)
+    workspaceCanvas = createWorkspaceCanvasRepository(serialized_db)
+    workspaceItems = createWorkspaceItemsRepository(serialized_db)
+    workspaceConnections = createWorkspaceConnectionsRepository(serialized_db)
+    chat = createChatRepository(serialized_db)
+    agentRuns = createAgentRunsRepository(serialized_db)
+    agentTraces = createAgentTracesRepository(serialized_db)
+    agentInterrupts = createAgentInterruptsRepository(serialized_db)
+    agentToolEffects = createAgentToolEffectsRepository(serialized_db)
+    agentMemories = createAgentMemoriesRepository(serialized_db)
+    agentProfiles = createAgentProfilesRepository(serialized_db)
+    agentRuntimeSessions = createAgentRuntimeSessionsRepository(serialized_db)
     return {
         "transaction": transaction,
         "documents": documents,

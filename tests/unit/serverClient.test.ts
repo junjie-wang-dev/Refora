@@ -212,6 +212,18 @@ describe('serverClient', () => {
       expect(calls[0].url).toContain('limit=10')
     })
 
+    it('builds query string for paged document search', async () => {
+      const { fetch, calls } = makeFetchSpy(() => makeResponse([]))
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
+
+      await client.http.documentsSearch('neural systems', { limit: 100, offset: 200 })
+
+      expect(calls[0].url).toContain('/documents/search?')
+      expect(calls[0].url).toContain('q=neural+systems')
+      expect(calls[0].url).toContain('limit=100')
+      expect(calls[0].url).toContain('offset=200')
+    })
+
     it('throws IpcError-shaped error on ok:false envelope', async () => {
       const { fetch } = makeFetchSpy(() => makeErrorResponse('not_found', 'no such doc', 404))
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })

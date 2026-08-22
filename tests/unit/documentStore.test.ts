@@ -89,6 +89,10 @@ function resetStoreState(): void {
     searchQuery: '',
     searchResults: [],
     isLoading: false,
+    isLoadingMoreDocuments: false,
+    hasMoreDocuments: false,
+    isLoadingMoreSearchResults: false,
+    hasMoreSearchResults: false,
     listMode: { mode: 'all' },
     listColumnState: defaultListColumnState,
     isImporting: false,
@@ -228,7 +232,9 @@ describe('DocumentStore', () => {
       expect(useDocumentStore.getState().documents).toEqual(docs)
       expect(mockList).toHaveBeenCalledWith({
         mode: 'all',
-        sort: { field: 'addedAt', dir: 'desc' }
+        sort: { field: 'addedAt', dir: 'desc' },
+        limit: 100,
+        offset: 0
       })
     })
 
@@ -262,6 +268,28 @@ describe('DocumentStore', () => {
 
       expect(useDocumentStore.getState().documents).toEqual(latest)
     })
+
+    it('loads large libraries in pages and appends the next page', async () => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => (
+        makeDoc({ id: `doc-${index}` })
+      ))
+      const nextPage = [makeDoc({ id: 'doc-100' })]
+      mockList.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(nextPage)
+
+      await useDocumentStore.getState().fetchDocuments()
+      expect(useDocumentStore.getState().hasMoreDocuments).toBe(true)
+
+      await useDocumentStore.getState().loadMoreDocuments()
+
+      expect(mockList).toHaveBeenLastCalledWith({
+        mode: 'all',
+        sort: { field: 'addedAt', dir: 'desc' },
+        limit: 100,
+        offset: 100
+      })
+      expect(useDocumentStore.getState().documents).toHaveLength(101)
+      expect(useDocumentStore.getState().hasMoreDocuments).toBe(false)
+    })
   })
 
   describe('performSearch', () => {
@@ -285,7 +313,7 @@ describe('DocumentStore', () => {
       await vi.advanceTimersByTimeAsync(200)
 
       expect(mockSearch).toHaveBeenCalledTimes(1)
-      expect(mockSearch).toHaveBeenCalledWith('hello')
+      expect(mockSearch).toHaveBeenCalledWith('hello', { limit: 100, offset: 0 })
       expect(useDocumentStore.getState().searchResults).toEqual(results)
     })
 
@@ -297,7 +325,7 @@ describe('DocumentStore', () => {
       await vi.advanceTimersByTimeAsync(200)
 
       expect(mockSearch).toHaveBeenCalledTimes(1)
-      expect(mockSearch).toHaveBeenCalledWith('abc')
+      expect(mockSearch).toHaveBeenCalledWith('abc', { limit: 100, offset: 0 })
     })
 
     it('clears search and falls back to list mode on empty query', () => {
@@ -339,6 +367,23 @@ describe('DocumentStore', () => {
       await Promise.resolve()
 
       expect(useDocumentStore.getState().searchResults).toEqual(latest)
+    })
+
+    it('loads additional search results from the current offset', async () => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => (
+        makeDoc({ id: `search-${index}` })
+      ))
+      mockSearch
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce([makeDoc({ id: 'search-100' })])
+
+      useDocumentStore.getState().performSearch('paper')
+      await vi.advanceTimersByTimeAsync(200)
+      await useDocumentStore.getState().loadMoreSearchResults()
+
+      expect(mockSearch).toHaveBeenLastCalledWith('paper', { limit: 100, offset: 100 })
+      expect(useDocumentStore.getState().searchResults).toHaveLength(101)
+      expect(useDocumentStore.getState().hasMoreSearchResults).toBe(false)
     })
   })
 
@@ -651,7 +696,11 @@ describe('DocumentStore', () => {
 
     it('restores optimistic state and surfaces action failures', async () => {
       const doc = makeDoc()
-      useDocumentStore.setState({ documents: [doc], selectedIds: ['doc-1'] })
+      useDocumentStore.setState({
+        documents: [doc],
+        selectedIds: ['doc-1'],
+        focusedDocId: 'doc-1'
+      })
       mockOpenPdf.mockRejectedValueOnce(new Error('open failed'))
       mockOpenInFinder.mockRejectedValueOnce(new Error('finder failed'))
       mockRefreshMetadata.mockRejectedValueOnce(new Error('refresh failed'))
@@ -668,10 +717,52 @@ describe('DocumentStore', () => {
       await useDocumentStore.getState().deleteDoc('doc-1')
 
       expect(useDocumentStore.getState().documents).toContainEqual(doc)
+      expect(useDocumentStore.getState().selectedIds).toEqual(['doc-1'])
+      expect(useDocumentStore.getState().focusedDocId).toBe('doc-1')
 
       mockBulkDelete.mockRejectedValueOnce(new Error('bulk delete failed'))
       await useDocumentStore.getState().bulkDelete(['doc-1'])
       expect(useDocumentStore.getState().documents).toContainEqual(doc)
+      expect(useDocumentStore.getState().selectedIds).toEqual(['doc-1'])
+      expect(useDocumentStore.getState().focusedDocId).toBe('doc-1')
+    })
+
+    it('restores metadata state in lists when a bulk refresh fails', async () => {
+      const doc = makeDoc({ metadataStatus: 'done' })
+      useDocumentStore.setState({ documents: [doc], searchResults: [doc] })
+      mockBulkRefreshMetadata.mockRejectedValueOnce(new Error('bulk refresh failed'))
+
+      await useDocumentStore.getState().bulkRefreshMetadata(['doc-1'])
+
+      expect(useDocumentStore.getState().documents[0].metadataStatus).toBe('done')
+      expect(useDocumentStore.getState().searchResults[0].metadataStatus).toBe('done')
+    })
+
+    it('preserves newer UI state while rolling back a failed delete', async () => {
+      const doc = makeDoc()
+      const newer = makeDoc({ id: 'doc-newer' })
+      let rejectDelete: (error: Error) => void = () => undefined
+      mockDelete.mockImplementationOnce(() => new Promise((_, reject) => {
+        rejectDelete = reject
+      }))
+      useDocumentStore.setState({
+        documents: [doc],
+        selectedIds: ['doc-1'],
+        focusedDocId: 'doc-1'
+      })
+
+      const deletion = useDocumentStore.getState().deleteDoc('doc-1')
+      useDocumentStore.setState({
+        documents: [newer],
+        selectedIds: ['doc-newer'],
+        focusedDocId: 'doc-newer'
+      })
+      rejectDelete(new Error('delete failed'))
+      await deletion
+
+      expect(useDocumentStore.getState().documents).toEqual([doc, newer])
+      expect(useDocumentStore.getState().selectedIds).toEqual(['doc-newer', 'doc-1'])
+      expect(useDocumentStore.getState().focusedDocId).toBe('doc-newer')
     })
 
     it('skips opening missing or unknown documents', async () => {

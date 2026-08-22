@@ -353,7 +353,7 @@ export interface ServerHttp {
 
   documentsList(query?: DocumentsListQuery): Promise<Document[]>
   documentsCount(): Promise<DocumentCounts>
-  documentsSearch(q: string): Promise<Document[]>
+  documentsSearch(q: string, page?: Pick<DocumentsListQuery, 'limit' | 'offset'>): Promise<Document[]>
   documentsGet(documentId: string): Promise<Document>
   documentsUpdate(documentId: string, patch: DocumentPatch): Promise<Document>
   documentsSetStarred(documentId: string, starred: boolean): Promise<Document>
@@ -619,7 +619,7 @@ export function createServerClient(
 
     documentsList: (query) => get<Document[]>('/documents', query),
     documentsCount: () => get<DocumentCounts>('/documents/count'),
-    documentsSearch: (q) => get<Document[]>('/documents/search', { q }),
+    documentsSearch: (q, page) => get<Document[]>('/documents/search', { q, ...page }),
     documentsGet: (id) => get<Document>(`/documents/${id}`),
     documentsUpdate: (id, p) => patch<Document>(`/documents/${id}`, p),
     documentsSetStarred: (id, starred) => post<Document>(`/documents/${id}/starred`, { starred }),

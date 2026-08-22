@@ -34,6 +34,48 @@ def test_list_with_sort_field(db):
     assert [d["id"] for d in docs] == ["b", "a"]
 
 
+def test_list_pushes_pagination_and_starred_filter_into_sql(db):
+    repo = make_docs_repo(db, library_folder="/lib")
+    for index in range(8):
+        repo["insert"](
+            make_doc(
+                id=f"doc-{index}",
+                file_path=f"/lib/{index}.pdf",
+                file_name=f"{index}.pdf",
+                starred=index % 2,
+                added_at=100 - index,
+            )
+        )
+    statements: list[str] = []
+    db.set_trace_callback(statements.append)
+
+    docs = repo["list"](
+        {"mode": "all", "starred": False, "limit": 2, "offset": 1}
+    )
+
+    assert [document["id"] for document in docs] == ["doc-2", "doc-4"]
+    select = next(statement for statement in statements if "FROM documents" in statement)
+    assert "starred = 0" in select
+    assert "LIMIT 2 OFFSET 1" in select
+
+
+def test_list_offset_without_limit_is_applied_by_sql(db):
+    repo = make_docs_repo(db, library_folder="/lib")
+    for index in range(4):
+        repo["insert"](
+            make_doc(
+                id=f"doc-{index}",
+                file_path=f"/lib/{index}.pdf",
+                file_name=f"{index}.pdf",
+                added_at=100 - index,
+            )
+        )
+
+    docs = repo["list"]({"mode": "all", "offset": 2})
+
+    assert [document["id"] for document in docs] == ["doc-2", "doc-3"]
+
+
 def test_list_recentlyRead_filters_lastReadAt(db):
     repo = make_docs_repo(db, library_folder="/lib")
     repo["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf", last_read_at=500))
@@ -460,6 +502,24 @@ def test_search_respects_limit(db):
         repo["insert"](make_doc(id=f"d{i}", file_path=f"/lib/d{i}.pdf", file_name=f"d{i}.pdf", title="common"))
     results = repo["search"]("common", limit=3)
     assert len(results) == 3
+
+
+def test_search_pushes_offset_into_sql(db):
+    repo = make_docs_repo(db, library_folder="/lib", search_mode="like")
+    for index in range(6):
+        repo["insert"](
+            make_doc(
+                id=f"d{index}",
+                file_path=f"/lib/d{index}.pdf",
+                file_name=f"d{index}.pdf",
+                title="common",
+                added_at=100 - index,
+            )
+        )
+
+    results = repo["search"]("common", limit=2, offset=2)
+
+    assert [document["id"] for document in results] == ["d2", "d3"]
 
 
 def test_search_like_mode_with_short_query(db):

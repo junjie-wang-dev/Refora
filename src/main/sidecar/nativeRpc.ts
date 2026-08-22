@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { isAbsolute, resolve as resolvePath } from 'node:path'
-import { lstatSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, extname, isAbsolute, relative, resolve as resolvePath } from 'node:path'
+import { lstatSync, realpathSync } from 'node:fs'
 import { shell, dialog, clipboard, session as electronSession, type BrowserWindow } from 'electron'
 import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from '../services/safeStorageProxy'
@@ -24,10 +25,22 @@ export interface NativeRpcDeps {
   createHttpServer?: typeof createServer
   copyFileToClipboard?: (path: string) => void
   setProxy?: (proxyRules: string) => Promise<void>
-  validatePath?: (path: string, kind: NativePathKind) => string
+  managedRoots?: string[]
+  temporaryRoot?: string
+  validatePath?: (path: string, kind: NativePathKind, capability: NativePathCapability) => string
 }
 
 export type NativePathKind = 'file' | 'item'
+export type NativePathCapability =
+  | 'managed-directory-or-pdf'
+  | 'managed-or-pdf'
+  | 'managed-or-temporary-clipboard'
+
+export interface NativePathPolicy {
+  managedRoots?: string[]
+  temporaryRoot?: string
+  capability?: NativePathCapability
+}
 
 export interface NativeRpc {
   start(): Promise<NativeRpcInfo>
@@ -86,16 +99,69 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
 
-export function validateNativePath(path: string, kind: NativePathKind): string {
+function normalizeRoot(path: string): string | null {
+  try {
+    if (!isAbsolute(path)) return null
+    const resolved = resolvePath(path)
+    const real = realpathSync(resolved)
+    return lstatSync(real).isDirectory() ? real : null
+  } catch {
+    return null
+  }
+}
+
+function isWithinRoot(path: string, root: string): boolean {
+  const value = relative(root, path)
+  return value !== '' && !value.startsWith('..') && !isAbsolute(value)
+}
+
+export function validateNativePath(
+  path: string,
+  kind: NativePathKind,
+  policy?: NativePathPolicy
+): string {
   if (!isAbsolute(path)) throw new Error('path must be absolute')
   const resolvedPath = resolvePath(path)
-  const stats = lstatSync(resolvedPath)
-  if (stats.isSymbolicLink()) throw new Error('symbolic links are not allowed')
+  const requestedStats = lstatSync(resolvedPath)
+  if (requestedStats.isSymbolicLink()) throw new Error('symbolic links are not allowed')
+  const realPath = realpathSync(resolvedPath)
+  const stats = lstatSync(realPath)
   if (kind === 'file' && !stats.isFile()) throw new Error('path must reference a file')
   if (kind === 'item' && !stats.isFile() && !stats.isDirectory()) {
     throw new Error('path must reference a file or directory')
   }
-  return resolvedPath
+  if (!policy?.capability) return realPath
+  const managedRoots = (policy.managedRoots ?? [])
+    .map(normalizeRoot)
+    .filter((root): root is string => root !== null)
+  const isManaged = managedRoots.some((root) => isWithinRoot(realPath, root))
+  if (
+    isManaged &&
+    (policy.capability !== 'managed-directory-or-pdf' || stats.isDirectory())
+  ) {
+    return realPath
+  }
+  if (
+    (policy.capability === 'managed-or-pdf' ||
+      policy.capability === 'managed-directory-or-pdf') &&
+    stats.isFile() &&
+    extname(realPath).toLowerCase() === '.pdf'
+  ) {
+    return realPath
+  }
+  if (policy.capability === 'managed-or-temporary-clipboard' && stats.isFile()) {
+    const temporaryRoot = normalizeRoot(policy.temporaryRoot ?? tmpdir())
+    const parent = dirname(realPath)
+    if (
+      temporaryRoot &&
+      dirname(parent) === temporaryRoot &&
+      basename(parent).startsWith('refora-clipboard-') &&
+      extname(realPath).toLowerCase() === '.md'
+    ) {
+      return realPath
+    }
+  }
+  throw new Error('path is outside the allowed native capability')
 }
 
 interface TrashItemBody {
@@ -142,7 +208,20 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const safeStorage = deps.safeStorage ?? createSafeStorageProxy()
   const createHttpServer = deps.createHttpServer ?? createServer
   const copyFileToClipboard = deps.copyFileToClipboard ?? writeFileToClipboard
-  const validatePath = deps.validatePath ?? validateNativePath
+  const managedRoots = new Set(
+    (deps.managedRoots ?? [])
+      .map(normalizeRoot)
+      .filter((root): root is string => root !== null)
+  )
+  const temporaryRoot = deps.temporaryRoot ?? tmpdir()
+  const validatePath =
+    deps.validatePath ??
+    ((path: string, kind: NativePathKind, capability: NativePathCapability) =>
+      validateNativePath(path, kind, {
+        managedRoots: [...managedRoots],
+        temporaryRoot,
+        capability
+      }))
   const setProxy =
     deps.setProxy ??
     ((proxyRules: string) => electronSession.defaultSession.setProxy({ proxyRules }))
@@ -161,7 +240,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (!rawPath) return fail('invalid_input', 'path is required')
     let path: string
     try {
-      path = validatePath(rawPath, 'item')
+      path = validatePath(rawPath, 'item', 'managed-directory-or-pdf')
     } catch (e) {
       return fail('invalid_path', e instanceof Error ? e.message : String(e))
     }
@@ -178,7 +257,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (!rawPath) return fail('invalid_input', 'path is required')
     let path: string
     try {
-      path = validatePath(rawPath, 'item')
+      path = validatePath(rawPath, 'item', 'managed-or-pdf')
     } catch (e) {
       return fail('invalid_path', e instanceof Error ? e.message : String(e))
     }
@@ -198,7 +277,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (!rawPath) return fail('invalid_input', 'path is required')
     let path: string
     try {
-      path = validatePath(rawPath, 'item')
+      path = validatePath(rawPath, 'item', 'managed-or-pdf')
     } catch (e) {
       return fail('invalid_path', e instanceof Error ? e.message : String(e))
     }
@@ -223,7 +302,10 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
       if (result.canceled || result.filePaths.length === 0) {
         return ok({ canceled: true, path: null })
       }
-      return ok({ canceled: false, path: result.filePaths[0] })
+      const selected = normalizeRoot(result.filePaths[0])
+      if (!selected) return fail('invalid_path', 'Selected directory is unavailable')
+      managedRoots.add(selected)
+      return ok({ canceled: false, path: selected })
     } catch (e) {
       return fail('dialog_failed', e instanceof Error ? e.message : String(e))
     }
@@ -306,7 +388,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (!rawPath) return fail('invalid_input', 'path is required')
     let path: string
     try {
-      path = validatePath(rawPath, 'file')
+      path = validatePath(rawPath, 'file', 'managed-or-temporary-clipboard')
     } catch (e) {
       return fail('invalid_path', e instanceof Error ? e.message : String(e))
     }

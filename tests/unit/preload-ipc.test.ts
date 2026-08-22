@@ -60,7 +60,11 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.Bootstrap, args: [], invoke: (value) => value.getBootstrap() },
       { channel: IpcChannel.DocumentsList, args: [{ mode: 'all' }], invoke: (value) => value.documents.list({ mode: 'all' }) },
       { channel: IpcChannel.DocumentsCount, args: [], invoke: (value) => value.documents.counts() },
-      { channel: IpcChannel.DocumentsSearch, args: ['query'], invoke: (value) => value.documents.search('query') },
+      {
+        channel: IpcChannel.DocumentsSearch,
+        args: ['query', { limit: 100, offset: 200 }],
+        invoke: (value) => value.documents.search('query', { limit: 100, offset: 200 })
+      },
       { channel: IpcChannel.DocumentsGet, args: ['doc-1'], invoke: (value) => value.documents.get('doc-1') },
       { channel: IpcChannel.DocumentsUpdate, args: ['doc-1', { title: 'Title' }], invoke: (value) => value.documents.update('doc-1', { title: 'Title' }) },
       { channel: IpcChannel.DocumentsSetStarred, args: ['doc-1', true], invoke: (value) => value.documents.setStarred('doc-1', true) },

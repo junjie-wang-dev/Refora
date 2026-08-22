@@ -51,12 +51,17 @@ interface DocumentState {
   importProgress: { current: number; total: number } | null
   identifierImporting: number
   isLoading: boolean
+  isLoadingMoreDocuments: boolean
+  hasMoreDocuments: boolean
   initialized: boolean
   categories: Category[]
   isSearching: boolean
   searchQuery: string
   searchResults: Document[]
+  isLoadingMoreSearchResults: boolean
+  hasMoreSearchResults: boolean
   fetchDocuments: (filter?: ListFilter) => Promise<void>
+  loadMoreDocuments: () => Promise<void>
   fetchDocumentCounts: () => Promise<void>
   setListMode: (filter: ListFilter) => void
   setListColumnState: (state: ListColumnState) => void
@@ -94,6 +99,7 @@ interface DocumentState {
   renameCategory: (id: string, name: string) => Promise<void>
   deleteCategory: (id: string) => Promise<void>
   performSearch: (q: string) => void
+  loadMoreSearchResults: () => Promise<void>
   clearSearch: () => void
 }
 
@@ -109,6 +115,7 @@ let toastTimeout: ReturnType<typeof setTimeout> | null = null
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let documentRequestVersion = 0
 let searchRequestVersion = 0
+const DOCUMENT_PAGE_SIZE = 100
 
 const IDENTIFIER_NETWORK_ERROR_CODES = new Set([
   'arxiv_unreachable',
@@ -130,6 +137,27 @@ function findKnownDocument(state: DocumentState, docId: string): Document | unde
     state.searchResults.find((doc) => doc.id === docId)
 }
 
+function restoreRemovedDocuments(
+  current: Document[],
+  before: Document[],
+  ids: Set<string>
+): Document[] {
+  const restored = [...current]
+  for (const [index, document] of before.entries()) {
+    if (!ids.has(document.id) || restored.some((item) => item.id === document.id)) continue
+    restored.splice(Math.min(index, restored.length), 0, document)
+  }
+  return restored
+}
+
+function restoreSelection(current: string[], before: string[], ids: Set<string>): string[] {
+  const restored = new Set(current)
+  for (const id of before) {
+    if (ids.has(id)) restored.add(id)
+  }
+  return [...restored]
+}
+
 export const useDocumentStore = create<DocumentState>((set, get) => ({
   documents: [],
   documentCounts: { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 },
@@ -143,21 +171,34 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   importProgress: null,
   identifierImporting: 0,
   isLoading: false,
+  isLoadingMoreDocuments: false,
+  hasMoreDocuments: false,
   initialized: false,
   categories: [],
   isSearching: false,
   searchQuery: '',
   searchResults: [],
+  isLoadingMoreSearchResults: false,
+  hasMoreSearchResults: false,
 
   fetchDocuments: async (filter?: ListFilter) => {
     const requestVersion = ++documentRequestVersion
     const f = filter ?? get().listMode
     const sort = get().listColumnState.sort
-    set({ isLoading: true })
+    set({
+      isLoading: true,
+      isLoadingMoreDocuments: false,
+      hasMoreDocuments: false
+    })
     try {
-      const docs = await api.documents.list({ ...f, sort })
+      const docs = await api.documents.list({
+        ...f,
+        sort,
+        limit: DOCUMENT_PAGE_SIZE,
+        offset: 0
+      })
       if (requestVersion === documentRequestVersion) {
-        set({ documents: docs })
+        set({ documents: docs, hasMoreDocuments: docs.length === DOCUMENT_PAGE_SIZE })
       }
     } catch (error) {
       if (requestVersion === documentRequestVersion) {
@@ -167,6 +208,46 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     } finally {
       if (requestVersion === documentRequestVersion) {
         set({ isLoading: false })
+      }
+    }
+  },
+
+  loadMoreDocuments: async () => {
+    const state = get()
+    if (
+      state.isLoading ||
+      state.isLoadingMoreDocuments ||
+      !state.hasMoreDocuments ||
+      state.isSearching
+    ) return
+    const requestVersion = documentRequestVersion
+    const offset = state.documents.length
+    set({ isLoadingMoreDocuments: true })
+    try {
+      const docs = await api.documents.list({
+        ...state.listMode,
+        sort: state.listColumnState.sort,
+        limit: DOCUMENT_PAGE_SIZE,
+        offset
+      })
+      if (requestVersion !== documentRequestVersion) return
+      set((current) => {
+        const knownIds = new Set(current.documents.map((document) => document.id))
+        return {
+          documents: [
+            ...current.documents,
+            ...docs.filter((document) => !knownIds.has(document.id))
+          ],
+          hasMoreDocuments: docs.length === DOCUMENT_PAGE_SIZE
+        }
+      })
+    } catch (error) {
+      if (requestVersion === documentRequestVersion) {
+        get().showToast(errorMessage(error, 'Failed to load documents'))
+      }
+    } finally {
+      if (requestVersion === documentRequestVersion) {
+        set({ isLoadingMoreDocuments: false })
       }
     }
   },
@@ -284,13 +365,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       void get().fetchCategories()
       void get().fetchDocumentCounts()
     } catch {
-      set((s) => ({
-        documents: before.documents.some((item) => item.id === docId)
-          ? before.documents
-          : s.documents,
-        searchResults: before.searchResults.some((item) => item.id === docId)
-          ? before.searchResults
-          : s.searchResults
+      const selected = new Set([docId])
+      set((current) => ({
+        documents: restoreRemovedDocuments(current.documents, before.documents, selected),
+        searchResults: restoreRemovedDocuments(
+          current.searchResults,
+          before.searchResults,
+          selected
+        ),
+        selectedIds: restoreSelection(current.selectedIds, before.selectedIds, selected),
+        focusedDocId: current.focusedDocId === null && before.focusedDocId === docId
+          ? docId
+          : current.focusedDocId
       }))
       get().showToast(i18n.t('common.deleteFailed'))
     }
@@ -309,11 +395,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   bulkDelete: async (ids: string[]) => {
     const before = get()
+    const selected = new Set(ids)
     set((s) => ({
-      documents: s.documents.filter((d) => !ids.includes(d.id)),
-      searchResults: s.searchResults.filter((d) => !ids.includes(d.id)),
+      documents: s.documents.filter((d) => !selected.has(d.id)),
+      searchResults: s.searchResults.filter((d) => !selected.has(d.id)),
       selectedIds: [],
-      focusedDocId: ids.includes(s.focusedDocId ?? '') ? null : s.focusedDocId
+      focusedDocId: selected.has(s.focusedDocId ?? '') ? null : s.focusedDocId
     }))
     try {
       await api.documents.bulkDelete(ids)
@@ -321,20 +408,52 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       void get().fetchCategories()
       void get().fetchDocumentCounts()
     } catch {
-      set({ documents: before.documents, searchResults: before.searchResults })
+      set((current) => ({
+        documents: restoreRemovedDocuments(current.documents, before.documents, selected),
+        searchResults: restoreRemovedDocuments(
+          current.searchResults,
+          before.searchResults,
+          selected
+        ),
+        selectedIds: restoreSelection(current.selectedIds, before.selectedIds, selected),
+        focusedDocId: current.focusedDocId === null &&
+          before.focusedDocId !== null &&
+          selected.has(before.focusedDocId)
+          ? before.focusedDocId
+          : current.focusedDocId
+      }))
       get().showToast(i18n.t('common.deleteFailed'))
     }
   },
 
   bulkRefreshMetadata: async (ids: string[]) => {
+    const before = get()
+    const selected = new Set(ids)
+    const markPending = (documents: Document[]) => documents.map((document) =>
+      selected.has(document.id) ? { ...document, metadataStatus: 'pending' as const } : document
+    )
     set((s) => ({
-      documents: s.documents.map((d) =>
-        ids.includes(d.id) ? { ...d, metadataStatus: 'pending' } : d
-      )
+      documents: markPending(s.documents),
+      searchResults: markPending(s.searchResults)
     }))
     try {
       await api.documents.bulkRefreshMetadata(ids)
     } catch (e) {
+      const restoreStatuses = (current: Document[], previous: Document[]) => {
+        const previousById = new Map(previous.map((document) => [document.id, document]))
+        return current.map((document) => {
+          const original = previousById.get(document.id)
+          return selected.has(document.id) &&
+            document.metadataStatus === 'pending' &&
+            original
+            ? { ...document, metadataStatus: original.metadataStatus }
+            : document
+        })
+      }
+      set((current) => ({
+        documents: restoreStatuses(current.documents, before.documents),
+        searchResults: restoreStatuses(current.searchResults, before.searchResults)
+      }))
       get().showToast(errorMessage(e, 'Failed to refresh metadata'))
     }
   },
@@ -539,7 +658,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         focusedDocId: null,
         isSearching: false,
         searchQuery: '',
-        searchResults: []
+        searchResults: [],
+        isLoadingMoreSearchResults: false,
+        hasMoreSearchResults: false
       })
       void get().fetchDocuments()
       void get().fetchCategories()
@@ -601,16 +722,27 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       get().clearSearch()
       return
     }
-    set({ searchQuery: q, isSearching: true })
+    set({
+      searchQuery: q,
+      isSearching: true,
+      isLoadingMoreSearchResults: false,
+      hasMoreSearchResults: false
+    })
     searchTimeout = setTimeout(async () => {
       try {
-        const results = await api.documents.search(trimmed)
+        const results = await api.documents.search(trimmed, {
+          limit: DOCUMENT_PAGE_SIZE,
+          offset: 0
+        })
         if (
           requestVersion === searchRequestVersion &&
           get().isSearching &&
           get().searchQuery.trim() === trimmed
         ) {
-          set({ searchResults: results })
+          set({
+            searchResults: results,
+            hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
+          })
         }
       } catch {
         if (requestVersion === searchRequestVersion) {
@@ -620,11 +752,60 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }, 200)
   },
 
+  loadMoreSearchResults: async () => {
+    const state = get()
+    if (
+      !state.isSearching ||
+      state.isLoadingMoreSearchResults ||
+      !state.hasMoreSearchResults
+    ) return
+    const trimmed = state.searchQuery.trim()
+    if (!trimmed) return
+    const requestVersion = searchRequestVersion
+    const offset = state.searchResults.length
+    set({ isLoadingMoreSearchResults: true })
+    try {
+      const results = await api.documents.search(trimmed, {
+        limit: DOCUMENT_PAGE_SIZE,
+        offset
+      })
+      if (
+        requestVersion !== searchRequestVersion ||
+        !get().isSearching ||
+        get().searchQuery.trim() !== trimmed
+      ) return
+      set((current) => {
+        const knownIds = new Set(current.searchResults.map((document) => document.id))
+        return {
+          searchResults: [
+            ...current.searchResults,
+            ...results.filter((document) => !knownIds.has(document.id))
+          ],
+          hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
+        }
+      })
+    } catch {
+      if (requestVersion === searchRequestVersion) {
+        set({ hasMoreSearchResults: false })
+      }
+    } finally {
+      if (requestVersion === searchRequestVersion) {
+        set({ isLoadingMoreSearchResults: false })
+      }
+    }
+  },
+
   clearSearch: () => {
     searchRequestVersion++
     if (searchTimeout) clearTimeout(searchTimeout)
     searchTimeout = null
-    set({ isSearching: false, searchQuery: '', searchResults: [] })
+    set({
+      isSearching: false,
+      searchQuery: '',
+      searchResults: [],
+      isLoadingMoreSearchResults: false,
+      hasMoreSearchResults: false
+    })
     void get().fetchDocuments()
   },
 

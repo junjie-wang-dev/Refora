@@ -202,10 +202,10 @@ def _map_document(row: sqlite3.Row, library_folder: str) -> dict[str, Any]:
 
 def _order_by_clause(mode: str, sort: dict[str, str] | None) -> str:
     if sort is not None and sort.get("field") in SORT_FIELDS and sort.get("dir") in SORT_DIRS:
-        return f'ORDER BY {sort["field"]} {sort["dir"]}'
+        return f'ORDER BY {sort["field"]} {sort["dir"]}, id ASC'
     if mode == "recentlyRead":
-        return "ORDER BY lastReadAt DESC"
-    return "ORDER BY addedAt DESC"
+        return "ORDER BY lastReadAt DESC, id ASC"
+    return "ORDER BY addedAt DESC, id ASC"
 
 
 def createDocumentsRepository(db, deps: DocumentsRepoDeps):
@@ -213,21 +213,39 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         return deps["getLibraryFolder"]()
 
     def list_(filter: dict[str, Any]) -> list[dict[str, Any]]:
-        where = ""
+        clauses: list[str] = []
         params: list[Any] = []
         mode = filter.get("mode")
         if mode == "recentlyRead":
-            where = "WHERE lastReadAt IS NOT NULL"
+            clauses.append("lastReadAt IS NOT NULL")
         elif mode == "recentlyAdded":
-            where = "WHERE addedAt >= ?"
+            clauses.append("addedAt >= ?")
             params.append(now_ms() - 7 * 24 * 60 * 60 * 1000)
         elif mode == "starred":
-            where = "WHERE starred = 1"
+            clauses.append("starred = 1")
         elif mode == "category":
-            where = "WHERE id IN (SELECT documentId FROM document_categories WHERE categoryId = ?)"
+            clauses.append(
+                "id IN (SELECT documentId FROM document_categories WHERE categoryId = ?)"
+            )
             params.append(filter.get("categoryId"))
+        starred = filter.get("starred")
+        if isinstance(starred, bool):
+            clauses.append("starred = ?")
+            params.append(1 if starred else 0)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         order = _order_by_clause(mode, filter.get("sort"))
-        cur = db.execute(f"SELECT * FROM documents {where} {order}", params)
+        pagination = ""
+        limit = filter.get("limit")
+        offset = filter.get("offset", 0)
+        if isinstance(limit, int) and not isinstance(limit, bool):
+            pagination = "LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif isinstance(offset, int) and not isinstance(offset, bool) and offset > 0:
+            pagination = "LIMIT -1 OFFSET ?"
+            params.append(offset)
+        cur = db.execute(
+            f"SELECT * FROM documents {where} {order} {pagination}", params
+        )
         rows = cur.fetchall()
         lf = lib()
         return [_map_document(r, lf) for r in rows]
@@ -253,7 +271,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             "starred": row["starred"],
         }
 
-    def search(q: str, limit: int = 500) -> list[dict[str, Any]]:
+    def search(q: str, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
         trimmed = q.strip()
         if len(trimmed) == 0:
             return []
@@ -262,12 +280,17 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             if isinstance(limit, (int, float)) and limit == limit
             else 500
         )
+        safe_offset = (
+            max(0, int(offset))
+            if isinstance(offset, (int, float)) and offset == offset
+            else 0
+        )
         if len(trimmed) >= 3 and deps["getSearchMode"]() == "trigram":
             literal_query = '"' + trimmed.replace('"', '""') + '"'
             cur = db.execute(
                 "SELECT d.* FROM documents d JOIN docs_fts f ON d.rowid = f.rowid "
-                "WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
-                [literal_query, safe_limit],
+                "WHERE docs_fts MATCH ? ORDER BY rank, d.id ASC LIMIT ? OFFSET ?",
+                [literal_query, safe_limit, safe_offset],
             )
             rows = cur.fetchall()
             lf = lib()
@@ -275,8 +298,12 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         escaped = trimmed.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
         like = f"%{escaped}%"
         clauses = " OR ".join(f"{c} LIKE ? ESCAPE '\\'" for c in FTS_LIKE_COLUMNS)
-        params = [like] * len(FTS_LIKE_COLUMNS) + [safe_limit]
-        cur = db.execute(f"SELECT * FROM documents WHERE {clauses} LIMIT ?", params)
+        params = [like] * len(FTS_LIKE_COLUMNS) + [safe_limit, safe_offset]
+        cur = db.execute(
+            f"SELECT * FROM documents WHERE {clauses} "
+            "ORDER BY addedAt DESC, id ASC LIMIT ? OFFSET ?",
+            params,
+        )
         rows = cur.fetchall()
         lf = lib()
         return [_map_document(r, lf) for r in rows]

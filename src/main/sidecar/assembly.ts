@@ -16,6 +16,7 @@ import {
 export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
   getWin: () => BrowserWindow | null
+  nativeManagedRoots?: string[]
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
 }
@@ -38,7 +39,8 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     try {
       nativeRpc = createNativeRpc({
         token: connection.token,
-        getWin: deps.getWin
+        getWin: deps.getWin,
+        managedRoots: deps.nativeManagedRoots
       })
       await nativeRpc.start()
       serverClient = createServerClient(deps.lifecycle, nativeRpc)

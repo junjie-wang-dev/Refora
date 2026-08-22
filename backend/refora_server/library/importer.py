@@ -6,6 +6,8 @@ import inspect
 import json
 import os
 import shutil
+import stat
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -66,13 +68,70 @@ def _copy_to_library(source: str, library_folder: str) -> str:
     folder = Path(library_folder)
     folder.mkdir(parents=True, exist_ok=True)
     source_path = Path(source)
-    destination = folder / source_path.name
-    number = 1
-    while destination.exists():
-        destination = folder / f"{source_path.stem} ({number}){source_path.suffix}"
-        number += 1
-    shutil.copy2(source_path, destination)
-    return str(destination.resolve())
+    source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    source_fd = -1
+    temporary_fd = -1
+    temporary: Path | None = None
+    destination: Path | None = None
+    published: Path | None = None
+    completed = False
+    try:
+        source_fd = os.open(source_path, source_flags)
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=".refora-import-",
+            suffix=".part",
+            dir=folder,
+        )
+        temporary = Path(temporary_name)
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError("PDF source must be a regular file")
+        with os.fdopen(source_fd, "rb") as input_file:
+            source_fd = -1
+            with os.fdopen(temporary_fd, "wb") as output_file:
+                temporary_fd = -1
+                shutil.copyfileobj(input_file, output_file, 1024 * 1024)
+                os.fchmod(output_file.fileno(), stat.S_IMODE(source_stat.st_mode))
+                output_file.flush()
+                os.fsync(output_file.fileno())
+        number = 0
+        while True:
+            suffix = "" if number == 0 else f" ({number})"
+            destination = folder / f"{source_path.stem}{suffix}{source_path.suffix}"
+            try:
+                os.link(temporary, destination, follow_symlinks=False)
+                published = destination
+                break
+            except FileExistsError:
+                number += 1
+        temporary.unlink()
+        directory_fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        completed = True
+        return str(destination.resolve())
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        if not completed and published is not None:
+            published.unlink(missing_ok=True)
+
+
+def _file_identity(path: str) -> tuple[int, int, int, int, int]:
+    value = os.stat(path, follow_symlinks=False)
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
@@ -150,7 +209,15 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                 if documents["findByPath"](path) is not None:
                     skipped.append(path)
                     continue
-                file_hash = await call_work(hash_pdf, path)
+                stored_path = path
+                if not isInsideLibrary(path, library_folder):
+                    copied = await call_work(copy_to_library, path, library_folder)
+                    stored_path = validatePdfPath(copied) or ""
+                    if not stored_path or not isInsideLibrary(stored_path, library_folder):
+                        raise ValueError("Copied PDF path is outside the library folder")
+                    copied_path = stored_path
+                initial_identity = _file_identity(stored_path)
+                file_hash = await call_work(hash_pdf, stored_path)
                 duplicate = (
                     documents["findByHash"](file_hash)
                     if file_hash
@@ -158,15 +225,21 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                 )
                 if duplicate is not None:
                     if isWatch or not callable(confirm_duplicate):
+                        if copied_path:
+                            Path(copied_path).unlink(missing_ok=True)
+                            copied_path = None
                         skipped.append(path)
                         continue
                     should_skip = confirm_duplicate(Path(path).name)
                     if inspect.isawaitable(should_skip):
                         should_skip = await should_skip
                     if should_skip is not False:
+                        if copied_path:
+                            Path(copied_path).unlink(missing_ok=True)
+                            copied_path = None
                         skipped.append(path)
                         continue
-                validation = await call_work(validate_pdf, path)
+                validation = await call_work(validate_pdf, stored_path)
                 if isinstance(validation, dict):
                     file_name = Path(path).name
                     if validation.get("type") == "encrypted":
@@ -176,18 +249,19 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     else:
                         message = str(validation.get("message") or "Unable to read PDF")
                     errors.append({"path": path, "message": message})
+                    if copied_path:
+                        Path(copied_path).unlink(missing_ok=True)
+                        copied_path = None
                     continue
-                stored_path = path
-                if not isInsideLibrary(path, library_folder):
-                    copied_path = await call_work(copy_to_library, path, library_folder)
-                    stored_path = copied_path
-                stat = os.stat(path)
                 now = now_ms()
                 extracted = (
-                    await call_work(extract_metadata, path)
+                    await call_work(extract_metadata, stored_path)
                     if callable(extract_metadata)
                     else None
                 )
+                if _file_identity(stored_path) != initial_identity:
+                    raise RuntimeError("PDF changed during import")
+                stored_stat = os.stat(stored_path, follow_symlinks=False)
                 metadata = extracted if isinstance(extracted, dict) else {}
                 document = documents["insert"](
                     {
@@ -195,7 +269,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                         "filePath": stored_path,
                         "originalFolderPath": str(Path(path).parent),
                         "fileName": Path(stored_path).name,
-                        "fileSize": stat.st_size,
+                        "fileSize": stored_stat.st_size,
                         "fileHash": file_hash,
                         "title": metadata.get("title") if isinstance(metadata.get("title"), str) else None,
                         "authors": metadata.get("authors") if isinstance(metadata.get("authors"), str) else None,

@@ -127,6 +127,40 @@ def test_unassign_missing_link_is_noop(db):
     assert cats["listForDocument"]("a") == []
 
 
+def test_assignMany_is_atomic_when_any_document_is_invalid(db):
+    cats = make_cats_repo(db)
+    docs = make_docs_repo(db, library_folder="/lib")
+    cat = cats["create"]("Physics")
+    docs["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf"))
+
+    with pytest.raises(Exception):
+        cats["assignMany"](["a", "missing"], cat["id"])
+
+    assert cats["listForDocument"]("a") == []
+
+
+def test_setForDocuments_clears_all_assignments_in_one_operation(db):
+    cats = make_cats_repo(db)
+    docs = make_docs_repo(db, library_folder="/lib")
+    first = cats["create"]("Physics")
+    second = cats["create"]("Math")
+    for document_id in ("a", "b"):
+        docs["insert"](
+            make_doc(
+                id=document_id,
+                file_path=f"/lib/{document_id}.pdf",
+                file_name=f"{document_id}.pdf",
+            )
+        )
+        cats["assign"](document_id, first["id"])
+        cats["assign"](document_id, second["id"])
+
+    cats["setForDocuments"](["a", "b"], None)
+
+    assert cats["listForDocument"]("a") == []
+    assert cats["listForDocument"]("b") == []
+
+
 def test_listForDocument_returns_multiple_ordered(db):
     cats = make_cats_repo(db)
     docs = make_docs_repo(db, library_folder="/lib")

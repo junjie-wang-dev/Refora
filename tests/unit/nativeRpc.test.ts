@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events'
+import { realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
 import type { Server, IncomingMessage, ServerResponse } from 'node:http'
@@ -287,9 +289,10 @@ describe('nativeRpc', () => {
   })
 
   it('opens a directory dialog and returns the selected path', async () => {
+    const selectedDirectory = tmpdir()
     electronMocks.showOpenDialog.mockResolvedValue({
       canceled: false,
-      filePaths: ['/Users/x/papers']
+      filePaths: [selectedDirectory]
     })
     const { server } = await setup()
     const { status, body } = await dispatch(
@@ -300,7 +303,10 @@ describe('nativeRpc', () => {
       TOKEN
     )
     expect(status).toBe(200)
-    expect(body).toEqual({ ok: true, data: { canceled: false, path: '/Users/x/papers' } })
+    expect(body).toEqual({
+      ok: true,
+      data: { canceled: false, path: realpathSync(selectedDirectory) }
+    })
   })
 
   it('returns canceled when the dialog is dismissed', async () => {

@@ -59,6 +59,8 @@ let mockState: {
   toggleStar: ReturnType<typeof vi.fn>
   categories: { id: string; name: string; count: number }[]
   createCategory: ReturnType<typeof vi.fn>
+  loadMoreDocuments: ReturnType<typeof vi.fn>
+  loadMoreSearchResults: ReturnType<typeof vi.fn>
 }
 
 vi.mock('@renderer/store/documentStore', () => ({
@@ -86,7 +88,9 @@ vi.mock('@renderer/store/documentStore', () => ({
         requestDeleteConfirm: vi.fn(),
         refreshMetadata: vi.fn(),
         categories: mockState.categories,
-        createCategory: mockState.createCategory
+        createCategory: mockState.createCategory,
+        loadMoreDocuments: mockState.loadMoreDocuments,
+        loadMoreSearchResults: mockState.loadMoreSearchResults
       })
       return mockState
     },
@@ -134,7 +138,9 @@ function setupDefaultState() {
     setFocusedDoc: vi.fn(),
     toggleStar: vi.fn(),
     categories: [],
-    createCategory: vi.fn()
+    createCategory: vi.fn(),
+    loadMoreDocuments: vi.fn(),
+    loadMoreSearchResults: vi.fn()
   }
 }
 

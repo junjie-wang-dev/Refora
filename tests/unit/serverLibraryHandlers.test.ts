@@ -72,12 +72,30 @@ describe('createServerLibraryHandlers', () => {
     const invocations: Invocation[] = [
       {
         channel: IpcChannel.DocumentsList,
-        args: [{ mode: 'category', categoryId: 'cat-1', sort: { field: 'year', dir: 'asc' } }],
+        args: [{
+          mode: 'category',
+          categoryId: 'cat-1',
+          sort: { field: 'year', dir: 'asc' },
+          limit: 100,
+          offset: 200
+        }],
         method: 'documentsList',
-        forwarded: [{ mode: 'category', categoryId: 'cat-1', sortField: 'year', sortDir: 'asc' }]
+        forwarded: [{
+          mode: 'category',
+          categoryId: 'cat-1',
+          sortField: 'year',
+          sortDir: 'asc',
+          limit: 100,
+          offset: 200
+        }]
       },
       { channel: IpcChannel.DocumentsCount, args: [], method: 'documentsCount', forwarded: [] },
-      { channel: IpcChannel.DocumentsSearch, args: ['paper'], method: 'documentsSearch', forwarded: ['paper'] },
+      {
+        channel: IpcChannel.DocumentsSearch,
+        args: ['paper', { limit: 100, offset: 200 }],
+        method: 'documentsSearch',
+        forwarded: ['paper', { limit: 100, offset: 200 }]
+      },
       { channel: IpcChannel.DocumentsGet, args: ['doc-1'], method: 'documentsGet', forwarded: ['doc-1'] },
       { channel: IpcChannel.DocumentsUpdate, args: ['doc-1', { title: 'New' }], method: 'documentsUpdate', forwarded: ['doc-1', { title: 'New' }] },
       { channel: IpcChannel.DocumentsSetStarred, args: ['doc-1', true], method: 'documentsSetStarred', forwarded: ['doc-1', true] },

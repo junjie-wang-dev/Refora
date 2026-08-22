@@ -16,11 +16,15 @@ class Fakes:
         self.created_provider = None
         self.document_filter = None
         self.listed_documents = []
+        self.document_search_args = None
+        self.searched_documents = []
         self.clipboard_files = []
         self.imported_file_paths = []
         self.document_overrides = {}
         self.last_read_at = {}
         self.metadata_refreshes = []
+        self.bulk_metadata_refreshes = []
+        self.bulk_category_operations = []
         self.emitted_events = []
         self.pdf_annotations = {}
         self.documents = {
@@ -31,7 +35,7 @@ class Fakes:
                 "recentlyAdded": 0,
                 "starred": 0,
             },
-            "search": lambda _query, _limit: [],
+            "search": self.search_documents,
             "get": self.get_document,
             "delete": self.delete_document,
             "setStarred": lambda _id, _starred: None,
@@ -47,6 +51,15 @@ class Fakes:
             "delete": lambda _id: None,
             "assign": lambda _document_id, _category_id: None,
             "unassign": lambda _document_id, _category_id: None,
+            "assignMany": lambda document_ids, category_id: self.bulk_category_operations.append(
+                ("assign", document_ids, category_id)
+            ),
+            "unassignMany": lambda document_ids, category_id: self.bulk_category_operations.append(
+                ("unassign", document_ids, category_id)
+            ),
+            "setForDocuments": lambda document_ids, category_id: self.bulk_category_operations.append(
+                ("set", document_ids, category_id)
+            ),
             "listForDocument": lambda _document_id: [],
         }
         self.importer = {
@@ -105,6 +118,7 @@ class Fakes:
         self.exporter = {"exportJson": lambda _ids, _workspace: {}, "exportBibtex": lambda _ids: {}, "getBibtexString": lambda _ids: {"bibtex": ""}}
         self.metadata = {
             "refresh": self.refresh_metadata,
+            "bulkRefreshMetadata": self.bulk_refresh_metadata,
             "updateVerifiedArxivId": lambda document_id, arxiv_id: {
                 "id": document_id,
                 "arxivId": arxiv_id,
@@ -182,10 +196,20 @@ class Fakes:
 
     def list_documents(self, filter_: dict):
         self.document_filter = filter_
-        return self.listed_documents
+        offset = filter_.get("offset", 0)
+        limit = filter_.get("limit")
+        return (
+            self.listed_documents[offset:]
+            if limit is None
+            else self.listed_documents[offset : offset + limit]
+        )
 
     def delete_document(self, document_id: str):
         self.deleted_documents.append(document_id)
+
+    def search_documents(self, query: str, limit: int, offset: int = 0):
+        self.document_search_args = (query, limit, offset)
+        return self.searched_documents[offset : offset + limit]
 
     def import_files(self, paths: list[str]):
         self.imported_file_paths.extend(paths)
@@ -221,6 +245,9 @@ class Fakes:
     def refresh_metadata(self, document_id: str):
         self.metadata_refreshes.append(document_id)
         return {"id": document_id, "metadataStatus": "pending"}
+
+    def bulk_refresh_metadata(self, document_ids: list[str]):
+        self.bulk_metadata_refreshes.append(document_ids)
 
     def get_arxiv_by_id(self, arxiv_id: str):
         self.requested_arxiv_ids.append(arxiv_id)
@@ -525,8 +552,39 @@ def test_bulk_metadata_refresh_only_enqueues_work():
     )
 
     assert response.json() == {"ok": True, "data": {"ack": True}}
-    assert fakes.metadata_refreshes == ["doc-1", "doc-2", "doc-3"]
+    assert fakes.bulk_metadata_refreshes == [["doc-1", "doc-2", "doc-3"]]
+    assert fakes.metadata_refreshes == []
     assert fakes.token_calls == 1
+
+
+def test_bulk_category_routes_use_atomic_repository_operations():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+
+    categorized = client.post(
+        "/documents/bulk-categorize",
+        headers=headers,
+        json={"ids": ["doc-1", "doc-2"], "categoryId": "cat-1"},
+    )
+    assigned = client.post(
+        "/categories/cat-2/assign",
+        headers=headers,
+        json={"documentIds": ["doc-1", "doc-2"]},
+    )
+    unassigned = client.post(
+        "/categories/cat-2/unassign",
+        headers=headers,
+        json={"documentIds": ["doc-1", "doc-2"]},
+    )
+
+    assert categorized.status_code == 200
+    assert assigned.status_code == 200
+    assert unassigned.status_code == 200
+    assert fakes.bulk_category_operations == [
+        ("set", ["doc-1", "doc-2"], "cat-1"),
+        ("assign", ["doc-1", "doc-2"], "cat-2"),
+        ("unassign", ["doc-1", "doc-2"], "cat-2"),
+    ]
 
 
 def test_document_list_forwards_filter_sort_and_is_unpaged_by_default():
@@ -550,6 +608,49 @@ def test_document_list_forwards_filter_sort_and_is_unpaged_by_default():
     )
     assert invalid.status_code == 400
     assert invalid.json()["error"]["code"] == "validation"
+
+
+def test_document_list_forwards_pagination_to_repository():
+    client, fakes = make_client()
+    fakes.listed_documents = [{"id": f"doc-{index}"} for index in range(40)]
+
+    response = client.get(
+        "/documents?mode=all&limit=5&offset=10",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert response.json()["data"] == [
+        {"id": f"doc-{index}"} for index in range(10, 15)
+    ]
+    assert fakes.document_filter == {"mode": "all", "limit": 5, "offset": 10}
+
+
+def test_document_search_forwards_pagination_and_envelopes_invalid_values():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    fakes.searched_documents = [{"id": f"doc-{index}"} for index in range(20)]
+
+    response = client.get(
+        "/documents/search?q=paper&limit=3&offset=4",
+        headers=headers,
+    )
+    invalid_limit = client.get(
+        "/documents/search?q=paper&limit=501",
+        headers=headers,
+    )
+    invalid_offset = client.get(
+        "/documents/search?q=paper&offset=-1",
+        headers=headers,
+    )
+
+    assert response.json()["data"] == [
+        {"id": f"doc-{index}"} for index in range(4, 7)
+    ]
+    assert fakes.document_search_args == ("paper", 3, 4)
+    assert invalid_limit.status_code == 400
+    assert invalid_limit.json()["error"]["code"] == "validation"
+    assert invalid_offset.status_code == 400
+    assert invalid_offset.json()["error"]["code"] == "validation"
 
 
 def test_missing_document_and_invalid_pdf_path_are_enveloped():
@@ -696,6 +797,36 @@ def test_open_relocate_and_restore_preserve_document_contracts(tmp_path):
     restored_path = restored.json()["data"]["filePath"]
     assert restored_path.startswith(str(original_folder))
     assert not current.exists()
+
+
+def test_restore_rolls_file_back_when_database_update_fails(tmp_path):
+    client, fakes = make_client()
+    original_folder = tmp_path / "original"
+    library_folder = tmp_path / "library"
+    original_folder.mkdir()
+    library_folder.mkdir()
+    current = library_folder / "paper.pdf"
+    current.write_bytes(b"%PDF-current\n")
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": str(current),
+        "fileName": current.name,
+        "fileMissing": 0,
+        "originalFolderPath": str(original_folder),
+    }
+
+    def fail_update(_document_id: str, _path: str, _name: str):
+        raise RuntimeError("database write failed")
+
+    fakes.documents["updateFilePath"] = fail_update
+    response = client.post(
+        "/documents/doc-1/restore-file",
+        headers={"X-Refora-Token": "test-token"},
+    )
+
+    assert response.status_code == 500
+    assert current.read_bytes() == b"%PDF-current\n"
+    assert list(original_folder.iterdir()) == []
 
 
 def test_settings_roundtrip_uses_json_values():

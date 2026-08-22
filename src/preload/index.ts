@@ -39,6 +39,7 @@ import type {
   ImportProgress,
   LibrarySwitchResult,
   ListFilter,
+  PageRequest,
   ListModelsRequest,
   ListModelsResult,
   PdfAnnotation,
@@ -167,7 +168,9 @@ const api: ReforaApi = {
   documents: {
     list: (filter: ListFilter) => invoke<Document[]>(IpcChannel.DocumentsList, filter),
     counts: () => invoke<DocumentCounts>(IpcChannel.DocumentsCount),
-    search: (q: string) => invoke<SearchResult>(IpcChannel.DocumentsSearch, q),
+    search: (q: string, page?: PageRequest) => page
+      ? invoke<SearchResult>(IpcChannel.DocumentsSearch, q, page)
+      : invoke<SearchResult>(IpcChannel.DocumentsSearch, q),
     get: (id: string) => invoke<Document | null>(IpcChannel.DocumentsGet, id),
     update: (id: string, patch: DocumentPatch) =>
       invoke<Document>(IpcChannel.DocumentsUpdate, id, patch),

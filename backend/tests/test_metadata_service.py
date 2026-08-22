@@ -172,6 +172,51 @@ class FakeDocuments:
         }
 
 
+def test_bulk_metadata_refresh_rolls_back_all_statuses_on_failure() -> None:
+    statuses = {"doc-1": "done", "doc-2": "done"}
+
+    def get(document_id: str) -> dict[str, Any] | None:
+        status = statuses.get(document_id)
+        return (
+            {"id": document_id, "metadataStatus": status}
+            if status is not None
+            else None
+        )
+
+    def set_status(document_id: str, status: str) -> None:
+        statuses[document_id] = status
+        if document_id == "doc-2":
+            raise RuntimeError("status update failed")
+
+    def transaction(operation):
+        snapshot = dict(statuses)
+        try:
+            return operation()
+        except BaseException:
+            statuses.clear()
+            statuses.update(snapshot)
+            raise
+
+    service = create_metadata_service(
+        {
+            "documents": {
+                "get": get,
+                "setMetadataStatus": set_status,
+                "getResumableMetadataRows": lambda: [],
+            },
+            "settings": {"get": lambda _key, default=None: default},
+            "transaction": transaction,
+        },
+        academic={},
+        emit=lambda _name, _data: None,
+    )
+
+    with pytest.raises(RuntimeError, match="status update failed"):
+        service["bulkRefreshMetadata"](["doc-1", "doc-2"])
+
+    assert statuses == {"doc-1": "done", "doc-2": "done"}
+
+
 @pytest.mark.asyncio
 async def test_metadata_runs_in_python_and_preserves_edited_fields(
     monkeypatch: pytest.MonkeyPatch,

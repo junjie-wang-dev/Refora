@@ -63,6 +63,37 @@ def createCategoriesRepository(db):
             [docId, catId],
         )
 
+    def assignMany(docIds: list[str], catId: str) -> None:
+        if not docIds:
+            return
+        values = ", ".join("(?, ?)" for _ in docIds)
+        params = [value for doc_id in docIds for value in (doc_id, catId)]
+        db.execute(
+            f"INSERT OR IGNORE INTO document_categories (documentId, categoryId) VALUES {values}",
+            params,
+        )
+
+    def unassignMany(docIds: list[str], catId: str) -> None:
+        if not docIds:
+            return
+        placeholders = ", ".join("?" for _ in docIds)
+        db.execute(
+            f"DELETE FROM document_categories WHERE categoryId = ? AND documentId IN ({placeholders})",
+            [catId, *docIds],
+        )
+
+    def setForDocuments(docIds: list[str], catId: str | None) -> None:
+        if not docIds:
+            return
+        if catId is not None:
+            assignMany(docIds, catId)
+            return
+        placeholders = ", ".join("?" for _ in docIds)
+        db.execute(
+            f"DELETE FROM document_categories WHERE documentId IN ({placeholders})",
+            docIds,
+        )
+
     def listForDocument(docId: str) -> list[dict[str, Any]]:
         cur = db.execute(
             "SELECT c.*, "
@@ -99,6 +130,9 @@ def createCategoriesRepository(db):
         "delete": remove,
         "assign": assign,
         "unassign": unassign,
+        "assignMany": assignMany,
+        "unassignMany": unassignMany,
+        "setForDocuments": setForDocuments,
         "listForDocument": listForDocument,
         "countByCategory": countByCategory,
         "getAllDocumentCategories": getAllDocumentCategories,

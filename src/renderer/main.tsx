@@ -3,8 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { ConfigProvider } from '@lobehub/ui'
 import { motion } from 'motion/react'
 import Splash from './components/Splash'
-import App from './App'
-import RecoveryApp from './components/RecoveryApp'
 import { initI18n } from './i18n'
 import type { BootstrapData } from '../shared/ipc-types'
 import './styles/index.css'
@@ -26,7 +24,8 @@ if (!rootElement) {
 const root = createRoot(rootElement)
 root.render(<Splash />)
 
-function mountApp(bootstrap: Pick<BootstrapData, 'language' | 'listColumnState' | 'sidebarCollapsed' | 'firstRun'>) {
+async function mountApp(bootstrap: Pick<BootstrapData, 'language' | 'listColumnState' | 'sidebarCollapsed' | 'firstRun'>) {
+  const { default: App } = await import('./App')
   initI18n(bootstrap.language)
   root.render(
     <React.StrictMode>
@@ -41,7 +40,8 @@ function mountApp(bootstrap: Pick<BootstrapData, 'language' | 'listColumnState' 
   )
 }
 
-function mountRecoveryApp() {
+async function mountRecoveryApp() {
+  const { default: RecoveryApp } = await import('./components/RecoveryApp')
   initI18n(navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
   root.render(
     <React.StrictMode>
@@ -54,9 +54,5 @@ function mountRecoveryApp() {
 
 window.api
   .getBootstrap()
-  .then((bootstrap) => {
-    mountApp(bootstrap)
-  })
-  .catch(() => {
-    mountRecoveryApp()
-  })
+  .then(mountApp)
+  .catch(mountRecoveryApp)

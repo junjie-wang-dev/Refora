@@ -1054,8 +1054,24 @@ def create_metadata_service(
         return updated
 
     def bulk_refresh(document_ids: list[str]) -> None:
-        for document_id in document_ids:
-            refresh(document_id)
+        unique_ids = list(dict.fromkeys(document_ids))
+
+        def prepare() -> None:
+            for document_id in unique_ids:
+                if documents["get"](document_id) is None:
+                    raise RepoError(
+                        "not_found", f"document not found: {document_id}"
+                    )
+            for document_id in unique_ids:
+                documents["setMetadataStatus"](document_id, "pending")
+
+        transaction = repos.get("transaction")
+        if callable(transaction):
+            transaction(prepare)
+        else:
+            prepare()
+        for document_id in unique_ids:
+            enqueue(document_id)
 
     async def update_verified_arxiv_id(
         document_id: str, value: str

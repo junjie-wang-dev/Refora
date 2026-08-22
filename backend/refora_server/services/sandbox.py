@@ -34,6 +34,7 @@ RUNTIME_INSTALL_TIMEOUT_SECONDS = 10 * 60
 
 _RESOURCE_EXIT_CODE = 137
 _SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+_MEMORY_POLL_SECONDS = 0.1
 _BLOCKED_READ_PATHS = (
     "/Users",
     "/Volumes",
@@ -114,7 +115,12 @@ def _allow_subpath(operation: str, path: str) -> str:
     return f'({operation} (subpath "{_sandbox_literal(path)}"))'
 
 
-def _sandbox_profile(sandbox_root: Path, read_only_paths: tuple[str, ...]) -> str:
+def _sandbox_profile(
+    sandbox_root: Path,
+    read_only_paths: tuple[str, ...],
+    writable_paths: tuple[str, ...] = (),
+    allow_network: bool = False,
+) -> str:
     rules = [
         "(version 1)",
         "(deny default)",
@@ -132,8 +138,13 @@ def _sandbox_profile(sandbox_root: Path, read_only_paths: tuple[str, ...]) -> st
     ]
     rules.append(_allow_subpath("allow file-read*", str(sandbox_root)))
     rules.append(_allow_subpath("allow file-write*", str(sandbox_root)))
+    for path in writable_paths:
+        rules.append(_allow_subpath("allow file-read*", path))
+        rules.append(_allow_subpath("allow file-write*", path))
     for path in read_only_paths:
         rules.append(_allow_subpath("allow file-read*", path))
+    if allow_network:
+        rules.append("(allow network-outbound)")
     return " ".join(rules)
 
 
@@ -310,6 +321,40 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
+def _process_group_rss_bytes(process_group_id: int) -> int | None:
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-axo", "pgid=,rss="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    total_kib = 0
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pgid, rss_kib = (int(value) for value in fields)
+        except ValueError:
+            continue
+        if pgid == process_group_id and rss_kib > 0:
+            total_kib += rss_kib
+    return total_kib * 1024
+
+
+def _memory_limit_reached(process_group_id: int, memory_mb: int) -> bool | None:
+    rss = _process_group_rss_bytes(process_group_id)
+    if rss is None:
+        return None
+    return rss > memory_mb * 1024 * 1024
+
+
 def _collect_output(
     stream: BinaryIO,
     limit: int,
@@ -413,8 +458,13 @@ def execute(command: str, options: SandboxOptions | None = None) -> dict[str, An
     if len(command) > MAX_COMMAND_CHARS:
         raise ValueError("Sandbox command exceeds the maximum length")
     opts = options or SandboxOptions()
-    if opts.timeout_seconds <= 0 or opts.cpu_seconds <= 0:
-        raise ValueError("Sandbox timeouts must be positive")
+    if (
+        opts.timeout_seconds <= 0
+        or opts.cpu_seconds <= 0
+        or opts.memory_mb <= 0
+        or opts.file_size_mb <= 0
+    ):
+        raise ValueError("Sandbox resource limits must be positive")
     if opts.timeout_seconds > MAX_TIMEOUT_SECONDS:
         raise ValueError(f"Sandbox timeout cannot exceed {MAX_TIMEOUT_SECONDS} seconds")
     if sys.platform != "darwin" or not Path(opts.sandbox_executable).is_file():
@@ -487,7 +537,10 @@ def execute(command: str, options: SandboxOptions | None = None) -> dict[str, An
 
     timed_out = False
     cancelled = False
+    memory_limited = False
+    memory_monitor_unavailable = False
     deadline = started_at + opts.timeout_seconds
+    next_memory_check = started_at
     while process.poll() is None:
         if opts.cancel_event is not None and opts.cancel_event.is_set():
             cancelled = True
@@ -497,6 +550,17 @@ def execute(command: str, options: SandboxOptions | None = None) -> dict[str, An
             timed_out = True
             _terminate(process)
             break
+        if time.monotonic() >= next_memory_check:
+            next_memory_check = time.monotonic() + _MEMORY_POLL_SECONDS
+            memory_state = _memory_limit_reached(process.pid, opts.memory_mb)
+            if memory_state is None:
+                memory_monitor_unavailable = True
+                _terminate(process)
+                break
+            if memory_state:
+                memory_limited = True
+                _terminate(process)
+                break
         time.sleep(0.05)
     process.wait()
     for reader in readers:
@@ -515,7 +579,9 @@ def execute(command: str, options: SandboxOptions | None = None) -> dict[str, An
         status = "cancelled"
     elif timed_out:
         status = "timeout"
-    elif exit_code in (_RESOURCE_EXIT_CODE, -signal.SIGXCPU, -signal.SIGKILL):
+    elif memory_monitor_unavailable:
+        status = "unavailable"
+    elif memory_limited or exit_code in (_RESOURCE_EXIT_CODE, -signal.SIGXCPU, -signal.SIGKILL):
         status = "resource_limit"
     elif exit_code == 0:
         status = "ok"
@@ -530,6 +596,7 @@ def execute(command: str, options: SandboxOptions | None = None) -> dict[str, An
         timed_out=timed_out,
         cancelled=cancelled,
         truncated=output_state["truncated"],
+        error="memory_monitor_unavailable" if memory_monitor_unavailable else None,
         duration_ms=int((time.monotonic() - started_at) * 1000),
         signal_name=signal_name,
         changed_files=_changed_files(before, after),
@@ -544,17 +611,62 @@ def _run_installer(
     timeout_seconds: int,
     max_output_bytes: int,
     cancel_event: threading.Event,
+    sandbox_executable: str,
+    cpu_seconds: int,
+    memory_mb: int,
+    file_size_mb: int,
 ) -> dict[str, Any]:
     started_at = time.monotonic()
+    if not Path(sandbox_executable).is_file():
+        return {
+            "status": "unavailable",
+            "exitCode": -1,
+            "stdout": "",
+            "stderr": "OS-level sandbox execution is unavailable",
+            "timedOut": False,
+            "cancelled": False,
+            "truncated": False,
+        }
+    writable = []
+    for raw in (
+        str(cwd),
+        env.get("HOME"),
+        env.get("TMPDIR"),
+        env.get("UV_CACHE_DIR"),
+        env.get("PNPM_STORE_DIR"),
+        env.get("UV_PYTHON_INSTALL_DIR"),
+        env.get("REFORA_SANDBOX"),
+    ):
+        if not raw:
+            continue
+        path = Path(raw).expanduser().resolve()
+        if path.is_absolute():
+            writable.append(str(path))
+    readable = []
+    for raw in argv:
+        path = Path(raw).expanduser()
+        if not path.is_absolute() or not path.exists():
+            continue
+        resolved = path.resolve()
+        readable.append(str(resolved.parent if resolved.is_file() else resolved))
+    primary_root = Path(writable[0])
+    profile = _sandbox_profile(
+        primary_root,
+        tuple(dict.fromkeys(readable)),
+        tuple(dict.fromkeys(writable[1:])),
+        allow_network=True,
+    )
+    sandboxed_argv = [sandbox_executable, "-p", profile, *argv]
     try:
         process = subprocess.Popen(
-            argv,
+            sandboxed_argv,
             cwd=cwd,
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            preexec_fn=_build_preexec(cpu_seconds, memory_mb, file_size_mb),
         )
     except OSError as error:
         return {
@@ -585,7 +697,10 @@ def _run_installer(
         reader.start()
     timed_out = False
     cancelled = False
+    memory_limited = False
+    memory_monitor_unavailable = False
     deadline = started_at + timeout_seconds
+    next_memory_check = started_at
     while process.poll() is None:
         if cancel_event.is_set():
             cancelled = True
@@ -595,6 +710,17 @@ def _run_installer(
             timed_out = True
             _terminate(process)
             break
+        if time.monotonic() >= next_memory_check:
+            next_memory_check = time.monotonic() + _MEMORY_POLL_SECONDS
+            memory_state = _memory_limit_reached(process.pid, memory_mb)
+            if memory_state is None:
+                memory_monitor_unavailable = True
+                _terminate(process)
+                break
+            if memory_state:
+                memory_limited = True
+                _terminate(process)
+                break
         time.sleep(0.05)
     process.wait()
     for reader in readers:
@@ -604,11 +730,23 @@ def _run_installer(
         status = "cancelled"
     elif timed_out:
         status = "timeout"
+    elif memory_monitor_unavailable:
+        status = "unavailable"
+    elif memory_limited or process.returncode in (
+        _RESOURCE_EXIT_CODE,
+        -signal.SIGXCPU,
+        -signal.SIGKILL,
+    ):
+        status = "resource_limit"
     return {
         "status": status,
         "exitCode": process.returncode,
         "stdout": b"".join(stdout_chunks).decode("utf-8", errors="replace"),
-        "stderr": b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+        "stderr": (
+            "Memory monitoring is unavailable"
+            if memory_monitor_unavailable
+            else b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        ),
         "timedOut": timed_out,
         "cancelled": cancelled,
         "truncated": output_state["truncated"],
@@ -648,6 +786,10 @@ class SandboxExecutor:
             timeout_seconds=RUNTIME_INSTALL_TIMEOUT_SECONDS,
             max_output_bytes=self._options.max_output_bytes,
             cancel_event=cancel_event,
+            sandbox_executable=self._options.sandbox_executable,
+            cpu_seconds=self._options.cpu_seconds,
+            memory_mb=self._options.memory_mb,
+            file_size_mb=self._options.file_size_mb,
         )
 
     def execute(self, command: str, options: SandboxOptions | None = None) -> dict[str, Any]:
