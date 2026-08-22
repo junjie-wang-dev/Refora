@@ -339,6 +339,26 @@ describe('PDF reader state', () => {
     })
   })
 
+  it('flushes pending annotations immediately and exposes a failed flush', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'note',
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: 'Pending note',
+      point: { x: 0.5, y: 0.5 }
+    })
+    vi.mocked(api.documents.setPdfAnnotations).mockRejectedValueOnce(new Error('disk full'))
+
+    await expect(usePdfReaderStore.getState().flushPendingSaves()).rejects.toThrow('disk full')
+    expect(usePdfReaderStore.getState().saveStatus.paper).toBe('error')
+
+    await usePdfReaderStore.getState().flushPendingSaves()
+    expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saved')
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(2)
+  })
+
   it('ignores annotation loads that finish after a library switch', async () => {
     let resolveAnnotations: (annotations: []) => void = () => undefined
     vi.mocked(api.documents.pdfAnnotations).mockReturnValueOnce(

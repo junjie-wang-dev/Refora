@@ -9,7 +9,7 @@ import type { PdfTextService } from './services/pdfText'
 import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './services/dbPath'
 import { readLibraryFolderPath, writeLibraryFolderPath } from './services/prefs'
 import { IpcChannel } from '../shared/ipc-channels'
-import type { LibrarySwitchResult } from '../shared/ipc-types'
+import type { BootstrapData, LibrarySwitchResult } from '../shared/ipc-types'
 import { runMenuAction } from './services/menuAction'
 import { createServerPythonRuntime } from './sidecar/runtime'
 import type { ServerPythonRuntime } from './sidecar/runtime'
@@ -23,6 +23,10 @@ import type { SyncAuthConfirmation } from '../shared/sync-types'
 import { createSyncHandlers } from './sidecar/ipc/sync'
 import { createLibrarySwitcher } from './services/librarySwitcher'
 import { createShutdownHandler } from './services/shutdown'
+import { createRendererFlushCoordinator } from './services/rendererFlush'
+import { activateAssemblySettings } from './services/assemblySettings'
+import { createAppLifecycleIpcHandlers } from './services/appLifecycleIpc'
+import { runPersistenceGuard, type PersistenceFailureAction } from './services/persistenceGuard'
 import { createRendererPathCapabilities } from './services/fileCapabilities'
 import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
 
@@ -50,7 +54,37 @@ let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let syncHandlerChannels: string[] = []
 let menuLanguage: 'zh' | 'en' = 'en'
 let flushWindowState: () => Promise<void> = async () => undefined
+let allowWindowClose = false
 const rendererPathCapabilities = createRendererPathCapabilities()
+const rendererFlushCoordinator = createRendererFlushCoordinator()
+const appLifecycleIpcHandlers = createAppLifecycleIpcHandlers({
+  completeRendererFlush: (requestId, error) =>
+    rendererFlushCoordinator.complete(requestId, error)
+})
+
+for (const [channel, handler] of Object.entries(appLifecycleIpcHandlers)) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedIpcSender(event, () => win)) {
+      return {
+        ok: false,
+        error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
+      }
+    }
+    return (handler as (...handlerArgs: unknown[]) => unknown)(...args)
+  })
+}
+
+async function flushRendererState(target = win): Promise<void> {
+  if (
+    !target ||
+    target.isDestroyed() ||
+    target.webContents.isDestroyed() ||
+    target.webContents.isLoadingMainFrame()
+  ) return
+  await rendererFlushCoordinator.request((requestId) => {
+    target.webContents.send(IpcChannel.EventRendererFlushRequested, requestId)
+  })
+}
 
 const MENU_COPY = {
   en: {
@@ -73,7 +107,12 @@ const MENU_COPY = {
     exportJson: 'Export JSON…',
     exportJsonTitle: 'Export JSON',
     exportBibtex: 'Export BibTeX…',
-    failed: 'Failed'
+    failed: 'Failed',
+    persistenceFailedTitle: 'Unsaved changes',
+    persistenceFailedMessage: 'Some local changes could not be saved.',
+    persistenceFailedDetail: 'Retry saving, cancel closing, or explicitly discard the unsaved changes.',
+    retrySaving: 'Retry Saving',
+    discardChanges: 'Discard Changes'
   },
   zh: {
     file: '文件',
@@ -95,9 +134,35 @@ const MENU_COPY = {
     exportJson: '导出 JSON…',
     exportJsonTitle: '导出 JSON',
     exportBibtex: '导出 BibTeX…',
-    failed: '失败'
+    failed: '失败',
+    persistenceFailedTitle: '存在未保存的更改',
+    persistenceFailedMessage: '部分本地更改无法保存。',
+    persistenceFailedDetail: '请选择重试保存、取消关闭，或明确放弃未保存的更改。',
+    retrySaving: '重试保存',
+    discardChanges: '放弃更改'
   }
 } as const
+
+async function resolvePersistenceFailure(error: unknown): Promise<PersistenceFailureAction> {
+  const copy = MENU_COPY[menuLanguage]
+  const message = error instanceof Error ? error.message : String(error)
+  const options = {
+    type: 'warning' as const,
+    title: copy.persistenceFailedTitle,
+    message: copy.persistenceFailedMessage,
+    detail: `${copy.persistenceFailedDetail}\n\n${message}`,
+    buttons: [copy.retrySaving, copy.cancel, copy.discardChanges],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  }
+  const result = win && !win.isDestroyed()
+    ? await dialog.showMessageBox(win, options)
+    : await dialog.showMessageBox(options)
+  if (result.response === 0) return 'retry'
+  if (result.response === 2) return 'discard'
+  return 'cancel'
+}
 
 function registerSyncAccountHandlers(service: SyncAccountService): void {
   const handlers = createSyncHandlers(service)
@@ -424,6 +489,8 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
   bw.on('blur', () => sendWindowFocus(false))
 
   let saveBoundsTimeout: ReturnType<typeof setTimeout> | null = null
+  let closeFlushInProgress = false
+  let closeAfterFlush = false
   const saveBounds = async (): Promise<void> => {
     const assembly = serverAssembly
     if (!assembly || bw.isDestroyed()) return
@@ -450,14 +517,45 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
 
   bw.on('resize', debouncedSaveBounds)
   bw.on('move', debouncedSaveBounds)
-  bw.on('close', () => {
+  bw.on('close', (event) => {
     if (saveBoundsTimeout) {
       clearTimeout(saveBoundsTimeout)
       saveBoundsTimeout = null
     }
-    void saveBounds()
+    if (allowWindowClose || closeAfterFlush) {
+      void saveBounds()
+      return
+    }
+    event.preventDefault()
+    if (closeFlushInProgress) return
+    closeFlushInProgress = true
+    void runPersistenceGuard({
+      persist: async () => {
+        await Promise.all([saveBounds(), flushRendererState(bw)])
+      },
+      resolveFailure: async (error) => {
+        logger.error(
+          `window close blocked because renderer state could not be saved: ${error instanceof Error ? error.message : String(error)}`
+        )
+        return resolvePersistenceFailure(error)
+      }
+    })
+      .then((result) => {
+        if (result === 'cancelled') return
+        closeAfterFlush = true
+        bw.close()
+      })
+      .catch((error) => {
+        logger.error(
+          `window close persistence prompt failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      })
+      .finally(() => {
+        closeFlushInProgress = false
+      })
   })
   bw.on('closed', () => {
+    rendererFlushCoordinator.cancel()
     if (flushWindowState === saveBounds) flushWindowState = async () => undefined
   })
 
@@ -578,6 +676,20 @@ async function createPythonServerAssembly(
   }
 }
 
+async function activatePythonServerAssembly(assembly: ServerAssembly): Promise<BootstrapData> {
+  return activateAssemblySettings({
+    assembly,
+    setProxy: (proxyRules) => session.defaultSession.setProxy({ proxyRules }),
+    setLanguage: (language) => {
+      menuLanguage = language
+      Menu.setApplicationMenu(buildMenu(language))
+    },
+    setTheme: (theme) => {
+      nativeTheme.themeSource = theme
+    }
+  })
+}
+
 const switchLibraryFolderPython = createLibrarySwitcher({
   resolveFolder: realpathSync,
   isDirectory: (folder) => {
@@ -590,6 +702,10 @@ const switchLibraryFolderPython = createLibrarySwitcher({
   dbPathForFolder: dbPathForLibraryFolder,
   dbExistsInFolder: dbExistsInLibraryFolder,
   createAssembly: createPythonServerAssembly,
+  beforeSwitch: () => flushRendererState(),
+  activateAssembly: async (assembly) => {
+    await activatePythonServerAssembly(assembly)
+  },
   getState: () => ({
     assembly: serverAssembly,
     dbPath: activeDbPath,
@@ -667,9 +783,7 @@ void app.whenReady().then(async () => {
       switchLibraryFolderPython
     )
     await serverAssembly.start()
-    const bootstrap = await serverAssembly.getClient().http.appBootstrap()
-    menuLanguage = bootstrap.language
-    nativeTheme.themeSource = bootstrap.theme
+    const bootstrap = await activatePythonServerAssembly(serverAssembly)
     if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
       activeLibraryFolder = realpathSync(bootstrap.libraryFolderPath)
       activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
@@ -698,6 +812,7 @@ void app.whenReady().then(async () => {
 
 const handleBeforeQuit = createShutdownHandler({
   flushWindowState: () => flushWindowState(),
+  flushRendererState: () => flushRendererState(),
   unregisterHandlers: unregisterSyncAccountHandlers,
   stopServices: async () => {
     const assembly = serverAssembly
@@ -711,10 +826,14 @@ const handleBeforeQuit = createShutdownHandler({
     serverPythonRuntime = null
     win = null
   },
-  quit: () => app.quit(),
+  quit: () => {
+    allowWindowClose = true
+    app.quit()
+  },
   reportError: (error) => {
     logger.error(`shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
-  }
+  },
+  resolvePersistenceFailure
 })
 
 app.on('before-quit', handleBeforeQuit)

@@ -15,6 +15,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import i18n from '../i18n'
 import { openDocumentPdf } from '../utils/openPdf'
+import { normalizeBootstrapData } from '../../shared/bootstrap'
 
 const DEFAULT_COLUMNS: ListColumn[] = [
   { id: 'title', visible: true, width: 300, order: 0 },
@@ -30,12 +31,44 @@ function defaultColumnState(): ListColumnState {
 }
 
 let persistTimeout: ReturnType<typeof setTimeout> | null = null
+let pendingColumnState: { state: ListColumnState; generation: number } | null = null
+let persistTask: Promise<void> | null = null
+let columnPersistenceGeneration = 0
 
 function persistColumnState(state: ListColumnState): void {
   if (persistTimeout) clearTimeout(persistTimeout)
+  pendingColumnState = { state, generation: columnPersistenceGeneration }
   persistTimeout = setTimeout(() => {
-    api.settings.set('listColumnState', state).catch(() => {})
+    persistTimeout = null
+    void flushColumnState().catch(() => {
+      useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+    })
   }, 500)
+}
+
+async function flushColumnState(): Promise<void> {
+  if (persistTimeout) {
+    clearTimeout(persistTimeout)
+    persistTimeout = null
+  }
+  if (persistTask) await persistTask.catch(() => undefined)
+  const pending = pendingColumnState
+  if (!pending) return
+  pendingColumnState = null
+  if (pending.generation !== columnPersistenceGeneration) return
+  const task = api.settings.set('listColumnState', pending.state)
+  persistTask = task
+  try {
+    await task
+  } catch (error) {
+    if (!pendingColumnState && pending.generation === columnPersistenceGeneration) {
+      pendingColumnState = pending
+    }
+    throw error
+  } finally {
+    if (persistTask === task) persistTask = null
+  }
+  if (pendingColumnState) await flushColumnState()
 }
 
 interface DocumentState {
@@ -67,6 +100,7 @@ interface DocumentState {
   setListColumnState: (state: ListColumnState) => void
   setSort: (field: SortField) => void
   setColumns: (columns: ListColumn[]) => void
+  flushPendingSettings: () => Promise<void>
   setFocusedDoc: (docId: string | null) => void
   toggleSelect: (docId: string) => void
   selectAll: () => void
@@ -115,6 +149,8 @@ let toastTimeout: ReturnType<typeof setTimeout> | null = null
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let documentRequestVersion = 0
 let searchRequestVersion = 0
+let documentCountsRequestVersion = 0
+let categoriesRequestVersion = 0
 const DOCUMENT_PAGE_SIZE = 100
 
 const IDENTIFIER_NETWORK_ERROR_CODES = new Set([
@@ -202,7 +238,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
     } catch (error) {
       if (requestVersion === documentRequestVersion) {
-        get().showToast(errorMessage(error, 'Failed to load documents'))
+        get().showToast(errorMessage(error, i18n.t('documentErrors.loadFailed')))
       }
       throw error
     } finally {
@@ -243,7 +279,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       })
     } catch (error) {
       if (requestVersion === documentRequestVersion) {
-        get().showToast(errorMessage(error, 'Failed to load documents'))
+        get().showToast(errorMessage(error, i18n.t('documentErrors.loadFailed')))
       }
     } finally {
       if (requestVersion === documentRequestVersion) {
@@ -253,11 +289,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   fetchDocumentCounts: async () => {
+    const requestVersion = ++documentCountsRequestVersion
     try {
       const counts = await api.documents.counts()
-      set({ documentCounts: counts })
-    } catch {
-      void 0
+      if (requestVersion === documentCountsRequestVersion) {
+        set({ documentCounts: counts })
+      }
+    } catch (error) {
+      if (requestVersion === documentCountsRequestVersion) {
+        get().showToast(errorMessage(error, i18n.t('documentErrors.countsLoadFailed')))
+      }
     }
   },
 
@@ -290,6 +331,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return { listColumnState: newState }
     })
   },
+
+  flushPendingSettings: flushColumnState,
 
   setFocusedDoc: (docId: string | null) => {
     set({ focusedDocId: docId })
@@ -325,7 +368,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       void get().fetchDocumentCounts()
     } catch {
       get().patchDocument(docId, doc)
-      get().showToast('Failed to update star')
+      get().showToast(i18n.t('documentErrors.starFailed'))
     }
   },
 
@@ -337,7 +380,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       get().patchDocument(docId, updated)
       void get().fetchDocumentCounts()
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to open PDF'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.openPdfFailed')))
     }
   },
 
@@ -345,7 +388,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       await api.documents.openInFinder(docId)
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to open in Finder'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.revealFailed')))
     }
   },
 
@@ -388,7 +431,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       get().patchDocument(docId, updated)
       return true
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to refresh metadata'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.metadataFailed')))
       return false
     }
   },
@@ -454,7 +497,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         documents: restoreStatuses(current.documents, before.documents),
         searchResults: restoreStatuses(current.searchResults, before.searchResults)
       }))
-      get().showToast(errorMessage(e, 'Failed to refresh metadata'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.metadataFailed')))
     }
   },
 
@@ -464,7 +507,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       get().clearSelection()
       await get().fetchCategories()
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to categorize'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.categorizeFailed')))
     }
   },
 
@@ -652,32 +695,72 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     api.events.onMenuImportMendeley(menuImportMendeleyCb[0])
 
     librarySwitchedCb[0] = () => {
+      columnPersistenceGeneration += 1
+      if (persistTimeout) clearTimeout(persistTimeout)
+      persistTimeout = null
+      pendingColumnState = null
+      if (searchTimeout) clearTimeout(searchTimeout)
+      searchTimeout = null
+      documentRequestVersion++
       searchRequestVersion++
+      documentCountsRequestVersion++
+      categoriesRequestVersion++
       set({
+        documents: [],
+        documentCounts: { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 },
+        listMode: { mode: 'all' },
         selectedIds: [],
         focusedDocId: null,
+        confirmDelete: null,
+        isImporting: false,
+        importProgress: null,
+        identifierImporting: 0,
+        isLoading: false,
+        isLoadingMoreDocuments: false,
+        hasMoreDocuments: false,
+        categories: [],
         isSearching: false,
         searchQuery: '',
         searchResults: [],
         isLoadingMoreSearchResults: false,
-        hasMoreSearchResults: false
+        hasMoreSearchResults: false,
+        listColumnState: defaultColumnState()
       })
-      void get().fetchDocuments()
-      void get().fetchCategories()
-      void get().fetchDocumentCounts()
+      const generation = columnPersistenceGeneration
+      void Promise.resolve().then(() => {
+        if (generation !== columnPersistenceGeneration) return
+        void get().fetchDocuments().catch(() => undefined)
+        void get().fetchCategories()
+        void get().fetchDocumentCounts()
+      })
+      void api.getBootstrap()
+        .then(normalizeBootstrapData)
+        .then((bootstrap) => {
+          if (generation !== columnPersistenceGeneration) return
+          set({ listColumnState: bootstrap.listColumnState ?? defaultColumnState() })
+        })
+        .catch(() => {
+          if (generation !== columnPersistenceGeneration) return
+          get().showToast(i18n.t('common.settingsLoadFailed'))
+        })
     }
     api.events.onLibrarySwitched(librarySwitchedCb[0])
 
-    void get().fetchDocuments()
+    void get().fetchDocuments().catch(() => undefined)
     void get().fetchDocumentCounts()
   },
 
   fetchCategories: async () => {
+    const requestVersion = ++categoriesRequestVersion
     try {
       const cats = await api.categories.list()
-      set({ categories: cats })
-    } catch {
-      void 0
+      if (requestVersion === categoriesRequestVersion) {
+        set({ categories: cats })
+      }
+    } catch (error) {
+      if (requestVersion === categoriesRequestVersion) {
+        get().showToast(errorMessage(error, i18n.t('documentErrors.categoriesLoadFailed')))
+      }
     }
   },
 
@@ -687,7 +770,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       set((s) => ({ categories: [...s.categories, { ...cat, count: 0 }] }))
       return cat
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to create category'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.categoryCreateFailed')))
       return null
     }
   },
@@ -699,7 +782,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         categories: s.categories.map((c) => (c.id === id ? { ...c, name } : c))
       }))
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to rename category'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.categoryRenameFailed')))
     }
   },
 
@@ -710,7 +793,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         categories: s.categories.filter((c) => c.id !== id)
       }))
     } catch (e) {
-      get().showToast(errorMessage(e, 'Failed to delete category'))
+      get().showToast(errorMessage(e, i18n.t('documentErrors.categoryDeleteFailed')))
     }
   },
 
@@ -810,8 +893,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   destroy: () => {
+    columnPersistenceGeneration++
     documentRequestVersion++
     searchRequestVersion++
+    documentCountsRequestVersion++
+    categoriesRequestVersion++
+    if (persistTimeout) clearTimeout(persistTimeout)
+    persistTimeout = null
+    pendingColumnState = null
     if (docUpdatedCb[0]) {
       api.events.off('document:updated', docUpdatedCb[0])
       docUpdatedCb[0] = null

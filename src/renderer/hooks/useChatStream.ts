@@ -737,7 +737,11 @@ export function useChatStream({
     cancelledRunRef.current = null
     try {
       const model = requestModel || undefined
-      if (model) void pushRecentModel(model, activeProviderId)
+      if (model) {
+        void pushRecentModel(model, activeProviderId).catch(() => {
+          setError(t('common.settingsSaveFailed'))
+        })
+      }
       const { threadId, runId } = await api.ai.chatSend({
         workspaceId: activeWorkspaceId,
         ...(contextDocumentId ? { activeDocumentId: contextDocumentId } : {}),

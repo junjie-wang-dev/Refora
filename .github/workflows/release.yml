@@ -97,11 +97,8 @@ jobs:
       - name: Provision backend Python environment
         run: uv run --project backend --locked python -c "import fastapi, uvicorn, websockets"
 
-      - name: Build application
-        run: npm run build
-
       - name: Playwright E2E suite
-        run: npx playwright test --workers=1
+        run: npm run test:e2e -- --workers=1
 
       - name: Upload E2E diagnostics
         if: failure()

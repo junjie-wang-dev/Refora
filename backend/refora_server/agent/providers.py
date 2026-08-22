@@ -164,7 +164,13 @@ def _normalize_compatible_streaming_roles(model: ChatOpenAI) -> ChatOpenAI:
     return model
 
 
-def create_model(config: dict[str, Any]) -> ChatOpenAI:
+def create_model(
+    config: dict[str, Any],
+    *,
+    proxy: str | None = None,
+    http_client: Any | None = None,
+    http_async_client: Any | None = None,
+) -> ChatOpenAI:
     api_key = config.get("apiKey")
     if not isinstance(api_key, str) or not api_key:
         api_key = "local-provider"
@@ -184,6 +190,17 @@ def create_model(config: dict[str, Any]) -> ChatOpenAI:
         options["extra_body"] = config["extraBody"]
     if isinstance(config.get("reasoning"), dict):
         options["reasoning"] = config["reasoning"]
+    if http_client is not None:
+        options["http_client"] = http_client
+    if http_async_client is not None:
+        options["http_async_client"] = http_async_client
+    if (
+        isinstance(proxy, str)
+        and proxy
+        and http_client is None
+        and http_async_client is None
+    ):
+        options["openai_proxy"] = proxy
     return _normalize_compatible_streaming_roles(ChatOpenAI(**options))
 
 

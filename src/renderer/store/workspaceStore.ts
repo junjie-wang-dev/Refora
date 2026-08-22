@@ -16,6 +16,8 @@ import type {
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import { useDocumentStore } from './documentStore'
+import i18n from '../i18n'
+import { trackRendererPersistence } from '../persistence'
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -85,6 +87,7 @@ const noteUpdateRevisions = new Map<
   Partial<Record<keyof WorkspaceNotePatch, number>>
 >()
 let nextNoteUpdateRevision = 0
+let libraryGeneration = 0
 
 function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
@@ -140,6 +143,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     api.events.onWorkspaceItemsChanged(workspaceItemsChangedCb[0])
 
     librarySwitchedCb[0] = () => {
+      libraryGeneration++
+      noteUpdateQueues.clear()
+      noteUpdateRevisions.clear()
       set({
         workspaces: [],
         activeWorkspaceId: null,
@@ -164,6 +170,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   destroy: () => {
+    libraryGeneration++
+    noteUpdateQueues.clear()
+    noteUpdateRevisions.clear()
     if (aiSummaryUpdatedCb[0]) {
       api.events.off('ai:summary:updated', aiSummaryUpdatedCb[0])
       aiSummaryUpdatedCb[0] = null
@@ -184,39 +193,49 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   fetchWorkspaces: async () => {
+    const generation = libraryGeneration
     try {
       const list = await api.workspaces.list()
-      set({ workspaces: list })
+      if (generation === libraryGeneration) set({ workspaces: list })
     } catch (e) {
-      toast(errorMessage(e, 'Failed to load workspaces'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadWorkspaces')))
     }
   },
 
   createWorkspace: async (name: string): Promise<Workspace | null> => {
+    const generation = libraryGeneration
     try {
       const ws = await api.workspaces.create(name)
+      if (generation !== libraryGeneration) return null
       set((s) => ({ workspaces: [...s.workspaces, ws] }))
       return ws
     } catch (e) {
-      toast(errorMessage(e, 'Failed to create workspace'))
+      if (generation !== libraryGeneration) return null
+      toast(errorMessage(e, i18n.t('workspaceErrors.createWorkspace')))
       return null
     }
   },
 
   renameWorkspace: async (id: string, name: string) => {
+    const generation = libraryGeneration
     try {
       await api.workspaces.rename(id, name)
+      if (generation !== libraryGeneration) return
       set((s) => ({
         workspaces: s.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
       }))
     } catch (e) {
-      toast(errorMessage(e, 'Failed to rename workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.renameWorkspace')))
     }
   },
 
   deleteWorkspace: async (id: string) => {
+    const generation = libraryGeneration
     try {
       await api.workspaces.delete(id)
+      if (generation !== libraryGeneration) return
       set((s) => {
         const activeCleared = s.activeWorkspaceId === id
         return {
@@ -239,7 +258,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         }
       })
     } catch (e) {
-      toast(errorMessage(e, 'Failed to delete workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.deleteWorkspace')))
     }
   },
 
@@ -291,17 +311,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   deleteThread: async (threadId: string) => {
+    const generation = libraryGeneration
     try {
       await api.ai.chatDeleteThread(threadId)
+      if (generation !== libraryGeneration) return
       if (get().activeThreadId === threadId) {
         set({ activeThreadId: null })
       }
     } catch (e) {
-      toast(errorMessage(e, 'Failed to delete thread'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.deleteThread')))
     }
   },
 
   renameThread: async (threadId: string, title: string) => {
+    const generation = libraryGeneration
     const prev = get().threads
     set((s) => ({
       threads: s.threads.map((t) => (t.id === threadId ? { ...t, title } : t))
@@ -309,18 +333,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await api.ai.renameThread(threadId, title)
     } catch (e) {
+      if (generation !== libraryGeneration) return
       set({ threads: prev })
-      toast(errorMessage(e, 'Failed to rename thread'))
+      toast(errorMessage(e, i18n.t('workspaceErrors.renameThread')))
     }
   },
 
   fetchThreads: async (options) => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     try {
       const list = await api.ai.chatThreads(id)
-      if (get().activeWorkspaceId !== id) return
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
       set((state) => {
-        if (state.activeWorkspaceId !== id) return state
+        if (generation !== libraryGeneration || state.activeWorkspaceId !== id) return state
         const activeStillExists = list.some((thread) => thread.id === state.activeThreadId)
         const shouldSelectLatest =
           options?.selectLatestIfNone === true ||
@@ -335,8 +361,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         }
       })
     } catch (e) {
-      if (get().activeWorkspaceId !== id) return
-      toast(errorMessage(e, 'Failed to load chat threads'))
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadThreads')))
     }
   },
 
@@ -390,6 +416,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   fetchItems: async () => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id) {
       set({ items: [] })
@@ -397,28 +424,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceItems.list(id)
-      if (get().activeWorkspaceId !== id) return
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
       set({ items: list })
     } catch (e) {
-      if (get().activeWorkspaceId !== id) return
-      toast(errorMessage(e, 'Failed to load workspace items'))
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadItems')))
     }
   },
 
   addDocs: async (docIds: string[], placement?: WorkspaceItemPlacement) => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id || docIds.length === 0) return
     try {
       if (placement) await api.workspaceItems.add(id, 'document', docIds, placement)
       else await api.workspaceItems.add(id, 'document', docIds)
+      if (generation !== libraryGeneration) return
       await get().fetchItems()
     } catch (e) {
-      toast(errorMessage(e, 'Failed to add documents to workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.addDocuments')))
       throw e
     }
   },
 
   fetchAssets: async () => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id) {
       set({ assets: [] })
@@ -426,49 +457,60 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceAssets.list(id)
-      if (get().activeWorkspaceId !== id) return
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
       set({ assets: list })
     } catch (e) {
-      if (get().activeWorkspaceId !== id) return
-      toast(errorMessage(e, 'Failed to load workspace files'))
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadFiles')))
     }
   },
 
   addAssets: async (paths: string[], placement?: WorkspaceItemPlacement) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId) return
     try {
       const result = placement
         ? await api.workspaceAssets.addFiles(workspaceId, paths, placement)
         : await api.workspaceAssets.addFiles(workspaceId, paths)
-      if (get().activeWorkspaceId !== workspaceId) return
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return
       await Promise.all([get().fetchItems(), get().fetchAssets()])
       if (result.errors.length > 0) {
         toast(result.errors[0].message)
       }
     } catch (e) {
-      toast(errorMessage(e, 'Failed to add files to workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.addFiles')))
       throw e
     }
   },
 
   addFiles: async (paths: string[], placement?: WorkspaceItemPlacement) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId || paths.length === 0) return
     try {
       const result = placement
         ? await api.workspaceFiles.add(workspaceId, paths, placement)
         : await api.workspaceFiles.add(workspaceId, paths)
-      if (get().activeWorkspaceId !== workspaceId) return
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return
       await Promise.all([get().fetchItems(), get().fetchNotes(), get().fetchAssets()])
       if (result.errors.length > 0) toast(result.errors[0].message)
     } catch (e) {
-      toast(errorMessage(e, 'Failed to add files to workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.addFiles')))
       throw e
     }
   },
 
   deleteAsset: async (id: string) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     const previousAssets = get().assets
     const previousItems = get().items
@@ -479,35 +521,43 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await api.workspaceAssets.delete(id)
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
         set({ assets: previousAssets, items: previousItems })
       }
-      toast(errorMessage(e, 'Failed to delete workspace file'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.deleteFile')))
     }
   },
 
   addItem: async (kind: WorkspaceItemKind, ids: string[], placement?: WorkspaceItemPlacement) => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id || ids.length === 0) return
     try {
       if (placement) await api.workspaceItems.add(id, kind, ids, placement)
       else await api.workspaceItems.add(id, kind, ids)
+      if (generation !== libraryGeneration) return
       await get().fetchItems()
     } catch (e) {
-      toast(errorMessage(e, 'Failed to add items to workspace'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.addItems')))
     }
   },
 
   removeItem: async (itemId: string) => {
+    const generation = libraryGeneration
     try {
       await api.workspaceItems.remove(itemId)
+      if (generation !== libraryGeneration) return
       await get().fetchItems()
     } catch (e) {
-      toast(errorMessage(e, 'Failed to remove item'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.removeItem')))
     }
   },
 
   reorderItems: async (orderedIds: string[]) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId) return
     const previous = get().items
@@ -522,14 +572,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ items: reordered })
     try {
       const saved = await api.workspaceItems.reorder(workspaceId, orderedIds)
-      if (get().activeWorkspaceId === workspaceId) set({ items: saved })
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
+        set({ items: saved })
+      }
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) set({ items: previous })
-      toast(errorMessage(e, 'Failed to reorder workspace items'))
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
+        set({ items: previous })
+      }
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.reorderItems')))
     }
   },
 
   resizeItem: async (itemId: string, width: number, height: number) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId) return false
     const previousItem = get().items.find((item) => item.id === itemId)
@@ -539,7 +595,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }))
     try {
       const saved = await api.workspaceItems.resize(itemId, width, height)
-      if (get().activeWorkspaceId !== workspaceId) return true
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return true
       set((s) => ({
         items: s.items.map((item) =>
           item.id === itemId && item.width === width && item.height === height ? saved : item
@@ -547,7 +606,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }))
       return true
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
         set((s) => ({
           items: s.items.map((item) =>
             item.id === itemId && item.width === width && item.height === height
@@ -556,12 +615,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           )
         }))
       }
-      toast(errorMessage(e, 'Failed to save card size'))
+      if (generation !== libraryGeneration) return false
+      toast(errorMessage(e, i18n.t('workspaceErrors.saveCardSize')))
       return false
     }
   },
 
   moveItem: async (itemId: string, x: number, y: number, zIndex: number) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId) return false
     const previousItem = get().items.find((item) => item.id === itemId)
@@ -571,7 +632,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }))
     try {
       const saved = await api.workspaceItems.move(itemId, x, y, zIndex)
-      if (get().activeWorkspaceId !== workspaceId) return true
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return true
       set((s) => ({
         items: s.items.map((item) =>
           item.id === itemId && item.x === x && item.y === y && item.zIndex === zIndex
@@ -581,7 +645,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }))
       return true
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
         set((s) => ({
           items: s.items.map((item) =>
             item.id === itemId && item.x === x && item.y === y && item.zIndex === zIndex
@@ -590,12 +654,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           )
         }))
       }
-      toast(errorMessage(e, 'Failed to save card position'))
+      if (generation !== libraryGeneration) return false
+      toast(errorMessage(e, i18n.t('workspaceErrors.saveCardPosition')))
       return false
     }
   },
 
   fetchReports: async () => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id) {
       set({ reports: [] })
@@ -603,15 +669,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.reports.list(id)
-      if (get().activeWorkspaceId !== id) return
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
       set({ reports: list })
     } catch (e) {
-      if (get().activeWorkspaceId !== id) return
-      toast(errorMessage(e, 'Failed to load reports'))
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadReports')))
     }
   },
 
   deleteReport: async (id: string) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     const previousReports = get().reports
     const previousItems = get().items
@@ -622,27 +689,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await api.reports.delete(id)
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
         set({ reports: previousReports, items: previousItems })
       }
-      toast(errorMessage(e, 'Failed to delete report'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.deleteReport')))
     }
   },
 
   updateReport: async (id: string, patch: { title?: string; contentMd?: string }) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     try {
-      const updated = await api.reports.update(id, patch)
-      if (get().activeWorkspaceId !== workspaceId) return true
+      const updated = await trackRendererPersistence(api.reports.update(id, patch))
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return true
       set((s) => ({ reports: s.reports.map((r) => (r.id === id ? updated : r)) }))
       return true
     } catch (e) {
-      toast(errorMessage(e, 'Failed to update report'))
+      if (generation !== libraryGeneration) return false
+      toast(errorMessage(e, i18n.t('workspaceErrors.updateReport')))
       return false
     }
   },
 
   fetchNotes: async () => {
+    const generation = libraryGeneration
     const id = get().activeWorkspaceId
     if (!id) {
       set({ notes: [] })
@@ -650,11 +724,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceNotes.list(id)
-      if (get().activeWorkspaceId !== id) return
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
       set({ notes: list })
     } catch (e) {
-      if (get().activeWorkspaceId !== id) return
-      toast(errorMessage(e, 'Failed to load workspace notes'))
+      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.loadNotes')))
     }
   },
 
@@ -664,23 +738,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     noteType: WorkspaceNoteType,
     placement?: WorkspaceItemPlacement
   ) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     if (!workspaceId) return null
     try {
       const note = placement
         ? await api.workspaceNotes.create(workspaceId, title, contentMd, noteType, placement)
         : await api.workspaceNotes.create(workspaceId, title, contentMd, noteType)
-      if (get().activeWorkspaceId !== workspaceId) return null
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return null
       set((s) => ({ notes: [...s.notes, note] }))
       await get().fetchItems()
       return note
     } catch (e) {
-      toast(errorMessage(e, 'Failed to create workspace note'))
+      if (generation !== libraryGeneration) return null
+      toast(errorMessage(e, i18n.t('workspaceErrors.createNote')))
       return null
     }
   },
 
   deleteNote: async (id: string) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     const previousNotes = get().notes
     const previousItems = get().items
@@ -691,14 +771,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await api.workspaceNotes.delete(id)
     } catch (e) {
-      if (get().activeWorkspaceId === workspaceId) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
         set({ notes: previousNotes, items: previousItems })
       }
-      toast(errorMessage(e, 'Failed to delete workspace note'))
+      if (generation !== libraryGeneration) return
+      toast(errorMessage(e, i18n.t('workspaceErrors.deleteNote')))
     }
   },
 
   updateNote: async (id: string, patch: WorkspaceNotePatch) => {
+    const generation = libraryGeneration
     const workspaceId = get().activeWorkspaceId
     const previousNote = get().notes.find((note) => note.id === id)
     const revision = ++nextNoteUpdateRevision
@@ -716,14 +798,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         notes: s.notes.map((note) => note.id === id ? { ...note, ...patch } : note)
       }))
     }
-    const execute = () => api.workspaceNotes.update(id, patch)
+    const execute = () => generation === libraryGeneration
+      ? trackRendererPersistence(api.workspaceNotes.update(id, patch))
+      : Promise.reject()
     const previousQueue = noteUpdateQueues.get(id)
     const request = previousQueue ? previousQueue.then(execute) : execute()
     const settled = request.then(() => undefined, () => undefined)
     noteUpdateQueues.set(id, settled)
     try {
       const updated = await request
-      if (get().activeWorkspaceId !== workspaceId) return true
+      if (
+        generation !== libraryGeneration ||
+        get().activeWorkspaceId !== workspaceId
+      ) return true
       const hasLatestField = fields.some(isLatest)
       set((s) => ({
         notes: s.notes.map((note) => {
@@ -741,7 +828,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }))
       return true
     } catch (e) {
-      if (previousNote && get().activeWorkspaceId === workspaceId) {
+      if (
+        previousNote &&
+        generation === libraryGeneration &&
+        get().activeWorkspaceId === workspaceId
+      ) {
         set((s) => ({
           notes: s.notes.map((note) => {
             if (note.id !== id) return note
@@ -762,7 +853,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           })
         }))
       }
-      toast(errorMessage(e, 'Failed to update workspace note'))
+      if (generation !== libraryGeneration) return false
+      toast(errorMessage(e, i18n.t('workspaceErrors.updateNote')))
       return false
     } finally {
       const currentRevisions = noteUpdateRevisions.get(id)

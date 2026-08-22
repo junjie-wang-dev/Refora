@@ -11,6 +11,7 @@ from refora_server.providers.catalog import (
     providerRequiresApiKey,
 )
 from refora_server.services.ai_summary import build_provider_reasoning_options
+from refora_server.services.proxy import normalize_proxy_rules
 from refora_server.repositories.errors import RepoError
 
 TEST_TIMEOUT_MS = 8_000
@@ -53,6 +54,7 @@ def _fetch_models_from_endpoint(
     api_key: str,
     *,
     client_factory: Callable[..., Any] | None = None,
+    proxy: str = "",
 ) -> dict[str, Any]:
     base = base_url.rstrip("/")
     headers: dict[str, str] = {}
@@ -60,7 +62,10 @@ def _fetch_models_from_endpoint(
         headers["Authorization"] = f"Bearer {api_key}"
     client = client_factory(httpx.Client) if client_factory else httpx.Client
     try:
-        with client(timeout=TEST_TIMEOUT_MS / 1000) as session:
+        options: dict[str, Any] = {"timeout": TEST_TIMEOUT_MS / 1000}
+        if proxy:
+            options["proxy"] = proxy
+        with client(**options) as session:
             response = session.get(f"{base}/models", headers=headers)
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -84,6 +89,11 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
     deps = deps or {}
     client_factory = deps.get("client_factory") if isinstance(deps, dict) else None
     logger = deps.get("logger") if isinstance(deps, dict) else None
+    get_proxy = deps.get("get_proxy") if isinstance(deps, dict) else None
+
+    def _proxy_url() -> str:
+        value = get_proxy() if callable(get_proxy) else ""
+        return normalize_proxy_rules(value)
 
     def _warn(message: str) -> None:
         if logger is not None:
@@ -115,7 +125,10 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
                 return {"ok": False}
             normalized = normalize_base_url(provider["baseUrl"])
             result = _fetch_models_from_endpoint(
-                normalized, key, client_factory=client_factory
+                normalized,
+                key,
+                client_factory=client_factory,
+                proxy=_proxy_url(),
             )
             if not result["ok"]:
                 return {"ok": False}
@@ -137,7 +150,10 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
                 return {"ok": False, "models": [], "error": "Base URL is required"}
             normalized = normalize_base_url(provider["baseUrl"])
             result = _fetch_models_from_endpoint(
-                normalized, key, client_factory=client_factory
+                normalized,
+                key,
+                client_factory=client_factory,
+                proxy=_proxy_url(),
             )
             if not result["ok"]:
                 return {"ok": False, "models": [], "error": result.get("error", "")}

@@ -149,9 +149,11 @@ def configure_app(app: FastAPI) -> None:
         "ai_providers": services["aiProviders"],
         "ai_providers_repo": repos["aiProviders"],
         "exporter": services["export"],
+        "clipboard_temp": services["clipboardTemp"],
         "connector": connector,
         "metadata": services["metadata"],
         "emit": app.state.event_bus.broadcast,
+        "get_proxy": services.get("getProxy"),
     }
     workspace_deps = {
         "require_token": require_token,

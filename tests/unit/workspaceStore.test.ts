@@ -14,7 +14,9 @@ import type {
   WorkspaceItem,
   WorkspaceItemsChangedEvent,
   WorkspaceNote,
-  WorkspaceAsset
+  WorkspaceAsset,
+  Workspace,
+  ChatThread
 } from '../../src/shared/ipc-types'
 
 function makeReport(overrides: Partial<AiReport> = {}): AiReport {
@@ -741,6 +743,66 @@ describe('WorkspaceStore', () => {
       expect(useWorkspaceStore.getState().notes).toEqual([])
       expect(useWorkspaceStore.getState().assets).toEqual([])
       expect(useWorkspaceStore.getState().threads).toEqual([])
+    })
+
+    it('ignores delayed workspace and global thread responses from the previous library', async () => {
+      let resolveOldWorkspaces!: (workspaces: Workspace[]) => void
+      let resolveNewWorkspaces!: (workspaces: Workspace[]) => void
+      let resolveOldThreads!: (threads: ChatThread[]) => void
+      mockWorkspacesList
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOldWorkspaces = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveNewWorkspaces = resolve }))
+      mockChatThreads.mockImplementationOnce(
+        () => new Promise((resolve) => { resolveOldThreads = resolve })
+      )
+
+      useWorkspaceStore.getState().init()
+      const oldThreads = useWorkspaceStore.getState().fetchThreads()
+      const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void)
+      cb()
+
+      expect(useWorkspaceStore.getState().workspaces).toEqual([])
+      expect(useWorkspaceStore.getState().threads).toEqual([])
+      await vi.waitFor(() => expect(mockWorkspacesList).toHaveBeenCalledTimes(2))
+
+      const freshWorkspaces = [{ id: 'new-ws', name: 'New', createdAt: 1, updatedAt: 1 }]
+      resolveNewWorkspaces(freshWorkspaces)
+      await vi.waitFor(() => {
+        expect(useWorkspaceStore.getState().workspaces).toEqual(freshWorkspaces)
+      })
+
+      resolveOldWorkspaces([{ id: 'old-ws', name: 'Old', createdAt: 0, updatedAt: 0 }])
+      resolveOldThreads([
+        { id: 'old-thread', workspaceId: null, providerId: 'p', title: 'Old', createdAt: 0 }
+      ])
+      await oldThreads
+      await Promise.resolve()
+
+      expect(useWorkspaceStore.getState().workspaces).toEqual(freshWorkspaces)
+      expect(useWorkspaceStore.getState().threads).toEqual([])
+    })
+
+    it('ignores delayed content when workspace ids are reused in another library', async () => {
+      let resolveOldItems!: (items: WorkspaceItem[]) => void
+      let resolveNewItems!: (items: WorkspaceItem[]) => void
+      mockWorkspaceItemsList
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOldItems = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveNewItems = resolve }))
+      useWorkspaceStore.getState().init()
+      useWorkspaceStore.setState({ activeWorkspaceId: 'shared-workspace' })
+      const oldItems = useWorkspaceStore.getState().fetchItems()
+      const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void)
+      cb()
+      useWorkspaceStore.setState({ activeWorkspaceId: 'shared-workspace' })
+      const newItemsRequest = useWorkspaceStore.getState().fetchItems()
+      const newItems = [makeItem({ id: 'new-item', workspaceId: 'shared-workspace' })]
+      resolveNewItems(newItems)
+      await newItemsRequest
+
+      resolveOldItems([makeItem({ id: 'old-item', workspaceId: 'shared-workspace' })])
+      await oldItems
+
+      expect(useWorkspaceStore.getState().items).toEqual(newItems)
     })
   })
 

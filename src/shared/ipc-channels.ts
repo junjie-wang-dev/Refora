@@ -1,5 +1,6 @@
 export const IpcChannel = {
   Bootstrap: 'app:bootstrap',
+  RendererFlushComplete: 'app:renderer-flush-complete',
 
   DocumentsList: 'documents:list',
   DocumentsCount: 'documents:count',
@@ -153,6 +154,7 @@ export const IpcChannel = {
   AiReportsUpdate: 'ai:reports:update',
 
   EventDocumentUpdated: 'document:updated',
+  EventRendererFlushRequested: 'app:renderer-flush-requested',
   EventWindowFocusChanged: 'window:focus-changed',
   EventImportProgress: 'import:progress',
   EventImportToast: 'import:toast',

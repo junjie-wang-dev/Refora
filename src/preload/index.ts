@@ -111,6 +111,7 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const subscriptions = new Map<unknown, { channel: string; ipcListener: (...args: unknown[]) => void }>()
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let authConfirmationSubscriber: ((payload: SyncAuthConfirmation) => void) | null = null
+let rendererFlushSubscriber: (() => Promise<void>) | null = null
 
 ipcRenderer.on(IpcChannel.EventSyncAuthConfirmation, (...args: unknown[]) => {
   const payload = args[1] as SyncAuthConfirmation
@@ -119,6 +120,20 @@ ipcRenderer.on(IpcChannel.EventSyncAuthConfirmation, (...args: unknown[]) => {
   } else {
     pendingAuthConfirmation = payload
   }
+})
+
+ipcRenderer.on(IpcChannel.EventRendererFlushRequested, (...args: unknown[]) => {
+  const requestId = args[1]
+  if (typeof requestId !== 'string') return
+  const task = Promise.resolve().then(() => rendererFlushSubscriber?.())
+  void task.then(
+    () => invoke<void>(IpcChannel.RendererFlushComplete, requestId),
+    (error: unknown) => invoke<void>(
+      IpcChannel.RendererFlushComplete,
+      requestId,
+      error instanceof Error ? error.message : String(error)
+    )
+  ).catch(() => undefined)
 })
 
 const SINGLE_SUBSCRIBER_CHANNELS = new Set([
@@ -151,6 +166,10 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): void {
 }
 
 function unsubscribe(channel: string, cb: unknown): void {
+  if (channel === IpcChannel.EventRendererFlushRequested && rendererFlushSubscriber === cb) {
+    rendererFlushSubscriber = null
+    return
+  }
   if (channel === IpcChannel.EventSyncAuthConfirmation && authConfirmationSubscriber === cb) {
     authConfirmationSubscriber = null
     return
@@ -453,6 +472,9 @@ const api: ReforaApi = {
   },
 
   events: {
+    onRendererFlushRequested: (cb: () => Promise<void>) => {
+      rendererFlushSubscriber = cb
+    },
     onDocumentUpdated: (cb: (doc: Document) => void) =>
       subscribe(IpcChannel.EventDocumentUpdated, cb),
     onWindowFocusChanged: (cb: (focused: boolean) => void) =>

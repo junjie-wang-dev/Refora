@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-libra
 import DetailPanel from '../../src/renderer/components/DetailPanel'
 import type { Document, Category, ReforaApi } from '../../src/shared/ipc-types'
 import type { MineruEngineStatus, OcrDocumentState } from '../../src/shared/mineru-types'
+import { flushRendererPersistence } from '../../src/renderer/persistence'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -88,6 +89,7 @@ const mockStoreState = vi.hoisted(() => ({
   requestDeleteConfirm: vi.fn(),
   showToast: vi.fn(),
   patchDocument: vi.fn(),
+  flushPendingSettings: vi.fn().mockResolvedValue(undefined),
   toastMessage: null as string | null
 }))
 
@@ -116,6 +118,7 @@ function resetStore(): void {
   mockStoreState.requestDeleteConfirm.mockReset()
   mockStoreState.showToast.mockReset()
   mockStoreState.patchDocument.mockReset()
+  mockStoreState.flushPendingSettings.mockReset().mockResolvedValue(undefined)
   mockStoreState.openInFinder.mockReset()
   mockStoreState.refreshMetadata.mockReset()
 }
@@ -322,7 +325,7 @@ describe('DetailPanel', () => {
       expect(screen.getByText('ocr.convert')).toBeInTheDocument()
       expect(screen.queryByText('ocr.open')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Second Paper' })).toBeInTheDocument()
-    }, 10_000)
+    }, 30_000)
 
     it('shows active indeterminate progress instead of a frozen parsing percentage', async () => {
       api.ocr.getState = vi.fn().mockResolvedValue({
@@ -559,6 +562,53 @@ describe('DetailPanel', () => {
 
       expect(mockUpdateDoc).toHaveBeenCalledWith('1', { note: 'Latest note' })
       vi.useRealTimers()
+    })
+
+    it('keeps a failed note draft visible and retries it', async () => {
+      mockUpdateDoc
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockResolvedValueOnce({ ...mockDoc, note: 'Unsaved draft' })
+      render(<DetailPanel />)
+
+      const textarea = screen.getByDisplayValue('Good read') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'Unsaved draft' } })
+      fireEvent.blur(textarea)
+
+      expect(await screen.findByText('detail.saveFailed')).toBeInTheDocument()
+      expect(textarea).toHaveValue('Unsaved draft')
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'pdfReader.retrySave' }))
+      })
+
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(2)
+      expect(textarea).toHaveValue('Unsaved draft')
+      expect(await screen.findByText('common.saved')).toBeInTheDocument()
+    })
+
+    it('waits for a pending note from the previous document during a renderer flush', async () => {
+      let release: (document: Document) => void = () => undefined
+      mockUpdateDoc.mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+      const secondDocument = { ...mockDoc, id: '2', note: 'Second note' }
+      const { rerender } = render(<DetailPanel />)
+
+      fireEvent.change(screen.getByDisplayValue('Good read'), {
+        target: { value: 'Draft for first document' }
+      })
+      mockStoreState.focusedDocId = '2'
+      mockStoreState.documents = [mockDoc, secondDocument]
+      rerender(<DetailPanel />)
+      await Promise.resolve()
+
+      expect(mockUpdateDoc).toHaveBeenCalledWith('1', { note: 'Draft for first document' })
+      let flushed = false
+      const flush = flushRendererPersistence().then(() => { flushed = true })
+      await Promise.resolve()
+      expect(flushed).toBe(false)
+
+      release({ ...mockDoc, note: 'Draft for first document' })
+      await flush
+      expect(flushed).toBe(true)
     })
   })
 

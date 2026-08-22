@@ -19,170 +19,16 @@ import type {
   DocumentPatch
 } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
-import type {
-  MineruInstallProgress,
-  OcrCompletedEvent,
-  OcrDocumentState,
-  OcrErrorEvent,
-  OcrProfile,
-  OcrProgressEvent
-} from '../../shared/mineru-types'
-import { IpcChannel } from '../../shared/ipc-channels'
-import { useOcrReaderStore } from '../store/ocrReaderStore'
-import OcrProgressCard from './OcrProgressCard'
 import { openDocumentPdf } from '../utils/openPdf'
+import OcrSection from './OcrSection'
+import {
+  pendingDocumentNote,
+  persistDocumentNote,
+  stageDocumentNote,
+  subscribeDocumentNoteStatus
+} from '../persistence'
 
 type InlineFieldVariant = 'default' | 'title' | 'year' | 'authors' | 'metadata' | 'abstract'
-
-function OcrSection({ doc }: { doc: Document }) {
-  const { t } = useTranslation()
-  const openReader = useOcrReaderStore((state) => state.open)
-  const [state, setState] = useState<OcrDocumentState | null>(null)
-  const [profile, setProfile] = useState<OcrProfile>('balanced')
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const refreshGeneration = useRef(0)
-  const readerFailedMessage = t('ocr.readerFailed')
-
-  const refresh = useCallback(async () => {
-    const generation = refreshGeneration.current + 1
-    refreshGeneration.current = generation
-    try {
-      const next = await api.ocr.getState(doc.id)
-      if (refreshGeneration.current !== generation) return
-      setState(next)
-      setError(null)
-    } catch (value) {
-      if (refreshGeneration.current !== generation) return
-      setError(errorMessage(value, readerFailedMessage))
-    } finally {
-      if (refreshGeneration.current === generation) setLoading(false)
-    }
-  }, [doc.id, readerFailedMessage])
-
-  useEffect(() => {
-    setState(null)
-    setError(null)
-    setLoading(true)
-    void refresh()
-    const onProgress = (payload: OcrProgressEvent) => {
-      if (payload.job.documentId !== doc.id) return
-      void refresh()
-      setError(null)
-    }
-    const onCompleted = (payload: OcrCompletedEvent) => {
-      if (payload.documentId !== doc.id) return
-      void refresh()
-      setError(null)
-    }
-    const onError = (payload: OcrErrorEvent) => {
-      if (payload.documentId !== doc.id) return
-      refreshGeneration.current += 1
-      setState((current) => current ? { ...current, activeJob: null } : current)
-      setLoading(false)
-      setError(t('ocr.failed', { message: payload.message }))
-    }
-    const onInstallProgress = (payload: MineruInstallProgress) => {
-      if (payload.stage === 'completed') void refresh()
-    }
-    api.events.onOcrProgress(onProgress)
-    api.events.onOcrCompleted(onCompleted)
-    api.events.onOcrError(onError)
-    api.events.onMineruInstallProgress(onInstallProgress)
-    return () => {
-      refreshGeneration.current += 1
-      api.events.off(IpcChannel.EventOcrProgress, onProgress)
-      api.events.off(IpcChannel.EventOcrCompleted, onCompleted)
-      api.events.off(IpcChannel.EventOcrError, onError)
-      api.events.off(IpcChannel.EventMineruInstallProgress, onInstallProgress)
-    }
-  }, [doc.id, refresh])
-
-  const start = async () => {
-    setError(null)
-    try {
-      const job = await api.ocr.start(doc.id, profile)
-      setState((current) => current ? { ...current, activeJob: job } : current)
-    } catch (value) {
-      setError(errorMessage(value, readerFailedMessage))
-    }
-  }
-
-  const cancel = async () => {
-    if (!state?.activeJob) return
-    try {
-      await api.ocr.cancel(state.activeJob.id)
-      await refresh()
-    } catch (value) {
-      setError(errorMessage(value, readerFailedMessage))
-    }
-  }
-
-  if (loading) return null
-  const installed = state?.engine.state === 'installed'
-  const job = state?.activeJob
-  const result = state?.result
-
-  return (
-    <div className="mt-5 flex flex-col gap-3 border-t border-border pt-5">
-      <div>
-        <div className="text-label font-semibold uppercase tracking-wide text-muted">
-          {t('ocr.title')}
-        </div>
-        <p className="mb-0 mt-1 text-xs leading-5 text-muted">{t('ocr.description')}</p>
-      </div>
-
-      {job ? (
-        <OcrProgressCard job={job} onCancel={() => void cancel()} />
-      ) : (
-        <>
-          {result && (
-            <div className="flex flex-col gap-2">
-              {result.stale && (
-                <div className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
-                  {t('ocr.stale')}
-                </div>
-              )}
-              <Button
-                variant="primary"
-                size="sm"
-                className="self-start"
-                icon={<FileText className="h-3.5 w-3.5" />}
-                onClick={() => openReader(doc.id, result.resultKey, doc.title || doc.fileName)}
-              >
-                {t('ocr.open')}
-              </Button>
-            </div>
-          )}
-          {installed ? (
-            <div className="flex items-center gap-2">
-              <Select
-                value={profile}
-                onChange={(value) => setProfile(value as OcrProfile)}
-                options={(['compatible', 'balanced', 'quality'] as OcrProfile[]).map((value) => ({
-                  value,
-                  label: t(`ocr.profiles.${value}`)
-                }))}
-                size="small"
-                style={{ minWidth: 150 }}
-                aria-label={t('ocr.profile')}
-              />
-              <Button variant="ghost" size="sm" onClick={() => void start()}>
-                {result ? t('ocr.rebuild') : t('ocr.convert')}
-              </Button>
-            </div>
-          ) : (
-            <div className="rounded-lg bg-panel-2 px-3 py-2 text-xs text-muted">
-              {t('ocr.engineRequired')}
-            </div>
-          )}
-        </>
-      )}
-
-      {error && <div className="rounded-lg bg-error/10 px-3 py-2 text-xs text-error">{error}</div>}
-    </div>
-  )
-}
 
 const DISPLAY_CLASSES: Record<InlineFieldVariant, string> = {
   default: 'rounded-lg bg-background px-3 py-1.5 text-sm leading-5',
@@ -397,68 +243,111 @@ function NoteField({
   onSaved: (doc: Document) => void
 }) {
   const { t } = useTranslation()
-  const [text, setText] = useState(value ?? '')
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const pendingDraft = pendingDocumentNote(docId)
+  const [text, setText] = useState(pendingDraft ?? value ?? '')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>(
+    pendingDraft === undefined ? 'idle' : 'error'
+  )
   const saveRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const statusRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const textRef = useRef(value ?? '')
+  const textRef = useRef(pendingDraft ?? value ?? '')
   const editVersionRef = useRef(0)
-  const dirtyRef = useRef(false)
+  const dirtyRef = useRef(pendingDraft !== undefined)
   const docIdRef = useRef(docId)
+  const savedTextRef = useRef(value ?? '')
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   useEffect(() => {
     if (docIdRef.current !== docId) {
       docIdRef.current = docId
       dirtyRef.current = false
       editVersionRef.current++
+      savedTextRef.current = value ?? ''
     }
     if (dirtyRef.current) return
+    savedTextRef.current = value ?? ''
     textRef.current = value ?? ''
     setText(value ?? '')
   }, [docId, value])
 
-  useEffect(() => {
-    return () => {
-      if (saveRef.current) clearTimeout(saveRef.current)
-      if (statusRef.current) clearTimeout(statusRef.current)
+  const save = useCallback((nextText: string, editVersion: number) => {
+    const run = async () => {
+      if (nextText === savedTextRef.current) {
+        if (editVersion === editVersionRef.current) {
+          dirtyRef.current = false
+          setStatus('idle')
+        }
+        return
+      }
+      if (editVersion === editVersionRef.current) setStatus('saving')
+      try {
+        const doc = await persistDocumentNote(docId)
+        savedTextRef.current = nextText
+        if (editVersion === editVersionRef.current) {
+          dirtyRef.current = false
+          setStatus('saved')
+          if (statusRef.current) clearTimeout(statusRef.current)
+          statusRef.current = setTimeout(() => setStatus('idle'), 2000)
+        }
+        if (doc) onSaved(doc)
+      } catch (error) {
+        if (editVersion === editVersionRef.current) {
+          dirtyRef.current = true
+          setStatus('error')
+        }
+        throw error
+      }
     }
-  }, [])
+    const task = saveQueueRef.current.then(run, run)
+    saveQueueRef.current = task.catch(() => undefined)
+    return task
+  }, [docId, onSaved])
 
-  const save = useCallback(async (nextText: string, editVersion: number) => {
-    const current = value ?? ''
-    if (nextText === current) {
-      if (editVersion === editVersionRef.current) dirtyRef.current = false
-      return
+  const flush = useCallback(async () => {
+    if (saveRef.current) {
+      clearTimeout(saveRef.current)
+      saveRef.current = undefined
     }
-    setStatus('saving')
-    try {
-      const doc = await api.documents.update(docId, { note: nextText })
-      if (editVersion === editVersionRef.current) {
+    if (dirtyRef.current) {
+      await save(textRef.current, editVersionRef.current)
+    } else {
+      await saveQueueRef.current
+    }
+  }, [save])
+
+  useEffect(() => {
+    const unsubscribe = subscribeDocumentNoteStatus(docId, (nextStatus) => {
+      if (nextStatus === 'saved') {
         dirtyRef.current = false
+        savedTextRef.current = textRef.current
         setStatus('saved')
         if (statusRef.current) clearTimeout(statusRef.current)
         statusRef.current = setTimeout(() => setStatus('idle'), 2000)
+        return
       }
-      onSaved(doc)
-    } catch {
-      if (editVersion === editVersionRef.current) {
-        dirtyRef.current = false
-        textRef.current = current
-        setText(current)
-        setStatus('idle')
-      }
+      if (nextStatus === 'error') dirtyRef.current = true
+      setStatus(nextStatus)
+    })
+    return () => {
+      unsubscribe()
+      if (statusRef.current) clearTimeout(statusRef.current)
+      if (saveRef.current) clearTimeout(saveRef.current)
+      void persistDocumentNote(docId).catch(() => undefined)
     }
-  }, [value, docId, onSaved])
+  }, [docId])
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextText = e.target.value
     const editVersion = ++editVersionRef.current
     dirtyRef.current = true
     textRef.current = nextText
+    stageDocumentNote(docId, nextText, savedTextRef.current)
     setText(nextText)
+    setStatus('idle')
     if (saveRef.current) clearTimeout(saveRef.current)
     saveRef.current = setTimeout(() => {
-      void save(nextText, editVersion)
+      saveRef.current = undefined
+      void save(nextText, editVersion).catch(() => undefined)
     }, 1000)
   }
 
@@ -476,6 +365,20 @@ function NoteField({
             {t('common.saved')}
           </span>
         )}
+        {status === 'error' && (
+          <>
+            <span className="text-caption font-normal normal-case text-error">
+              {t('detail.saveFailed')}
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              onClick={() => void flush().catch(() => undefined)}
+            >
+              {t('pdfReader.retrySave')}
+            </Button>
+          </>
+        )}
       </span>
       <Textarea
         variant="filled"
@@ -484,8 +387,11 @@ function NoteField({
         value={text}
         onChange={handleChange}
         onBlur={() => {
-          if (saveRef.current) clearTimeout(saveRef.current)
-          void save(textRef.current, editVersionRef.current)
+          if (saveRef.current) {
+            clearTimeout(saveRef.current)
+            saveRef.current = undefined
+          }
+          void save(textRef.current, editVersionRef.current).catch(() => undefined)
         }}
       />
     </div>
@@ -517,9 +423,12 @@ function CategoryChips({
     try {
       await api.categories.unassign(docId, catId)
       void fetchCategories()
-    } catch {
+    } catch (error) {
       if (removed) setAssigned((prev) => { const s = [...prev, removed]; return s })
-      fetchCategories().catch(() => {})
+      useDocumentStore.getState().showToast(
+        errorMessage(error, t('documentErrors.assignCategoryFailed'))
+      )
+      void fetchCategories()
     }
   }
 
@@ -529,9 +438,12 @@ function CategoryChips({
     try {
       await api.categories.assign(docId, catId)
       void fetchCategories()
-    } catch {
+    } catch (error) {
       setAssigned((prev) => prev.filter((c) => c.id !== catId))
-      fetchCategories().catch(() => {})
+      useDocumentStore.getState().showToast(
+        errorMessage(error, t('documentErrors.assignCategoryFailed'))
+      )
+      void fetchCategories()
     }
   }
 
@@ -639,7 +551,9 @@ function SingleDetail({ doc }: { doc: Document }) {
       const updated = await openDocumentPdf(doc.id)
       patchDocument(doc.id, updated)
     } catch (e) {
-      useDocumentStore.getState().showToast(errorMessage(e, 'Failed to open PDF'))
+      useDocumentStore.getState().showToast(
+        errorMessage(e, t('documentErrors.openPdfFailed'))
+      )
     }
   }
 
@@ -856,7 +770,7 @@ function SingleDetail({ doc }: { doc: Document }) {
         <OcrSection key={doc.id} doc={doc} />
 
         <div className="mt-5">
-          <NoteField value={doc.note ?? ''} docId={doc.id} onSaved={onSaved} />
+          <NoteField key={doc.id} value={doc.note ?? ''} docId={doc.id} onSaved={onSaved} />
         </div>
 
         <div className="mt-4">

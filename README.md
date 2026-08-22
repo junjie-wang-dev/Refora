@@ -109,4 +109,4 @@ Plans, model activity, tool calls, token usage, and live progress are visible in
 
 ## License
 
-The project package metadata declares the [MIT license](package.json).
+The project is distributed under the [MIT license](LICENSE).

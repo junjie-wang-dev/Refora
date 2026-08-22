@@ -4,6 +4,7 @@ import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
 import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
 import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
 import { createSyncHandlers } from '../../src/main/sidecar/ipc/sync'
+import { createAppLifecycleIpcHandlers } from '../../src/main/services/appLifecycleIpc'
 import { IpcChannel } from '../../src/shared/ipc-channels'
 import type { ServerClient } from '../../src/main/sidecar/client'
 import type { SyncAccountService } from '../../src/main/services/syncAccount'
@@ -17,7 +18,8 @@ describe('server IPC handler coverage', () => {
       ...createServerLibraryHandlers({ serverClient }),
       ...createServerWorkspaceHandlers(serverClient),
       ...createServerAiHandlers({ serverClient }),
-      ...createSyncHandlers(syncAccountService)
+      ...createSyncHandlers(syncAccountService),
+      ...createAppLifecycleIpcHandlers({ completeRendererFlush: () => true })
     }
     const requestChannels = Object.entries(IpcChannel)
       .filter(([name]) => !name.startsWith('Event'))

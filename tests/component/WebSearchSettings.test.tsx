@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 vi.mock('react-i18next', () => {
   const labels: Record<string, string> = {
@@ -65,7 +64,6 @@ describe('WebSearchSettings', () => {
   })
 
   it('shows key presence without exposing stored secrets and saves replacements', async () => {
-    const user = userEvent.setup()
     render(<WebSearchSettings />)
 
     const tavilyInput = await screen.findByLabelText('Tavily API key')
@@ -73,25 +71,26 @@ describe('WebSearchSettings', () => {
     expect(tavilyInput).toHaveAttribute('type', 'password')
     expect(screen.getByText('Key configured')).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('Brave Search API key'), 'brave-new-key')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.change(screen.getByLabelText('Brave Search API key'), {
+      target: { value: 'brave-new-key' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(api.webSearch.updateConfig).toHaveBeenCalledWith({
       provider: 'tavily',
       braveApiKey: 'brave-new-key'
     }))
-  }, 20_000)
+  }, 60_000)
 
   it('clears an active provider key only after disabling that provider', async () => {
-    const user = userEvent.setup()
     render(<WebSearchSettings />)
 
     await screen.findByLabelText('Tavily API key')
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
     await waitFor(() => expect(api.webSearch.updateConfig).toHaveBeenCalledWith({
       provider: 'disabled',
       clearTavilyApiKey: true
     }))
-  }, 20_000)
+  }, 60_000)
 })

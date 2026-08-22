@@ -12,7 +12,11 @@ from refora_server.cli_runtime.definitions import (
     CodexCliAdapter,
     GeminiCliAdapter,
 )
-from refora_server.cli_runtime.engine import CliRuntimeEngine, _build_prompt
+from refora_server.cli_runtime.engine import (
+    CliRuntimeEngine,
+    _build_prompt,
+    _cli_subprocess_environment,
+)
 from refora_server.cli_runtime.mcp_server import _handle
 from refora_server.cli_runtime.registry import CliRuntimeRegistry
 from refora_server.cli_runtime.types import CliInvocation, CliRuntimeCapabilities
@@ -762,3 +766,30 @@ async def test_cli_engine_strips_refora_env_from_subprocess(tmp_path, monkeypatc
 
     delta = next(event["delta"] for event in events if event["event"] == "token")
     assert delta == "leaked=[]"
+
+
+def test_cli_environment_uses_runtime_specific_allowlists(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/Users/tester")
+    monkeypatch.setenv("CODEX_HOME", "/Users/tester/.codex-custom")
+    monkeypatch.setenv("OPENAI_API_KEY", "codex-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "unrelated-secret")
+    monkeypatch.setenv("REFORA_SERVER_TOKEN", "server-secret")
+
+    codex = _cli_subprocess_environment({"ADAPTER_SETTING": "on"}, "codex")
+    gemini = _cli_subprocess_environment({}, "gemini")
+    unknown = _cli_subprocess_environment({}, "custom")
+
+    assert codex["PATH"] == "/usr/bin:/bin"
+    assert codex["HOME"] == "/Users/tester"
+    assert codex["CODEX_HOME"] == "/Users/tester/.codex-custom"
+    assert codex["OPENAI_API_KEY"] == "codex-key"
+    assert codex["ADAPTER_SETTING"] == "on"
+    assert "GEMINI_API_KEY" not in codex
+    assert gemini["GEMINI_API_KEY"] == "gemini-key"
+    assert "OPENAI_API_KEY" not in gemini
+    assert "CODEX_HOME" not in unknown
+    for environment in (codex, gemini, unknown):
+        assert "AWS_SECRET_ACCESS_KEY" not in environment
+        assert "REFORA_SERVER_TOKEN" not in environment

@@ -5,11 +5,15 @@ import {
   useCallback,
   createContext,
   useContext,
-  useMemo
+  useMemo,
+  useRef
 } from 'react'
 import { api } from '../ipc'
+import i18n from '../i18n'
+import { useDocumentStore } from '../store/documentStore'
 import { injectThemeCssVars } from '../theme/tokens'
 import type { ThemeMode } from '../../shared/ipc-types'
+import { trackRendererPersistence } from '../persistence'
 
 export type { ThemeMode } from '../../shared/ipc-types'
 export type ResolvedTheme = 'dark' | 'light'
@@ -38,6 +42,7 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>('system')
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme)
+  const loadVersionRef = useRef(0)
 
   const resolvedTheme = mode === 'system' ? systemTheme : mode
 
@@ -45,19 +50,42 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
     applyResolvedTheme(resolvedTheme)
   }, [resolvedTheme])
 
-  useEffect(() => {
-    api.settings
-      .get<string>(STORAGE_KEY, 'system')
-      .then((saved: string) => {
-        const m = saved === 'dark' || saved === 'light' ? saved : 'system'
-        setModeState(m)
-        api.appearance.setThemeSource(m).catch(() => {})
-      })
-      .catch(() => {
-        setModeState('system')
-        api.appearance.setThemeSource('system').catch(() => {})
-      })
+  const loadTheme = useCallback(async (showError: boolean) => {
+    const version = ++loadVersionRef.current
+    let nextMode: ThemeMode = 'system'
+    let errorShown = false
+    try {
+      const saved = await api.settings.get<string>(STORAGE_KEY, 'system')
+      nextMode = saved === 'dark' || saved === 'light' ? saved : 'system'
+    } catch {
+      if (version !== loadVersionRef.current) return
+      if (showError) {
+        useDocumentStore.getState().showToast(i18n.t('common.settingsLoadFailed'))
+        errorShown = true
+      }
+    }
+    if (version !== loadVersionRef.current) return
+    setModeState(nextMode)
+    try {
+      await api.appearance.setThemeSource(nextMode)
+    } catch {
+      if (version === loadVersionRef.current && showError && !errorShown) {
+        useDocumentStore.getState().showToast(i18n.t('common.settingsLoadFailed'))
+      }
+    }
   }, [])
+
+  useEffect(() => {
+    void loadTheme(true)
+    const handleLibrarySwitched = () => {
+      void loadTheme(true)
+    }
+    api.events.onLibrarySwitched(handleLibrarySwitched)
+    return () => {
+      loadVersionRef.current += 1
+      api.events.off('library:switched', handleLibrarySwitched)
+    }
+  }, [loadTheme])
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
@@ -70,10 +98,15 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const setMode = useCallback((newMode: ThemeMode) => {
+    loadVersionRef.current += 1
     setModeState(newMode)
-    api.appearance.setThemeSource(newMode).catch(() => {})
-    api.settings.set(STORAGE_KEY, newMode).catch(() => {})
-  }, [])
+    void trackRendererPersistence(api.settings.set(STORAGE_KEY, newMode))
+      .then(() => api.appearance.setThemeSource(newMode))
+      .catch(() => {
+        useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+        void loadTheme(false)
+      })
+  }, [loadTheme])
 
   const value = useMemo<ThemeContextValue>(
     () => ({ mode, resolvedTheme, setMode }),

@@ -107,6 +107,30 @@ def test_create_model_temperature_none_omits_temperature_kwarg(monkeypatch: pyte
     assert "max_completion_tokens" not in captured
 
 
+def test_create_model_configures_proxy_on_owned_openai_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("refora_server.agent.providers.ChatOpenAI.__init__", fake_init)
+
+    providers.create_model(
+        {
+            "model": "gpt-4o",
+            "baseUrl": "https://example.test/v1",
+            "apiKey": "test-key",
+        },
+        proxy="socks5://127.0.0.1:1080",
+    )
+
+    assert captured["openai_proxy"] == "socks5://127.0.0.1:1080"
+    assert "http_client" not in captured
+    assert "http_async_client" not in captured
+
+
 def test_create_model_use_responses_api_true_sets_attribute() -> None:
     config: dict[str, Any] = {
         "model": "gpt-4o",

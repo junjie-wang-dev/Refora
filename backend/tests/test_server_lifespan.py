@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 from fastapi import FastAPI
 from pypdf import PdfWriter
 import pytest
 
 from refora_server.server.connector import ConnectorBroker
-from refora_server.server.lifespan import create_lifespan
+from refora_server.server.lifespan import _download_mineru_file, create_lifespan
 
 
 class EventSocket:
@@ -18,6 +18,63 @@ class EventSocket:
 
     async def send_json(self, message) -> None:
         self.messages.append(message)
+
+
+async def test_mineru_download_uses_proxy_and_closes_client(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    class Response:
+        headers = {"content-length": "3"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self, _size):
+            yield b"pdf"
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            captured["closed"] = True
+            return False
+
+        def stream(self, method, url):
+            captured["request"] = (method, url)
+            return Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", Client)
+    destination = tmp_path / "engine.bin"
+
+    await _download_mineru_file(
+        "https://example.test/engine.bin",
+        str(destination),
+        asyncio.Event(),
+        lambda *_args: None,
+        proxy="socks5://127.0.0.1:1080",
+    )
+
+    assert destination.read_bytes() == b"pdf"
+    assert captured == {
+        "follow_redirects": True,
+        "timeout": 60.0,
+        "proxy": "socks5://127.0.0.1:1080",
+        "request": ("GET", "https://example.test/engine.bin"),
+        "closed": True,
+    }
 
 
 async def test_lifespan_starts_watcher_and_processes_metadata_in_python(
@@ -260,7 +317,12 @@ async def test_lifespan_recovers_active_runs_after_connector_subscription(
 
 async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
     db = object()
-    repos = {"documents": object()}
+    repos = {
+        "documents": object(),
+        "settings": {"get": lambda key, default="": (
+            "http://127.0.0.1:8080" if key == "proxyUrl" else default
+        )},
+    }
     events = Mock(flush=AsyncMock(), broadcast=AsyncMock())
     connector = Mock(cancel_pending=AsyncMock())
     runtime = {"destroy": AsyncMock()}
@@ -273,9 +335,13 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             SimpleNamespace(name="web_search"),
         ]
     )
-    model_factory = Mock(return_value="model")
+    model = SimpleNamespace(
+        invoke=Mock(return_value=SimpleNamespace(content="Generated title"))
+    )
+    model_factory = Mock(return_value=model)
     agent_factory = Mock(return_value="agent")
-    summary_factory = Mock(return_value={})
+    destroy_summary = Mock()
+    summary_factory = Mock(return_value={"destroy": destroy_summary})
     title_factory = Mock(return_value={"generateThreadTitle": Mock()})
     execute_sandbox = Mock(return_value={"status": "ok"})
     install_runtime_packages = Mock(return_value={"status": "ok"})
@@ -427,19 +493,28 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         assert callable(summary_dependencies["emit_error"])
         assert callable(title_factory.call_args.args[1]["generate_title"])
 
-        assert dependencies["createModel"](
-            {
-                "model": "test-model",
-                "apiKey": "test-key",
-                "baseUrl": "https://example.test/v1",
-                "useResponsesApi": True,
-                "modelKwargs": {"reasoning_effort": "high"},
-                "reasoning": {"effort": "high", "summary": "auto"},
-                "temperature": 0.2,
-                "maxTokens": 123,
-            }
-        ) == "model"
-        model_factory.assert_called_once_with(
+        provider = {
+            "model": "test-model",
+            "apiKey": "test-key",
+            "baseUrl": "https://example.test/v1",
+            "useResponsesApi": True,
+            "modelKwargs": {"reasoning_effort": "high"},
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "temperature": 0.2,
+            "maxTokens": 123,
+        }
+        assert summary_dependencies["generate_summary"](
+            {"provider": provider, "text": "Paper body"}
+        ) == "Generated title"
+        assert title_factory.call_args.args[1]["generate_title"](
+            {"provider": provider, "userMessage": "Discuss the paper"}
+        ) == "Generated title"
+        assert dependencies["createModel"](provider) is model
+        assert model_factory.call_count == 3
+        for invocation in model_factory.call_args_list:
+            assert invocation.kwargs["http_client"] is not None
+            assert invocation.kwargs["http_async_client"] is not None
+        model_factory.assert_called_with(
             model="test-model",
             api_key="test-key",
             base_url="https://example.test/v1",
@@ -449,6 +524,8 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             reasoning={"effort": "high", "summary": "auto"},
             temperature=0.2,
             max_completion_tokens=123,
+            http_client=ANY,
+            http_async_client=ANY,
         )
 
         runtime_tools = [
@@ -479,6 +556,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         }
 
     runtime["destroy"].assert_awaited_once()
+    destroy_summary.assert_called_once_with()
 
 
 async def test_connector_cancels_pending_requests() -> None:

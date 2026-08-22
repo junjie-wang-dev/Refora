@@ -2,11 +2,11 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
-import { FilePlus, GridFour, NotePencil, Palette, Stack, Sticker } from '@phosphor-icons/react'
+import { FilePlus, NotePencil, Sticker } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useDocumentStore } from '../../store/documentStore'
 import { api } from '../../ipc'
-import { markdownCardContent, paperCardMarkdown } from '../../utils/workspaceCardMarkdown'
+import { registerRendererFlushTask, trackRendererPersistence } from '../../persistence'
 import { EmptyState } from '../ui'
 import {
   WORKSPACE_CANVAS_DEFAULT_ZOOM,
@@ -25,14 +25,7 @@ import type {
   WorkspaceNote,
   WorkspaceNoteType
 } from '../../../shared/ipc-types'
-import PaperCard from './PaperCard'
-import ReportCard from './ReportCard'
-import NoteCard from './NoteCard'
-import StickyNoteCard from './StickyNoteCard'
-import { STICKY_NOTE_COLORS } from './stickyNoteColors'
-import AssetCard from './AssetCard'
-import { openDocumentPdf } from '../../utils/openPdf'
-import ResizableCard, {
+import {
   clampCardSize,
   type CardPosition,
   type CardSize
@@ -41,82 +34,26 @@ import {
   cardAnchorPoint,
   closestCardAnchor,
   connectionCurve,
-  targetAnchorForPreview,
-  type ConnectionPoint
+  targetAnchorForPreview
 } from './connectionGeometry'
+import BoardCanvasWorld, { type BoardConnectionDraft } from './BoardCanvasWorld'
+import WorkspaceCards from './WorkspaceCards'
+import { compactGridPlacements, DEFAULT_VIEWPORT, VIEWPORT_SAVE_DELAY } from './boardLayout'
+import {
+  hasFilePayload,
+  hasWorkspaceDocumentPayload,
+  hasWorkspaceDropPayload,
+  workspaceDocumentIds
+} from './boardDrop'
+import useBoardSpacePan from './useBoardSpacePan'
 
-const DOC_MIME = 'application/x-refora-docids'
-const VIEWPORT_SAVE_DELAY = 160
 const EMPTY_NOTES: WorkspaceNote[] = []
-const DEFAULT_VIEWPORT: WorkspaceCanvasViewport = {
-  panX: 0,
-  panY: 0,
-  zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
-}
-
-interface ConnectionDraft {
-  sourceItemId: string
-  sourceAnchor: WorkspaceConnectionAnchor
-  source: ConnectionPoint
-  pointer: ConnectionPoint
-}
 
 interface MarqueeSelection {
   left: number
   top: number
   width: number
   height: number
-}
-
-interface GridPlacement {
-  x: number
-  y: number
-}
-
-function compactGridPlacements(
-  items: WorkspaceItem[],
-  sizeFor: (item: WorkspaceItem) => CardSize,
-  originX: number,
-  originY: number
-): GridPlacement[] {
-  const gap = 24
-  const columnCount = Math.ceil(Math.sqrt(items.length))
-  const columns = Array.from({ length: columnCount }, () => ({
-    width: 0,
-    height: 0
-  }))
-  const itemColumns: number[] = []
-  const itemY: number[] = []
-
-  items.forEach((item) => {
-    const size = sizeFor(item)
-    let columnIndex = 0
-    for (let index = 1; index < columns.length; index += 1) {
-      if (columns[index].height < columns[columnIndex].height) columnIndex = index
-    }
-    const column = columns[columnIndex]
-    itemColumns.push(columnIndex)
-    itemY.push(originY + column.height)
-    column.width = Math.max(column.width, size.width)
-    column.height += size.height + gap
-  })
-
-  const columnX: number[] = []
-  let nextX = originX
-  columns.forEach((column, index) => {
-    columnX[index] = nextX
-    nextX += column.width + gap
-  })
-
-  return items.map((_, index) => ({
-    x: columnX[itemColumns[index]],
-    y: itemY[index]
-  }))
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement
-    && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
 }
 
 export interface BoardHandle {
@@ -170,12 +107,12 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const [autoEditNoteId, setAutoEditNoteId] = useState<string | null>(null)
   const [autoEditStickyNoteId, setAutoEditStickyNoteId] = useState<string | null>(null)
   const [connections, setConnections] = useState<WorkspaceConnection[]>([])
-  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null)
+  const [connectionDraft, setConnectionDraft] = useState<BoardConnectionDraft | null>(null)
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set())
   const [animatingItemIds, setAnimatingItemIds] = useState<Set<string>>(new Set())
   const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelection | null>(null)
-  const [spacePressed, setSpacePressed] = useState(false)
+  const { spacePressed, spacePressedRef } = useBoardSpacePan()
   const canvasRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
   const activeWorkspaceIdRef = useRef(activeWorkspaceId)
@@ -184,14 +121,14 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const viewportFrameRef = useRef<number | null>(null)
   const viewportTouchedRef = useRef(false)
   const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const viewportSaveTaskRef = useRef<Promise<void> | null>(null)
   const dropErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panCleanupRef = useRef<(() => void) | null>(null)
   const marqueeCleanupRef = useRef<(() => void) | null>(null)
   const layoutAnimationFrameRef = useRef<number | null>(null)
   const layoutAnimationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const spacePressedRef = useRef(false)
   const connectionCleanupRef = useRef<(() => void) | null>(null)
-  const connectionDraftRef = useRef<ConnectionDraft | null>(null)
+  const connectionDraftRef = useRef<BoardConnectionDraft | null>(null)
   const connectionPreviewPathRef = useRef<SVGPathElement>(null)
   const connectionFrameRef = useRef<number | null>(null)
   const previewPositionsRef = useRef(new Map<string, CardPosition>())
@@ -261,11 +198,17 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [applyViewportVisuals])
 
   const persistViewport = useCallback((workspaceId: string, next: WorkspaceCanvasViewport) => {
-    void api.workspaceCanvas.update(workspaceId, next).catch((e) => {
+    const task = trackRendererPersistence(api.workspaceCanvas.update(workspaceId, next).then(() => undefined)).catch((e) => {
       if (useWorkspaceStore.getState().activeWorkspaceId === workspaceId) {
         useDocumentStore.getState().showToast(errorMessage(e, t('workspace.canvasSaveFailed')))
       }
+      throw e
     })
+    viewportSaveTaskRef.current = task
+    void task.finally(() => {
+      if (viewportSaveTaskRef.current === task) viewportSaveTaskRef.current = null
+    }).catch(() => undefined)
+    return task
   }, [t])
 
   const scheduleViewportSave = useCallback((next: WorkspaceCanvasViewport) => {
@@ -274,7 +217,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     const workspaceId = activeWorkspaceId
     viewportSaveTimerRef.current = setTimeout(() => {
       viewportSaveTimerRef.current = null
-      persistViewport(workspaceId, next)
+      void persistViewport(workspaceId, next).catch(() => undefined)
     }, VIEWPORT_SAVE_DELAY)
   }, [activeWorkspaceId, persistViewport])
 
@@ -285,8 +228,21 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     }
     updateViewportTransient(next)
     flushViewportVisuals()
-    if (activeWorkspaceId) persistViewport(activeWorkspaceId, next)
+    if (activeWorkspaceId) void persistViewport(activeWorkspaceId, next).catch(() => undefined)
   }, [activeWorkspaceId, flushViewportVisuals, persistViewport, updateViewportTransient])
+
+  const flushViewportSave = useCallback(async () => {
+    if (viewportSaveTimerRef.current) {
+      clearTimeout(viewportSaveTimerRef.current)
+      viewportSaveTimerRef.current = null
+    }
+    if (viewportSaveTaskRef.current) await viewportSaveTaskRef.current.catch(() => undefined)
+    if (activeWorkspaceId && viewportTouchedRef.current) {
+      await persistViewport(activeWorkspaceId, viewportRef.current)
+    }
+  }, [activeWorkspaceId, persistViewport])
+
+  useEffect(() => registerRendererFlushTask(flushViewportSave), [flushViewportSave])
 
   useEffect(() => {
     if (layoutAnimationFrameRef.current !== null) {
@@ -321,30 +277,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       return next.size === current.size ? current : next
     })
   }, [items])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || isEditableTarget(event.target)) return
-      event.preventDefault()
-      if (spacePressedRef.current) return
-      spacePressedRef.current = true
-      setSpacePressed(true)
-    }
-    const releaseSpace = (event?: Event) => {
-      if (event?.type === 'keyup' && (event as KeyboardEvent).code !== 'Space') return
-      if (!spacePressedRef.current) return
-      spacePressedRef.current = false
-      setSpacePressed(false)
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', releaseSpace)
-    window.addEventListener('blur', releaseSpace)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', releaseSpace)
-      window.removeEventListener('blur', releaseSpace)
-    }
-  }, [])
 
   useEffect(() => {
     connectionCleanupRef.current?.()
@@ -401,7 +333,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         clearTimeout(viewportSaveTimerRef.current)
         viewportSaveTimerRef.current = null
       }
-      if (viewportTouchedRef.current) persistViewport(workspaceId, viewportRef.current)
+      if (viewportTouchedRef.current) {
+        void persistViewport(workspaceId, viewportRef.current).catch(() => undefined)
+      }
     }
   }, [activeWorkspaceId, applyViewportVisuals, persistViewport, t])
 
@@ -447,9 +381,13 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           }
         } catch (e) {
           if (cancelled) return
-          useDocumentStore.getState().showToast(errorMessage(e, 'Failed to load workspace document'))
+          useDocumentStore.getState().showToast(
+            errorMessage(e, t('workspace.openDocFailed'))
+          )
           if (workspaceIds.has(docId)) {
-            setSummaryErrors((previous) => new Map(previous).set(docId, 'Failed to load document'))
+            setSummaryErrors((previous) =>
+              new Map(previous).set(docId, t('workspace.openDocFailed'))
+            )
           }
         }
       })
@@ -457,7 +395,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     return () => {
       cancelled = true
     }
-  }, [allDocIdsKey, workspaceDocIdsKey])
+  }, [allDocIdsKey, t, workspaceDocIdsKey])
 
   useEffect(() => {
     const cb = (docId: string) => {
@@ -476,14 +414,18 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           return next
         })
       }).catch((e) => {
-        useDocumentStore.getState().showToast(errorMessage(e, 'Failed to load workspace document'))
+        useDocumentStore.getState().showToast(
+          errorMessage(e, t('workspace.openDocFailed'))
+        )
         setSummarizing((previous) => {
           if (!previous.has(docId)) return previous
           const next = new Set(previous)
           next.delete(docId)
           return next
         })
-        setSummaryErrors((previous) => new Map(previous).set(docId, 'Failed to load document'))
+        setSummaryErrors((previous) =>
+          new Map(previous).set(docId, t('workspace.openDocFailed'))
+        )
       })
     }
     const errCb = (payload: SummaryErrorEvent) => {
@@ -502,7 +444,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       api.events.off('ai:summary:updated', cb)
       api.events.off('ai:summary:error', errCb)
     }
-  }, [workspaceDocIdsKey])
+  }, [t, workspaceDocIdsKey])
 
   const handleSummarize = useCallback((docId: string) => {
     setSummaryErrors((previous) => {
@@ -973,16 +915,8 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     document.body.style.userSelect = 'none'
   }
 
-  const hasDocPayload = (e: React.DragEvent) =>
-    Array.from(e.dataTransfer.types).includes(DOC_MIME)
-
-  const hasFilePayload = (e: React.DragEvent) =>
-    Array.from(e.dataTransfer.types).includes('Files')
-
-  const hasSupportedPayload = (e: React.DragEvent) => hasDocPayload(e) || hasFilePayload(e)
-
   const handleDragEnter = (e: React.DragEvent) => {
-    if (!hasSupportedPayload(e)) return
+    if (!hasWorkspaceDropPayload(e.dataTransfer)) return
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
@@ -990,7 +924,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (!hasSupportedPayload(e)) return
+    if (!hasWorkspaceDropPayload(e.dataTransfer)) return
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
@@ -1001,33 +935,19 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropActive(false)
   }
 
-  const parseDocIds = (e: React.DragEvent): string[] => {
-    const raw = e.dataTransfer.getData(DOC_MIME)
-    if (!raw) return []
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        return parsed.filter((value): value is string => typeof value === 'string' && value.length > 0)
-      }
-    } catch {
-      return []
-    }
-    return []
-  }
-
   const handleDrop = async (e: React.DragEvent) => {
-    if (!hasSupportedPayload(e)) return
+    if (!hasWorkspaceDropPayload(e.dataTransfer)) return
     e.preventDefault()
     e.stopPropagation()
     setDropActive(false)
     const world = worldPositionAt(e.clientX, e.clientY)
     const placement = { x: Math.round(world.x - 150), y: Math.round(world.y - 100) }
     try {
-      if (hasDocPayload(e)) {
-        const ids = parseDocIds(e)
+      if (hasWorkspaceDocumentPayload(e.dataTransfer)) {
+        const ids = workspaceDocumentIds(e.dataTransfer)
         if (ids.length === 0) return
         await addDocs(ids, placement)
-      } else {
+      } else if (hasFilePayload(e.dataTransfer)) {
         const paths = (await Promise.all(
           Array.from(e.dataTransfer.files).map((file) => api.getPathForFile(file))
         )).filter((path) => path.length > 0)
@@ -1174,160 +1094,37 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     t
   ])
 
-  const cardNodes = useMemo(() => sortedItems.map((item) => {
-    if (item.kind === 'document' && item.docId) {
-      const docId = item.docId
-      const doc = docs.get(docId) ?? null
-      const summary = summaries.get(docId) ?? null
-      const summaryForReader = summary?.content ? summary : null
-      return (
-        <ResizableCard
-          key={item.id}
-          {...cardProps(item)}
-          className="workspace-connection-accent--document"
-        >
-          <PaperCard
-            doc={doc}
-            summary={summary}
-            summaryLoading={!loadedSummaryDocIds.has(docId)}
-            summarizing={summarizing.has(docId)}
-            summaryError={summaryErrors.get(docId) ?? null}
-            onSummarize={() => handleSummarize(docId)}
-            onOpenPdf={() => void openDocumentPdf(docId)}
-            onRemove={() => void removeItem(item.id)}
-            onOpenSummary={doc && summaryForReader && onOpenMarkdownCard
-              ? () => onOpenMarkdownCard({ kind: 'summary', doc, summary: summaryForReader })
-              : undefined}
-            onCopy={doc
-              ? () => handleCopyMarkdown(doc.title || doc.fileName, paperCardMarkdown(doc, summary))
-              : undefined}
-          />
-        </ResizableCard>
-      )
-    }
-    if (item.kind === 'report' && item.reportId) {
-      const report = reportMap.get(item.reportId)
-      if (!report) return null
-      return (
-        <ResizableCard
-          key={item.id}
-          {...cardProps(item)}
-          className="workspace-connection-accent--report"
-        >
-          <ReportCard
-            report={report}
-            sourceDocuments={docs}
-            onOpenSource={(docId) => void openDocumentPdf(docId)}
-            onDelete={() => void deleteReport(report.id)}
-            onUpdate={updateReport}
-            onOpen={onOpenMarkdownCard
-              ? () => onOpenMarkdownCard({ kind: 'report', id: report.id })
-              : undefined}
-            onEdit={onOpenMarkdownCard
-              ? () => onOpenMarkdownCard({ kind: 'report', id: report.id }, 'edit')
-              : undefined}
-            onCopy={() => handleCopyMarkdown(
-              report.title,
-              markdownCardContent(report.title, report.contentMd)
-            )}
-          />
-        </ResizableCard>
-      )
-    }
-    if (item.kind === 'note' && item.noteId) {
-      const note = noteMap.get(item.noteId)
-      if (!note) return null
-      if (note.noteType === 'plain') {
-        return (
-          <ResizableCard
-            key={item.id}
-            {...cardProps(item)}
-            className="workspace-connection-accent--sticky"
-          >
-            <StickyNoteCard
-              note={note}
-              autoFocus={autoEditStickyNoteId === note.id}
-              onAutoFocusHandled={() => setAutoEditStickyNoteId(null)}
-              onDelete={() => void deleteNote(note.id)}
-              onUpdate={updateNote}
-              onCopy={handleCopyText}
-            />
-          </ResizableCard>
-        )
-      }
-      return (
-        <ResizableCard
-          key={item.id}
-          {...cardProps(item)}
-          className="workspace-connection-accent--note"
-        >
-          <NoteCard
-            note={note}
-            autoEdit={autoEditNoteId === note.id}
-            onAutoEditHandled={() => setAutoEditNoteId(null)}
-            onDelete={() => void deleteNote(note.id)}
-            onUpdate={updateNote}
-            onOpen={onOpenMarkdownCard
-              ? () => onOpenMarkdownCard({ kind: 'note', id: note.id })
-              : undefined}
-            onEdit={onOpenMarkdownCard
-              ? () => onOpenMarkdownCard({ kind: 'note', id: note.id }, 'edit')
-              : undefined}
-            onCopy={() => handleCopyMarkdown(
-              note.title,
-              markdownCardContent(note.title, note.contentMd)
-            )}
-          />
-        </ResizableCard>
-      )
-    }
-    if (item.kind === 'asset' && item.assetId) {
-      const asset = assetMap.get(item.assetId)
-      if (!asset) return null
-      return (
-        <ResizableCard
-          key={item.id}
-          {...cardProps(item)}
-          className="workspace-connection-accent--asset"
-        >
-          <AssetCard
-            asset={asset}
-            onOpen={() => handleOpenAsset(asset.id)}
-            onReveal={() => handleRevealAsset(asset.id)}
-            onDelete={() => void deleteAsset(asset.id)}
-            onCopy={() => handleCopyAsset(asset.id)}
-          />
-        </ResizableCard>
-      )
-    }
-    return null
-  }), [
-    assetMap,
-    autoEditNoteId,
-    autoEditStickyNoteId,
-    cardProps,
-    deleteAsset,
-    deleteNote,
-    deleteReport,
-    docs,
-    handleCopyAsset,
-    handleCopyMarkdown,
-    handleCopyText,
-    handleOpenAsset,
-    handleRevealAsset,
-    handleSummarize,
-    loadedSummaryDocIds,
-    noteMap,
-    onOpenMarkdownCard,
-    removeItem,
-    reportMap,
-    sortedItems,
-    summaries,
-    summarizing,
-    summaryErrors,
-    updateNote,
-    updateReport
-  ])
+  const cardNodes = (
+    <WorkspaceCards
+      items={sortedItems}
+      documents={docs}
+      summaries={summaries}
+      reports={reportMap}
+      notes={noteMap}
+      assets={assetMap}
+      loadedSummaryDocIds={loadedSummaryDocIds}
+      summarizing={summarizing}
+      summaryErrors={summaryErrors}
+      autoEditNoteId={autoEditNoteId}
+      autoEditStickyNoteId={autoEditStickyNoteId}
+      cardProps={cardProps}
+      onSummarize={handleSummarize}
+      onRemoveItem={(itemId) => void removeItem(itemId)}
+      onDeleteReport={(reportId) => void deleteReport(reportId)}
+      onUpdateReport={updateReport}
+      onDeleteNote={(noteId) => void deleteNote(noteId)}
+      onUpdateNote={updateNote}
+      onDeleteAsset={(assetId) => void deleteAsset(assetId)}
+      onOpenAsset={handleOpenAsset}
+      onRevealAsset={handleRevealAsset}
+      onCopyAsset={handleCopyAsset}
+      onCopyMarkdown={handleCopyMarkdown}
+      onCopyText={handleCopyText}
+      onAutoEditNoteHandled={() => setAutoEditNoteId(null)}
+      onAutoEditStickyNoteHandled={() => setAutoEditStickyNoteId(null)}
+      onOpenMarkdownCard={onOpenMarkdownCard}
+    />
+  )
 
   return (
     <div
@@ -1369,175 +1166,24 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         </div>
       )}
 
-      <div
-        ref={worldRef}
-        className="workspace-canvas-world absolute left-0 top-0 h-px w-px origin-top-left"
-        style={{ transform: `translate3d(${DEFAULT_VIEWPORT.panX}px, ${DEFAULT_VIEWPORT.panY}px, 0) scale(${DEFAULT_VIEWPORT.zoom})` }}
+      <BoardCanvasWorld
+        worldRef={worldRef}
+        connectionPaths={connectionPaths}
+        connectionDraft={connectionDraft}
+        connectionPreviewPathRef={connectionPreviewPathRef}
+        connectionGroupRefs={connectionGroupRefs}
+        connectionDeleteRefs={connectionDeleteRefs}
+        selectedConnectionId={selectedConnectionId}
+        selectedBounds={selectedBounds}
+        selectedItemCount={selectedItems.length}
+        selectedStickyNotes={selectedStickyNotes}
+        onSelectConnection={setSelectedConnectionId}
+        onDeleteConnection={(connectionId) => void handleDeleteConnection(connectionId)}
+        onArrangeSelected={arrangeSelected}
+        onStickyColor={handleStickyColor}
       >
-        <svg className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-visible" aria-hidden="false">
-          <defs>
-            <marker id="workspace-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-              <path d="M 0 0 L 9 4.5 L 0 9 z" fill="var(--color-muted)" />
-            </marker>
-            <marker id="workspace-arrow-selected" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-              <path d="M 0 0 L 9 4.5 L 0 9 z" fill="var(--color-accent)" />
-            </marker>
-          </defs>
-          {connectionPaths.map(({ connection, path }) => {
-            const selected = selectedConnectionId === connection.id
-            return (
-              <g
-                key={connection.id}
-                ref={(element) => {
-                  if (element) connectionGroupRefs.current.set(connection.id, element)
-                  else connectionGroupRefs.current.delete(connection.id)
-                }}
-              >
-                <path
-                  d={path}
-                  fill="none"
-                  stroke="transparent"
-                  strokeWidth="16"
-                  style={{ pointerEvents: 'stroke' }}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={t('workspace.connectionSelect')}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    setSelectedConnectionId(connection.id)
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    void handleDeleteConnection(connection.id)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Delete' || event.key === 'Backspace') {
-                      event.preventDefault()
-                      void handleDeleteConnection(connection.id)
-                    }
-                  }}
-                />
-                <path
-                  d={path}
-                  fill="none"
-                  stroke={selected ? 'var(--color-accent)' : 'var(--color-muted)'}
-                  strokeOpacity={selected ? 0.9 : 0.55}
-                  strokeWidth={selected ? 2.5 : 2}
-                  markerEnd={selected ? 'url(#workspace-arrow-selected)' : 'url(#workspace-arrow)'}
-                  style={{ pointerEvents: 'none' }}
-                />
-              </g>
-            )
-          })}
-          {connectionDraft && (() => {
-            const targetAnchor = targetAnchorForPreview(connectionDraft.source, connectionDraft.pointer)
-            const preview = connectionCurve(
-              connectionDraft.source,
-              connectionDraft.pointer,
-              connectionDraft.sourceAnchor,
-              targetAnchor
-            )
-            return (
-              <path
-                ref={connectionPreviewPathRef}
-                d={preview.path}
-                fill="none"
-                stroke="var(--color-muted)"
-                strokeOpacity="0.65"
-                strokeWidth="2"
-                strokeDasharray="7 6"
-                markerEnd="url(#workspace-arrow)"
-              />
-            )
-          })()}
-        </svg>
         {cardNodes}
-        {selectedBounds && (
-          <div
-            data-selection-toolbar
-            className="absolute z-[300000] flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border bg-panel/95 p-1 shadow-lg backdrop-blur"
-            style={{
-              left: (selectedBounds.minX + selectedBounds.maxX) / 2,
-              top: selectedBounds.maxY + 12
-            }}
-            role="toolbar"
-            aria-label={t('workspace.selectionActions')}
-          >
-            <span
-              className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-background px-2 text-xs tabular-nums text-muted"
-              aria-label={t('workspace.selectionCount')}
-            >
-              {selectedItems.length}
-            </span>
-            <button
-              type="button"
-              className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground hover:bg-background disabled:cursor-default disabled:opacity-40"
-              disabled={selectedItems.length < 2}
-              onClick={() => arrangeSelected('stack')}
-              aria-label={t('workspace.selectionStack')}
-              title={t('workspace.selectionStack')}
-            >
-              <Stack className="h-3.5 w-3.5" />
-              {t('workspace.selectionStack')}
-            </button>
-            <button
-              type="button"
-              className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground hover:bg-background disabled:cursor-default disabled:opacity-40"
-              disabled={selectedItems.length < 2}
-              onClick={() => arrangeSelected('grid')}
-              aria-label={t('workspace.selectionGrid')}
-              title={t('workspace.selectionGrid')}
-            >
-              <GridFour className="h-3.5 w-3.5" />
-              {t('workspace.selectionGrid')}
-            </button>
-            {selectedStickyNotes.length > 0 && (
-              <>
-                <div className="mx-0.5 h-5 w-px bg-border" />
-                <Palette
-                  className="mx-1 h-3.5 w-3.5 text-muted"
-                  aria-label={t('workspace.stickyColor')}
-                />
-                {STICKY_NOTE_COLORS.map((option) => {
-                  const active = selectedStickyNotes.every((note) => (note.color ?? 'sand') === option.id)
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className={`h-5 w-5 rounded-full border transition-transform hover:scale-110 ${active ? 'border-accent ring-2 ring-accent/30' : 'border-black/10'}`}
-                      style={{ backgroundColor: option.value }}
-                      onClick={() => handleStickyColor(option.id)}
-                      aria-label={t(`workspace.stickyColor${option.label}`)}
-                      title={t(`workspace.stickyColor${option.label}`)}
-                    />
-                  )
-                })}
-              </>
-            )}
-          </div>
-        )}
-        {selectedConnectionId && connectionPaths.map(({ connection, midpoint }) => (
-          connection.id === selectedConnectionId && (
-            <button
-              key={connection.id}
-              ref={(element) => {
-                if (element) connectionDeleteRefs.current.set(connection.id, element)
-                else connectionDeleteRefs.current.delete(connection.id)
-              }}
-              type="button"
-              className="absolute z-[200003] flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-panel text-sm leading-none text-muted shadow-md hover:border-error hover:text-error"
-              style={{ left: midpoint.x, top: midpoint.y }}
-              aria-label={t('workspace.connectionDelete')}
-              title={t('workspace.connectionDelete')}
-              onClick={() => void handleDeleteConnection(connection.id)}
-            >
-              ×
-            </button>
-          )
-        ))}
-      </div>
+      </BoardCanvasWorld>
       {marqueeSelection && (
         <div
           className="workspace-selection-marquee pointer-events-none absolute z-[250000]"

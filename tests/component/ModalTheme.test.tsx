@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   set: vi.fn(),
-  setThemeSource: vi.fn()
+  setThemeSource: vi.fn(),
+  onLibrarySwitched: vi.fn(),
+  off: vi.fn(),
+  showToast: vi.fn()
 }))
 
 vi.mock('@renderer/ipc', () => ({
@@ -15,7 +18,23 @@ vi.mock('@renderer/ipc', () => ({
     },
     appearance: {
       setThemeSource: mocks.setThemeSource
+    },
+    events: {
+      onLibrarySwitched: mocks.onLibrarySwitched,
+      off: mocks.off
     }
+  }
+}))
+
+vi.mock('@renderer/i18n', () => ({
+  default: {
+    t: (key: string) => key
+  }
+}))
+
+vi.mock('@renderer/store/documentStore', () => ({
+  useDocumentStore: {
+    getState: () => ({ showToast: mocks.showToast })
   }
 }))
 
@@ -64,6 +83,9 @@ describe('AppThemeProvider', () => {
     mocks.get.mockReset().mockResolvedValue('system')
     mocks.set.mockReset().mockResolvedValue(undefined)
     mocks.setThemeSource.mockReset().mockResolvedValue(undefined)
+    mocks.onLibrarySwitched.mockReset()
+    mocks.off.mockReset()
+    mocks.showToast.mockReset()
     document.documentElement.removeAttribute('data-theme')
   })
 
@@ -105,7 +127,7 @@ describe('AppThemeProvider', () => {
     expect(screen.getByTestId('resolved-theme')).toHaveTextContent('light')
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
     expect(mocks.set).toHaveBeenCalledWith('theme', 'light')
-    expect(mocks.setThemeSource).toHaveBeenLastCalledWith('light')
+    await waitFor(() => expect(mocks.setThemeSource).toHaveBeenLastCalledWith('light'))
   })
 
   it('reapplies the system theme when the media query changes', async () => {
@@ -122,7 +144,7 @@ describe('AppThemeProvider', () => {
     })
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
     expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dark')
-    expect(mocks.setThemeSource).toHaveBeenLastCalledWith('system')
+    await waitFor(() => expect(mocks.setThemeSource).toHaveBeenLastCalledWith('system'))
   })
 
   it('keeps component tokens in sync when returning from dark to a light system theme', async () => {
@@ -148,7 +170,7 @@ describe('AppThemeProvider', () => {
     expect(screen.getByTestId('theme-mode')).toHaveTextContent('system')
     expect(screen.getByTestId('resolved-theme')).toHaveTextContent('light')
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
-    expect(mocks.setThemeSource).toHaveBeenLastCalledWith('system')
+    await waitFor(() => expect(mocks.setThemeSource).toHaveBeenLastCalledWith('system'))
   })
 
   it('falls back to the system theme when loading the saved value fails', async () => {
@@ -164,5 +186,23 @@ describe('AppThemeProvider', () => {
     await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'))
     expect(screen.getByTestId('theme-mode')).toHaveTextContent('system')
     expect(mocks.setThemeSource).toHaveBeenLastCalledWith('system')
+    expect(mocks.showToast).toHaveBeenCalledWith('common.settingsLoadFailed')
+  })
+
+  it('reloads the saved theme after switching libraries', async () => {
+    mocks.get.mockResolvedValueOnce('light').mockResolvedValueOnce('dark')
+
+    render(
+      <AppThemeProvider>
+        <ThemeReader />
+      </AppThemeProvider>
+    )
+
+    await waitFor(() => expect(screen.getByTestId('theme-mode')).toHaveTextContent('light'))
+    const [[handleLibrarySwitched]] = mocks.onLibrarySwitched.mock.calls
+    act(() => handleLibrarySwitched())
+
+    await waitFor(() => expect(screen.getByTestId('theme-mode')).toHaveTextContent('dark'))
+    expect(mocks.setThemeSource).toHaveBeenLastCalledWith('dark')
   })
 })

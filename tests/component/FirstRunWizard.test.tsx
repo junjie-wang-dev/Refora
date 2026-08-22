@@ -28,14 +28,14 @@ afterEach(() => {
 describe('FirstRunWizard', () => {
   it('renders choose-library button', () => {
     render(<FirstRunWizard onDone={vi.fn()} />)
-    expect(screen.getByText('Choose Library Folder')).toBeInTheDocument()
+    expect(screen.getByText('wizard.chooseLibrary')).toBeInTheDocument()
   })
 
   it('does nothing when dialog cancelled (null path)', async () => {
     openDirectory.mockResolvedValue(null)
     const onDone = vi.fn()
     render(<FirstRunWizard onDone={onDone} />)
-    fireEvent.click(screen.getByText('Choose Library Folder'))
+    fireEvent.click(screen.getByText('wizard.chooseLibrary'))
     await waitFor(() => expect(openDirectory).toHaveBeenCalled())
     expect(librarySwitch).not.toHaveBeenCalled()
     expect(onDone).not.toHaveBeenCalled()
@@ -46,7 +46,7 @@ describe('FirstRunWizard', () => {
     librarySwitch.mockResolvedValue({ libraryFolderPath: '/my/lib', dbExisted: true, scanned: 0, imported: 0, skipped: 0, errors: [] })
     const onDone = vi.fn()
     render(<FirstRunWizard onDone={onDone} />)
-    fireEvent.click(screen.getByText('Choose Library Folder'))
+    fireEvent.click(screen.getByText('wizard.chooseLibrary'))
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
     expect(librarySwitch).toHaveBeenCalledWith('/my/lib')
   })
@@ -55,7 +55,7 @@ describe('FirstRunWizard', () => {
     openDirectory.mockResolvedValue('/my/lib')
     librarySwitch.mockRejectedValue(new Error('disk full'))
     render(<FirstRunWizard onDone={vi.fn()} />)
-    fireEvent.click(screen.getByText('Choose Library Folder'))
+    fireEvent.click(screen.getByText('wizard.chooseLibrary'))
     await waitFor(() => expect(screen.getByText('disk full')).toBeInTheDocument())
   })
 })

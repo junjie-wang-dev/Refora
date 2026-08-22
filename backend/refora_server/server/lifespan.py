@@ -6,7 +6,6 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -20,7 +19,6 @@ from refora_server.academic import (
     create_research_frontier_service,
     create_semantic_scholar_client,
 )
-from refora_server.academic.arxiv import FetchResponse
 from refora_server.agent.providers import create_agent, create_model
 from refora_server.cli_runtime import CliRuntimeEngine, create_cli_runtime_registry
 from refora_server.cli_runtime.tool_broker import CliToolBroker
@@ -30,19 +28,25 @@ from refora_server.library.paths import resolveFromLibrary
 from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
+from refora_server.server.services.academic_runtime import create_academic_runtime
+from refora_server.server.services.lifespan_support import (
+    LazyAgentRuntime as _LazyAgentRuntime,
+    download_mineru_file as _download_mineru_file,
+    mineru_worker_path as _mineru_worker_path,
+    schedule_event as _schedule_event,
+    summary_prompt as _summary_prompt,
+    trash_mineru_path as _trash_mineru_path,
+    unavailable_agent_capability as _unavailable_agent_capability,
+    unavailable_ocr_service as _unavailable_ocr_service,
+)
 from refora_server.services.agent_runtime import createAgentRuntime
 from refora_server.services.agent_profiles import createAgentProfilesService
 from refora_server.services.agent_intent import assemble_recovery
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
-from refora_server.services.academic_serializer import (
-    serialize_arxiv_search_response,
-    serialize_paper,
-    serialize_paper_fulltext_response,
-    serialize_semantic_recommendations_response,
-)
 from refora_server.services.chat_history import createChatHistoryService
+from refora_server.services.clipboard_temp import create_clipboard_temp_service
 from refora_server.services.document_text import createDocumentTextService
 from refora_server.services.document_presence import create_document_presence_service
 from refora_server.services.export import createExportService
@@ -54,7 +58,9 @@ from refora_server.services.mineru import (
     create_mineru_worker_process,
 )
 from refora_server.services.metadata import create_metadata_service
+from refora_server.services.model_http_clients import create_model_http_client_pool
 from refora_server.services.ocr import OcrServiceDeps, create_ocr_service
+from refora_server.services.proxy import normalize_proxy_rules
 from refora_server.services.related_papers import find_related_papers
 from refora_server.services.sandbox import SandboxOptions, createSandboxService
 from refora_server.services.thread_title import createThreadTitleService
@@ -63,170 +69,6 @@ from refora_server.services.web_search import createWebSearchService
 from refora_server.services.web_fetch import fetchUrlAsync
 from refora_server.services.workspaces import createWorkspacesService
 from refora_server.library.importer import createImporter
-
-
-def _mineru_worker_path() -> str:
-    configured = os.environ.get("REFORA_MINERU_WORKER_PATH")
-    if configured:
-        return configured
-    package_root = Path(__file__).resolve().parents[2]
-    candidates = (
-        package_root / "workers" / "mineru_worker.py",
-        package_root.parent / "mineru" / "mineru_worker.py",
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return str(candidates[0])
-
-
-async def _download_mineru_file(
-    url: str,
-    destination: str,
-    cancel_event: asyncio.Event,
-    on_progress: Any,
-) -> None:
-    try:
-        import httpx
-    except ImportError as error:
-        raise RuntimeError("MinerU download support is unavailable") from error
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    received = 0
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                raw_total = response.headers.get("content-length")
-                total = int(raw_total) if raw_total and raw_total.isdigit() else None
-                with open(destination, "wb") as output:
-                    os.chmod(destination, 0o600)
-                    async for chunk in response.aiter_bytes(64 * 1024):
-                        if cancel_event.is_set():
-                            raise RuntimeError("MinerU installation was cancelled")
-                        output.write(chunk)
-                        received += len(chunk)
-                        on_progress(received, total)
-        if cancel_event.is_set():
-            raise RuntimeError("MinerU installation was cancelled")
-    except BaseException:
-        try:
-            os.unlink(destination)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-async def _trash_mineru_path(connector: Any, path: str) -> None:
-    result = await connector.trash_item(path)
-    if isinstance(result, dict) and result.get("ok"):
-        return
-    error = result.get("error") if isinstance(result, dict) else None
-    message = error.get("message") if isinstance(error, dict) else "No response from the native connector"
-    raise RuntimeError(f"Native Trash connector is unavailable: {message}")
-
-
-def _schedule_event(
-    events: Any,
-    name: str,
-    data: Any,
-    loop: asyncio.AbstractEventLoop | None = None,
-) -> None:
-    try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
-    if loop is not None and running_loop is not loop:
-        future = asyncio.run_coroutine_threadsafe(events.broadcast(name, data), loop)
-        future.add_done_callback(_consume_future)
-        return
-    task = asyncio.create_task(events.broadcast(name, data))
-
-    def consume_result(completed: asyncio.Task[Any]) -> None:
-        try:
-            completed.result()
-        except Exception:
-            pass
-
-    task.add_done_callback(consume_result)
-
-
-def _consume_future(completed: Any) -> None:
-    try:
-        completed.result()
-    except BaseException:
-        pass
-
-
-def _unavailable_ocr_service(reason: str) -> dict[str, Any]:
-    async def unavailable(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError(f"OCR service is unavailable: {reason}")
-
-    async def stop_worker() -> None:
-        return None
-
-    def destroy() -> None:
-        return None
-
-    return {
-        "initialize": unavailable,
-        "getState": unavailable,
-        "startOcr": unavailable,
-        "cancelOcr": unavailable,
-        "getOcrState": unavailable,
-        "getMarkdown": unavailable,
-        "readMarkdown": unavailable,
-        "prepareDocumentDelete": unavailable,
-        "stopWorker": stop_worker,
-        "destroy": destroy,
-    }
-
-
-def _unavailable_agent_capability(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-    return {
-        "status": "unavailable",
-        "code": "agent_capability_unavailable",
-        "message": "Agent capability is unavailable",
-    }
-
-
-class _LazyAgentRuntime(dict):
-    def __init__(self, app: FastAPI) -> None:
-        self._app = app
-
-    def _resolve(self) -> dict[str, Any]:
-        runtime = getattr(self._app.state, "agent_runtime", None)
-        return runtime if isinstance(runtime, dict) else {}
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._resolve().get(key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return self._resolve()[key]
-
-    def __contains__(self, key: object) -> bool:
-        return key in self._resolve()
-
-
-def _summary_prompt(text: str | None, combined: str | None) -> str:
-    if isinstance(text, str):
-        return (
-            "You are a research assistant reading text extracted from a PDF. "
-            "Capture at most two essential facts from this excerpt in no more than "
-            "60 words total. Be concise and factual; do not write a long "
-            "interpretation.\n\n"
-            f"Extracted PDF text:\n{text}"
-        )
-    if isinstance(combined, str):
-        return (
-            "You are a research assistant. Create a brief factual overview from the "
-            "extracted PDF section notes below. Respond in the paper's primary "
-            "language with ONLY a JSON object containing exactly two fields: "
-            '"core" (one or two short sentences, at most 80 words) and "keyPoints" '
-            "(an array of 3 to 5 concise strings, each at most 20 words). Do not add "
-            "methods, contribution, analysis, markdown, or commentary.\n\n"
-            f"Extracted PDF section notes:\n{combined}"
-        )
-    raise RuntimeError("AI summary input is unavailable")
 
 
 def create_lifespan(
@@ -287,6 +129,8 @@ def create_lifespan(
         startup_active_runs = list_active_runs() if callable(list_active_runs) else []
         events = create_event_bus()
         connector = create_connector_broker(events)
+        clipboard_temp = create_clipboard_temp_service()
+        clipboard_temp["cleanupStale"]()
         server_loop = asyncio.get_running_loop()
         run_cancel_events: dict[str, asyncio.Event] = {}
 
@@ -329,6 +173,25 @@ def create_lifespan(
         def finish_agent_run(run_id: str) -> None:
             run_cancel_events.pop(run_id, None)
 
+        def proxy_url() -> str:
+            settings_repo = repos.get("settings")
+            get_setting = (
+                settings_repo.get("get")
+                if isinstance(settings_repo, dict)
+                else getattr(settings_repo, "get", None)
+            )
+            value = get_setting("proxyUrl", "") if callable(get_setting) else ""
+            try:
+                return normalize_proxy_rules(value)
+            except ValueError:
+                return ""
+
+        model_http_clients = create_model_http_client_pool()
+
+        def configured_model(provider: dict[str, Any]) -> Any:
+            options = model_http_clients["modelOptions"](proxy_url())
+            return create_model(provider, **options)
+
         emit = events.broadcast
         mineru = create_mineru_engine_manager(
             MineruEngineManagerDeps(
@@ -337,7 +200,15 @@ def create_lifespan(
                     or state_dir
                     or os.path.dirname(os.path.abspath(db_path))
                 ),
-                downloadFile=_download_mineru_file,
+                downloadFile=lambda url, destination, cancel_event, on_progress: (
+                    _download_mineru_file(
+                        url,
+                        destination,
+                        cancel_event,
+                        on_progress,
+                        proxy=proxy_url() or None,
+                    )
+                ),
                 trashItem=lambda path: _trash_mineru_path(connector, path),
                 emitProgress=lambda progress: _schedule_event(
                     events, "mineru.install-progress", progress.to_dict()
@@ -359,18 +230,6 @@ def create_lifespan(
                 )
             },
         )
-
-        def proxy_url() -> str:
-            settings_repo = repos.get("settings")
-            get_setting = (
-                settings_repo.get
-                if callable(getattr(settings_repo, "get", None))
-                else settings_repo.get("get")
-                if isinstance(settings_repo, dict)
-                else None
-            )
-            value = get_setting("proxyUrl", "") if callable(get_setting) else ""
-            return value.strip() if isinstance(value, str) else ""
 
         if complete_repos:
             async def confirm_duplicate(file_name: str) -> bool:
@@ -488,7 +347,7 @@ def create_lifespan(
             if not isinstance(provider, dict):
                 raise RuntimeError("AI summary provider is unavailable")
             prompt = _summary_prompt(payload.get("text"), payload.get("combined"))
-            response = create_model(provider).invoke(
+            response = configured_model(provider).invoke(
                 [{"role": "user", "content": prompt}]
             )
             return getattr(response, "content", response)
@@ -521,7 +380,7 @@ def create_lifespan(
                 "Reply with ONLY the title, nothing else.\n\n"
                 f"User message: {user_message[:500]}"
             )
-            response = create_model(provider).invoke(
+            response = configured_model(provider).invoke(
                 [{"role": "user", "content": prompt}]
             )
             content = getattr(response, "content", response)
@@ -544,123 +403,26 @@ def create_lifespan(
                         return lines[-1]
             return ""
 
-        async def academic_fetch(url: str, options: dict[str, Any]) -> FetchResponse:
-            try:
-                import httpx
-            except ImportError as error:
-                raise RuntimeError("Academic network support is unavailable") from error
-            signal = options.get("signal")
-            if isinstance(signal, asyncio.Event) and signal.is_set():
-                raise asyncio.CancelledError()
-            timeout_ms = options.get("timeout_ms")
-            timeout = (
-                max(1, int(timeout_ms)) / 1000
-                if isinstance(timeout_ms, (int, float)) and not isinstance(timeout_ms, bool)
-                else 20.0
-            )
-            headers = options.get("headers")
-            request_headers = headers if isinstance(headers, dict) else None
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                follow_redirects=options.get("follow_redirects") is True,
-                **({"proxy": proxy_url()} if proxy_url() else {}),
-            ) as client:
-                request_task = asyncio.create_task(
-                    client.get(url, headers=request_headers)
-                )
-                if isinstance(signal, asyncio.Event):
-                    cancel_task = asyncio.create_task(signal.wait())
-                    done, _ = await asyncio.wait(
-                        {request_task, cancel_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if cancel_task in done and signal.is_set():
-                        request_task.cancel()
-                        await asyncio.gather(
-                            request_task, return_exceptions=True
-                        )
-                        raise asyncio.CancelledError()
-                    cancel_task.cancel()
-                    await asyncio.gather(cancel_task, return_exceptions=True)
-                response = await request_task
-            if isinstance(signal, asyncio.Event) and signal.is_set():
-                raise asyncio.CancelledError()
-            return FetchResponse(
-                status=response.status_code,
-                text=response.text,
-                headers=dict(response.headers),
-                final_url=str(response.url),
-            )
-
-        academic: dict[str, Any] = {}
-        if "documents" in repos:
-            academic_cache = create_academic_cache(
-                os.path.join(app.state.library_folder, ".refora", "academic-cache")
-            )
-            arxiv_client = create_arxiv_client(academic_fetch, academic_cache)
-            semantic_scholar_client = create_semantic_scholar_client(
-                academic_fetch, academic_cache
-            )
-            academic_identity = create_academic_identity_service(
-                repos["documents"], semantic_scholar_client
-            )
-            academic_graph = create_academic_graph_service(
-                academic_identity, semantic_scholar_client
-            )
-            academic_frontier = create_research_frontier_service(
-                academic_identity,
-                academic_graph,
-                arxiv_client,
-                os.path.join(app.state.library_folder, ".refora", "academic-frontiers"),
-            )
-            arxiv_papers = create_arxiv_paper_service(arxiv_client, academic_cache)
-
-            async def search_arxiv(request: Any) -> dict[str, Any]:
-                return serialize_arxiv_search_response(await arxiv_client.search(request))
-
-            async def get_arxiv_by_id(arxiv_id: str) -> dict[str, Any] | None:
-                paper = await arxiv_client.get_by_id(arxiv_id)
-                return serialize_paper(paper, "arxiv") if paper is not None else None
-
-            async def search_arxiv_title(
-                title: str, page_size: int = 5
-            ) -> dict[str, Any]:
-                return serialize_arxiv_search_response(
-                    await arxiv_client.search_title(title, page_size)
-                )
-
-            async def get_arxiv_paper(
-                arxiv_id: str,
-                section_id: str | None = None,
-                cursor: str | None = None,
-                max_chars: int | None = None,
-            ) -> dict[str, Any]:
-                return serialize_paper_fulltext_response(
-                    await arxiv_papers.get_paper(arxiv_id, section_id, cursor, max_chars)
-                )
-
-            async def get_semantic_recommendations(
-                locator: Any, limit: int | None = None
-            ) -> dict[str, Any]:
-                return serialize_semantic_recommendations_response(
-                    await academic_graph.get_recommendations(locator, limit)
-                )
-
-            academic = {
-                "arxiv": {
-                    "search": search_arxiv,
-                    "getById": get_arxiv_by_id,
-                    "searchTitle": search_arxiv_title,
-                },
-                "arxiv_papers": {"get_paper": get_arxiv_paper},
-                "identity": academic_identity,
-                "graph": {
-                    "get_citing_papers": academic_graph.get_citing_papers,
-                    "get_referenced_papers": academic_graph.get_referenced_papers,
-                    "get_recommendations": get_semantic_recommendations,
-                },
-                "frontier": academic_frontier,
-            }
+        academic_runtime = create_academic_runtime(
+            repos,
+            app.state.library_folder,
+            proxy_url,
+            {
+                "cache": create_academic_cache,
+                "arxiv": create_arxiv_client,
+                "semantic_scholar": create_semantic_scholar_client,
+                "identity": create_academic_identity_service,
+                "graph": create_academic_graph_service,
+                "frontier": create_research_frontier_service,
+                "arxiv_papers": create_arxiv_paper_service,
+            },
+        )
+        academic = academic_runtime["services"]
+        arxiv_client = academic_runtime.get("arxiv")
+        arxiv_papers = academic_runtime.get("arxiv_papers")
+        academic_identity = academic_runtime.get("identity")
+        academic_graph = academic_runtime.get("graph")
+        academic_frontier = academic_runtime.get("frontier")
         def list_readonly_workspace_assets(workspace_id: str) -> list[dict[str, Any]]:
             assets = repos["workspaceAssets"]["list"](workspace_id)
             return [
@@ -727,7 +489,11 @@ def create_lifespan(
             "webSearch": web_search,
             "mineru": mineru,
             "ocr": ocr,
-            "aiProviders": createAiProvidersService(repos),
+            "aiProviders": createAiProvidersService(
+                repos,
+                {"get_proxy": proxy_url},
+            ),
+            "getProxy": proxy_url,
             "agentProfiles": (
                 createAgentProfilesService(repos, {"cliRuntime": cli_runtime})
                 if "agentProfiles" in repos
@@ -735,6 +501,7 @@ def create_lifespan(
             ),
             "cliRuntime": cli_runtime,
             "cliToolBroker": cli_tool_broker,
+            "clipboardTemp": clipboard_temp,
             "aiSummary": summary_service,
             "documentText": document_text,
             "documentPresence": document_presence,
@@ -1111,7 +878,7 @@ def create_lifespan(
         def create_runtime_model(provider: dict[str, Any]) -> Any:
             if provider.get("backendType") == "cli":
                 return None
-            return create_model(provider)
+            return configured_model(provider)
 
         def create_runtime_agent(
             model: Any, tools: list[Any], request: dict[str, Any]
@@ -1217,8 +984,12 @@ def create_lifespan(
             if recovery_task is not None:
                 recovery_task.cancel()
                 await asyncio.gather(recovery_task, return_exceptions=True)
+            destroy_summary = summary_service.get("destroy")
+            if callable(destroy_summary):
+                destroy_summary()
             await agent_runtime["destroy"]()
             await cli_runtime.destroy()
+            await model_http_clients["destroy"]()
             await metadata_service["destroy"]()
             await document_presence["destroy"]()
             stop_watcher = watcher.get("stopScanning")

@@ -17,6 +17,8 @@ interface LibrarySwitcherDeps {
     libraryFolder: string,
     switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult>
   ) => Promise<ServerAssembly>
+  beforeSwitch?: () => Promise<void>
+  activateAssembly?: (assembly: ServerAssembly) => Promise<void>
   getState: () => LibraryState
   setState: (state: LibraryState) => void
   persistLibraryFolder: (folder: string) => void
@@ -43,7 +45,10 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
     const targetDbPath = deps.dbPathForFolder(resolvedFolder)
     const dbExisted = deps.dbExistsInFolder(resolvedFolder)
     let nextAssembly: ServerAssembly | null = null
+    let switchStarted = false
     try {
+      await deps.beforeSwitch?.()
+      switchStarted = true
       await previous.assembly?.stop()
       deps.setState({
         assembly: null,
@@ -56,6 +61,7 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
         switchLibraryFolder
       )
       await nextAssembly.start()
+      await deps.activateAssembly?.(nextAssembly)
       let scanned = 0
       let imported = 0
       let skipped = 0
@@ -88,7 +94,7 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
       return result
     } catch (error) {
       await nextAssembly?.stop().catch(() => undefined)
-      if (previous.assembly) {
+      if (previous.assembly && switchStarted) {
         let restored: ServerAssembly | null = null
         try {
           restored = await deps.createAssembly(
@@ -97,6 +103,7 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
             switchLibraryFolder
           )
           await restored.start()
+          await deps.activateAssembly?.(restored)
           deps.setState({ ...previous, assembly: restored })
         } catch (recoveryError) {
           await restored?.stop().catch(() => undefined)

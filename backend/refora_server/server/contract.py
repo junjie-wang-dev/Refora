@@ -67,7 +67,11 @@ def _route(method: str, path: str) -> dict[str, str]:
 
 def source_http_routes() -> list[dict[str, str]]:
     server_root = Path(__file__).resolve().parent
-    paths = [server_root / "app.py", *(server_root / "routes").glob("*.py")]
+    paths = [
+        server_root / "app.py",
+        *(server_root / "routes").glob("*.py"),
+        *(server_root / "services").glob("*_routes.py"),
+    ]
     routes: set[tuple[str, str]] = set()
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))

@@ -27,6 +27,7 @@ class Fakes:
         self.bulk_category_operations = []
         self.emitted_events = []
         self.pdf_annotations = {}
+        self.transaction_calls = 0
         self.documents = {
             "list": self.list_documents,
             "counts": lambda: {
@@ -81,6 +82,7 @@ class Fakes:
             "listColumnState": None,
             "theme": "dark",
         }
+        self.settings_values = settings_values
         self.settings = {
             "list": lambda: sorted(settings_values.items()),
             "get": lambda key, default=None: settings_values.get(key, default),
@@ -171,6 +173,7 @@ class Fakes:
             },
         }
         self.repos = {
+            "transaction": self.run_transaction,
             "workspaceAssets": {"search": lambda _query, _limit: []},
             "workspaces": {"searchContent": lambda _query, _limit: []},
             "chat": {"search": lambda _query, _limit: []},
@@ -282,6 +285,10 @@ class Fakes:
     def set_pdf_annotations(self, document_id: str, annotations: list[dict]):
         self.pdf_annotations[document_id] = annotations
         return annotations
+
+    def run_transaction(self, operation):
+        self.transaction_calls += 1
+        return operation()
 
     def get_web_search_config(self):
         return {
@@ -714,6 +721,58 @@ def test_bootstrap_global_search_and_directory_dialog_are_enveloped():
     }
 
 
+def test_bootstrap_rejects_malformed_window_and_column_settings():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    fakes.settings_values["windowBounds"] = {
+        "x": 10,
+        "y": 20,
+        "width": "wide",
+        "height": 700,
+        "isMaximized": True,
+    }
+    fakes.settings_values["listColumnState"] = {
+        "columns": [
+            {"id": "title", "visible": True, "width": 200, "order": 0}
+        ],
+        "sort": {"field": "unknown", "dir": "asc"},
+    }
+
+    response = client.get("/app/bootstrap", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["windowBounds"] is None
+    assert response.json()["data"]["listColumnState"] is None
+
+    fakes.settings_values["windowBounds"] = {
+        "x": 10.4,
+        "y": 20.4,
+        "width": 1200.4,
+        "height": 700.4,
+        "isMaximized": True,
+    }
+    fakes.settings_values["listColumnState"] = {
+        "columns": [
+            {"id": column_id, "visible": True, "width": 200 + order, "order": order}
+            for order, column_id in enumerate(
+                ("title", "authors", "year", "venue", "addedAt", "filePath")
+            )
+        ],
+        "sort": {"field": "year", "dir": "desc"},
+    }
+
+    valid = client.get("/app/bootstrap", headers=headers).json()["data"]
+
+    assert valid["windowBounds"] == {
+        "x": 10,
+        "y": 20,
+        "width": 1200,
+        "height": 700,
+        "isMaximized": True,
+    }
+    assert valid["listColumnState"] == fakes.settings_values["listColumnState"]
+
+
 def test_empty_import_paths_open_the_native_pdf_picker(tmp_path):
     client, fakes = make_client()
     first = tmp_path / "one.pdf"
@@ -910,12 +969,144 @@ def test_settings_proxy_url_applies_proxy_rules_via_connector(tmp_path):
 
     assert response.status_code == 200
     assert applied == ["http://proxy.example:8080"]
+    assert fakes.transaction_calls == 1
 
     invalid = client.patch(
         "/settings", headers=headers, json={"proxyUrl": "not-a-url"}
     )
-    assert invalid.status_code == 200
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "invalid_proxy"
     assert applied == ["http://proxy.example:8080"]
+    assert client.get("/settings", headers=headers).json()["data"]["proxyUrl"] == (
+        "http://proxy.example:8080"
+    )
+
+
+def test_settings_proxy_url_accepts_supported_urls_and_empty_value():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    applied: list[str] = []
+
+    async def apply_proxy(rules: str):
+        applied.append(rules)
+        return {"ok": True, "data": {"applied": True}}
+
+    fakes.connector["applyProxy"] = apply_proxy
+    values = [
+        "http://proxy.example:8080",
+        "https://proxy.example",
+        "socks5://127.0.0.1:1080",
+        "http://[::1]:3128",
+        "",
+    ]
+
+    for value in values:
+        response = client.patch(
+            "/settings", headers=headers, json={"proxyUrl": value}
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["proxyUrl"] == value
+
+    assert applied == values
+
+
+def test_settings_proxy_url_rejects_malformed_or_credentialed_urls():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    applied: list[str] = []
+
+    async def apply_proxy(rules: str):
+        applied.append(rules)
+        return {"ok": True, "data": {"applied": True}}
+
+    fakes.connector["applyProxy"] = apply_proxy
+    invalid_values = [
+        None,
+        42,
+        "proxy.example:8080",
+        "ftp://proxy.example:21",
+        "http://",
+        "http://proxy.example:",
+        "http://proxy.example:0",
+        "http://proxy.example:65536",
+        "http://user:secret@proxy.example:8080",
+        "http://proxy.example:8080/path",
+        "http://proxy.example:8080?mode=fast",
+        "http://proxy.example:8080#fragment",
+        "http://proxy example:8080",
+        "http://exa%mple.com:8080",
+        "http://-proxy.example:8080",
+        "http://proxy..example:8080",
+        "http://999.999.999.999:8080",
+    ]
+
+    for value in invalid_values:
+        response = client.patch(
+            "/settings", headers=headers, json={"proxyUrl": value}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_proxy"
+
+    assert applied == []
+    assert client.get("/settings", headers=headers).json()["data"].get(
+        "proxyUrl", ""
+    ) == ""
+
+
+def test_settings_proxy_connector_failure_does_not_persist_changes():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+
+    async def apply_proxy(_rules: str):
+        return {
+            "ok": False,
+            "error": {"code": "proxy_failed", "message": "Proxy rejected"},
+        }
+
+    fakes.connector["applyProxy"] = apply_proxy
+    response = client.patch(
+        "/settings",
+        headers=headers,
+        json={"sidebarCollapsed": True, "proxyUrl": "http://proxy.example:8080"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "code": "proxy_failed",
+        "message": "Proxy rejected",
+    }
+    assert fakes.transaction_calls == 0
+    settings = client.get("/settings", headers=headers).json()["data"]
+    assert settings.get("proxyUrl", "") == ""
+    assert settings["sidebarCollapsed"] == "0"
+
+
+def test_settings_proxy_persistence_failure_restores_previous_proxy():
+    client, fakes = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    applied: list[str] = []
+
+    async def apply_proxy(rules: str):
+        applied.append(rules)
+        return {"ok": True, "data": {"applied": True}}
+
+    fakes.connector["applyProxy"] = apply_proxy
+
+    def fail_set(_key: str, _value: object):
+        raise RuntimeError("database unavailable")
+
+    fakes.settings["set"] = fail_set
+    response = client.patch(
+        "/settings",
+        headers=headers,
+        json={"proxyUrl": "http://proxy.example:8080"},
+    )
+
+    assert response.status_code == 500
+    assert applied == ["http://proxy.example:8080", ""]
+    assert client.get("/settings", headers=headers).json()["data"].get(
+        "proxyUrl", ""
+    ) == ""
 
 
 def test_web_search_keys_are_encrypted_and_can_be_cleared():
@@ -1032,7 +1223,7 @@ def test_saved_provider_test_and_models_use_native_stored_key():
 def test_unsaved_provider_models_uses_request_key_without_persisting(monkeypatch):
     captured = {}
 
-    def create_transient_service(repos):
+    def create_transient_service(repos, _deps=None):
         def list_models(provider_id, api_key):
             captured["raw"] = repos["aiProviders"]["getRaw"](provider_id)
             captured["apiKey"] = api_key

@@ -13,6 +13,7 @@ import type {
 } from '@shared/ipc-types'
 
 const DOC_MIME = 'application/x-refora-docids'
+const originalWorkspaceCanvasUpdate = window.api.workspaceCanvas.update
 
 const mockAddDocs = vi.fn()
 const mockAddAssets = vi.fn()
@@ -142,6 +143,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.api.workspaceCanvas.update = originalWorkspaceCanvasUpdate
 })
 
 function makeItem(id: string, docId: string, x: number): WorkspaceItem {
@@ -833,6 +835,24 @@ describe('Board canvas controls and connections', () => {
     fireEvent.pointerUp(document, { pointerId: 12 })
 
     expect(world.style.transform).toBe('translate3d(60px, 55px, 0) scale(1)')
+  })
+
+  it('persists a pending wheel viewport when the board unmounts', async () => {
+    const updateViewport = vi.fn().mockResolvedValue({ panX: -12, panY: -18, zoom: 1 })
+    window.api.workspaceCanvas.update = updateViewport
+    const { container, unmount } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+
+    fireEvent.wheel(board, { deltaX: 12, deltaY: 18 })
+    unmount()
+
+    await waitFor(() => {
+      expect(updateViewport).toHaveBeenCalledWith('ws-1', {
+        panX: -12,
+        panY: -18,
+        zoom: 1
+      })
+    })
   })
 
   it('selects cards by click, focus, and marquee while showing floating actions', () => {

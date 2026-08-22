@@ -940,6 +940,26 @@ describe('StickyNoteCard', () => {
     })
     expect(content).toHaveValue('Unsaved text')
   })
+
+  it('persists a pending inline draft when the card unmounts', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(true)
+    const { unmount } = render(
+      <StickyNoteCard
+        note={note}
+        onDelete={() => {}}
+        onUpdate={onUpdate}
+      />
+    )
+
+    const content = screen.getByRole('textbox', { name: 'workspace.stickyNoteContentLabel' })
+    fireEvent.click(content)
+    fireEvent.change(content, { target: { value: 'Saved on unmount' } })
+    unmount()
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith('sticky-1', { contentMd: 'Saved on unmount' })
+    })
+  })
 })
 
 describe('ResizableCard', () => {

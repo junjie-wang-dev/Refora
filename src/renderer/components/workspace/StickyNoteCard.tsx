@@ -7,6 +7,7 @@ import { motion, MotionConfig } from 'motion/react'
 import { cardClassName } from '../ui'
 import type { WorkspaceNote, WorkspaceNotePatch } from '../../../shared/ipc-types'
 import { stickyNoteColorValue } from './stickyNoteColors'
+import { registerRendererFlushTask } from '../../persistence'
 
 interface StickyNoteCardProps {
   note: WorkspaceNote
@@ -64,13 +65,9 @@ export default function StickyNoteCard({
     if (editing) textareaRef.current?.focus()
   }, [editing])
 
-  useEffect(() => () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-  }, [])
-
   const persist = useCallback((value: string) => {
-    if (value === lastSavedRef.current) return
-    saveSequenceRef.current = saveSequenceRef.current.then(async () => {
+    if (value === lastSavedRef.current) return saveSequenceRef.current
+    const run = async () => {
       if (value === lastSavedRef.current) return
       const saved = await onUpdate(note.id, { contentMd: value })
       if (!saved) {
@@ -80,7 +77,9 @@ export default function StickyNoteCard({
       lastSavedRef.current = value
       setSaveError(false)
       if (latestDraftRef.current === value) dirtyRef.current = false
-    })
+    }
+    saveSequenceRef.current = saveSequenceRef.current.then(run, run)
+    return saveSequenceRef.current
   }, [note.id, onUpdate])
 
   const scheduleSave = useCallback((value: string) => {
@@ -90,6 +89,27 @@ export default function StickyNoteCard({
       persist(value)
     }, SAVE_DELAY)
   }, [persist])
+
+  const flushDraft = useCallback(async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    await persist(latestDraftRef.current)
+    if (dirtyRef.current) throw new Error(t('workspace.stickyNoteSaveFailed'))
+  }, [persist, t])
+
+  useEffect(() => {
+    const unregister = registerRendererFlushTask(flushDraft)
+    return () => {
+      unregister()
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      if (dirtyRef.current) void persist(latestDraftRef.current)
+    }
+  }, [flushDraft, persist])
 
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault()

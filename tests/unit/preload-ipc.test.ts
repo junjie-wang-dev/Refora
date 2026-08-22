@@ -35,6 +35,7 @@ interface InvocationCase {
 describe('preload IPC bridge', () => {
   let api: ReforaApi
   let authConfirmationListener: ((event: unknown, payload: unknown) => void) | undefined
+  let rendererFlushListener: ((event: unknown, requestId: unknown) => void) | undefined
 
   beforeAll(async () => {
     await import('../../src/preload/index')
@@ -42,6 +43,9 @@ describe('preload IPC bridge', () => {
     authConfirmationListener = electronMocks.on.mock.calls.find(
       ([channel]) => channel === IpcChannel.EventSyncAuthConfirmation
     )?.[1] as ((event: unknown, payload: unknown) => void) | undefined
+    rendererFlushListener = electronMocks.on.mock.calls.find(
+      ([channel]) => channel === IpcChannel.EventRendererFlushRequested
+    )?.[1] as ((event: unknown, requestId: unknown) => void) | undefined
   })
 
   beforeEach(() => {
@@ -275,6 +279,39 @@ describe('preload IPC bridge', () => {
 
     expect(callback).toHaveBeenCalledWith(payload)
     api.events.off(IpcChannel.EventSyncAuthConfirmation, callback)
+  })
+
+  it('acknowledges renderer persistence only after the subscriber completes', async () => {
+    let release: () => void = () => undefined
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const callback = vi.fn(() => pending)
+    api.events.onRendererFlushRequested(callback)
+
+    rendererFlushListener?.({ sender: 'ignored' }, 'flush-1')
+    await Promise.resolve()
+
+    expect(callback).toHaveBeenCalledOnce()
+    expect(electronMocks.invoke).not.toHaveBeenCalled()
+    release()
+    await vi.waitFor(() => expect(electronMocks.invoke).toHaveBeenCalledWith(
+      IpcChannel.RendererFlushComplete,
+      'flush-1'
+    ))
+    api.events.off(IpcChannel.EventRendererFlushRequested, callback)
+  })
+
+  it('reports renderer persistence failures to main', async () => {
+    const callback = vi.fn(async () => { throw new Error('disk full') })
+    api.events.onRendererFlushRequested(callback)
+
+    rendererFlushListener?.({ sender: 'ignored' }, 'flush-2')
+
+    await vi.waitFor(() => expect(electronMocks.invoke).toHaveBeenCalledWith(
+      IpcChannel.RendererFlushComplete,
+      'flush-2',
+      'disk full'
+    ))
+    api.events.off(IpcChannel.EventRendererFlushRequested, callback)
   })
 
   it('replaces duplicate callbacks and single-subscriber chat listeners', () => {

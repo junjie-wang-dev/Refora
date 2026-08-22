@@ -275,15 +275,21 @@ export default function DocumentList({
   )
 
   const handleCopyPath = useCallback((filePath: string) => {
-    navigator.clipboard.writeText(filePath).catch(() => {})
-  }, [])
+    void navigator.clipboard.writeText(filePath).catch(() => {
+      useDocumentStore.getState().showToast(t('common.copyFailed'))
+    })
+  }, [t])
 
   const handleAddFiles = useCallback(async () => {
     try {
       await api.import.addFiles([])
-    } catch { void 0 }
+    } catch (error) {
+      useDocumentStore.getState().showToast(
+        errorMessage(error, t('documentErrors.importFilesFailed'))
+      )
+    }
     void fetchDocuments()
-  }, [fetchDocuments])
+  }, [fetchDocuments, t])
 
   const handleCopyBibtex = useCallback(async (ids: string[]) => {
     try {
@@ -310,7 +316,9 @@ export default function DocumentList({
           }
           void useDocumentStore.getState().fetchCategories()
         } catch (err) {
-          useDocumentStore.getState().showToast(errorMessage(err, 'Failed to categorize'))
+          useDocumentStore.getState().showToast(
+            errorMessage(err, t('documentErrors.categorizeFailed'))
+          )
         }
       }
       const createAndAssign = async () => {
@@ -412,16 +420,22 @@ export default function DocumentList({
           paths.push(p)
         }
       } catch (e) {
-        useDocumentStore.getState().showToast(errorMessage(e, 'Failed to read file path'))
+        useDocumentStore.getState().showToast(
+          errorMessage(e, t('documentErrors.readFilePathFailed'))
+        )
       }
     }
     if (paths.length > 0) {
       try {
         await api.import.addFiles(paths)
-      } catch (e) { useDocumentStore.getState().showToast(errorMessage(e, 'Failed to import files')) }
+      } catch (e) {
+        useDocumentStore.getState().showToast(
+          errorMessage(e, t('documentErrors.importFilesFailed'))
+        )
+      }
       void fetchDocuments()
     }
-  }, [fetchDocuments])
+  }, [fetchDocuments, t])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes('Files')) {

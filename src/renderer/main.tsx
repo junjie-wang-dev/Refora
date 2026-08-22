@@ -5,7 +5,11 @@ import { motion } from 'motion/react'
 import Splash from './components/Splash'
 import { initI18n } from './i18n'
 import type { BootstrapData } from '../shared/ipc-types'
+import { normalizeBootstrapData } from '../shared/bootstrap'
+import { flushRendererPersistence } from './persistence'
 import './styles/index.css'
+
+window.api.events.onRendererFlushRequested(flushRendererPersistence)
 
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 if (IS_MAC) {
@@ -31,7 +35,7 @@ async function mountApp(bootstrap: Pick<BootstrapData, 'language' | 'listColumnS
     <React.StrictMode>
       <ConfigProvider motion={motion}>
         <App
-          listColumnState={bootstrap.listColumnState as never}
+          listColumnState={bootstrap.listColumnState}
           sidebarCollapsed={bootstrap.sidebarCollapsed}
           firstRun={bootstrap.firstRun}
         />
@@ -54,5 +58,5 @@ async function mountRecoveryApp() {
 
 window.api
   .getBootstrap()
-  .then(mountApp)
+  .then((bootstrap) => mountApp(normalizeBootstrapData(bootstrap)))
   .catch(mountRecoveryApp)

@@ -13,6 +13,8 @@ import WorkspaceMarkdownView, {
 import WorkspaceReaderTabs, { type WorkspaceReaderTab } from './WorkspaceReaderTabs'
 import { aiSummaryMarkdown } from '../../utils/workspaceCardMarkdown'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
+import { useDocumentStore } from '../../store/documentStore'
+import { errorMessage } from '../../../shared/ipc-types'
 
 const PdfReader = lazy(() => import('../PdfReader'))
 
@@ -96,8 +98,12 @@ export default function WorkspacePanel() {
 
   const handleOpenSandbox = useCallback(() => {
     if (!activeWorkspaceId) return
-    void window.api.workspaces.openSandbox(activeWorkspaceId).catch(() => undefined)
-  }, [activeWorkspaceId])
+    void window.api.workspaces.openSandbox(activeWorkspaceId).catch((error) => {
+      useDocumentStore.getState().showToast(
+        errorMessage(error, t('workspace.openSandboxFailed'))
+      )
+    })
+  }, [activeWorkspaceId, t])
 
   const activeNote = activeMarkdownCard?.kind === 'note'
     ? notes.find((note) => note.id === activeMarkdownCard.id) ?? null

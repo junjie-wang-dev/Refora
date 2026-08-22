@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import inspect
 import json
 import os
-import re
 import shutil
-import tempfile
 import time
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
 
 from refora_server.academic.arxiv import base_arxiv_id
 from refora_server.academic.types import ArxivSearchInput
@@ -22,198 +18,31 @@ from refora_server.library.bib_import import importFromBibtex
 from refora_server.library.file_hash import streamHash
 from refora_server.library.identifier_import import importByIdentifier
 from refora_server.library.json_import import importFromJson
-from refora_server.library.paths import containsLibrary, isInsideLibrary, resolveFromLibrary
+from refora_server.library.paths import containsLibrary, isInsideLibrary
 from refora_server.library.pdf_path import resolvePdfFilePath
-from refora_server.db.settings_seed import SETTING_KEYS
 from refora_server.services.ai_providers import createAiProvidersService
-from refora_server.web.types import WEB_SEARCH_PROVIDERS
-
-
-class _UnavailableError(RuntimeError):
-    code = "unavailable"
-
-
-def _value(source: Any, name: str, default: Any = None) -> Any:
-    if isinstance(source, Mapping):
-        return source.get(name, default)
-    return getattr(source, name, default)
-
-
-def _dependency(deps: Any, *names: str) -> Any:
-    for name in names:
-        value = _value(deps, name)
-        if value is not None:
-            return value
-    for group in ("repos", "repositories", "services"):
-        nested = _value(deps, group)
-        if nested is not None:
-            for name in names:
-                value = _value(nested, name)
-                if value is not None:
-                    return value
-    return None
-
-
-def _method(source: Any, name: str) -> Any:
-    value = _value(source, name)
-    if not callable(value):
-        raise _UnavailableError(f"Dependency does not provide {name}")
-    return value
-
-
-def _markdown_file_name(title: str) -> str:
-    normalized = re.sub(r"\.md$", "", title.strip(), flags=re.IGNORECASE)
-    normalized = re.sub(r'[<>:"/\\|?*]', "-", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip().rstrip(". ")[:120]
-    return f"{normalized or 'card'}.md"
-
-
-async def _call(source: Any, name: str, *args: Any, **kwargs: Any) -> Any:
-    result = _method(source, name)(*args, **kwargs)
-    if inspect.isawaitable(result):
-        return await result
-    return result
-
-
-def _success(data: Any, status_code: int = 200) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"ok": True, "data": data})
-
-
-def _error(exc: Exception) -> JSONResponse:
-    code = getattr(exc, "code", "")
-    message = getattr(exc, "message", "") or str(exc) or "Internal server error"
-    if code in {"not_found", "file_missing"}:
-        return JSONResponse(status_code=404, content={"ok": False, "error": {"code": "not_found", "message": message}})
-    if code in {"duplicate", "conflict", "state_error"}:
-        return JSONResponse(status_code=409, content={"ok": False, "error": {"code": "conflict", "message": message}})
-    if code in {"unavailable", "dependency_unavailable", "connector_timeout"}:
-        return JSONResponse(status_code=503, content={"ok": False, "error": {"code": "unavailable", "message": message}})
-    if code == "identifier_network_error":
-        return JSONResponse(status_code=503, content={"ok": False, "error": {"code": code, "message": message}})
-    if isinstance(exc, (ValueError, TypeError)) or code:
-        return JSONResponse(status_code=400, content={"ok": False, "error": {"code": code or "validation", "message": message}})
-    print(f"ERROR library route: {type(exc).__name__}: {exc}", flush=True)
-    return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": "Internal server error"}})
-
-
-def _body_dict(body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict):
-        raise ValueError("Request body must be an object")
-    return body
-
-
-def _string(body: dict[str, Any], name: str, *, required: bool = True) -> str:
-    value = body.get(name)
-    if not isinstance(value, str) or (required and not value.strip()):
-        raise ValueError(f"{name} must be a non-empty string")
-    return value.strip()
-
-
-def _ids(body: dict[str, Any], name: str = "ids") -> list[str]:
-    value = body.get(name)
-    if not isinstance(value, list) or not value or any(not isinstance(item, str) or not item for item in value):
-        raise ValueError(f"{name} must be a non-empty list of strings")
-    return value
-
-
-def _absolute_directory(value: str) -> str:
-    if not value or not os.path.isabs(value):
-        raise ValueError("path must be an absolute directory path")
-    resolved = os.path.abspath(value)
-    if not os.path.isdir(resolved):
-        raise ValueError("path must be an existing directory")
-    return resolved
-
-
-def _provider_input(body: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in body.items() if key not in {"apiKey", "apiKeyEnc"}}
-
-
-async def _connector(connector: Any, operation: str, *args: Any) -> Any:
-    names = {
-        "trash": ("trashItem", "trash_item"),
-        "open": ("openPath", "open_path"),
-        "reveal": ("showInFolder", "show_in_folder"),
-        "clipboard": ("clipboardWrite", "clipboard_write", "writeText", "write_text"),
-        "clipboard_file": ("clipboardWriteFile", "clipboard_write_file"),
-        "dialog_directory": ("dialogOpenDirectory", "dialog_open_directory"),
-        "dialog_file": ("dialogOpenFile", "dialog_open_file"),
-        "dialog_choose": ("dialogChoose", "dialog_choose"),
-        "encrypt_api_key": ("encryptApiKey", "encrypt_api_key"),
-        "decrypt_api_key": ("decryptApiKey", "decrypt_api_key"),
-    }[operation]
-    for name in names:
-        if callable(_value(connector, name)):
-            result = await _call(connector, name, *args)
-            if isinstance(result, Mapping) and "ok" in result:
-                if result.get("ok") is True:
-                    return result.get("data")
-                error = result.get("error")
-                code = error.get("code") if isinstance(error, Mapping) else "connector_error"
-                message = error.get("message") if isinstance(error, Mapping) else "Native connector failed"
-                failure = RuntimeError(str(message))
-                failure.code = str(code)
-                raise failure
-            return result
-    raise _UnavailableError(f"Connector does not provide {names[0]}")
-
-
-def _json_setting(settings: Any, key: str, default: Any) -> Any:
-    return _method(settings, "get")(key, default)
-
-
-def _absolute_regular_file(value: str, extensions: set[str], max_bytes: int) -> str:
-    if not value or not os.path.isabs(value):
-        raise ValueError("path must be absolute")
-    path = Path(value)
-    if path.suffix.lower() not in extensions:
-        raise ValueError(f"path must have one of these extensions: {', '.join(sorted(extensions))}")
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("path must be an existing regular file")
-        if path.stat().st_size > max_bytes:
-            raise ValueError(f"file exceeds the {max_bytes // (1024 * 1024)} MB limit")
-        return str(path.resolve(strict=True))
-    except OSError as error:
-        raise ValueError("path must be an existing regular file") from error
-
-
-def _base64_blob(value: Any) -> bytes | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise _UnavailableError("Native encryption returned an invalid payload")
-    try:
-        return base64.b64decode(value, validate=True)
-    except ValueError as error:
-        raise _UnavailableError("Native encryption returned invalid base64") from error
-
-
-def _validate_proxy_url(url: str) -> bool:
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        return parsed.scheme in {"http", "https", "socks5"}
-    except Exception:
-        return False
-
-
-async def _apply_proxy_rules(connector: Any, rules: str) -> None:
-    if rules and not _validate_proxy_url(rules):
-        return
-    apply = _value(connector, "applyProxy") or _value(connector, "apply_proxy")
-    if not callable(apply):
-        return
-    result = apply(rules)
-    if inspect.isawaitable(result):
-        result = await result
-    if isinstance(result, Mapping) and result.get("ok") is False:
-        error = result.get("error") or {}
-        code = error.get("code") if isinstance(error, Mapping) else "connector_error"
-        message = error.get("message") if isinstance(error, Mapping) else "Native proxy connector failed"
-        failure = RuntimeError(str(message))
-        failure.code = str(code)
-        raise failure
+from refora_server.services.clipboard_temp import create_clipboard_temp_service
+from refora_server.server.services.library_route_support import (
+    UnavailableError as _UnavailableError,
+    absolute_directory as _absolute_directory,
+    absolute_regular_file as _absolute_regular_file,
+    body_dict as _body_dict,
+    call as _call,
+    connector_call as _connector,
+    dependency as _dependency,
+    error_response as _error,
+    ids as _ids,
+    json_setting as _json_setting,
+    list_column_state as _list_column_state,
+    method as _method,
+    string as _string,
+    success as _success,
+    value as _value,
+    window_bounds as _window_bounds,
+)
+from refora_server.server.services.library_settings_routes import (
+    register_library_settings_routes,
+)
 
 
 def create_library_router(deps: Any) -> APIRouter:
@@ -235,11 +64,17 @@ def create_library_router(deps: Any) -> APIRouter:
     web_search = _value(deps, "web_search") or _value(services, "webSearch") or _dependency(deps, "webSearch")
     web_search_config = _value(deps, "web_search_config") or _value(repos, "webSearchConfig")
     providers = _value(deps, "ai_providers") or _value(services, "aiProviders")
+    get_proxy = _value(services, "getProxy") or _dependency(deps, "get_proxy")
     provider_repo = _value(deps, "ai_providers_repo") or _value(repos, "aiProviders")
     agent_profiles = _value(services, "agentProfiles") or _dependency(
         deps, "agentProfiles", "agent_profiles"
     )
     exporter = _dependency(deps, "exporter", "export")
+    clipboard_temp = (
+        _value(services, "clipboardTemp")
+        or _dependency(deps, "clipboard_temp")
+        or create_clipboard_temp_service()
+    )
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
     emit = _dependency(deps, "emit")
@@ -285,76 +120,6 @@ def create_library_router(deps: Any) -> APIRouter:
             max_bytes,
         )
 
-    async def provider_api_key(provider_id: str) -> str:
-        encrypted_getter = _value(providers, "getEncryptedApiKey")
-        raw_getter = _value(provider_repo, "getRaw")
-        if callable(encrypted_getter):
-            encrypted = await _call(providers, "getEncryptedApiKey", provider_id)
-        elif callable(raw_getter):
-            raw = await _call(provider_repo, "getRaw", provider_id)
-            if not isinstance(raw, Mapping):
-                raise ValueError(f"Provider not found: {provider_id}")
-            encrypted = raw.get("apiKeyEnc")
-        else:
-            raise _UnavailableError("Provider key repository is unavailable")
-        if encrypted is None:
-            return ""
-        data = await _connector(connector, "decrypt_api_key", encrypted)
-        if not isinstance(data, Mapping) or not isinstance(data.get("apiKey"), str):
-            raise _UnavailableError("Native key storage returned an invalid payload")
-        return data["apiKey"]
-
-    async def encrypted_provider_input(body: dict[str, Any]) -> dict[str, Any]:
-        parsed = _body_dict(body)
-        output = _provider_input(parsed)
-        if "apiKey" not in parsed:
-            return output
-        api_key = parsed.get("apiKey")
-        if not isinstance(api_key, str):
-            raise ValueError("apiKey must be a string")
-        data = await _connector(connector, "encrypt_api_key", api_key)
-        if not isinstance(data, Mapping) or "apiKeyEnc" not in data:
-            raise _UnavailableError("Native key storage returned an invalid payload")
-        output["apiKeyEnc"] = _base64_blob(data.get("apiKeyEnc"))
-        return output
-
-    async def encrypted_search_key(api_key: str) -> bytes | None:
-        data = await _connector(connector, "encrypt_api_key", api_key)
-        if not isinstance(data, Mapping):
-            raise _UnavailableError("Native key storage returned an invalid payload")
-        return _base64_blob(data.get("apiKeyEnc"))
-
-    def workspace_asset_file(asset_id: str) -> str:
-        asset = _method(workspace_assets, "get")(asset_id)
-        if asset is None:
-            error = RuntimeError(f"workspace asset not found: {asset_id}")
-            error.code = "not_found"
-            raise error
-        library_folder = _json_setting(settings, "libraryFolderPath", "")
-        if not isinstance(library_folder, str) or not os.path.isabs(library_folder):
-            raise ValueError("Library folder is not configured")
-        file_path = asset.get("filePath")
-        file_name = asset.get("fileName")
-        if not isinstance(file_path, str) or not isinstance(file_name, str):
-            raise ValueError("Workspace asset has an invalid path")
-        resolved = os.path.abspath(resolveFromLibrary(file_path, library_folder))
-        asset_directory = os.path.abspath(
-            os.path.join(library_folder, "refora-assets", asset_id)
-        )
-        try:
-            inside = os.path.commonpath([asset_directory, resolved]) == asset_directory
-        except ValueError:
-            inside = False
-        if (
-            not inside
-            or os.path.dirname(resolved) != asset_directory
-            or os.path.basename(resolved) != file_name
-            or os.path.islink(resolved)
-            or not os.path.isfile(resolved)
-        ):
-            raise ValueError("Workspace asset path is invalid or missing")
-        return resolved
-
     @router.get("/app/bootstrap")
     async def app_bootstrap():
         async def action():
@@ -373,8 +138,8 @@ def create_library_router(deps: Any) -> APIRouter:
             return {
                 "language": language,
                 "theme": theme,
-                "windowBounds": window_bounds if isinstance(window_bounds, dict) else None,
-                "listColumnState": list_column_state if isinstance(list_column_state, dict) else None,
+                "windowBounds": _window_bounds(window_bounds),
+                "listColumnState": _list_column_state(list_column_state),
                 "sidebarCollapsed": sidebar_collapsed is True or sidebar_collapsed == "1",
                 "firstRun": not bool(library_folder_path),
                 "libraryFolderPath": library_folder_path or None,
@@ -1079,300 +844,24 @@ def create_library_router(deps: Any) -> APIRouter:
     async def switch_library(body: dict[str, Any]):
         return await run(lambda: _call(library, "switchLibrary", _absolute_directory(_string(_body_dict(body), "path"))))
 
-    @router.get("/settings")
-    async def get_settings():
-        async def action():
-            values = await _call(settings, "list")
-            return dict(values)
-        return await run(action)
-
-    @router.patch("/settings")
-    async def patch_settings(body: dict[str, Any]):
-        async def action():
-            parsed = _body_dict(body)
-            proxy_changed = False
-            for key, value in parsed.items():
-                if not isinstance(key, str) or not key:
-                    raise ValueError("Settings keys must be non-empty strings")
-                if key not in SETTING_KEYS:
-                    error = RuntimeError(f"Unknown setting key: {key}")
-                    error.code = "forbidden_field"
-                    raise error
-                if key == "libraryFolderPath" and isinstance(value, str) and value:
-                    error = RuntimeError("Use library.switch to change the library folder")
-                    error.code = "use_library_switch"
-                    raise error
-                try:
-                    json.dumps(value, allow_nan=False)
-                except (TypeError, ValueError) as error:
-                    raise ValueError(f"Setting {key} is not JSON serializable") from error
-                await _call(settings, "set", key, value)
-                if key == "proxyUrl":
-                    proxy_changed = True
-            if proxy_changed:
-                proxy_value = _json_setting(settings, "proxyUrl", "")
-                proxy_rules = proxy_value.strip() if isinstance(proxy_value, str) else ""
-                await _apply_proxy_rules(connector, proxy_rules)
-            values = await _call(settings, "list")
-            return dict(values)
-        return await run(action)
-
-    @router.get("/settings/web-search")
-    async def get_web_search_settings():
-        return await run(lambda: _call(web_search, "getConfig"))
-
-    @router.patch("/settings/web-search")
-    async def patch_web_search_settings(body: dict[str, Any]):
-        async def action():
-            parsed = _body_dict(body)
-            allowed = {
-                "provider",
-                "tavilyApiKey",
-                "braveApiKey",
-                "clearTavilyApiKey",
-                "clearBraveApiKey",
-            }
-            unknown = set(parsed) - allowed
-            if unknown:
-                raise ValueError(
-                    f"Unknown web search setting: {sorted(unknown)[0]}"
-                )
-            current = await _call(web_search_config, "get")
-            provider = parsed.get("provider", current.get("provider"))
-            if provider not in WEB_SEARCH_PROVIDERS:
-                raise ValueError("Unknown web search provider")
-            tavily_key = parsed.get("tavilyApiKey")
-            brave_key = parsed.get("braveApiKey")
-            clear_tavily = parsed.get("clearTavilyApiKey", False)
-            clear_brave = parsed.get("clearBraveApiKey", False)
-            if not isinstance(clear_tavily, bool) or not isinstance(clear_brave, bool):
-                raise ValueError("Web search clear flags must be booleans")
-            if tavily_key is not None and not isinstance(tavily_key, str):
-                raise ValueError("tavilyApiKey must be a string")
-            if brave_key is not None and not isinstance(brave_key, str):
-                raise ValueError("braveApiKey must be a string")
-            tavily_key = tavily_key.strip() if isinstance(tavily_key, str) else ""
-            brave_key = brave_key.strip() if isinstance(brave_key, str) else ""
-            if clear_tavily and tavily_key:
-                raise ValueError("Tavily API key cannot be set and cleared together")
-            if clear_brave and brave_key:
-                raise ValueError("Brave API key cannot be set and cleared together")
-            patch: dict[str, Any] = {"provider": provider}
-            if clear_tavily:
-                patch["tavilyApiKeyEnc"] = None
-            elif tavily_key:
-                patch["tavilyApiKeyEnc"] = await encrypted_search_key(tavily_key)
-            if clear_brave:
-                patch["braveApiKeyEnc"] = None
-            elif brave_key:
-                patch["braveApiKeyEnc"] = await encrypted_search_key(brave_key)
-            has_tavily = (
-                patch.get("tavilyApiKeyEnc", current.get("tavilyApiKeyEnc"))
-                is not None
-            )
-            has_brave = (
-                patch.get("braveApiKeyEnc", current.get("braveApiKeyEnc"))
-                is not None
-            )
-            if provider == "tavily" and not has_tavily:
-                raise ValueError(
-                    "Configure a Tavily API key before selecting Tavily"
-                )
-            if provider == "brave" and not has_brave:
-                raise ValueError("Configure a Brave API key before selecting Brave")
-            await _call(web_search_config, "update", patch)
-            return await _call(web_search, "getConfig")
-        return await run(action)
-
-    @router.post("/settings/web-search/test")
-    async def test_web_search_settings(body: dict[str, Any]):
-        async def action():
-            parsed = _body_dict(body)
-            query = parsed.get("query", "")
-            if not isinstance(query, str):
-                raise ValueError("query must be a string")
-            test_search = _method(web_search, "test")
-            return await asyncio.to_thread(test_search, query)
-        return await run(action)
-
-    @router.get("/ai/providers")
-    async def list_providers():
-        return await run(lambda: _call(providers, "list"))
-
-    @router.post("/ai/providers")
-    async def create_provider(body: dict[str, Any]):
-        async def action():
-            provider = await _call(
-                provider_repo, "create", await encrypted_provider_input(body)
-            )
-            if agent_profiles is not None:
-                await _call(agent_profiles, "ensureApiProfile", provider)
-            return provider
-        return await run(action)
-
-    @router.patch("/ai/providers/{provider_id}")
-    async def patch_provider(provider_id: str, body: dict[str, Any]):
-        async def action():
-            provider = await _call(
-                provider_repo, "update", provider_id, await encrypted_provider_input(body)
-            )
-            if agent_profiles is not None:
-                profile = await _call(agent_profiles, "ensureApiProfile", provider)
-                await _call(
-                    agent_profiles,
-                    "update",
-                    profile["id"],
-                    {
-                        "name": provider["name"],
-                        "model": provider.get("model") or "",
-                        "reasoningEffort": provider.get("reasoningEffort") or "medium",
-                    },
-                )
-            return provider
-        return await run(action)
-
-    @router.delete("/ai/providers/{provider_id}")
-    async def delete_provider(provider_id: str):
-        async def action():
-            await _call(provider_repo, "delete", provider_id)
-            return {"ack": True}
-        return await run(action)
-
-    @router.post("/ai/providers/{provider_id}/test")
-    async def test_provider(provider_id: str):
-        async def action():
-            return await _call(
-                providers, "testProvider", provider_id, await provider_api_key(provider_id)
-            )
-        return await run(action)
-
-    @router.post("/ai/providers/models")
-    async def list_provider_models(body: dict[str, Any]):
-        async def action():
-            parsed = _body_dict(body)
-            provider_id = parsed.get("providerId")
-            if provider_id is not None:
-                if not isinstance(provider_id, str) or not provider_id.strip():
-                    raise ValueError("providerId must be a non-empty string")
-                return await _call(
-                    providers,
-                    "listModels",
-                    provider_id,
-                    await provider_api_key(provider_id),
-                )
-            base_url = parsed.get("baseUrl")
-            api_key = parsed.get("apiKey", "")
-            if not isinstance(base_url, str) or not base_url.strip():
-                return {"ok": False, "models": [], "error": "Base URL is required"}
-            if not isinstance(api_key, str):
-                raise ValueError("apiKey must be a string")
-            transient_raw = {
-                "id": "__transient__",
-                "presetId": parsed.get("presetId") or "custom",
-                "name": "Unsaved provider",
-                "baseUrl": base_url,
-                "model": "",
-            }
-            transient = createAiProvidersService(
-                {
-                    "aiProviders": {
-                        "getRaw": lambda provider: (
-                            transient_raw if provider == "__transient__" else None
-                        )
-                    }
-                }
-            )
-            return await _call(transient, "listModels", "__transient__", api_key)
-        return await run(action)
-
-    @router.get("/ai/agent-profiles")
-    async def list_agent_profiles():
-        return await run(lambda: _call(agent_profiles, "list"))
-
-    @router.get("/ai/cli-runtimes")
-    async def scan_cli_runtimes():
-        async def action():
-            scan = _method(agent_profiles, "scanRuntimes")
-            return await asyncio.to_thread(scan)
-
-        return await run(action)
-
-    @router.post("/ai/agent-profiles")
-    async def create_agent_profile(body: dict[str, Any]):
-        return await run(
-            lambda: _call(agent_profiles, "create", _body_dict(body))
-        )
-
-    @router.patch("/ai/agent-profiles/{profile_id}")
-    async def patch_agent_profile(profile_id: str, body: dict[str, Any]):
-        return await run(
-            lambda: _call(agent_profiles, "update", profile_id, _body_dict(body))
-        )
-
-    @router.delete("/ai/agent-profiles/{profile_id}")
-    async def delete_agent_profile(profile_id: str):
-        async def action():
-            await _call(agent_profiles, "delete", profile_id)
-            return {"ack": True}
-
-        return await run(action)
-
-    @router.post("/ai/agent-profiles/{profile_id}/test")
-    async def test_agent_profile(profile_id: str):
-        return await run(lambda: _call(agent_profiles, "test", profile_id))
-
-    @router.post("/ai/agent-profiles/{profile_id}/models")
-    async def list_agent_profile_models(profile_id: str):
-        return await run(lambda: _call(agent_profiles, "listModels", profile_id))
-
-    @router.post("/export/json")
-    async def export_json(body: dict[str, Any]):
-        async def action():
-            parsed = _body_dict(body)
-            return await _call(exporter, "exportJson", parsed.get("documentIds"), parsed.get("workspaceId"))
-        return await run(action)
-
-    @router.post("/export/bibtex")
-    async def export_bibtex(body: dict[str, Any]):
-        return await run(lambda: _call(exporter, "exportBibtex", _ids(_body_dict(body), "documentIds")))
-
-    @router.get("/export/bibtex-string")
-    async def export_bibtex_string(documentIds: str = ""):
-        async def action():
-            values = [value for value in documentIds.split(",") if value]
-            if not values:
-                raise ValueError("documentIds is required")
-            return await _call(exporter, "getBibtexString", values)
-        return await run(action)
-
-    async def copy_text(body: dict[str, Any], field: str):
-        await _connector(connector, "clipboard", _string(_body_dict(body), field))
-        return {"ack": True}
-
-    @router.post("/clipboard/write-text")
-    async def write_clipboard_text(body: dict[str, Any]):
-        return await run(lambda: copy_text(body, "text"))
-
-    @router.post("/clipboard/copy-markdown")
-    async def copy_clipboard_markdown(body: dict[str, Any]):
-        async def action():
-            payload = _body_dict(body)
-            title = _string(payload, "title")
-            markdown = _string(payload, "markdown")
-            directory = Path(tempfile.mkdtemp(prefix="refora-clipboard-"))
-            path = directory / _markdown_file_name(title)
-            path.write_text(markdown, encoding="utf-8")
-            await _connector(connector, "clipboard_file", str(path))
-            return {"ack": True}
-
-        return await run(action)
-
-    @router.post("/clipboard/copy-workspace-asset")
-    async def copy_workspace_asset(body: dict[str, Any]):
-        async def action():
-            asset_id = _string(_body_dict(body), "assetId")
-            await _connector(connector, "clipboard_file", workspace_asset_file(asset_id))
-            return {"ack": True}
-        return await run(action)
+    register_library_settings_routes(
+        router,
+        {
+            "run": run,
+            "settings": settings,
+            "connector": connector,
+            "transaction": transaction,
+            "web_search": web_search,
+            "web_search_config": web_search_config,
+            "providers": providers,
+            "provider_repo": provider_repo,
+            "agent_profiles": agent_profiles,
+            "get_proxy": get_proxy,
+            "exporter": exporter,
+            "clipboard_temp": clipboard_temp,
+            "workspace_assets": workspace_assets,
+            "create_ai_providers": createAiProvidersService,
+        },
+    )
 
     return router

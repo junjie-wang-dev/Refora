@@ -867,6 +867,7 @@ export type EventChannelKey = keyof typeof IpcChannel & `Event${string}`
 export type EventChannel = (typeof IpcChannel)[EventChannelKey]
 
 export interface DocumentEvents {
+  onRendererFlushRequested(cb: () => Promise<void>): void
   onDocumentUpdated(cb: (doc: Document) => void): void
   onWindowFocusChanged(cb: (focused: boolean) => void): void
   onImportProgress(cb: (payload: ImportProgress) => void): void

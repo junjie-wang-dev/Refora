@@ -50,9 +50,13 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const handleAddFiles = useCallback(async () => {
     try {
       await api.import.addFiles([])
-    } catch (e) { useDocumentStore.getState().showToast(errorMessage(e, 'Failed to import files')) }
+    } catch (e) {
+      useDocumentStore.getState().showToast(
+        errorMessage(e, t('documentErrors.importFilesFailed'))
+      )
+    }
     void fetchDocuments()
-  }, [fetchDocuments])
+  }, [fetchDocuments, t])
 
   const handleImportFromIdentifier = useCallback(() => {
     setShowIdentifierImport(true)

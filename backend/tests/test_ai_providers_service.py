@@ -7,6 +7,7 @@ import pytest
 from refora_server.db.connection import open_database
 from refora_server.repositories.ai_providers import createAiProvidersRepository
 from refora_server.services.ai_providers import (
+    TEST_TIMEOUT_MS,
     createAiProvidersService,
     normalize_base_url,
 )
@@ -32,14 +33,19 @@ class _FakeResponse:
 
 
 class _FakeClient:
+    instances: list["_FakeClient"] = []
+
     def __init__(self, *args, **kwargs):
         self.kwargs = kwargs
         self.get_calls: list[tuple[str, dict[str, str]]] = []
+        self.closed = False
+        self.instances.append(self)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
+        self.closed = True
         return False
 
     def get(self, url, headers=None):
@@ -55,6 +61,7 @@ class _FakeClient:
     @classmethod
     def reset(cls):
         cls._routes.clear()
+        cls.instances.clear()
 
     def _respond(self, url, headers):
         for base, responder in _FakeClient._routes.items():
@@ -107,6 +114,30 @@ def test_test_provider_ok_returns_model(db):
     svc = _service(db, responder)
     result = svc["testProvider"](provider["id"], "sk-test")
     assert result == {"ok": True, "model": "gpt-5.6-terra"}
+
+
+def test_test_provider_applies_current_proxy_and_closes_client(db):
+    provider = _make_provider(db)
+    responder = _FakeClient()
+    responder._respond = lambda url, headers: _FakeResponse(
+        200, {"data": [{"id": "gpt-5.6-terra"}]}
+    )
+    _FakeClient.reset()
+    _FakeClient.register("https://api.openai.com/v1", responder)
+    service = createAiProvidersService(
+        {"aiProviders": _make_provider_repo(db)},
+        {
+            "client_factory": lambda _: _FakeClient,
+            "get_proxy": lambda: "http://127.0.0.1:8080",
+        },
+    )
+
+    assert service["testProvider"](provider["id"], "sk-test")["ok"] is True
+    assert _FakeClient.instances[-1].kwargs == {
+        "timeout": TEST_TIMEOUT_MS / 1000,
+        "proxy": "http://127.0.0.1:8080",
+    }
+    assert _FakeClient.instances[-1].closed is True
 
 
 def test_test_provider_missing_returns_ok_false(db):

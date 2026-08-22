@@ -23,6 +23,7 @@ import { IconTooltip, Input, PanelTabHeader, Textarea } from '../ui'
 import WorkspaceNavigationControls from './WorkspaceNavigationControls'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
+import { registerRendererFlushTask } from '../../persistence'
 
 export type WorkspaceMarkdownViewKind = 'note' | 'report' | 'summary'
 export type WorkspaceMarkdownViewMode = 'read' | 'edit'
@@ -141,7 +142,20 @@ const WorkspaceMarkdownView = forwardRef<
     return () => window.clearTimeout(timeout)
   }, [draftContent, draftTitle, editable, isDirty, mode, save])
 
-  const saveCurrentDraft = () => save({ title: draftTitle, contentMd: draftContent })
+  const saveCurrentDraft = useCallback(
+    () => save({ title: draftTitle, contentMd: draftContent }),
+    [draftContent, draftTitle, save]
+  )
+
+  const flushDraft = useCallback(async () => {
+    if (!isDirty) return
+    if (!await saveCurrentDraft()) throw new Error(saveFailed)
+  }, [isDirty, saveCurrentDraft, saveFailed])
+
+  useEffect(() => {
+    if (!editable) return
+    return registerRendererFlushTask(flushDraft)
+  }, [editable, flushDraft])
 
   const requestClose = async () => {
     if (!isDirty) return true
@@ -181,7 +195,9 @@ const WorkspaceMarkdownView = forwardRef<
         disabled: !selectedText,
         onClick: () => {
           if (!selectedText) return
-          void window.api.clipboard.writeText(selectedText).catch(() => {})
+          void window.api.clipboard.writeText(selectedText).catch(() => {
+            useDocumentStore.getState().showToast(i18n.t('common.copyFailed'))
+          })
         }
       },
       {

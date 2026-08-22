@@ -39,9 +39,11 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
 }
 
 const mockList = vi.fn()
+const mockCounts = vi.fn()
 const mockSearch = vi.fn()
 const mockSetStarred = vi.fn()
 const mockSettingsSet = vi.fn()
+const mockGetBootstrap = vi.fn()
 const mockOpenPdf = vi.fn()
 const mockOpenInFinder = vi.fn()
 const mockDelete = vi.fn()
@@ -82,6 +84,7 @@ const defaultListColumnState: ListColumnState = {
 function resetStoreState(): void {
   useDocumentStore.setState({
     documents: [],
+    documentCounts: { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 },
     selectedIds: [],
     focusedDocId: null,
     initialized: false,
@@ -107,9 +110,11 @@ function resetStoreState(): void {
 beforeEach(() => {
   initI18n('en')
   mockList.mockReset()
+  mockCounts.mockReset()
   mockSearch.mockReset()
   mockSetStarred.mockReset()
   mockSettingsSet.mockReset()
+  mockGetBootstrap.mockReset()
   mockOpenPdf.mockReset()
   mockOpenInFinder.mockReset()
   mockDelete.mockReset()
@@ -136,9 +141,19 @@ beforeEach(() => {
   mockEventsOff.mockReset()
 
   mockList.mockResolvedValue([])
+  mockCounts.mockResolvedValue({ all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 })
   mockSearch.mockResolvedValue([])
   mockSetStarred.mockResolvedValue(undefined)
   mockSettingsSet.mockResolvedValue(undefined)
+  mockGetBootstrap.mockResolvedValue({
+    language: 'en',
+    theme: 'dark',
+    windowBounds: null,
+    listColumnState: null,
+    sidebarCollapsed: false,
+    firstRun: false,
+    libraryFolderPath: '/fake/library'
+  })
   mockOpenPdf.mockImplementation(async (id: string) => makeDoc({ id, lastReadAt: 1 }))
   mockOpenInFinder.mockResolvedValue(undefined)
   mockDelete.mockResolvedValue(undefined)
@@ -162,8 +177,10 @@ beforeEach(() => {
   mockCategoriesDelete.mockResolvedValue(undefined)
 
   const api = window.api as unknown as Record<string, unknown>
+  api.getBootstrap = mockGetBootstrap
   const docs = api.documents as Record<string, unknown>
   docs.list = mockList
+  docs.counts = mockCounts
   docs.search = mockSearch
   docs.setStarred = mockSetStarred
   docs.openPdf = mockOpenPdf
@@ -431,7 +448,20 @@ describe('DocumentStore', () => {
 
     it('library:switched event refetches documents and clears selection', async () => {
       const fetchedDocs = [makeDoc({ id: 'a1' }), makeDoc({ id: 'a2' })]
+      const targetColumns: ListColumnState = {
+        ...defaultListColumnState,
+        sort: { field: 'year', dir: 'asc' }
+      }
       mockList.mockResolvedValue(fetchedDocs)
+      mockGetBootstrap.mockResolvedValue({
+        language: 'zh',
+        theme: 'light',
+        windowBounds: null,
+        listColumnState: targetColumns,
+        sidebarCollapsed: true,
+        firstRun: false,
+        libraryFolderPath: '/new/library'
+      })
       useDocumentStore.setState({
         selectedIds: ['old'],
         focusedDocId: 'old',
@@ -447,7 +477,116 @@ describe('DocumentStore', () => {
       expect(useDocumentStore.getState().focusedDocId).toBeNull()
       await Promise.resolve()
       await Promise.resolve()
+      await Promise.resolve()
       expect(mockList).toHaveBeenCalled()
+      expect(useDocumentStore.getState().listColumnState).toEqual(targetColumns)
+    })
+
+    it('drops a stale debounced column write after an external library switch', async () => {
+      vi.useFakeTimers()
+      useDocumentStore.getState().init(null)
+      const nextColumns: ListColumnState = {
+        ...defaultListColumnState,
+        sort: { field: 'venue', dir: 'asc' }
+      }
+      useDocumentStore.getState().setListColumnState(nextColumns)
+      const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void) | undefined
+
+      cb!()
+      await vi.advanceTimersByTimeAsync(500)
+
+      expect(mockSettingsSet).not.toHaveBeenCalledWith('listColumnState', nextColumns)
+      vi.useRealTimers()
+    })
+
+    it('clears library state immediately and ignores delayed responses from the previous library', async () => {
+      let resolveOldDocuments!: (documents: Document[]) => void
+      let resolveNewDocuments!: (documents: Document[]) => void
+      let resolveOldCategories!: (categories: Category[]) => void
+      let resolveNewCategories!: (categories: Category[]) => void
+      let resolveOldCounts!: (counts: {
+        all: number
+        recentlyRead: number
+        recentlyAdded: number
+        starred: number
+      }) => void
+      let resolveNewCounts!: typeof resolveOldCounts
+      mockList
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOldDocuments = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveNewDocuments = resolve }))
+      mockCategoriesList
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOldCategories = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveNewCategories = resolve }))
+      mockCounts
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOldCounts = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveNewCounts = resolve }))
+      useDocumentStore.setState({
+        documents: [makeDoc({ id: 'old' })],
+        documentCounts: { all: 4, recentlyRead: 3, recentlyAdded: 2, starred: 1 },
+        listMode: { mode: 'category', categoryId: 'old-category' },
+        selectedIds: ['old'],
+        focusedDocId: 'old',
+        confirmDelete: { ids: ['old'], message: 'delete' },
+        isImporting: true,
+        importProgress: { current: 1, total: 2 },
+        identifierImporting: 1,
+        isLoading: true,
+        isLoadingMoreDocuments: true,
+        hasMoreDocuments: true,
+        categories: [{ id: 'old-category', name: 'Old', sortOrder: 0, createdAt: 0, count: 1 }]
+      })
+
+      useDocumentStore.getState().init(null)
+      const oldCategories = useDocumentStore.getState().fetchCategories()
+      const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void)
+      cb()
+
+      expect(useDocumentStore.getState()).toMatchObject({
+        documents: [],
+        documentCounts: { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 },
+        listMode: { mode: 'all' },
+        selectedIds: [],
+        focusedDocId: null,
+        confirmDelete: null,
+        isImporting: false,
+        importProgress: null,
+        identifierImporting: 0,
+        isLoading: false,
+        isLoadingMoreDocuments: false,
+        hasMoreDocuments: false,
+        categories: []
+      })
+
+      await vi.waitFor(() => {
+        expect(mockList).toHaveBeenCalledTimes(2)
+        expect(mockCategoriesList).toHaveBeenCalledTimes(2)
+        expect(mockCounts).toHaveBeenCalledTimes(2)
+      })
+      const newDocuments = [makeDoc({ id: 'new' })]
+      const newCategories = [
+        { id: 'new-category', name: 'New', sortOrder: 0, createdAt: 1, count: 1 }
+      ]
+      const newCounts = { all: 1, recentlyRead: 0, recentlyAdded: 1, starred: 0 }
+      resolveNewDocuments(newDocuments)
+      resolveNewCategories(newCategories)
+      resolveNewCounts(newCounts)
+      await vi.waitFor(() => {
+        expect(useDocumentStore.getState().documents).toEqual(newDocuments)
+        expect(useDocumentStore.getState().categories).toEqual(newCategories)
+        expect(useDocumentStore.getState().documentCounts).toEqual(newCounts)
+      })
+
+      resolveOldDocuments([makeDoc({ id: 'stale' })])
+      resolveOldCategories([
+        { id: 'stale-category', name: 'Stale', sortOrder: 0, createdAt: 0, count: 9 }
+      ])
+      resolveOldCounts({ all: 99, recentlyRead: 99, recentlyAdded: 99, starred: 99 })
+      await oldCategories
+      await Promise.resolve()
+
+      expect(useDocumentStore.getState().documents).toEqual(newDocuments)
+      expect(useDocumentStore.getState().categories).toEqual(newCategories)
+      expect(useDocumentStore.getState().documentCounts).toEqual(newCounts)
     })
   })
 
@@ -635,6 +774,23 @@ describe('DocumentStore', () => {
         field: 'addedAt',
         dir: 'desc'
       })
+    })
+
+    it('flushes a pending column layout without waiting for the debounce', async () => {
+      vi.useFakeTimers()
+      const next = {
+        ...defaultListColumnState,
+        sort: { field: 'year', dir: 'asc' } as const
+      }
+
+      useDocumentStore.getState().setListColumnState(next)
+      await useDocumentStore.getState().flushPendingSettings()
+
+      expect(mockSettingsSet).toHaveBeenCalledOnce()
+      expect(mockSettingsSet).toHaveBeenCalledWith('listColumnState', next)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(mockSettingsSet).toHaveBeenCalledOnce()
+      vi.useRealTimers()
     })
   })
 

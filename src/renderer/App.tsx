@@ -25,7 +25,9 @@ import { useChatDraftStore } from './store/chatDraftStore'
 import { usePdfReaderStore } from './store/pdfReaderStore'
 import { api } from './ipc'
 import i18n from './i18n'
+import { normalizeBootstrapData } from '../shared/bootstrap'
 import type { ListColumnState } from '../shared/ipc-types'
+import { registerRendererFlushTask, trackRendererPersistence } from './persistence'
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 400
@@ -44,6 +46,17 @@ const DETAIL_DEFAULT = 384
 const WORKSPACE_DEFAULT = 800
 const CHAT_MIN = 380
 const CHAT_DEFAULT = 560
+
+function savedDimension(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(minimum, Math.min(maximum, value))
+    : fallback
+}
 
 function canExpandDocumentList(
   listWidth: number,
@@ -112,6 +125,11 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const workspaceWidthRef = useRef(WORKSPACE_DEFAULT)
   const expandedDocumentListWidthRef = useRef(0)
   const panelResizingRef = useRef(false)
+  const settingsHydrationVersionRef = useRef(0)
+  const writableSettingKeysRef = useRef(new Set<string>())
+  const pendingSettingWritesRef = useRef(new Map<string, unknown>())
+  const settingWriteTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const settingWriteTasksRef = useRef(new Map<string, Promise<void>>())
   const documentListPanelRef = useRef<HTMLDivElement>(null)
   const detailPanelRef = useRef<HTMLDivElement>(null)
   const workspacePanelRef = useRef<HTMLDivElement>(null)
@@ -204,85 +222,186 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     }
   }, [])
 
-  useEffect(() => {
-    let active = true
-    void Promise.all([
-      api.settings.get<number>('sidebarWidth', SIDEBAR_DEFAULT),
-      api.settings.get<number>('detailWidth', DETAIL_DEFAULT),
-      api.settings.get<number>('workspaceWidth', WORKSPACE_DEFAULT),
-      api.settings.get<number>('workspaceChatWidth', CHAT_DEFAULT),
-      api.settings.get<number>('documentListCompactWidth', DOC_LIST_COMPACT_DEFAULT),
-    ]).then(([s, d, w, c, compactWidth]) => {
-      if (!active) return
-      setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, s)))
-      const nextDetailWidth = Math.max(DETAIL_MIN, Math.min(DETAIL_MAX, d))
-      detailWidthRef.current = nextDetailWidth
-      setDetailWidth(nextDetailWidth)
-      const nextWorkspaceWidth = Math.max(WORKSPACE_RESIZE_MIN, Math.min(WORKSPACE_MAX, w))
-      workspaceWidthRef.current = nextWorkspaceWidth
-      setWorkspaceWidth(nextWorkspaceWidth)
-      setChatWidth(Math.max(CHAT_MIN, c))
-      const nextCompactWidth = Math.max(
-        DOC_LIST_COMPACT_MIN,
-        Math.min(DOC_LIST_COMPACT_MAX, compactWidth)
-      )
-      documentListCompactWidthRef.current = nextCompactWidth
-      documentListDragWidthRef.current = nextCompactWidth
-      setDocumentListCompactWidth(nextCompactWidth)
-      setSettingsHydrated(true)
-    }).catch(() => {
-      if (active) useDocumentStore.getState().showToast(i18n.t('common.settingsLoadFailed'))
+  const hydrateLibrarySettings = useCallback(async (includeBootstrap: boolean) => {
+    const version = ++settingsHydrationVersionRef.current
+    writableSettingKeysRef.current.clear()
+    setSettingsHydrated(false)
+    const settingKeys = [
+      'sidebarWidth',
+      'detailWidth',
+      'workspaceWidth',
+      'workspaceChatWidth',
+      'documentListCompactWidth'
+    ] as const
+    const [bootstrapResult, ...settingResults] = await Promise.allSettled([
+      includeBootstrap
+        ? Promise.resolve().then(() => api.getBootstrap()).then(normalizeBootstrapData)
+        : Promise.resolve(null),
+      Promise.resolve().then(() => api.settings.get<number>('sidebarWidth', SIDEBAR_DEFAULT)),
+      Promise.resolve().then(() => api.settings.get<number>('detailWidth', DETAIL_DEFAULT)),
+      Promise.resolve().then(() => api.settings.get<number>('workspaceWidth', WORKSPACE_DEFAULT)),
+      Promise.resolve().then(() => api.settings.get<number>('workspaceChatWidth', CHAT_DEFAULT)),
+      Promise.resolve().then(() => api.settings.get<number>(
+        'documentListCompactWidth',
+        DOC_LIST_COMPACT_DEFAULT
+      ))
+    ])
+    if (version !== settingsHydrationVersionRef.current) return
+
+    let failed = bootstrapResult.status === 'rejected'
+    if (bootstrapResult.status === 'fulfilled' && bootstrapResult.value) {
+      setSidebarCollapsed(bootstrapResult.value.sidebarCollapsed)
+      setShowWizard(bootstrapResult.value.firstRun)
+      try {
+        await i18n.changeLanguage(bootstrapResult.value.language)
+      } catch {
+        failed = true
+      }
+      if (version !== settingsHydrationVersionRef.current) return
+    }
+
+    const values = settingResults.map((result, index) => {
+      if (result.status === 'fulfilled') {
+        writableSettingKeysRef.current.add(settingKeys[index])
+        return result.value
+      }
+      failed = true
+      return undefined
     })
-    return () => {
-      active = false
+    const [s, d, w, c, compactWidth] = values
+    setSidebarWidth(savedDimension(s, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX))
+    const nextDetailWidth = savedDimension(d, DETAIL_DEFAULT, DETAIL_MIN, DETAIL_MAX)
+    detailWidthRef.current = nextDetailWidth
+    setDetailWidth(nextDetailWidth)
+    const nextWorkspaceWidth = savedDimension(
+      w,
+      WORKSPACE_DEFAULT,
+      WORKSPACE_RESIZE_MIN,
+      WORKSPACE_MAX
+    )
+    workspaceWidthRef.current = nextWorkspaceWidth
+    setWorkspaceWidth(nextWorkspaceWidth)
+    setChatWidth(savedDimension(c, CHAT_DEFAULT, CHAT_MIN, 2_000))
+    const nextCompactWidth = savedDimension(
+      compactWidth,
+      DOC_LIST_COMPACT_DEFAULT,
+      DOC_LIST_COMPACT_MIN,
+      DOC_LIST_COMPACT_MAX
+    )
+    documentListCompactWidthRef.current = nextCompactWidth
+    documentListDragWidthRef.current = nextCompactWidth
+    setDocumentListCompactWidth(nextCompactWidth)
+    setSettingsHydrated(true)
+    if (failed) {
+      useDocumentStore.getState().showToast(i18n.t('common.settingsLoadFailed'))
     }
   }, [])
 
-  const persistSetting = useCallback((key: string, value: unknown) => {
-    void api.settings.set(key, value).catch(() => {
-      useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
-    })
+  useEffect(() => {
+    void hydrateLibrarySettings(false)
+    const handleLibrarySwitched = () => {
+      void hydrateLibrarySettings(true)
+    }
+    api.events.onLibrarySwitched(handleLibrarySwitched)
+    return () => {
+      settingsHydrationVersionRef.current += 1
+      api.events.off('library:switched', handleLibrarySwitched)
+    }
+  }, [hydrateLibrarySettings])
+
+  const persistSetting = useCallback(async (key: string) => {
+    const timer = settingWriteTimersRef.current.get(key)
+    if (timer) clearTimeout(timer)
+    settingWriteTimersRef.current.delete(key)
+    const existing = settingWriteTasksRef.current.get(key)
+    if (existing) await existing.catch(() => undefined)
+    while (pendingSettingWritesRef.current.has(key)) {
+      const value = pendingSettingWritesRef.current.get(key)
+      pendingSettingWritesRef.current.delete(key)
+      const task = trackRendererPersistence(api.settings.set(key, value))
+      settingWriteTasksRef.current.set(key, task)
+      try {
+        await task
+      } catch (error) {
+        if (!pendingSettingWritesRef.current.has(key)) {
+          pendingSettingWritesRef.current.set(key, value)
+        }
+        useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+        throw error
+      } finally {
+        if (settingWriteTasksRef.current.get(key) === task) {
+          settingWriteTasksRef.current.delete(key)
+        }
+      }
+    }
   }, [])
 
-  useEffect(() => {
-    if (!settingsHydrated) return
-    const timer = setTimeout(() => {
-      persistSetting('sidebarWidth', sidebarWidth)
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [persistSetting, settingsHydrated, sidebarWidth])
+  const scheduleSettingWrite = useCallback((key: string, value: unknown, delay = 500) => {
+    pendingSettingWritesRef.current.set(key, value)
+    const existing = settingWriteTimersRef.current.get(key)
+    if (existing) clearTimeout(existing)
+    if (delay === 0) {
+      settingWriteTimersRef.current.delete(key)
+      void persistSetting(key).catch(() => undefined)
+      return
+    }
+    settingWriteTimersRef.current.set(key, setTimeout(() => {
+      settingWriteTimersRef.current.delete(key)
+      void persistSetting(key).catch(() => undefined)
+    }, delay))
+  }, [persistSetting])
+
+  const cancelScheduledSettingWrite = useCallback((key: string) => {
+    const timer = settingWriteTimersRef.current.get(key)
+    if (timer) clearTimeout(timer)
+    settingWriteTimersRef.current.delete(key)
+  }, [])
+
+  const flushSettingWrites = useCallback(async () => {
+    for (const timer of settingWriteTimersRef.current.values()) clearTimeout(timer)
+    settingWriteTimersRef.current.clear()
+    const keys = new Set([
+      ...pendingSettingWritesRef.current.keys(),
+      ...settingWriteTasksRef.current.keys()
+    ])
+    const results = await Promise.allSettled([...keys].map(persistSetting))
+    const failure = results.find((result): result is PromiseRejectedResult =>
+      result.status === 'rejected'
+    )
+    if (failure) throw failure.reason
+  }, [persistSetting])
+
+  useEffect(() => registerRendererFlushTask(flushSettingWrites), [flushSettingWrites])
 
   useEffect(() => {
-    if (!settingsHydrated) return
-    const timer = setTimeout(() => {
-      persistSetting('detailWidth', detailWidth)
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [detailWidth, persistSetting, settingsHydrated])
+    if (!settingsHydrated || !writableSettingKeysRef.current.has('sidebarWidth')) return
+    scheduleSettingWrite('sidebarWidth', sidebarWidth)
+    return () => cancelScheduledSettingWrite('sidebarWidth')
+  }, [cancelScheduledSettingWrite, scheduleSettingWrite, settingsHydrated, sidebarWidth])
 
   useEffect(() => {
-    if (!settingsHydrated) return
-    const timer = setTimeout(() => {
-      persistSetting('workspaceWidth', workspaceWidth)
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [persistSetting, settingsHydrated, workspaceWidth])
+    if (!settingsHydrated || !writableSettingKeysRef.current.has('detailWidth')) return
+    scheduleSettingWrite('detailWidth', detailWidth)
+    return () => cancelScheduledSettingWrite('detailWidth')
+  }, [cancelScheduledSettingWrite, detailWidth, scheduleSettingWrite, settingsHydrated])
 
   useEffect(() => {
-    if (!settingsHydrated) return
-    const timer = setTimeout(() => {
-      persistSetting('workspaceChatWidth', chatWidth)
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [chatWidth, persistSetting, settingsHydrated])
+    if (!settingsHydrated || !writableSettingKeysRef.current.has('workspaceWidth')) return
+    scheduleSettingWrite('workspaceWidth', workspaceWidth)
+    return () => cancelScheduledSettingWrite('workspaceWidth')
+  }, [cancelScheduledSettingWrite, scheduleSettingWrite, settingsHydrated, workspaceWidth])
 
   useEffect(() => {
-    if (!settingsHydrated) return
-    const timer = setTimeout(() => {
-      persistSetting('documentListCompactWidth', documentListCompactWidth)
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [documentListCompactWidth, persistSetting, settingsHydrated])
+    if (!settingsHydrated || !writableSettingKeysRef.current.has('workspaceChatWidth')) return
+    scheduleSettingWrite('workspaceChatWidth', chatWidth)
+    return () => cancelScheduledSettingWrite('workspaceChatWidth')
+  }, [cancelScheduledSettingWrite, chatWidth, scheduleSettingWrite, settingsHydrated])
+
+  useEffect(() => {
+    if (!settingsHydrated || !writableSettingKeysRef.current.has('documentListCompactWidth')) return
+    scheduleSettingWrite('documentListCompactWidth', documentListCompactWidth)
+    return () => cancelScheduledSettingWrite('documentListCompactWidth')
+  }, [cancelScheduledSettingWrite, documentListCompactWidth, scheduleSettingWrite, settingsHydrated])
 
   const collapseDocumentListAtWidth = useCallback((width: number) => {
     if (!Number.isFinite(width) || width <= 0 || width > DOC_LIST_COLLAPSE_THRESHOLD) return
@@ -312,12 +431,13 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const handleToggleSidebar = () => {
     setSidebarCollapsed((v) => {
       const next = !v
-      void api.settings.set('sidebarCollapsed', next ? '1' : '0')
+      scheduleSettingWrite('sidebarCollapsed', next ? '1' : '0', 0)
       return next
     })
   }
 
   const handleSidebarResize = useCallback((delta: number) => {
+    writableSettingKeysRef.current.add('sidebarWidth')
     setSidebarWidth((w) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w + delta)))
   }, [])
 
@@ -340,6 +460,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
 
   const handleDetailResizeEnd = useCallback(() => {
     panelResizingRef.current = false
+    writableSettingKeysRef.current.add('detailWidth')
     setDetailWidth(detailWidthRef.current)
     if (!workspacePanelOpen || documentListCompact) return
     collapseDocumentListAtWidth(
@@ -348,6 +469,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   }, [collapseDocumentListAtWidth, documentListCompact, workspacePanelOpen])
 
   const handleChatResize = useCallback((delta: number) => {
+    writableSettingKeysRef.current.add('workspaceChatWidth')
     setChatWidth((width) => Math.max(CHAT_MIN, width - delta))
   }, [])
 
@@ -441,6 +563,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     documentListResizeOriginRef.current = null
     setDocumentListResizeOrigin(null)
     if (resizeOriginCompact) {
+      writableSettingKeysRef.current.add('documentListCompactWidth')
       const nextDocumentListWidth = documentListDragWidthRef.current
       if (documentListCompactRef.current) {
         const nextCompactWidth = Math.max(
@@ -470,10 +593,12 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
         DOC_LIST_MIN,
         compactAvailableWidthRef.current - (rightPanelOpen ? 1 : 0) - nextWorkspaceWidth
       )
+      writableSettingKeysRef.current.add('workspaceWidth')
       setWorkspaceWidth(nextWorkspaceWidth)
       return
     }
 
+    writableSettingKeysRef.current.add('workspaceWidth')
     setWorkspaceWidth(workspaceWidthRef.current)
     const finalDocumentListWidth = Math.max(DOC_LIST_MIN, expandedDocumentListWidthRef.current)
     expandedDocumentListWidthRef.current = finalDocumentListWidth

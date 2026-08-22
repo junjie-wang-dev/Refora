@@ -73,6 +73,7 @@ interface PdfReaderState {
   retrySave: (documentId: string) => void
   undoLastDeletion: () => void
   clearLastDeletion: () => void
+  flushPendingSaves: () => Promise<void>
   prepareForLibrarySwitch: () => Promise<void>
   resetForLibrarySwitch: () => void
 }
@@ -125,18 +126,57 @@ function persist(documentId: string, annotations: PdfAnnotation[]): void {
   }, 250))
 }
 
-async function prepareForLibrarySwitch(): Promise<void> {
-  const pendingIds = [...persistTimers.keys()]
-  for (const documentId of pendingIds) {
-    const timer = persistTimers.get(documentId)
-    if (timer) clearTimeout(timer)
-    persistTimers.delete(documentId)
+async function flushPendingSaves(): Promise<void> {
+  const pendingIds = new Set<string>()
+  while (true) {
+    for (const [documentId, timer] of persistTimers) {
+      clearTimeout(timer)
+      persistTimers.delete(documentId)
+      pendingIds.add(documentId)
+    }
+    await Promise.all(persistTasks.values())
+    for (const [documentId, status] of Object.entries(
+      usePdfReaderStore.getState().saveStatus
+    )) {
+      if (status === 'error') pendingIds.add(documentId)
+    }
+    if (pendingIds.size === 0) {
+      if (persistTimers.size === 0 && persistTasks.size === 0) return
+      continue
+    }
+    const ids = [...pendingIds]
+    pendingIds.clear()
+    const results = await Promise.allSettled(ids.map(async (documentId) => {
+      const version = persistVersions.get(documentId)
+      const annotations = usePdfReaderStore.getState().annotations[documentId] ?? []
+      usePdfReaderStore.setState((state) => ({
+        saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
+      }))
+      try {
+        await api.documents.setPdfAnnotations(documentId, annotations)
+        if (persistVersions.get(documentId) === version) {
+          usePdfReaderStore.setState((state) => ({
+            saveStatus: { ...state.saveStatus, [documentId]: 'saved' }
+          }))
+        }
+      } catch (error) {
+        if (persistVersions.get(documentId) === version) {
+          usePdfReaderStore.setState((state) => ({
+            saveStatus: { ...state.saveStatus, [documentId]: 'error' }
+          }))
+        }
+        throw error
+      }
+    }))
+    const failure = results.find((result): result is PromiseRejectedResult =>
+      result.status === 'rejected'
+    )
+    if (failure) throw failure.reason
   }
-  await Promise.all(persistTasks.values())
-  await Promise.all(pendingIds.map(async (documentId) => {
-    const annotations = usePdfReaderStore.getState().annotations[documentId] ?? []
-    await api.documents.setPdfAnnotations(documentId, annotations)
-  }))
+}
+
+async function prepareForLibrarySwitch(): Promise<void> {
+  await flushPendingSaves()
 }
 
 function resetForLibrarySwitch(): void {
@@ -354,6 +394,8 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   clearLastDeletion: () => set({ lastDeletion: null }),
+
+  flushPendingSaves,
 
   prepareForLibrarySwitch,
 

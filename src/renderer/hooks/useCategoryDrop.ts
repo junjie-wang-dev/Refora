@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
+import i18n from '../i18n'
 
 const DOC_MIME = 'application/x-refora-docids'
 
@@ -41,7 +42,9 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
           }
           void fetchCategories()
         } catch (e) {
-          useDocumentStore.getState().showToast(errorMessage(e, 'Failed to assign category'))
+          useDocumentStore.getState().showToast(
+            errorMessage(e, i18n.t('documentErrors.assignCategoryFailed'))
+          )
         }
         return
       }
@@ -57,7 +60,9 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
               paths.push(p)
             }
           } catch (e) {
-            useDocumentStore.getState().showToast(errorMessage(e, 'Failed to read file path'))
+            useDocumentStore.getState().showToast(
+              errorMessage(e, i18n.t('documentErrors.readFilePathFailed'))
+            )
           }
         }
         if (paths.length === 0) return
@@ -75,7 +80,9 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
             await api.categories.assign(id, catId)
           }
         } catch (e) {
-          useDocumentStore.getState().showToast(errorMessage(e, 'Failed to import files to category'))
+          useDocumentStore.getState().showToast(
+            errorMessage(e, i18n.t('documentErrors.importToCategoryFailed'))
+          )
         }
         setPendingCatImports((prev) => {
           const next = new Set(prev)

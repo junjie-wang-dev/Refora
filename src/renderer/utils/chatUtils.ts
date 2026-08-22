@@ -1,4 +1,5 @@
 import { api } from '../ipc'
+import { trackRendererPersistence } from '../persistence'
 import type { Dispatch, SetStateAction, MutableRefObject } from 'react'
 import type {
   AgentInterrupt,
@@ -104,7 +105,7 @@ export async function pushRecentModel(model: string, providerId: string): Promis
     { model: id, providerId },
     ...prev.filter((m) => m.model !== id || m.providerId !== providerId)
   ].slice(0, MAX_RECENT)
-  await api.settings.set(RECENT_MODELS_KEY, JSON.stringify(next))
+  await trackRendererPersistence(api.settings.set(RECENT_MODELS_KEY, JSON.stringify(next)))
 }
 
 export function localMessage(

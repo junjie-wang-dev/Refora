@@ -39,6 +39,7 @@ function createFakeChild(): FakeChildProcess {
   child.kill = vi.fn((signal?: string) => {
     child.killed = true
     child.emit('close', 0, signal ?? 'SIGTERM')
+    return true
   })
   return child
 }
@@ -199,6 +200,23 @@ describe('serverLifecycle', () => {
     await expect(createServerLifecycle(makeDeps()).start()).rejects.toThrow(/does not match/)
   })
 
+  it('preserves the startup error when both cleanup signals throw', async () => {
+    const spawn = makeSpawn((child) => {
+      announce(child, port)
+      child.kill = vi.fn(() => {
+        throw new Error('kill failed')
+      })
+    })
+    mockReadFile.mockResolvedValue('{')
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
+
+    await expect(lifecycle.start()).rejects.toThrow(/token file/)
+
+    const child = spawn.mock.results[0].value as FakeChildProcess
+    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM')
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL')
+  })
+
   it('sends SIGTERM on stop', async () => {
     const spawn = makeSpawn((child) => announce(child, 9000))
     mockReadFile.mockResolvedValue(JSON.stringify({ port: 9000, token }))
@@ -208,6 +226,7 @@ describe('serverLifecycle', () => {
     await lifecycle.stop()
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
   })
 
   it('falls back to SIGKILL after the grace period on stop', async () => {
@@ -229,6 +248,42 @@ describe('serverLifecycle', () => {
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('falls back immediately when SIGTERM throws during stop', async () => {
+    const spawn = makeSpawn((child) => {
+      announce(child, 9002)
+      child.kill = vi.fn((signal?: string) => {
+        if (signal === 'SIGTERM') throw new Error('SIGTERM failed')
+        child.emit('close', null, signal ?? 'SIGKILL')
+        return true
+      })
+    })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9002, token }))
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
+    await lifecycle.start()
+    const child = spawn.mock.results[0].value as FakeChildProcess
+
+    await expect(lifecycle.stop()).resolves.toBeUndefined()
+    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM')
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL')
+  })
+
+  it('does not reject stop when both termination signals throw', async () => {
+    const spawn = makeSpawn((child) => {
+      announce(child, 9003)
+      child.kill = vi.fn(() => {
+        throw new Error('kill failed')
+      })
+    })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9003, token }))
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
+    await lifecycle.start()
+    const child = spawn.mock.results[0].value as FakeChildProcess
+
+    await expect(lifecycle.stop()).resolves.toBeUndefined()
+    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM')
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL')
   })
 
   it('restarts the server with exponential backoff after an unexpected crash', async () => {
@@ -310,6 +365,35 @@ describe('serverLifecycle', () => {
     const thirdChild = spawn.mock.results[2].value as FakeChildProcess
     thirdChild.emit('close', 1, null)
     await vi.advanceTimersByTimeAsync(10_000)
+    expect(spawnCount).toBe(3)
+  })
+
+  it('restores the restart budget after a stable running window', async () => {
+    let spawnCount = 0
+    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+      spawnCount += 1
+      const child = createFakeChild()
+      queueMicrotask(() => announce(child, 6500 + spawnCount))
+      return child as unknown as ChildProcess
+    })
+    const lifecycle = createServerLifecycle(
+      makeDeps({ spawnChild: spawn, maxRestarts: 1, restartStabilityMs: 1_000 })
+    )
+    mockReadFile.mockImplementation(async () =>
+      JSON.stringify({ port: 6500 + spawnCount, token })
+    )
+    await lifecycle.start()
+
+    const firstChild = spawn.mock.results[0].value as FakeChildProcess
+    firstChild.emit('close', 1, null)
+    await vi.advanceTimersByTimeAsync(600)
+    expect(spawnCount).toBe(2)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    const secondChild = spawn.mock.results[1].value as FakeChildProcess
+    secondChild.emit('close', 1, null)
+    await vi.advanceTimersByTimeAsync(600)
+
     expect(spawnCount).toBe(3)
   })
 

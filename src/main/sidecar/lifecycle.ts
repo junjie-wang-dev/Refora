@@ -8,6 +8,7 @@ const DEFAULT_MAX_RESTARTS = 5
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000
 const DEFAULT_HEALTH_INTERVAL_MS = 15_000
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000
+const DEFAULT_RESTART_STABILITY_MS = 60_000
 const BASE_BACKOFF_MS = 500
 const LISTENING_PREFIX = 'LISTENING '
 const TOKEN_FILE = 'server.token'
@@ -32,6 +33,7 @@ export interface ServerLifecycleDeps {
   startupTimeoutMs?: number
   healthIntervalMs?: number
   healthTimeoutMs?: number
+  restartStabilityMs?: number
   spawnChild?: typeof spawn
   readFile?: (path: string) => Promise<string>
   fetchHealth?: (url: string, timeoutMs: number) => Promise<boolean>
@@ -91,6 +93,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   const startupTimeoutMs = deps.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
   const healthIntervalMs = deps.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS
   const healthTimeoutMs = deps.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
+  const restartStabilityMs = deps.restartStabilityMs ?? DEFAULT_RESTART_STABILITY_MS
   const spawnChild = deps.spawnChild ?? spawn
   const readFile = deps.readFile ?? defaultReadFile
   const fetchHealth = deps.fetchHealth ?? defaultFetchHealth
@@ -99,6 +102,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   let connection: ServerConnection | null = null
   let startPromise: Promise<ServerConnection> | null = null
   let healthTimer: ReturnType<typeof setTimeout> | null = null
+  let restartResetTimer: ReturnType<typeof setTimeout> | null = null
   let stopping = false
   let restartCount = 0
 
@@ -111,6 +115,21 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       clearTimeout(healthTimer)
       healthTimer = null
     }
+  }
+
+  function clearRestartResetTimer(): void {
+    if (restartResetTimer) {
+      clearTimeout(restartResetTimer)
+      restartResetTimer = null
+    }
+  }
+
+  function scheduleRestartReset(spawned: ChildProcess): void {
+    clearRestartResetTimer()
+    restartResetTimer = setTimeout(() => {
+      restartResetTimer = null
+      if (!stopping && child === spawned && connection) restartCount = 0
+    }, restartStabilityMs)
   }
 
   function spawnServer(): SpawnResult {
@@ -223,6 +242,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       if (child === spawned) child = null
       connection = null
       clearHealthTimer()
+      clearRestartResetTimer()
       if (restartCount >= maxRestarts) {
         logger.error(
           `serverLifecycle:crashed and reached max restarts (${maxRestarts})`
@@ -254,13 +274,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
         logger.warn('serverLifecycle:health check failed, restarting server')
         const current = child
         if (current) {
-          stopping = true
-          try {
-            current.kill('SIGTERM')
-          } catch (e) {
-            logger.warn(`serverLifecycle:kill-failed ${e instanceof Error ? e.message : String(e)}`)
-          }
-          stopping = false
+          if (!terminate(current, 'SIGTERM')) terminate(current, 'SIGKILL')
         }
       })
     }, healthIntervalMs)
@@ -275,13 +289,14 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       connection = await buildConnection(port)
       await waitUntilHealthy(connection)
     } catch (error) {
-      terminate(spawned, 'SIGTERM')
+      if (!terminate(spawned, 'SIGTERM')) terminate(spawned, 'SIGKILL')
       connection = null
       child = null
       throw error
     }
     attachCrashHandler(spawned)
     scheduleHealthCheck()
+    scheduleRestartReset(spawned)
     return connection
   }
 
@@ -299,18 +314,22 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     return start()
   }
 
-  function terminate(spawned: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
-    if (!spawned.pid) return
+  function terminate(spawned: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    if (!spawned.pid) return true
     try {
-      spawned.kill(signal)
-    } catch {
-      spawned.kill(signal)
+      return spawned.kill(signal)
+    } catch (error) {
+      logger.warn(
+        `serverLifecycle:failed to send ${signal}: ${error instanceof Error ? error.message : String(error)}`
+      )
+      return false
     }
   }
 
   async function stop(): Promise<void> {
     stopping = true
     clearHealthTimer()
+    clearRestartResetTimer()
     const current = child
     child = null
     if (!current) {
@@ -319,14 +338,24 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       return
     }
     const closed = new Promise<void>((resolve) => {
-      current.once('close', () => resolve())
-      const killTimer = setTimeout(() => {
-        terminate(current, 'SIGKILL')
+      let settled = false
+      let killTimer: ReturnType<typeof setTimeout> | null = null
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        if (killTimer) clearTimeout(killTimer)
         resolve()
+      }
+      current.once('close', finish)
+      killTimer = setTimeout(() => {
+        terminate(current, 'SIGKILL')
+        finish()
       }, 5_000)
-      current.once('close', () => clearTimeout(killTimer))
+      if (!terminate(current, 'SIGTERM')) {
+        terminate(current, 'SIGKILL')
+        finish()
+      }
     })
-    terminate(current, 'SIGTERM')
     await closed
     connection = null
     startPromise = null

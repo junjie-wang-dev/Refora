@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushRendererPersistence } from '../../src/renderer/persistence'
 
 const mocks = vi.hoisted(() => ({
   documentState: {
@@ -8,7 +9,8 @@ const mocks = vi.hoisted(() => ({
     listMode: { mode: 'all' } as { mode: string },
     init: vi.fn(),
     destroy: vi.fn(),
-    showToast: vi.fn()
+    showToast: vi.fn(),
+    flushPendingSettings: vi.fn().mockResolvedValue(undefined)
   },
   workspaceState: {
     activeWorkspaceId: 'ws-1' as string | null,
@@ -28,7 +30,9 @@ const mocks = vi.hoisted(() => ({
   workspacePanelRender: vi.fn(),
   resizeObserverCallback: null as ResizeObserverCallback | null,
   onLibrarySwitched: vi.fn(),
-  eventsOff: vi.fn()
+  eventsOff: vi.fn(),
+  getBootstrap: vi.fn(),
+  changeLanguage: vi.fn()
 }))
 
 class ResizeObserverTestMock {
@@ -54,7 +58,8 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@renderer/i18n', () => ({
   default: {
-    t: (key: string) => key
+    t: (key: string) => key,
+    changeLanguage: mocks.changeLanguage
   }
 }))
 
@@ -101,6 +106,7 @@ vi.mock('@renderer/store/ocrReaderStore', () => ({
 
 vi.mock('@renderer/ipc', () => ({
   api: {
+    getBootstrap: mocks.getBootstrap,
     settings: {
       get: mocks.settingsGet,
       set: mocks.settingsSet
@@ -236,6 +242,16 @@ describe('App root layout', () => {
     mocks.resizeObserverCallback = null
     mocks.settingsGet.mockImplementation((_key: string, fallback: unknown) => Promise.resolve(fallback))
     mocks.settingsSet.mockResolvedValue(undefined)
+    mocks.getBootstrap.mockResolvedValue({
+      language: 'en',
+      theme: 'system',
+      windowBounds: null,
+      listColumnState: null,
+      sidebarCollapsed: false,
+      firstRun: false,
+      libraryFolderPath: null
+    })
+    mocks.changeLanguage.mockResolvedValue(undefined)
     useChatDraftStore.setState({ pending: null })
     vi.stubGlobal('ResizeObserver', ResizeObserverTestMock)
   })
@@ -293,6 +309,138 @@ describe('App root layout', () => {
     expect(mocks.documentState.showToast).toHaveBeenCalledWith(
       'common.settingsLoadFailed'
     )
+  })
+
+  it('hydrates available settings without overwriting a field that failed to load', async () => {
+    vi.useFakeTimers()
+    mocks.settingsGet.mockImplementation((key: string, fallback: unknown) => {
+      if (key === 'detailWidth') return Promise.reject(new Error('temporarily unavailable'))
+      const values: Record<string, number> = {
+        sidebarWidth: 300,
+        workspaceWidth: 900,
+        workspaceChatWidth: 600,
+        documentListCompactWidth: 400
+      }
+      return Promise.resolve(values[key] ?? fallback)
+    })
+
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+
+    expect(mocks.settingsSet).toHaveBeenCalledWith('sidebarWidth', 300)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('workspaceWidth', 900)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('workspaceChatWidth', 600)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('documentListCompactWidth', 400)
+    expect(mocks.settingsSet).not.toHaveBeenCalledWith('detailWidth', 384)
+    expect(mocks.documentState.showToast).toHaveBeenCalledWith('common.settingsLoadFailed')
+  })
+
+  it('falls back from malformed persisted layout dimensions', async () => {
+    vi.useFakeTimers()
+    mocks.settingsGet.mockResolvedValue(Number.NaN)
+
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+
+    expect(mocks.settingsSet).toHaveBeenCalledWith('sidebarWidth', 224)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('detailWidth', 384)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('workspaceWidth', 800)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('workspaceChatWidth', 560)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('documentListCompactWidth', 320)
+  })
+
+  it('rehydrates per-library layout settings and cancels stale debounced writes', async () => {
+    vi.useFakeTimers()
+    let targetLibrary = false
+    mocks.settingsGet.mockImplementation((key: string, fallback: unknown) => {
+      if (!targetLibrary) return Promise.resolve(fallback)
+      const targetValues: Record<string, number> = {
+        sidebarWidth: 310,
+        detailWidth: 510,
+        workspaceWidth: 920,
+        workspaceChatWidth: 610,
+        documentListCompactWidth: 410
+      }
+      return Promise.resolve(targetValues[key] ?? fallback)
+    })
+    mocks.getBootstrap.mockResolvedValue({
+      language: 'zh',
+      theme: 'dark',
+      windowBounds: null,
+      listColumnState: null,
+      sidebarCollapsed: true,
+      firstRun: false,
+      libraryFolderPath: '/target'
+    })
+
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+    mocks.settingsSet.mockClear()
+
+    const sidebarDivider = screen.getAllByTestId('resize-divider')[0]
+    sidebarDivider.dataset.resizeDelta = '40'
+    fireEvent.click(sidebarDivider)
+    targetLibrary = true
+    await act(async () => {
+      for (const [callback] of mocks.onLibrarySwitched.mock.calls) callback()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByTestId('collapsed-sidebar-toolbar')).toBeInTheDocument()
+    expect(mocks.changeLanguage).toHaveBeenCalledWith('zh')
+
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+    expect(mocks.settingsSet).not.toHaveBeenCalledWith('sidebarWidth', 264)
+    expect(mocks.settingsSet).toHaveBeenCalledWith('sidebarWidth', 310)
+  })
+
+  it('flushes pending per-library layout settings before a library switch', async () => {
+    vi.useFakeTimers()
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+    })
+    mocks.settingsSet.mockClear()
+
+    const sidebarDivider = screen.getAllByTestId('resize-divider')[0]
+    sidebarDivider.dataset.resizeDelta = '40'
+    fireEvent.click(sidebarDivider)
+
+    await act(async () => {
+      await flushRendererPersistence()
+    })
+
+    expect(mocks.settingsSet).toHaveBeenCalledWith('sidebarWidth', 264)
   })
 
   it('keeps the sidebar outside the search bar and all main panels below it', async () => {

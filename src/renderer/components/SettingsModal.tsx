@@ -12,7 +12,7 @@ import type { MineruEngineStatus, MineruInstallProgress } from '../../shared/min
 import { IpcChannel } from '../../shared/ipc-channels'
 import { formatElapsedClock } from '../utils/format'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { usePdfReaderStore } from '../store/pdfReaderStore'
+import { flushRendererPersistence } from '../persistence'
 import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
 import type { PdfOpenMode } from '../utils/openPdf'
@@ -455,9 +455,9 @@ export default function SettingsModal({
       const path = await api.dialog.openDirectory()
       if (!path) return
       setSwitching(true)
-      await usePdfReaderStore.getState().prepareForLibrarySwitch()
+      await flushRendererPersistence()
       await api.library.switch(path)
-      setLibraryFolderPath(path)
+      await loadSettings()
     } catch (e) {
       setError(errorMessage(e, t('settings.librarySwitchFailed')))
     } finally {

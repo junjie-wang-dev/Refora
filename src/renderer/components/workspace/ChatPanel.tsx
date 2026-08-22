@@ -13,6 +13,7 @@ import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
 import { useChatDraftStore } from '../../store/chatDraftStore'
+import { useDocumentStore } from '../../store/documentStore'
 import { Button as UiButton, PanelTabHeader } from '../ui'
 import { useChatStream } from '../../hooks/useChatStream'
 import { AI_PROVIDERS_CHANGED_EVENT } from '../../utils/aiProviderEvents'
@@ -23,6 +24,8 @@ import ModelSelector from './ModelSelector'
 import ThreadHistory from './ThreadHistory'
 import AgentOcrProgress from './AgentOcrProgress'
 import AgentApprovalCard from './AgentApprovalCard'
+import i18n from '../../i18n'
+import { trackRendererPersistence } from '../../persistence'
 
 export { parseReforaDocLink } from '../../utils/markdown'
 
@@ -36,6 +39,12 @@ const AI_REASONING_EFFORTS = new Set<AiReasoningEffort>([
   'max',
   'ultra'
 ])
+
+function persistChatSetting(key: string, value: unknown): void {
+  void trackRendererPersistence(api.settings.set(key, value)).catch(() => {
+    useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+  })
+}
 
 function providerReasoningEffort(provider: AiProvider): AiReasoningEffort {
   return provider.reasoningControl === 'none' ? 'none' : provider.reasoningEffort
@@ -144,6 +153,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const inputAreaRef = useRef<HTMLDivElement | null>(null)
   const handledChatDraftIdsRef = useRef(new Set<number>())
+  const providerLoadVersionRef = useRef(0)
 
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null
   const deepThinking =
@@ -201,6 +211,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   }, [consumeChatDraft, pendingChatDraft])
 
   const loadProviders = useCallback(async () => {
+    const loadVersion = ++providerLoadVersionRef.current
     try {
       const [
         profiles,
@@ -223,6 +234,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         api.settings.get<string>('chatSelectedVariant', ''),
         api.settings.get<AiReasoningEffort | ''>('chatReasoningEffort', '')
       ])
+      if (loadVersion !== providerLoadVersionRef.current) return
       const apiProvidersById = new Map(
         apiProviders.map((provider) => [provider.id, provider])
       )
@@ -283,11 +295,11 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         setSelectedReasoningEffort(nextReasoningEffort)
       }
       if (nextId) {
-        void api.settings.set('activeAgentProfileId', nextId)
-        void api.settings.set('chatSelectedAgentProfileId', nextId)
+        persistChatSetting('activeAgentProfileId', nextId)
+        persistChatSetting('chatSelectedAgentProfileId', nextId)
         const selectedProfile = resolvedProfiles.find((profile) => profile.id === nextId)
         if (selectedProfile?.apiProviderId) {
-          void api.settings.set('activeProviderId', selectedProfile.apiProviderId)
+          persistChatSetting('activeProviderId', selectedProfile.apiProviderId)
         }
         if (p) {
           const fallback = defaultModelForProvider(p)
@@ -299,13 +311,15 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
           const nextReasoningEffort = savedProfileId === nextId || legacySavedProfileId === nextId
             ? normalizeReasoningEffort(savedReasoningEffort, fallbackReasoningEffort)
             : fallbackReasoningEffort
-          void api.settings.set('chatSelectedModel', useSavedModel ? savedModel : fallback.model)
-          void api.settings.set('chatSelectedVariant', useSavedModel ? savedVariant : fallback.variant)
-          void api.settings.set('chatReasoningEffort', nextReasoningEffort)
+          persistChatSetting('chatSelectedModel', useSavedModel ? savedModel : fallback.model)
+          persistChatSetting('chatSelectedVariant', useSavedModel ? savedVariant : fallback.variant)
+          persistChatSetting('chatReasoningEffort', nextReasoningEffort)
         }
       }
     } catch (e) {
-      chat.setError(errorMessage(e, 'Failed to load providers'))
+      if (loadVersion === providerLoadVersionRef.current) {
+        chat.setError(errorMessage(e, t('workspace.chat.providersLoadFailed')))
+      }
     }
   }, [])
 
@@ -321,6 +335,24 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     const reloadProviders = () => void loadProviders()
     window.addEventListener(AI_PROVIDERS_CHANGED_EVENT, reloadProviders)
     return () => window.removeEventListener(AI_PROVIDERS_CHANGED_EVENT, reloadProviders)
+  }, [loadProviders])
+
+  useEffect(() => {
+    const reloadProviders = () => {
+      providerLoadVersionRef.current += 1
+      setProviders([])
+      setAgentProfiles([])
+      setActiveProviderId('')
+      setSelectedModel('')
+      setSelectedVariant('')
+      setSelectedReasoningEffort('none')
+      void loadProviders()
+    }
+    api.events.onLibrarySwitched(reloadProviders)
+    return () => {
+      providerLoadVersionRef.current += 1
+      api.events.off('library:switched', reloadProviders)
+    }
   }, [loadProviders])
 
   useEffect(() => {
@@ -416,18 +448,18 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       if (providerId && providerId !== activeProviderId) {
         const nextProfile = agentProfiles.find((profile) => profile.id === providerId)
         setActiveProviderId(providerId)
-        void api.settings.set('activeAgentProfileId', providerId)
+        persistChatSetting('activeAgentProfileId', providerId)
         if (nextProfile?.apiProviderId) {
-          void api.settings.set('activeProviderId', nextProfile.apiProviderId)
+          persistChatSetting('activeProviderId', nextProfile.apiProviderId)
         }
       }
       setSelectedReasoningEffort(nextReasoningEffort)
-      void api.settings.set('chatReasoningEffort', nextReasoningEffort)
+      persistChatSetting('chatReasoningEffort', nextReasoningEffort)
       setSelectedModel(baseModel)
       setSelectedVariant(variant)
-      void api.settings.set('chatSelectedAgentProfileId', nextProviderId)
-      void api.settings.set('chatSelectedModel', baseModel)
-      void api.settings.set('chatSelectedVariant', variant)
+      persistChatSetting('chatSelectedAgentProfileId', nextProviderId)
+      persistChatSetting('chatSelectedModel', baseModel)
+      persistChatSetting('chatSelectedVariant', variant)
       if (providerChanged && (chat.hadMessagesRef.current || chat.messages.length > 0)) {
         setModelSwitchHint('provider')
         window.setTimeout(() => setModelSwitchHint(null), 3500)
@@ -451,7 +483,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     (effort: AiReasoningEffort) => {
       const nextEffort = activeProvider?.reasoningControl === 'none' ? 'none' : effort
       setSelectedReasoningEffort(nextEffort)
-      void api.settings.set('chatReasoningEffort', nextEffort)
+      persistChatSetting('chatReasoningEffort', nextEffort)
     },
     [activeProvider?.reasoningControl]
   )
@@ -496,9 +528,9 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      chat.setError('Failed to export conversation')
+      chat.setError(t('workspace.chat.exportFailed'))
     }
-  }, [threads, chat.setError])
+  }, [threads, chat.setError, t])
 
   return (
     <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background" style={{ containerType: 'inline-size' }}>

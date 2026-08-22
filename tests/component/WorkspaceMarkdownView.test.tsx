@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { showContextMenu } from '@lobehub/ui'
 import WorkspaceMarkdownView from '../../src/renderer/components/workspace/WorkspaceMarkdownView'
+import { flushRendererPersistence } from '../../src/renderer/persistence'
 
 vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 
@@ -170,6 +171,22 @@ describe('WorkspaceMarkdownView', () => {
         contentMd: 'Saved before navigating back'
       })
       expect(onBack).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('saves a pending draft during a renderer persistence flush', async () => {
+    const { onUpdate } = renderView({ initialMode: 'edit' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' }), {
+      target: { value: 'Saved during flush' }
+    })
+
+    await act(async () => {
+      await flushRendererPersistence()
+    })
+
+    expect(onUpdate).toHaveBeenCalledWith('note-1', {
+      title: 'Research notes',
+      contentMd: 'Saved during flush'
     })
   })
 

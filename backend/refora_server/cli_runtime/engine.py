@@ -31,16 +31,79 @@ def _segment_separator(before: str, after: str) -> str:
     return "\n" * max(0, 2 - trailing - leading)
 
 
-_SENSITIVE_ENV_PREFIXES = ("REFORA_",)
+_COMMON_CLI_ENVIRONMENT = frozenset(
+    {
+        "ALL_PROXY",
+        "COLORTERM",
+        "HOME",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "NO_COLOR",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "PATH",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    }
+)
+_RUNTIME_CLI_ENVIRONMENT = {
+    "codex": frozenset(
+        {
+            "CODEX_HOME",
+            "CODEX_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+        }
+    ),
+    "gemini": frozenset(
+        {
+            "CLOUDSDK_CONFIG",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+        }
+    ),
+}
 
 
-def _cli_subprocess_environment(extra: dict[str, Any]) -> dict[str]:
+def _cli_subprocess_environment(
+    extra: dict[str, Any],
+    runtime_id: str,
+) -> dict[str, str]:
+    allowed = _COMMON_CLI_ENVIRONMENT | _RUNTIME_CLI_ENVIRONMENT.get(
+        runtime_id,
+        frozenset(),
+    )
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not any(key.startswith(prefix) for prefix in _SENSITIVE_ENV_PREFIXES)
+        if key in allowed
     }
-    environment.update(extra)
+    environment.update(
+        {
+            key: value
+            for key, value in extra.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+    )
     return environment
 
 
@@ -134,7 +197,7 @@ class CliRuntimeAgent:
             session_id,
             self._mcp,
         )
-        environment = _cli_subprocess_environment(invocation.env)
+        environment = _cli_subprocess_environment(invocation.env, runtime_id)
         self._process = await asyncio.create_subprocess_exec(
             invocation.executable,
             *invocation.args,
