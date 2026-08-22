@@ -6,7 +6,7 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from refora_server.server.app import create_app_with_token
+from refora_server.server.app import create_app, create_app_with_token
 
 
 @pytest.fixture
@@ -58,6 +58,12 @@ def test_ready_rejected_with_wrong_token(client_with_token):
     assert resp.status_code == 401
 
 
-def test_token_disabled_allows_ready(client_no_token):
+def test_token_disabled_rejects_ready(client_no_token):
     resp = client_no_token.get("/ready")
-    assert resp.status_code == 200
+    assert resp.status_code == 401
+
+
+def test_create_app_requires_env_token(monkeypatch):
+    monkeypatch.delenv("REFORA_SERVER_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="REFORA_SERVER_TOKEN"):
+        create_app()

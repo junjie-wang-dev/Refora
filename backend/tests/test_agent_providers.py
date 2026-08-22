@@ -387,7 +387,7 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
     ) is True
     assert policies["__execute"]["when"](
         SimpleNamespace(tool_call={"args": {"command": "python script.py"}})
-    ) is False
+    ) is True
     assert policies["generate_report"]["when"](
         SimpleNamespace(tool_call={"args": {"path": "/outside/report.md"}})
     ) is True

@@ -2,8 +2,23 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from refora_server.server.app import create_app_with_token
+from refora_server.server.app import _loopback_origins, create_app_with_token
 from refora_server.server.contract import source_contract
+
+
+def test_loopback_origins_reject_non_loopback_override(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "REFORA_CORS_ORIGINS",
+        "http://localhost:5173,https://evil.example.com,file:///etc/passwd",
+    )
+    assert _loopback_origins() == ["http://localhost:5173"]
+
+
+def test_loopback_origins_fall_back_to_defaults_when_nothing_valid(monkeypatch) -> None:
+    monkeypatch.setenv("REFORA_CORS_ORIGINS", "https://evil.example.com")
+    origins = _loopback_origins()
+    assert "http://127.0.0.1" in origins
+    assert "http://localhost" in origins
 
 
 def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tmp_path: Path) -> None:
@@ -25,7 +40,7 @@ def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tm
         assert mineru.json()["data"]["state"] == "notInstalled"
         ocr = client.get("/ocr/state", headers=headers)
         assert ocr.json()["data"] == {"engine": mineru.json()["data"], "activeJob": None}
-        with client.websocket_connect("/ws?token=test-token") as websocket:
+        with client.websocket_connect("/ws", subprotocols=["refora-token.test-token"]) as websocket:
             websocket.send_json({"event": "ping"})
             assert websocket.receive_json() == {"event": "pong"}
 

@@ -683,7 +683,7 @@ export function useChatStream({
       cancelledRef.current = false
       cancelledRunRef.current = null
       setCanRetry(false)
-      setError(errorMessage(e, 'Failed to stop response'))
+      setError(errorMessage(e, tRef.current('workspace.chat.stopFailed', 'Failed to stop response')))
     })
   }, [])
 
@@ -781,7 +781,7 @@ export function useChatStream({
       activeRunIdRef.current = null
       setActiveRunId(null)
       setCanRetry(true)
-      setError(errorMessage(e, 'Failed to send message'))
+      setError(errorMessage(e, t('workspace.chat.sendFailed', 'Failed to send message')))
       isSendingRef.current = false
       setStreaming(false)
       setStreamingText('')
@@ -835,7 +835,7 @@ export function useChatStream({
       setActiveOcrDocumentId(null)
       setStreaming(false)
       setCanRetry(true)
-      setError(errorMessage(resumeError, 'Failed to resume agent'))
+      setError(errorMessage(resumeError, tRef.current('workspace.chat.resumeFailed', 'Failed to resume agent')))
     }
   }, [])
 

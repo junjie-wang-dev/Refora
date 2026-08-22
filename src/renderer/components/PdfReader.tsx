@@ -40,6 +40,7 @@ import {
 import { showContextMenu, type ContextMenuItem } from '@lobehub/ui'
 import { useTranslation } from 'react-i18next'
 import type {
+  PDFDocumentLoadingTask,
   PDFDocumentProxy,
   PDFPageProxy,
   RenderTask
@@ -1432,6 +1433,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     }
     let cancelled = false
     let document: PDFDocumentProxy | null = null
+    let loadingTask: PDFDocumentLoadingTask | null = null
     setLoadingError(null)
     setPdf(null)
     setCurrentPage(1)
@@ -1442,16 +1444,20 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       api.documents.readPdf(activeDocument.id)
     ]).then(([runtime, data]) => {
       const task = runtime.getDocument({ data })
+      loadingTask = task
+      if (cancelled) void task.destroy()?.catch(() => undefined)
       return task.promise
     }).then((nextDocument) => {
+      if (cancelled) return
       document = nextDocument
-      if (!cancelled) setPdf(nextDocument)
+      setPdf(nextDocument)
     }).catch(() => {
       if (!cancelled) setLoadingError(t('pdfReader.loadFailed'))
     })
     return () => {
       cancelled = true
-      void document?.cleanup()
+      void document?.cleanup()?.catch(() => undefined)
+      void loadingTask?.destroy()?.catch(() => undefined)
     }
   }, [activeDocument?.id, activeDocument?.updatedAt, t])
 

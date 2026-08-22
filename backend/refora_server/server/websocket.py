@@ -11,11 +11,34 @@ from refora_server.server.events import EventBus
 
 WebSocketHandler = Callable[[WebSocket], Awaitable[None]]
 
+TOKEN_PROTOCOL_PREFIX = "refora-token."
+
+
+def _supplied_token(websocket: WebSocket) -> str:
+    header = websocket.headers.get("sec-websocket-protocol", "")
+    for candidate in header.split(","):
+        name = candidate.strip()
+        if name.startswith(TOKEN_PROTOCOL_PREFIX):
+            return name[len(TOKEN_PROTOCOL_PREFIX):]
+    return ""
+
+
+def _select_token_protocol(websocket: WebSocket) -> str | None:
+    header = websocket.headers.get("sec-websocket-protocol", "")
+    for candidate in header.split(","):
+        name = candidate.strip()
+        if name.startswith(TOKEN_PROTOCOL_PREFIX):
+            return name
+    return None
+
 
 def _has_valid_token(websocket: WebSocket, token: str | None) -> bool:
-    if token is None:
-        return True
-    return hmac.compare_digest(websocket.query_params.get("token", ""), token)
+    if not token:
+        return False
+    supplied = _supplied_token(websocket)
+    if not supplied:
+        return False
+    return hmac.compare_digest(supplied, token)
 
 
 async def websocket_handler(
@@ -27,7 +50,7 @@ async def websocket_handler(
     if not _has_valid_token(websocket, token):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-    await websocket.accept()
+    await websocket.accept(subprotocol=_select_token_protocol(websocket))
     try:
         while True:
             message = await websocket.receive_json()

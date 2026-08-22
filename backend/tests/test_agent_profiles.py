@@ -690,3 +690,75 @@ async def test_cli_engine_resumes_the_same_process_after_tool_approval(tmp_path)
         "Preparing report.\n\nFinished"
     )
     assert engine._agents == {}
+
+
+class _EnvProbeAdapter:
+    id = "env-probe"
+    label = "Env probe"
+    capabilities = CliRuntimeCapabilities(
+        native_web_search=False,
+        mcp=False,
+        session_resume=False,
+    )
+
+    def build_invocation(self, profile, request, prompt, session_id, mcp):
+        script = (
+            "import json,os;"
+            "leaked=sorted(k for k in os.environ if k.startswith('REFORA_'));"
+            "print(json.dumps({'text': 'leaked=' + repr(leaked)}),flush=True)"
+        )
+        return CliInvocation(
+            executable=sys.executable,
+            args=("-u", "-c", script),
+            cwd=request["sandboxRoot"],
+            stdin=prompt,
+            env={"PROBE_MARKER": "present"},
+        )
+
+    def parse_event(self, payload):
+        text = payload.get("text")
+        return [
+            {"event": "token", "delta": text, "new_message": True}
+        ] if isinstance(text, str) else []
+
+    def session_id(self, payload):
+        return None
+
+    def result_text(self, payload):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_cli_engine_strips_refora_env_from_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setenv("REFORA_SERVER_TOKEN", "secret-token")
+    monkeypatch.setenv("REFORA_OTHER_SECRET", "other-secret")
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    sessions = {
+        "get": lambda *_args: None,
+        "put": lambda *_args: None,
+        "delete": lambda *_args: None,
+    }
+    engine = CliRuntimeEngine(
+        CliRuntimeRegistry([_EnvProbeAdapter()]),
+        broker,
+        sessions,
+        {"update": lambda *_args: None},
+    )
+    request = {
+        "runId": "run-env",
+        "threadId": "thread-env",
+        "sandboxRoot": str(tmp_path),
+        "messages": [{"role": "user", "content": "Report environment"}],
+        "agentProfile": {
+            "id": "profile-env",
+            "cliRuntimeId": "env-probe",
+        },
+    }
+
+    events = [
+        event
+        async for event in engine.create_agent([], request).astream_events({})
+    ]
+
+    delta = next(event["delta"] for event in events if event["event"] == "token")
+    assert delta == "leaked=[]"

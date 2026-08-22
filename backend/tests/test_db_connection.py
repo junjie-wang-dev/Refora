@@ -26,3 +26,18 @@ async def test_open_database_returns_named_rows_and_allows_agent_worker_access(t
         )
     finally:
         database.close()
+
+
+def test_open_database_serializes_migrations_with_lock_file(tmp_path):
+    db_path = str(tmp_path / "refora.db")
+
+    first, first_result = open_database(db_path)
+    try:
+        second, second_result = open_database(db_path)
+    finally:
+        first.close()
+    try:
+        assert first_result.to_version == second_result.to_version
+        assert (tmp_path / "refora.db.migration.lock").exists()
+    finally:
+        second.close()

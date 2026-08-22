@@ -52,14 +52,27 @@ def test_interactive_mode_allows_refora_workspace_writes(tool_name):
     assert not decision.needs_user
 
 
-def test_interactive_mode_allows_os_isolated_sandbox_commands_without_approval():
+def test_interactive_mode_requires_approval_for_sandbox_commands():
     engine = PermissionEngine(sandbox_root="/tmp/refora-sandbox")
 
     decision = engine.evaluate("__execute", {"command": "python -m pytest; rm -rf /"})
 
+    assert not decision.allowed
+    assert decision.needs_user
+    assert decision.reason == "requires approval"
+
+
+def test_interactive_mode_allows_allowlisted_sandbox_commands_without_approval():
+    engine = PermissionEngine(
+        sandbox_root="/tmp/refora-sandbox",
+        allowed_commands=["python -m pytest"],
+    )
+
+    decision = engine.evaluate("__execute", {"command": "python -m pytest -q"})
+
     assert decision.allowed
     assert not decision.needs_user
-    assert decision.reason == "isolated sandbox command"
+    assert decision.reason == "command on allowlist"
 
 
 def test_sandbox_command_without_a_managed_root_still_requires_approval():

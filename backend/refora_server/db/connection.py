@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 from .migrations import MigrationResult, SqliteLike, run_migrations
 
 _active_search_mode: str = "trigram"
+
+_MIGRATION_THREAD_LOCK = threading.Lock()
 
 
 class _SqliteAdapter:
@@ -39,6 +47,14 @@ class _SqliteAdapter:
         return row is not None
 
 
+def _migration_lock(db_path: str):
+    if fcntl is None or db_path == ":memory:" or "file::memory:" in db_path:
+        from contextlib import nullcontext
+
+        return nullcontext()
+    return open(f"{db_path}.migration.lock", "a+")
+
+
 def open_database(db_path: str) -> tuple[sqlite3.Connection, MigrationResult]:
     global _active_search_mode
     db = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
@@ -46,7 +62,15 @@ def open_database(db_path: str) -> tuple[sqlite3.Connection, MigrationResult]:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")
         db.execute("PRAGMA journal_mode = WAL")
-        result = run_migrations(_SqliteAdapter(db))
+        with _MIGRATION_THREAD_LOCK, _migration_lock(db_path) as lock_file:
+            if lock_file is not None and fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    result = run_migrations(_SqliteAdapter(db))
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            else:
+                result = run_migrations(_SqliteAdapter(db))
         _active_search_mode = result.search_mode
         return db, result
     except Exception:

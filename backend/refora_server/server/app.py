@@ -5,29 +5,38 @@ import os
 import secrets
 
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-_ALLOWED_LOOPBACK_ORIGINS = {
+_DEFAULT_LOOPBACK_ORIGINS = [
     "http://127.0.0.1",
     "http://localhost",
     "http://127.0.0.1:0",
-}
+    "http://localhost:0",
+]
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
 def _loopback_origins() -> list[str]:
     env_origins = os.environ.get("REFORA_CORS_ORIGINS", "")
     origins = [o.strip() for o in env_origins.split(",") if o.strip()]
-    if origins:
-        return origins
-    return [
-        "http://127.0.0.1",
-        "http://localhost",
-        "http://127.0.0.1:0",
-        "http://localhost:0",
-    ]
+    validated = [o for o in origins if _is_loopback_origin(o)]
+    if len(validated) != len(origins):
+        rejected = [o for o in origins if o not in validated]
+        print(f"WARN REFORA_CORS_ORIGINS ignored non-loopback origins: {rejected}", flush=True)
+    if validated:
+        return validated
+    return list(_DEFAULT_LOOPBACK_ORIGINS)
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    parsed = urlparse(origin)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    return parsed.hostname in _LOOPBACK_HOSTS
 
 
 class TokenVerifier:
@@ -36,7 +45,7 @@ class TokenVerifier:
 
     def verify(self, request: Request) -> bool:
         if not self._token:
-            return True
+            return False
         supplied = request.headers.get("X-Refora-Token", "")
         if not supplied:
             return False
@@ -173,6 +182,10 @@ def create_app(
     db: Any | None = None,
 ) -> FastAPI:
     token = os.environ.get("REFORA_SERVER_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "REFORA_SERVER_TOKEN is not set; refusing to start an unauthenticated server"
+        )
     return _make_app(token, db_path, library_folder, db)
 
 

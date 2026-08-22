@@ -970,8 +970,8 @@ export function createServerClient(
 
   async function doConnect(): Promise<void> {
     connection = await getConnection()
-    const url = `ws://127.0.0.1:${connection.port}/ws?token=${encodeURIComponent(connection.token)}`
-    ws = new WebSocketCtor(url)
+    const url = `ws://127.0.0.1:${connection.port}/ws`
+    ws = new WebSocketCtor(url, [`refora-token.${connection.token}`])
     await new Promise<void>((resolve, reject) => {
       if (!ws) {
         reject(makeError('ws_error', 'WebSocket not initialized'))

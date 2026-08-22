@@ -334,8 +334,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
               : null
         }
       })
-    } catch {
+    } catch (e) {
       if (get().activeWorkspaceId !== id) return
+      toast(errorMessage(e, 'Failed to load chat threads'))
     }
   },
 

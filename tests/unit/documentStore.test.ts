@@ -831,6 +831,22 @@ describe('DocumentStore', () => {
 
       useDocumentStore.getState().destroy()
     })
+
+    it('shows a toast when the menu BibTeX export fails', async () => {
+      useDocumentStore.setState({ documents: [makeDoc()], selectedIds: ['doc-1'] })
+      useDocumentStore.getState().init()
+
+      const exportBibtex = mockOnMenuExportBibtex.mock.calls[0][0] as () => void
+      mockExportBibtex.mockRejectedValueOnce(new Error(''))
+
+      exportBibtex()
+
+      await vi.waitFor(() => {
+        expect(useDocumentStore.getState().toastMessage).toBe('BibTeX export failed')
+      })
+
+      useDocumentStore.getState().destroy()
+    })
   })
 
   describe('category actions', () => {

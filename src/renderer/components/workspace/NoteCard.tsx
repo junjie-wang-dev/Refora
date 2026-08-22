@@ -17,11 +17,12 @@ import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
 import { Input as UiInput, Textarea as UiTextarea, cardClassName } from '../ui'
 import type { WorkspaceNote } from '../../../shared/ipc-types'
 import { openDocumentPdf } from '../../utils/openPdf'
+import i18n from '../../i18n'
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
   (docId) => openDocumentPdf(docId),
   () => useDocumentStore.getState().showToast(
-    'Failed to open document. It may have been moved or deleted.'
+    i18n.t('workspace.openDocFailed') as string
   )
 )
 

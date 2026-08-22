@@ -92,7 +92,8 @@ def _error(exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=503, content={"ok": False, "error": {"code": code, "message": message}})
     if isinstance(exc, (ValueError, TypeError)) or code:
         return JSONResponse(status_code=400, content={"ok": False, "error": {"code": code or "validation", "message": message}})
-    return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": message}})
+    print(f"ERROR library route: {type(exc).__name__}: {exc}", flush=True)
+    return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": "Internal server error"}})
 
 
 def _body_dict(body: Any) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import resource
 import shlex
 import sys
 import threading
@@ -11,6 +12,7 @@ import pytest
 from refora_server.services.sandbox import (
     SandboxExecutor,
     SandboxOptions,
+    _build_preexec,
     _sandbox_profile,
     execute,
 )
@@ -43,6 +45,30 @@ def test_profile_is_deny_by_default_and_has_no_broad_user_or_temp_access(tmp_pat
 def test_execute_requires_an_explicit_sandbox_root():
     with pytest.raises(ValueError, match="sandbox root"):
         execute("printf nope", SandboxOptions(timeout_seconds=5, cpu_seconds=5))
+
+
+def test_preexec_limits_additional_processes_with_finite_soft_limit(monkeypatch):
+    changes: list[tuple[int, tuple[int, int]]] = []
+
+    def getrlimit(resource_id: int) -> tuple[int, int]:
+        if resource_id == resource.RLIMIT_NPROC:
+            return 2666, 4000
+        return 10_000, 10_000
+
+    monkeypatch.setattr(resource, "getrlimit", getrlimit)
+    monkeypatch.setattr(
+        "refora_server.services.sandbox._current_user_process_count",
+        lambda: 300,
+    )
+    monkeypatch.setattr(
+        resource,
+        "setrlimit",
+        lambda resource_id, limits: changes.append((resource_id, limits)),
+    )
+
+    _build_preexec(30, 512, 16)()
+
+    assert (resource.RLIMIT_NPROC, (556, 4000)) in changes
 
 
 def test_execute_normal_output_and_status(sandbox_options: SandboxOptions):

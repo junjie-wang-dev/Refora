@@ -6,7 +6,10 @@ import pytest
 
 from refora_server.db.connection import open_database
 from refora_server.repositories.ai_providers import createAiProvidersRepository
-from refora_server.services.ai_providers import createAiProvidersService
+from refora_server.services.ai_providers import (
+    createAiProvidersService,
+    normalize_base_url,
+)
 
 
 @pytest.fixture
@@ -151,6 +154,23 @@ def test_test_provider_ollama_no_key_ok(db):
     assert result == {"ok": True, "model": "gpt-oss:20b"}
 
 
+def test_test_provider_rejects_unsafe_base_url_before_request(db):
+    provider = _make_provider(db, baseUrl="http://169.254.169.254/v1")
+    responder = _FakeClient()
+    responder._respond = lambda url, headers: _FakeResponse(
+        200, {"data": [{"id": "gpt-5.6-terra"}]}
+    )
+    _FakeClient.reset()
+    _FakeClient.register("http://169.254.169.254/v1", responder)
+    svc = createAiProvidersService(
+        {"aiProviders": _make_provider_repo(db)},
+        {"client_factory": lambda _: _FakeClient},
+    )
+
+    assert svc["testProvider"](provider["id"], "sk-test") == {"ok": False}
+    assert responder.get_calls == []
+
+
 def test_list_models_returns_sorted_ids(db):
     provider = _make_provider(db)
     responder = _FakeClient()
@@ -179,6 +199,32 @@ def test_list_models_required_key_absent(db):
     result = svc["listModels"](provider["id"], "")
     assert result["ok"] is False
     assert "api key" in result["error"].lower()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://169.254.169.254/v1",
+        "http://[fe80::1]/v1",
+        "http://metadata.google.internal/v1",
+        "https://user:pass@api.example.com/v1",
+        "ftp://api.example.com/v1",
+    ],
+)
+def test_list_models_rejects_unsafe_base_urls(db, base_url):
+    provider = _make_provider(db, baseUrl=base_url)
+    svc = _service(db)
+    result = svc["listModels"](provider["id"], "sk-test")
+    assert result["ok"] is False
+    assert result["models"] == []
+
+
+def test_normalize_base_url_allows_loopback_for_local_runtimes():
+    assert (
+        normalize_base_url("http://localhost:11434/v1/")
+        == "http://localhost:11434/v1"
+    )
+    assert normalize_base_url("http://192.168.1.10:8000/v1") == "http://192.168.1.10:8000/v1"
 
 
 def test_build_provider_config_uses_request_key_without_persisting_it(db):

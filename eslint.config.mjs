@@ -10,6 +10,9 @@ export default tseslint.config(
       'node_modules/**',
       'release/**',
       'build/**',
+      'coverage/**',
+      'playwright-report/**',
+      'test-results/**',
       '.kilo/**',
       'ui-mocks/**',
       '*.tsbuildinfo'

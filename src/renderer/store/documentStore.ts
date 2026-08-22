@@ -516,7 +516,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     menuExportBibtexCb[0] = () => {
       const ids = get().selectedIds
       if (ids.length === 0) return
-      void api.export.toBibtex(ids)
+      api.export.toBibtex(ids).catch((e: unknown) => {
+        get().showToast(errorMessage(e, i18n.t('topbar.exportBibtexFailed') as string))
+      })
     }
     api.events.onMenuExportBibtex(menuExportBibtexCb[0])
 

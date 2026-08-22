@@ -98,12 +98,14 @@ class FakeWebSocket {
   static CLOSING = 2
 
   url: string
+  protocols?: string[]
   readyState = FakeWebSocket.CONNECTING
   sent: string[] = []
   private listeners = new Map<string, Set<(event: { data?: unknown }) => void>>()
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string[]) {
     this.url = url
+    this.protocols = protocols
     FakeWebSocket.instances.push(this)
   }
 
@@ -392,12 +394,13 @@ describe('serverClient', () => {
   })
 
   describe('ws - connection and events', () => {
-    it('connects to ws url with token query param', async () => {
+    it('connects to ws url with token subprotocol', async () => {
       const client = createServerClient(lifecycle, nativeRpc, {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
-      expect(ws.url).toBe(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`)
+      expect(ws.url).toBe(`ws://127.0.0.1:${PORT}/ws`)
+      expect(ws.protocols).toEqual([`refora-token.${TOKEN}`])
       expect(client.ws.isConnected()).toBe(true)
     })
 
@@ -691,9 +694,8 @@ describe('serverClient', () => {
       FakeWebSocket.instances[0].close()
       await vi.advanceTimersByTimeAsync(600)
       expect(FakeWebSocket.instances).toHaveLength(2)
-      expect(FakeWebSocket.instances[1].url).toBe(
-        'ws://127.0.0.1:9988/ws?token=restarted-token'
-      )
+      expect(FakeWebSocket.instances[1].url).toBe('ws://127.0.0.1:9988/ws')
+      expect(FakeWebSocket.instances[1].protocols).toEqual(['refora-token.restarted-token'])
       FakeWebSocket.instances[1].open()
       expect(client.ws.isConnected()).toBe(true)
       expect(getServerBaseUrl).toHaveBeenCalledTimes(2)

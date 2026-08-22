@@ -475,6 +475,15 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
           next.delete(docId)
           return next
         })
+      }).catch((e) => {
+        useDocumentStore.getState().showToast(errorMessage(e, 'Failed to load workspace document'))
+        setSummarizing((previous) => {
+          if (!previous.has(docId)) return previous
+          const next = new Set(previous)
+          next.delete(docId)
+          return next
+        })
+        setSummaryErrors((previous) => new Map(previous).set(docId, 'Failed to load document'))
       })
     }
     const errCb = (payload: SummaryErrorEvent) => {

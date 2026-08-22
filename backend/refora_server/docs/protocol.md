@@ -241,7 +241,7 @@ never raise across the transport.
 
 ## WebSocket event stream
 
-Single multiplexed WebSocket: `ws://127.0.0.1:<port>/ws?token=<token>`.
+Single multiplexed WebSocket: `ws://127.0.0.1:<port>/ws`, authenticated via the `Sec-WebSocket-Protocol` subprotocol `refora-token.<token>`.
 
 ### Client → Server (commands)
 | Event | Payload | Response |

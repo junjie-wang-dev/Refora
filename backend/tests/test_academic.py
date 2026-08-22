@@ -187,6 +187,15 @@ class TestArxivParsing:
         assert feed.total == 0
         assert feed.entries == []
 
+    def test_parse_arxiv_feed_rejects_entity_declarations(self) -> None:
+        malicious = (
+            '<?xml version="1.0"?><!DOCTYPE feed [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            '<feed xmlns="http://www.w3.org/2005/Atom">&xxe;</feed>'
+        )
+        feed = parse_arxiv_feed(malicious)
+        assert feed.total == 0
+        assert feed.entries == []
+
 
 class TestArxivClient:
     @pytest.mark.asyncio

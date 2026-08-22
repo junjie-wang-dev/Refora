@@ -85,8 +85,6 @@ class PermissionEngine:
             return Decision(True, "local workspace write")
 
         if risk is RiskClass.EXEC:
-            if tool_name == "__execute" and self.sandbox_root is not None:
-                return Decision(True, "isolated sandbox command")
             command = arguments.get("command")
             if isinstance(command, str) and self._command_allowed(command):
                 return Decision(True, "command on allowlist")

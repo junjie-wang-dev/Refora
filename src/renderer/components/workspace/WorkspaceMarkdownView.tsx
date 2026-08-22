@@ -22,6 +22,7 @@ import { formatDate } from '../../utils/format'
 import { IconTooltip, Input, PanelTabHeader, Textarea } from '../ui'
 import WorkspaceNavigationControls from './WorkspaceNavigationControls'
 import { openDocumentPdf } from '../../utils/openPdf'
+import i18n from '../../i18n'
 
 export type WorkspaceMarkdownViewKind = 'note' | 'report' | 'summary'
 export type WorkspaceMarkdownViewMode = 'read' | 'edit'
@@ -34,7 +35,7 @@ interface MarkdownDraft {
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
   (docId) => openDocumentPdf(docId),
   () => useDocumentStore.getState().showToast(
-    'Failed to open document. It may have been moved or deleted.'
+    i18n.t('workspace.openDocFailed') as string
   )
 )
 

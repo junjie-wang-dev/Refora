@@ -29,12 +29,24 @@ const pdfMocks = vi.hoisted(() => {
     getPage: vi.fn(async () => page),
     cleanup: vi.fn()
   }
+  const destroyDocument = vi.fn(async () => undefined)
+  let loadGate: Promise<typeof document> | null = null
   return {
     cancelRender,
     document,
     page,
     renderPage,
-    translate
+    translate,
+    destroyDocument,
+    gateLoad(promise: Promise<typeof document> | null) {
+      loadGate = promise
+    },
+    createLoadingTask() {
+      return {
+        promise: loadGate ?? Promise.resolve(document),
+        destroy: destroyDocument
+      }
+    }
   }
 })
 
@@ -48,7 +60,7 @@ vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
-  getDocument: () => ({ promise: Promise.resolve(pdfMocks.document) }),
+  getDocument: () => pdfMocks.createLoadingTask(),
   TextLayer: class {
     render = vi.fn(async () => undefined)
     cancel = vi.fn()
@@ -133,6 +145,8 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.renderPage.mockClear()
     pdfMocks.cancelRender.mockClear()
     pdfMocks.document.numPages = 1
+    pdfMocks.destroyDocument.mockClear()
+    pdfMocks.gateLoad(null)
     vi.spyOn(api.documents, 'readPdf').mockResolvedValue(new Uint8Array([1]))
     usePdfReaderStore.setState({
       tabs: [document()],
@@ -452,5 +466,38 @@ describe('PdfReader rendering visibility', () => {
         rects: [{ x: 0.15, y: 0.1, width: 0.7, height: 20 / 300 }]
       })
     ])
+  })
+
+  it('destroys the superseded loading task when switching documents', async () => {
+    render(<PdfReader />)
+    await waitFor(() => {
+      expect(observers.some((observer) => observer.target instanceof HTMLCanvasElement)).toBe(true)
+    })
+    pdfMocks.destroyDocument.mockClear()
+
+    act(() => {
+      usePdfReaderStore.setState({
+        tabs: [document(), { ...document(), id: 'paper-2', fileName: 'paper-2.pdf' }],
+        activeDocumentId: 'paper-2'
+      })
+    })
+
+    await waitFor(() => expect(pdfMocks.destroyDocument).toHaveBeenCalledTimes(1))
+  })
+
+  it('destroys a late-resolving loading task after unmount instead of adopting it', async () => {
+    let release!: (value: typeof pdfMocks.document) => void
+    const gate = new Promise<typeof pdfMocks.document>((resolve) => {
+      release = resolve
+    })
+    pdfMocks.gateLoad(gate)
+    pdfMocks.document.cleanup.mockClear()
+
+    const view = render(<PdfReader />)
+    view.unmount()
+
+    release(pdfMocks.document)
+    await waitFor(() => expect(pdfMocks.destroyDocument).toHaveBeenCalledTimes(1))
+    expect(pdfMocks.document.cleanup).not.toHaveBeenCalled()
   })
 })

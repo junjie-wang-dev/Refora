@@ -8,15 +8,19 @@ from refora_server.server.websocket import websocket_handler
 
 
 class Socket:
-    def __init__(self, messages: list[dict], token: str = "token") -> None:
-        self.query_params = {"token": token}
+    def __init__(self, messages: list[dict], token: str | None = "token") -> None:
+        protocols = f"refora-token.{token}" if token else ""
+        self.headers = {"sec-websocket-protocol": protocols} if protocols else {}
+        self.query_params: dict[str, str] = {}
         self._messages = iter(messages)
         self.accepted = False
+        self.accepted_subprotocol: str | None = None
         self.closed_code: int | None = None
         self.sent: list[dict] = []
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
         self.accepted = True
+        self.accepted_subprotocol = subprotocol
 
     async def close(self, code: int) -> None:
         self.closed_code = code
@@ -57,6 +61,7 @@ async def test_websocket_commands_and_connector_reply():
     await events.broadcast("ai.chat.token", {"delta": "after disconnect"})
 
     assert socket.accepted
+    assert socket.accepted_subprotocol == "refora-token.token"
     assert socket.sent == [
         {"event": "subscribed", "topics": ["ai.chat.token"]},
         {"event": "pong"},
@@ -70,6 +75,38 @@ async def test_websocket_commands_and_connector_reply():
 @pytest.mark.asyncio
 async def test_websocket_rejects_invalid_token_before_accepting():
     socket = Socket([], token="wrong")
+
+    await websocket_handler(socket, EventBus(), Connector(), "token")
+
+    assert not socket.accepted
+    assert socket.closed_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_missing_token_header():
+    socket = Socket([], token=None)
+
+    await websocket_handler(socket, EventBus(), Connector(), "token")
+
+    assert not socket.accepted
+    assert socket.closed_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_when_server_token_unconfigured():
+    socket = Socket([], token="token")
+
+    await websocket_handler(socket, EventBus(), Connector(), None)
+
+    assert not socket.accepted
+    assert socket.closed_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_token_via_query_string():
+    socket = Socket([], token="token")
+    socket.query_params = {"token": "token"}
+    socket.headers = {}
 
     await websocket_handler(socket, EventBus(), Connector(), "token")
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -12,18 +14,37 @@ from refora_server.services.ai_summary import build_provider_reasoning_options
 from refora_server.repositories.errors import RepoError
 
 TEST_TIMEOUT_MS = 8_000
+_BLOCKED_PROVIDER_HOSTNAMES = {"metadata.google.internal"}
+
+
+def _assert_routable_provider_host(hostname: str) -> None:
+    if not hostname:
+        raise RepoError("invalid_input", "Base URL must include a hostname")
+    lowered = hostname.rstrip(".").lower()
+    if lowered in _BLOCKED_PROVIDER_HOSTNAMES:
+        raise RepoError("unsafe_url", "Base URL points to a metadata service")
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        return
+    if address.is_link_local or address.is_multicast or address.is_unspecified:
+        raise RepoError(
+            "unsafe_url",
+            "Base URL must not point to a link-local or multicast address",
+        )
 
 
 def normalize_base_url(value: str) -> str:
     raw = value.strip().rstrip("/")
     try:
-        from urllib.parse import urlparse
-
         parsed = urlparse(raw)
     except Exception:
         raise RepoError("invalid_input", "Base URL must be a valid HTTP or HTTPS URL")
     if parsed.scheme not in ("http", "https"):
         raise RepoError("invalid_input", "Base URL must use HTTP or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise RepoError("invalid_input", "Base URL must not contain credentials")
+    _assert_routable_provider_host(parsed.hostname or "")
     return raw
 
 
@@ -92,8 +113,9 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             key = (apiKey or "").strip()
             if not key and providerRequiresApiKey(provider["presetId"]):
                 return {"ok": False}
+            normalized = normalize_base_url(provider["baseUrl"])
             result = _fetch_models_from_endpoint(
-                provider["baseUrl"], key, client_factory=client_factory
+                normalized, key, client_factory=client_factory
             )
             if not result["ok"]:
                 return {"ok": False}

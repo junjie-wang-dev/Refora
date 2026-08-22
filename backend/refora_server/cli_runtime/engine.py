@@ -31,6 +31,19 @@ def _segment_separator(before: str, after: str) -> str:
     return "\n" * max(0, 2 - trailing - leading)
 
 
+_SENSITIVE_ENV_PREFIXES = ("REFORA_",)
+
+
+def _cli_subprocess_environment(extra: dict[str, Any]) -> dict[str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not any(key.startswith(prefix) for prefix in _SENSITIVE_ENV_PREFIXES)
+    }
+    environment.update(extra)
+    return environment
+
+
 def _build_prompt(request: dict[str, Any], resumed: bool) -> str:
     messages = request.get("messages") if isinstance(request.get("messages"), list) else []
     if resumed:
@@ -121,8 +134,7 @@ class CliRuntimeAgent:
             session_id,
             self._mcp,
         )
-        environment = os.environ.copy()
-        environment.update(invocation.env)
+        environment = _cli_subprocess_environment(invocation.env)
         self._process = await asyncio.create_subprocess_exec(
             invocation.executable,
             *invocation.args,

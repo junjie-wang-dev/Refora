@@ -812,6 +812,32 @@ describe('WorkspaceStore', () => {
     })
   })
 
+  describe('fetchThreads', () => {
+    it('shows a toast when loading chat threads fails', async () => {
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+      mockChatThreads.mockRejectedValueOnce(new Error('threads failed'))
+
+      await useWorkspaceStore.getState().fetchThreads()
+
+      expect(mockShowToast).toHaveBeenCalledWith('threads failed')
+    })
+
+    it('does not surface a stale failure after the workspace changed mid-request', async () => {
+      let rejectThreads!: (error: Error) => void
+      mockChatThreads.mockReturnValue(new Promise((_resolve, reject) => {
+        rejectThreads = reject
+      }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+      const pending = useWorkspaceStore.getState().fetchThreads()
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-2' })
+      rejectThreads(new Error('threads failed'))
+
+      await pending
+
+      expect(mockShowToast).not.toHaveBeenCalled()
+    })
+  })
+
   describe('item actions', () => {
     it('adds documents and other items with placement and refreshes items', async () => {
       const placement = { x: 120, y: 240 }

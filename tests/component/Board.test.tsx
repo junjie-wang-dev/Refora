@@ -373,6 +373,37 @@ describe('Board card clipboard actions', () => {
     expect(summarize).toHaveBeenCalledWith(document.id)
   })
 
+  it('shows a toast when the summary refresh after an update event fails', async () => {
+    const document = {
+      id: 'doc-1',
+      fileName: 'paper.pdf',
+      title: 'Paper title'
+    } as Document
+    mockItems = [makeItem('item-paper', document.id, 0)]
+    const api = window.api as unknown as Record<string, unknown>
+    const documents = api.documents as Record<string, unknown>
+    const ai = api.ai as Record<string, unknown>
+    documents.get = vi.fn().mockResolvedValue(document)
+    ai.summaryGet = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('summary lookup failed'))
+    let summaryUpdated: ((docId: string) => void) | null = null
+    ;(api.events as Record<string, unknown>).onAiSummaryUpdated = vi.fn(
+      (cb: (docId: string) => void) => {
+        summaryUpdated = cb
+      }
+    )
+
+    render(<Board />)
+    await waitFor(() => expect(screen.getByText('Paper title')).toBeInTheDocument())
+
+    await act(async () => {
+      summaryUpdated?.('doc-1')
+    })
+
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('summary lookup failed'))
+  })
+
   it('copies reports and Markdown notes as Markdown files', () => {
     const report: AiReport = {
       id: 'report-1',

@@ -42,6 +42,30 @@ def _public_address(value: str) -> bool:
     )
 
 
+def _peer_address(response: httpx.Response) -> str | None:
+    try:
+        stream = response.extensions["network_stream"]
+        peer = stream.get_extra("server_addr")
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if isinstance(peer, tuple) and peer:
+        value = peer[0]
+    elif isinstance(peer, str) and peer:
+        value = peer
+    else:
+        return None
+    return value.rsplit("%", 1)[0]
+
+
+def assert_public_peer(response: httpx.Response) -> None:
+    address = _peer_address(response)
+    if address is not None and not _public_address(address):
+        raise RepoError(
+            "unsafe_url",
+            "URL resolved to a non-public network address during connection",
+        )
+
+
 def _resolve_addresses(hostname: str, port: int) -> list[str]:
     try:
         return list(
@@ -356,6 +380,7 @@ def fetchUrl(
                     "User-Agent": "Refora/0.1 web_fetch",
                 },
             ) as response:
+                assert_public_peer(response)
                 if response.status_code in _REDIRECT_STATUSES:
                     location = response.headers.get("location")
                     if not location:
@@ -480,6 +505,8 @@ async def fetchUrlAsync(
             response = await _await_or_cancel(
                 client.send(request_obj, stream=True), cancelEvent
             )
+            if proxy is None:
+                assert_public_peer(response)
             if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get("location")
                 await response.aclose()

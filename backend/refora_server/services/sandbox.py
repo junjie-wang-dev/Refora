@@ -228,7 +228,29 @@ def _build_environment(roots: dict[str, Path], options: SandboxOptions) -> dict[
     return env
 
 
+PROCESS_LIMIT = 256
+
+
+def _current_user_process_count() -> int | None:
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-axo", "uid="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    user_id = str(os.getuid())
+    return sum(1 for line in result.stdout.splitlines() if line.strip() == user_id)
+
+
 def _build_preexec(cpu_seconds: int, memory_mb: int, file_size_mb: int) -> Callable[[], None]:
+    user_process_count = _current_user_process_count()
+
     def _preexec() -> None:
         limits: tuple[tuple[int | None, int], ...] = (
             (resource.RLIMIT_CPU, cpu_seconds),
@@ -248,6 +270,16 @@ def _build_preexec(cpu_seconds: int, memory_mb: int, file_size_mb: int) -> Calla
                 resource.setrlimit(resource_id, (limit, hard))
             except (ValueError, OSError):
                 continue
+        if user_process_count is not None:
+            try:
+                soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+                target = user_process_count + PROCESS_LIMIT
+                if hard != resource.RLIM_INFINITY:
+                    target = min(target, hard)
+                if soft == resource.RLIM_INFINITY or soft > target:
+                    resource.setrlimit(resource.RLIMIT_NPROC, (target, hard))
+            except (ValueError, OSError):
+                pass
 
     return _preexec
 

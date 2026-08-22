@@ -119,10 +119,17 @@ def _parse_total(raw_total: Any) -> int:
     return 0
 
 
+def _has_xml_entity_declarations(xml: str) -> bool:
+    lowered = xml.lower()
+    return "<!doctype" in lowered or "<!entity" in lowered
+
+
 def parse_arxiv_feed(xml: str) -> ParsedArxivFeed:
     try:
         import xml.etree.ElementTree as ET
 
+        if _has_xml_entity_declarations(xml):
+            return ParsedArxivFeed(total=0)
         root = ET.fromstring(xml)
     except Exception:
         return ParsedArxivFeed(total=0)

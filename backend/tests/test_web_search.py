@@ -315,6 +315,142 @@ def test_fetch_url_validates_each_redirect_destination() -> None:
     client.close()
 
 
+class _FakeNetworkStream:
+    def __init__(self, server_addr: tuple[str, int]) -> None:
+        self._server_addr = server_addr
+
+    def get_extra(self, key: str) -> object:
+        if key == "server_addr":
+            return self._server_addr
+        return None
+
+
+class _PeerInjectingTransport(httpx.BaseTransport):
+    def __init__(self, handler, server_addr: tuple[str, int]) -> None:
+        self._handler = handler
+        self._server_addr = server_addr
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        response = self._handler(request)
+        response.extensions["network_stream"] = _FakeNetworkStream(self._server_addr)
+        return response
+
+
+class _AsyncPeerInjectingTransport(httpx.AsyncBaseTransport):
+    def __init__(self, handler, server_addr: tuple[str, int]) -> None:
+        self._handler = handler
+        self._server_addr = server_addr
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._handler(request)
+        response.extensions["network_stream"] = _FakeNetworkStream(self._server_addr)
+        return response
+
+
+def test_fetch_url_rejects_rebound_connection_to_private_peer() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text="internal secret",
+            request=request,
+        )
+
+    client = httpx.Client(
+        transport=_PeerInjectingTransport(handler, ("127.0.0.1", 80))
+    )
+    with pytest.raises(RepoError) as error:
+        fetchUrl(
+            "https://public-looking.example/",
+            httpClient=client,
+            resolver=lambda _hostname, _port: ["93.184.216.34"],
+        )
+
+    assert error.value.code == "unsafe_url"
+    client.close()
+
+
+def test_fetch_url_rejects_rebound_redirect_from_private_peer() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        response = httpx.Response(
+            302,
+            headers={"location": "https://next.example/"},
+            request=request,
+        )
+        response.extensions["network_stream"] = _FakeNetworkStream(
+            ("127.0.0.1", 80)
+        )
+        return response
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RepoError) as error:
+        fetchUrl(
+            "https://public-looking.example/",
+            httpClient=client,
+            resolver=lambda _hostname, _port: ["93.184.216.34"],
+        )
+
+    assert error.value.code == "unsafe_url"
+    assert calls == ["https://public-looking.example/"]
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_rejects_rebound_connection_to_private_peer() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text="internal secret",
+            request=request,
+        )
+
+    client = httpx.AsyncClient(
+        transport=_AsyncPeerInjectingTransport(handler, ("169.254.169.254", 80))
+    )
+    with pytest.raises(RepoError) as error:
+        await fetchUrlAsync(
+            "https://public-looking.example/",
+            httpClient=client,
+            resolver=lambda _hostname, _port: ["93.184.216.34"],
+        )
+
+    assert error.value.code == "unsafe_url"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_rejects_rebound_redirect_from_private_peer() -> None:
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        response = httpx.Response(
+            302,
+            headers={"location": "https://next.example/"},
+            request=request,
+        )
+        response.extensions["network_stream"] = _FakeNetworkStream(
+            ("169.254.169.254", 80)
+        )
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(RepoError) as error:
+        await fetchUrlAsync(
+            "https://public-looking.example/",
+            httpClient=client,
+            resolver=lambda _hostname, _port: ["93.184.216.34"],
+        )
+
+    assert error.value.code == "unsafe_url"
+    assert calls == ["https://public-looking.example/"]
+    await client.aclose()
+
+
 @pytest.mark.asyncio
 async def test_async_fetch_cancels_an_in_flight_request() -> None:
     started = asyncio.Event()
