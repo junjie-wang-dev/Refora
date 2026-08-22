@@ -18,6 +18,9 @@
   <img src="https://img.shields.io/badge/interface-English_%7C_Chinese-blue" alt="English and Chinese interface">
 </p>
 
+> [!IMPORTANT]
+> Refora is still at an early stage. Its core reading, workspace, and AI research workflows are functional, but the product is evolving quickly and some features may change or remain incomplete. Treat it as an experimental research tool for now, and keep independent backups of important papers and research materials.
+
 ## Research should not end at a summary
 
 Most AI tools meet a paper in an empty chat. You paste fragments, rebuild the context, receive a summary, and lose the useful reasoning when the conversation ends.
