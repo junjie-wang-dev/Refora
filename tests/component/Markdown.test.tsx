@@ -7,8 +7,11 @@ import {
   REMARK_PLUGINS,
   urlTransform
 } from '../../src/renderer/utils/markdown'
+import { initI18n } from '../../src/renderer/i18n'
 
 const writeText = vi.fn()
+
+initI18n('en')
 
 describe('Markdown rendering', () => {
   beforeEach(() => {

@@ -31,6 +31,10 @@ const pdfMocks = vi.hoisted(() => {
   }
   const destroyDocument = vi.fn(async () => undefined)
   let loadGate: Promise<typeof document> | null = null
+  const getDocument = vi.fn(() => ({
+    promise: loadGate ?? Promise.resolve(document),
+    destroy: destroyDocument
+  }))
   return {
     cancelRender,
     document,
@@ -38,14 +42,9 @@ const pdfMocks = vi.hoisted(() => {
     renderPage,
     translate,
     destroyDocument,
+    getDocument,
     gateLoad(promise: Promise<typeof document> | null) {
       loadGate = promise
-    },
-    createLoadingTask() {
-      return {
-        promise: loadGate ?? Promise.resolve(document),
-        destroy: destroyDocument
-      }
     }
   }
 })
@@ -60,7 +59,14 @@ vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
-  getDocument: () => pdfMocks.createLoadingTask(),
+  PDFDataRangeTransport: class {
+    constructor(
+      readonly length: number,
+      readonly initialData: Uint8Array | null
+    ) {}
+    onDataRange = vi.fn()
+  },
+  getDocument: pdfMocks.getDocument,
   TextLayer: class {
     render = vi.fn(async () => undefined)
     cancel = vi.fn()
@@ -146,8 +152,13 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.cancelRender.mockClear()
     pdfMocks.document.numPages = 1
     pdfMocks.destroyDocument.mockClear()
+    pdfMocks.getDocument.mockClear()
     pdfMocks.gateLoad(null)
-    vi.spyOn(api.documents, 'readPdf').mockResolvedValue(new Uint8Array([1]))
+    vi.spyOn(api.documents, 'readPdfRange').mockResolvedValue({
+      begin: 0,
+      fileSize: 1,
+      data: new Uint8Array([1])
+    })
     usePdfReaderStore.setState({
       tabs: [document()],
       activeDocumentId: 'paper',
@@ -179,6 +190,13 @@ describe('PdfReader rendering visibility', () => {
 
     await waitFor(() => {
       expect(observers.some((observer) => observer.target instanceof HTMLCanvasElement)).toBe(true)
+    })
+    expect(api.documents.readPdfRange).toHaveBeenCalledWith('paper', 0, 65536)
+    expect(pdfMocks.getDocument).toHaveBeenCalledWith({
+      range: expect.anything(),
+      rangeChunkSize: 65536,
+      disableAutoFetch: true,
+      disableStream: true
     })
 
     const canvasObserver = observers.find(

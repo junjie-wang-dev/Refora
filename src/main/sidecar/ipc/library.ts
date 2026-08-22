@@ -11,6 +11,7 @@ import type {
   ListModelsRequest,
   ListModelsResult,
   PdfAnnotation,
+  PdfRangeChunk,
   Result
 } from '../../../shared/ipc-types'
 import { normalizeModelList } from '../../../shared/modelVariant'
@@ -19,12 +20,13 @@ import type {
   ImportBibPayload,
   ServerClient
 } from '../client'
-import { readFile } from 'node:fs/promises'
-import { resolvePdfFilePath } from '../../services/pdfPath'
+import { readPdfFileRange } from '../../services/pdfRange'
 
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  onSettingUpdated?: (key: string, value: unknown) => void
+  readPdfRange?: (filePath: string, begin: number, end: number) => Promise<PdfRangeChunk>
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -46,7 +48,9 @@ async function forward<T>(request: () => Promise<T>): Promise<Result<T>> {
 
 export function createServerLibraryHandlers({
   serverClient,
-  switchLibraryFolder
+  switchLibraryFolder,
+  onSettingUpdated,
+  readPdfRange = readPdfFileRange
 }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
@@ -80,10 +84,10 @@ export function createServerLibraryHandlers({
       forward(() => external === false
         ? http.documentsOpenPdf(documentId, false)
         : http.documentsOpenPdf(documentId)),
-    [IpcChannel.DocumentsReadPdf]: (documentId: string) =>
+    [IpcChannel.DocumentsReadPdfRange]: (documentId: string, begin: number, end: number) =>
       forward(async () => {
         const document = await http.documentsGet(documentId)
-        return new Uint8Array(await readFile(resolvePdfFilePath(document.filePath)))
+        return readPdfRange(document.filePath, begin, end)
       }),
     [IpcChannel.DocumentsPdfAnnotationsGet]: (documentId: string) =>
       forward(() => http.documentsPdfAnnotations(documentId)),
@@ -141,7 +145,11 @@ export function createServerLibraryHandlers({
         return settings[key] ?? defaultValue
       }),
     [IpcChannel.SettingsSet]: (key: string, value: unknown) =>
-      forward(() => http.settingsUpdate({ [key]: value })),
+      forward(async () => {
+        const settings = await http.settingsUpdate({ [key]: value })
+        onSettingUpdated?.(key, value)
+        return settings
+      }),
 
     [IpcChannel.WebSearchConfigGet]: () => forward(() => http.settingsWebSearchGet()),
     [IpcChannel.WebSearchConfigUpdate]: (patch: WebSearchConfigPatch) =>

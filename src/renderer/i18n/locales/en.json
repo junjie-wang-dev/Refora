@@ -244,6 +244,12 @@
     "theme": "Theme",
     "language": "Language",
     "proxy": "Proxy (HTTP/HTTPS)",
+    "loadFailed": "Failed to load settings",
+    "librarySwitchFailed": "Failed to switch the library folder",
+    "proxySaveFailed": "Failed to save the proxy setting",
+    "crossrefMailtoSaveFailed": "Failed to save the Crossref email",
+    "sidebarSaveFailed": "Failed to update the sidebar setting",
+    "languageSaveFailed": "Failed to change the language",
     "pdfOpenMode": {
       "title": "Open PDFs with",
       "desc": "Use the built-in tabbed reader and local annotation tools, or keep opening PDFs in your system default app.",
@@ -584,6 +590,7 @@
     "bibtexExported": "Exported {{count}} entries to BibTeX",
     "bibtexCopied": "Copied {{count}} BibTeX entries to clipboard",
     "copyFailed": "Failed to copy",
+    "copyCode": "Copy code",
     "movedToTrash": "Moved to Trash ({{count}})",
     "deleteFailed": "Failed to delete document",
     "close": "Close"

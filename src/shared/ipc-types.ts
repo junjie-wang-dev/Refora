@@ -129,6 +129,12 @@ export interface Document {
   categories?: Category[]
 }
 
+export interface PdfRangeChunk {
+  begin: number
+  fileSize: number
+  data: Uint8Array
+}
+
 export type PdfAnnotationKind =
   | 'highlight'
   | 'underline'
@@ -898,7 +904,7 @@ export interface ReforaApi {
     bulkCategorize(ids: string[], catId: string): Promise<void>
     bulkRefreshMetadata(ids: string[]): Promise<void>
     openPdf(id: string, external?: boolean): Promise<Document>
-    readPdf(id: string): Promise<Uint8Array>
+    readPdfRange(id: string, begin: number, end: number): Promise<PdfRangeChunk>
     pdfAnnotations(id: string): Promise<PdfAnnotation[]>
     setPdfAnnotations(id: string, annotations: PdfAnnotation[]): Promise<PdfAnnotation[]>
     openInFinder(id: string): Promise<void>

@@ -343,6 +343,33 @@ def test_workspace_file_picker_and_empty_note_content_are_supported(
     )
 
 
+def test_workspace_asset_import_awaits_async_service(
+    client: TestClient, services: FakeServices
+) -> None:
+    completed = False
+
+    async def import_assets(workspace_id, paths, placement):
+        nonlocal completed
+        await asyncio.sleep(0)
+        completed = True
+        assert workspace_id == "workspace-1"
+        assert paths == ["/tmp/asset.txt"]
+        assert placement is None
+        return {"imported": [{"id": "asset-1"}], "errors": []}
+
+    services.workspaces["importAssetsAsync"] = import_assets
+
+    response = client.post(
+        "/workspaces/workspace-1/assets/files",
+        headers=HEADERS,
+        json={"paths": ["/tmp/asset.txt"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["imported"] == [{"id": "asset-1"}]
+    assert completed is True
+
+
 def test_mineru_install_returns_immediate_acknowledgement(client: TestClient, services: FakeServices) -> None:
     response = client.post("/mineru/install", headers=HEADERS, json={"installRoot": "/tmp/mineru"})
 

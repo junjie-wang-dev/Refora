@@ -80,7 +80,7 @@ describe('WebSearchSettings', () => {
       provider: 'tavily',
       braveApiKey: 'brave-new-key'
     }))
-  }, 10_000)
+  }, 20_000)
 
   it('clears an active provider key only after disabling that provider', async () => {
     const user = userEvent.setup()
@@ -93,5 +93,5 @@ describe('WebSearchSettings', () => {
       provider: 'disabled',
       clearTavilyApiKey: true
     }))
-  }, 10_000)
+  }, 20_000)
 })

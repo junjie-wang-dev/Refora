@@ -32,6 +32,9 @@ describe('PDF worker preview', () => {
     }))
     vi.doMock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       GlobalWorkerOptions: {},
+      PDFDataRangeTransport: class {
+        onDataRange = vi.fn()
+      },
       getDocument: vi.fn(() => ({
         promise: Promise.resolve({
           getPage: vi.fn(async () => ({
@@ -49,6 +52,17 @@ describe('PDF worker preview', () => {
     const { renderPdfPreview } = await import('../../src/main/worker/pdf-worker')
 
     await expect(renderPdfPreview(resolve('tests/fixtures/valid.pdf'))).resolves.toBeInstanceOf(Uint8Array)
+
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    expect(pdfjs.getDocument).toHaveBeenCalledWith(expect.objectContaining({
+      range: expect.anything(),
+      rangeChunkSize: 65536,
+      disableAutoFetch: true,
+      disableStream: true
+    }))
+    expect(pdfjs.getDocument).toHaveBeenCalledWith(
+      expect.not.objectContaining({ data: expect.anything(), url: expect.anything() })
+    )
 
     expect(cleanup).toHaveBeenCalledOnce()
     expect(destroy).toHaveBeenCalledOnce()

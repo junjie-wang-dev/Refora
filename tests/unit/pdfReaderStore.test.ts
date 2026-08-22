@@ -304,6 +304,62 @@ describe('PDF reader state', () => {
     expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saved')
   })
 
+  it('flushes pending annotations before a library switch and clears reader state afterward', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'note',
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: 'Pending note',
+      point: { x: 0.5, y: 0.5 }
+    })
+
+    await usePdfReaderStore.getState().prepareForLibrarySwitch()
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledWith(
+      'paper',
+      [expect.objectContaining({ comment: 'Pending note' })]
+    )
+
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
+    expect(usePdfReaderStore.getState()).toMatchObject({
+      tabs: [],
+      activeDocumentId: null,
+      annotations: {},
+      saveStatus: {},
+      tool: null,
+      sidebarOpen: false,
+      selectedAnnotationIds: [],
+      lastDeletion: null
+    })
+  })
+
+  it('ignores annotation loads that finish after a library switch', async () => {
+    let resolveAnnotations: (annotations: []) => void = () => undefined
+    vi.mocked(api.documents.pdfAnnotations).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveAnnotations = resolve
+      })
+    )
+
+    const opening = usePdfReaderStore.getState().open(document('paper'))
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    resolveAnnotations([])
+    await opening
+
+    expect(usePdfReaderStore.getState()).toMatchObject({
+      tabs: [],
+      activeDocumentId: null,
+      annotations: {},
+      saveStatus: {}
+    })
+  })
+
   it('updates a text annotation color', async () => {
     await usePdfReaderStore.getState().open(document('paper'))
     const annotation = usePdfReaderStore.getState().addAnnotation('paper', {

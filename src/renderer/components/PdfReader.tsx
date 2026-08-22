@@ -74,9 +74,11 @@ import 'pdfjs-dist/web/pdf_viewer.css'
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
 const MIN_SCALE = 0.5
 const MAX_SCALE = 3
+const PDF_RANGE_CHUNK_SIZE = 64 * 1024
 
 interface PdfRuntime {
   getDocument: typeof import('pdfjs-dist').getDocument
+  PDFDataRangeTransport: typeof import('pdfjs-dist').PDFDataRangeTransport
   TextLayer: typeof import('pdfjs-dist').TextLayer
 }
 
@@ -91,6 +93,7 @@ function loadPdfRuntime(): Promise<PdfRuntime> {
       pdfjs.GlobalWorkerOptions.workerSrc = worker.default
       return {
         getDocument: pdfjs.getDocument,
+        PDFDataRangeTransport: pdfjs.PDFDataRangeTransport,
         TextLayer: pdfjs.TextLayer
       }
     })
@@ -1441,9 +1444,48 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     setSearchPages([])
     void Promise.all([
       loadPdfRuntime(),
-      api.documents.readPdf(activeDocument.id)
-    ]).then(([runtime, data]) => {
-      const task = runtime.getDocument({ data })
+      api.documents.readPdfRange(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
+    ]).then(([runtime, initial]) => {
+      const requestedDocumentId = activeDocument.id
+      class IpcPdfRangeTransport extends runtime.PDFDataRangeTransport {
+        private aborted = false
+
+        constructor() {
+          super(initial.fileSize, initial.data, true)
+        }
+
+        requestDataRange(begin: number, end: number): void {
+          if (this.aborted) return
+          void api.documents.readPdfRange(requestedDocumentId, begin, end).then((chunk) => {
+            if (this.aborted) return
+            if (
+              chunk.begin !== begin ||
+              chunk.fileSize !== initial.fileSize ||
+              chunk.data.length === 0 ||
+              chunk.data.length > end - begin
+            ) {
+              this.abort()
+              void loadingTask?.destroy().catch(() => undefined)
+              return
+            }
+            this.onDataRange(begin, chunk.data)
+          }).catch(() => {
+            if (this.aborted) return
+            this.abort()
+            void loadingTask?.destroy().catch(() => undefined)
+          })
+        }
+
+        abort(): void {
+          this.aborted = true
+        }
+      }
+      const task = runtime.getDocument({
+        range: new IpcPdfRangeTransport(),
+        rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
+        disableAutoFetch: true,
+        disableStream: true
+      })
       loadingTask = task
       if (cancelled) void task.destroy()?.catch(() => undefined)
       return task.promise

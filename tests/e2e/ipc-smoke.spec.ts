@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
 
-const mainScript = path.resolve(__dirname, '..', '..', 'out', 'main', 'index.js')
+const testMain = path.resolve(__dirname, 'electron-main.mjs')
 
 type ElectronApi = Record<string, unknown> & {
   getBootstrap(): Promise<Record<string, unknown>>
@@ -24,42 +24,47 @@ type ElectronApi = Record<string, unknown> & {
   }
   events: {
     onDocumentUpdated(cb: (doc: Record<string, unknown>) => void): void
+    off(channel: 'document:updated', cb: (doc: Record<string, unknown>) => void): void
   }
-}
-
-function api(pageEvalWindow: Window & typeof globalThis): ElectronApi {
-  return (pageEvalWindow as Window & { api: ElectronApi }).api
 }
 
 test.describe('IPC Smoke', () => {
   let electronApp: Awaited<ReturnType<typeof electron.launch>>
   let electronPage: Awaited<ReturnType<Awaited<ReturnType<typeof electron.launch>>['firstWindow']>>
+  let userDataFolder: string
   let libraryFolder: string
 
   test.beforeAll(async () => {
+    userDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-smoke-user-'))
     libraryFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-smoke-'))
+    fs.writeFileSync(
+      path.join(userDataFolder, 'refora-prefs.json'),
+      JSON.stringify({ libraryFolderPath: libraryFolder })
+    )
+    const launchEnv = {
+      ...process.env,
+      REFORA_E2E_USER_DATA_DIR: userDataFolder
+    }
+    delete launchEnv.ELECTRON_RUN_AS_NODE
     electronApp = await electron.launch({
       executablePath: electronExe,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: undefined,
-      },
-      args: [mainScript],
+      env: launchEnv,
+      args: [testMain],
     })
     electronPage = await electronApp.firstWindow()
-    await electronPage.evaluate(
-      async (lib: string) => api(window).settings.set('libraryFolderPath', lib),
-      libraryFolder,
-    )
+    const actualUserDataFolder = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+    expect(actualUserDataFolder).toBe(userDataFolder)
   })
 
   test.afterAll(async () => {
     await electronApp?.close()
+    try { fs.rmSync(userDataFolder, { recursive: true, force: true }) } catch { void 0 }
     try { fs.rmSync(libraryFolder, { recursive: true, force: true }) } catch { void 0 }
   })
 
   test('getBootstrap() returns valid shape', async () => {
-    const bootstrap = await electronPage.evaluate(() => api(window).getBootstrap())
+    const bootstrap = await electronPage.evaluate(() =>
+      (window as Window & { api: ElectronApi }).api.getBootstrap())
     expect(bootstrap).toBeDefined()
     expect(typeof bootstrap.language).toBe('string')
     expect(['zh', 'en']).toContain(bootstrap.language)
@@ -77,15 +82,23 @@ test.describe('IPC Smoke', () => {
   })
 
   test('settings get / set round-trip', async () => {
-    await electronPage.evaluate(() => api(window).settings.set('e2e_test_key', 'e2e_test_value'))
-    const value = await electronPage.evaluate(() => api(window).settings.get('e2e_test_key', null))
-    expect(value).toBe('e2e_test_value')
+    const result = await electronPage.evaluate(async () => {
+      const settings = (window as Window & { api: ElectronApi }).api.settings
+      const previous = await settings.get('sidebarCollapsed', '0')
+      const next = previous === '1' ? '0' : '1'
+      await settings.set('sidebarCollapsed', next)
+      const value = await settings.get('sidebarCollapsed', '0')
+      await settings.set('sidebarCollapsed', previous)
+      return { next, value }
+    })
+    expect(result.value).toBe(result.next)
   })
 
   test('document:updated event fires on update', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
     const result = await electronPage.evaluate(
-      async (absPath: string) => api(window).import.addFiles([absPath]),
+      async (absPath: string) =>
+        (window as Window & { api: ElectronApi }).api.import.addFiles([absPath]),
       pdfPath,
     )
     const ids = result.added
@@ -94,17 +107,24 @@ test.describe('IPC Smoke', () => {
 
     const eventDoc = await electronPage.evaluate((id: string) => {
       return new Promise<Record<string, unknown>>((resolve, reject) => {
+        const electronApi = (window as Window & { api: ElectronApi }).api
         const timeout = setTimeout(
           () => reject(new Error('Timeout waiting for document:updated')),
           15000,
         )
-        api(window).events.onDocumentUpdated((doc: Record<string, unknown>) => {
-          if (doc.id === id) {
+        const onUpdated = (doc: Record<string, unknown>) => {
+          if (doc.id === id && doc.title === 'E2E Test Title') {
             clearTimeout(timeout)
+            electronApi.events.off('document:updated', onUpdated)
             resolve(doc)
           }
+        }
+        electronApi.events.onDocumentUpdated(onUpdated)
+        void electronApi.documents.update(id, { title: 'E2E Test Title' }).catch((error) => {
+          clearTimeout(timeout)
+          electronApi.events.off('document:updated', onUpdated)
+          reject(error)
         })
-        void api(window).documents.update(id, { title: 'E2E Test Title' })
       })
     }, docId)
 

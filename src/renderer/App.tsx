@@ -22,6 +22,7 @@ import { useDocumentStore } from './store/documentStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useOcrReaderStore } from './store/ocrReaderStore'
 import { useChatDraftStore } from './store/chatDraftStore'
+import { usePdfReaderStore } from './store/pdfReaderStore'
 import { api } from './ipc'
 import type { ListColumnState } from '../shared/ipc-types'
 
@@ -186,6 +187,12 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   }, [])
 
   useEffect(() => () => useOcrReaderStore.getState().close(), [])
+
+  useEffect(() => {
+    const reset = () => usePdfReaderStore.getState().resetForLibrarySwitch()
+    api.events.onLibrarySwitched(reset)
+    return () => api.events.off('library:switched', reset)
+  }, [])
 
   useEffect(() => {
     const store = useWorkspaceStore.getState()

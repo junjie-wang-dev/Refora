@@ -17,6 +17,7 @@ export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
   getWin: () => BrowserWindow | null
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  onSettingUpdated?: (key: string, value: unknown) => void
 }
 
 export interface ServerAssembly {
@@ -65,7 +66,8 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         }),
         ...createServerLibraryHandlers({
           serverClient,
-          switchLibraryFolder: deps.switchLibraryFolder
+          switchLibraryFolder: deps.switchLibraryFolder,
+          onSettingUpdated: deps.onSettingUpdated
         }),
         ...createServerWorkspaceHandlers(serverClient),
         ...createServerAiHandlers({ serverClient })

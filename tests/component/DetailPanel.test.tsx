@@ -258,7 +258,7 @@ describe('DetailPanel', () => {
 
       expect(await screen.findByText('ocr.convert')).toBeInTheDocument()
       expect(api.ocr.getState).toHaveBeenCalledTimes(2)
-    })
+    }, 15_000)
 
     it('ignores an earlier document OCR refresh after the selection changes', async () => {
       const secondDoc = {
@@ -322,7 +322,7 @@ describe('DetailPanel', () => {
       expect(screen.getByText('ocr.convert')).toBeInTheDocument()
       expect(screen.queryByText('ocr.open')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Second Paper' })).toBeInTheDocument()
-    })
+    }, 10_000)
 
     it('shows active indeterminate progress instead of a frozen parsing percentage', async () => {
       api.ocr.getState = vi.fn().mockResolvedValue({

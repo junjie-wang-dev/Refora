@@ -151,6 +151,7 @@ def configure_app(app: FastAPI) -> None:
         "exporter": services["export"],
         "connector": connector,
         "metadata": services["metadata"],
+        "emit": app.state.event_bus.broadcast,
     }
     workspace_deps = {
         "require_token": require_token,

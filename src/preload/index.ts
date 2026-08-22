@@ -42,6 +42,7 @@ import type {
   ListModelsRequest,
   ListModelsResult,
   PdfAnnotation,
+  PdfRangeChunk,
   PdfImportResult,
   Result,
   ReforaApi,
@@ -89,20 +90,15 @@ import type {
   SyncSignUpResult
 } from '../shared/sync-types'
 
-class IpcResponseError extends Error {
-  readonly code: string
-  constructor(code: string, message: string) {
-    super(message)
-    this.name = 'IpcResponseError'
-    this.code = code
-  }
-}
-
 type Envelope<T> = Result<T>
 
 function unwrap<T>(r: Envelope<T>): T {
   if (!r.ok) {
-    throw new IpcResponseError(r.error.code, r.error.message)
+    throw {
+      name: 'IpcResponseError',
+      code: r.error.code,
+      message: r.error.message
+    }
   }
   return r.data
 }
@@ -186,7 +182,8 @@ const api: ReforaApi = {
     openPdf: (id: string, external) => external === false
       ? invoke<Document>(IpcChannel.DocumentsOpenPdf, id, false)
       : invoke<Document>(IpcChannel.DocumentsOpenPdf, id),
-    readPdf: (id: string) => invoke<Uint8Array>(IpcChannel.DocumentsReadPdf, id),
+    readPdfRange: (id: string, begin: number, end: number) =>
+      invoke<PdfRangeChunk>(IpcChannel.DocumentsReadPdfRange, id, begin, end),
     pdfAnnotations: (id: string) =>
       invoke<PdfAnnotation[]>(IpcChannel.DocumentsPdfAnnotationsGet, id),
     setPdfAnnotations: (id: string, annotations: PdfAnnotation[]) =>

@@ -73,10 +73,14 @@ interface PdfReaderState {
   retrySave: (documentId: string) => void
   undoLastDeletion: () => void
   clearLastDeletion: () => void
+  prepareForLibrarySwitch: () => Promise<void>
+  resetForLibrarySwitch: () => void
 }
 
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const persistVersions = new Map<string, number>()
+const persistTasks = new Map<string, Promise<void>>()
+let libraryGeneration = 0
 
 function isAnnotation(value: unknown): value is PdfAnnotation {
   if (!value || typeof value !== 'object') return false
@@ -101,7 +105,7 @@ function persist(documentId: string, annotations: PdfAnnotation[]): void {
   }))
   persistTimers.set(documentId, setTimeout(() => {
     persistTimers.delete(documentId)
-    void api.documents.setPdfAnnotations(documentId, annotations)
+    const task = api.documents.setPdfAnnotations(documentId, annotations)
       .then(() => {
         if (persistVersions.get(documentId) !== version) return
         usePdfReaderStore.setState((state) => ({
@@ -114,7 +118,45 @@ function persist(documentId: string, annotations: PdfAnnotation[]): void {
           saveStatus: { ...state.saveStatus, [documentId]: 'error' }
         }))
       })
+      .finally(() => {
+        if (persistTasks.get(documentId) === task) persistTasks.delete(documentId)
+      })
+    persistTasks.set(documentId, task)
   }, 250))
+}
+
+async function prepareForLibrarySwitch(): Promise<void> {
+  const pendingIds = [...persistTimers.keys()]
+  for (const documentId of pendingIds) {
+    const timer = persistTimers.get(documentId)
+    if (timer) clearTimeout(timer)
+    persistTimers.delete(documentId)
+  }
+  await Promise.all(persistTasks.values())
+  await Promise.all(pendingIds.map(async (documentId) => {
+    const annotations = usePdfReaderStore.getState().annotations[documentId] ?? []
+    await api.documents.setPdfAnnotations(documentId, annotations)
+  }))
+}
+
+function resetForLibrarySwitch(): void {
+  libraryGeneration += 1
+  for (const timer of persistTimers.values()) clearTimeout(timer)
+  persistTimers.clear()
+  persistVersions.clear()
+  persistTasks.clear()
+  usePdfReaderStore.setState({
+    tabs: [],
+    activeDocumentId: null,
+    annotations: {},
+    saveStatus: {},
+    tool: null,
+    sidebarOpen: false,
+    selectedAnnotationId: null,
+    selectedAnnotationIds: [],
+    pendingCommentFocusId: null,
+    lastDeletion: null
+  })
 }
 
 function createAnnotationId(): string {
@@ -139,6 +181,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   lastDeletion: null,
 
   open: async (document) => {
+    const generation = libraryGeneration
     const alreadyLoaded = Object.hasOwn(get().annotations, document.id)
     set((state) => ({
       tabs: state.tabs.some((tab) => tab.id === document.id)
@@ -152,6 +195,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     if (alreadyLoaded) return
     try {
       const saved = await api.documents.pdfAnnotations(document.id)
+      if (generation !== libraryGeneration) return
       const annotations = Array.isArray(saved) ? saved.filter(isAnnotation) : []
       set((state) => ({
         annotations: Object.hasOwn(state.annotations, document.id)
@@ -160,6 +204,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
         saveStatus: { ...state.saveStatus, [document.id]: 'saved' }
       }))
     } catch {
+      if (generation !== libraryGeneration) return
       set((state) => ({
         annotations: Object.hasOwn(state.annotations, document.id)
           ? state.annotations
@@ -308,5 +353,9 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     persist(deletion.documentId, current)
   },
 
-  clearLastDeletion: () => set({ lastDeletion: null })
+  clearLastDeletion: () => set({ lastDeletion: null }),
+
+  prepareForLibrarySwitch,
+
+  resetForLibrarySwitch
 }))

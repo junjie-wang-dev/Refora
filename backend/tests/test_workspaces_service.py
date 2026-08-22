@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from pathlib import Path
 
 import pytest
+import refora_server.services.workspaces as workspaces_module
 
 from conftest import (
     make_workspace_assets_repo,
@@ -473,6 +476,142 @@ class TestAssetsImport:
         result = service["importAssets"](w["id"], [link])
         assert result["imported"] == []
         assert result["errors"][0]["path"] == link
+
+    def test_import_rejects_file_over_size_limit(
+        self, service, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "large.bin", b"12345")
+        monkeypatch.setattr(workspaces_module, "WORKSPACE_ASSET_IMPORT_LIMIT", 4)
+        workspace = _make_workspace(service)
+
+        result = service["importAssets"](workspace["id"], [src])
+
+        assert result["imported"] == []
+        assert "512 MiB limit" in result["errors"][0]["message"]
+        assert service["listAssets"](workspace["id"]) == []
+        assert not (Path(library_dir) / WORKSPACE_ASSET_DIRECTORY).exists()
+
+    def test_import_rejects_insufficient_disk_space(
+        self, service, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "asset.bin", b"12345")
+        monkeypatch.setattr(
+            workspaces_module.shutil,
+            "disk_usage",
+            lambda _path: type("Usage", (), {"free": 0})(),
+        )
+        workspace = _make_workspace(service)
+
+        result = service["importAssets"](workspace["id"], [src])
+
+        assert result["imported"] == []
+        assert "Not enough disk space" in result["errors"][0]["message"]
+        assert service["listAssets"](workspace["id"]) == []
+        asset_root = Path(library_dir) / WORKSPACE_ASSET_DIRECTORY
+        assert not asset_root.exists() or list(asset_root.iterdir()) == []
+
+    def test_atomic_publish_failure_removes_staged_file_and_record(
+        self, service, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "asset.bin", b"payload")
+
+        def fail_replace(_source, _destination):
+            raise OSError("publish failed")
+
+        monkeypatch.setattr(workspaces_module.os, "replace", fail_replace)
+        workspace = _make_workspace(service)
+
+        result = service["importAssets"](workspace["id"], [src])
+
+        assert result["imported"] == []
+        assert "publish failed" in result["errors"][0]["message"]
+        assert service["listAssets"](workspace["id"]) == []
+        assert service["listItems"](workspace["id"]) == []
+        asset_root = Path(library_dir) / WORKSPACE_ASSET_DIRECTORY
+        assert not asset_root.exists() or list(asset_root.iterdir()) == []
+
+    def test_database_failure_rolls_back_record_and_removes_published_file(
+        self, service, repos, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "asset.bin", b"payload")
+        workspace = _make_workspace(service)
+
+        def fail_item_insert(*_args, **_kwargs):
+            raise RepoError("insert_failed", "item insert failed")
+
+        monkeypatch.setitem(repos["workspaceItems"], "add", fail_item_insert)
+
+        result = service["importAssets"](workspace["id"], [src])
+
+        assert result["imported"] == []
+        assert "item insert failed" in result["errors"][0]["message"]
+        assert service["listAssets"](workspace["id"]) == []
+        assert service["listItems"](workspace["id"]) == []
+        asset_root = Path(library_dir) / WORKSPACE_ASSET_DIRECTORY
+        assert not asset_root.exists() or list(asset_root.iterdir()) == []
+
+    @pytest.mark.asyncio
+    async def test_async_import_does_not_block_event_loop(
+        self, service, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "asset.bin", b"payload")
+        workspace = _make_workspace(service)
+        original_stage = workspaces_module._stage_asset_file
+        started = threading.Event()
+        release = threading.Event()
+
+        def delayed_stage(*args, **kwargs):
+            started.set()
+            if not release.wait(0.5):
+                raise TimeoutError("test release timed out")
+            return original_stage(*args, **kwargs)
+
+        monkeypatch.setattr(workspaces_module, "_stage_asset_file", delayed_stage)
+        task = asyncio.create_task(
+            service["importAssetsAsync"](workspace["id"], [src])
+        )
+        try:
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            assert started.is_set()
+            assert not task.done()
+        finally:
+            release.set()
+
+        result = await task
+        assert len(result["imported"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_cancelled_async_import_removes_staged_directory(
+        self, service, library_dir, monkeypatch
+    ):
+        src = self._write_source(library_dir, "asset.bin", b"payload")
+        workspace = _make_workspace(service)
+        started = threading.Event()
+
+        def cancellable_stage(_source, destination, _size, cancelled):
+            temporary = Path(destination).parent / ".refora-import-test.tmp"
+            temporary.write_bytes(b"partial")
+            started.set()
+            if not cancelled.wait(1):
+                raise TimeoutError("cancellation was not delivered")
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(workspaces_module, "_stage_asset_file", cancellable_stage)
+        task = asyncio.create_task(
+            service["importAssetsAsync"](workspace["id"], [src])
+        )
+        assert await asyncio.to_thread(started.wait, 1)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert service["listAssets"](workspace["id"]) == []
+        asset_root = Path(library_dir) / WORKSPACE_ASSET_DIRECTORY
+        assert not asset_root.exists() or list(asset_root.iterdir()) == []
 
     def test_import_missing_workspace_raises(self, service):
         with pytest.raises(RepoError) as exc:

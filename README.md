@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  Refora is an AI-native research workspace for macOS. It brings papers, annotations, evidence maps, notes, and a research agent into one continuous loop—from understanding a passage to tracing a research frontier, developing hypotheses, and turning insight into durable work.
+  Refora is an AI-native research workspace for Apple Silicon Macs. It brings papers, annotations, evidence maps, notes, and a research agent into one continuous loop—from understanding a passage to tracing a research frontier, developing hypotheses, and turning insight into durable work.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS">
+  <img src="https://img.shields.io/badge/platform-macOS_Apple_Silicon-lightgrey" alt="macOS on Apple Silicon">
   <img src="https://img.shields.io/badge/focus-AI--native_research-coral" alt="AI-native research">
   <img src="https://img.shields.io/badge/interface-English_%7C_Chinese-blue" alt="English and Chinese interface">
 </p>

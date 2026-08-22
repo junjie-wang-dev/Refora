@@ -4,23 +4,34 @@ import fs from 'node:fs'
 import os from 'node:os'
 import electronExe from 'electron'
 
+const testMain = path.resolve(__dirname, 'electron-main.mjs')
+
 test.describe('Document CRUD', () => {
   let electronApp: Awaited<ReturnType<typeof electron.launch>>
   let electronPage: Awaited<ReturnType<Awaited<ReturnType<typeof electron.launch>>['firstWindow']>>
+  let userDataFolder: string
   let libraryFolder: string
 
   test.beforeAll(async () => {
+    userDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-crud-user-'))
     libraryFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-crud-'))
-    const launchEnv = { ...process.env }
+    fs.writeFileSync(
+      path.join(userDataFolder, 'refora-prefs.json'),
+      JSON.stringify({ libraryFolderPath: libraryFolder })
+    )
+    const launchEnv = {
+      ...process.env,
+      REFORA_E2E_USER_DATA_DIR: userDataFolder
+    }
     delete launchEnv.ELECTRON_RUN_AS_NODE
     electronApp = await electron.launch({
       executablePath: electronExe,
       env: launchEnv,
-      args: ['.'],
+      args: [testMain],
     })
     electronPage = await electronApp.firstWindow()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await electronPage.evaluate((lib: string) => (window as any).api.settings.set('libraryFolderPath', lib) as Promise<void>, libraryFolder)
+    const actualUserDataFolder = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+    expect(actualUserDataFolder).toBe(userDataFolder)
   })
 
   test.afterAll(async () => {
@@ -28,6 +39,7 @@ test.describe('Document CRUD', () => {
       electronApp?.close(),
       new Promise<void>((resolve) => setTimeout(resolve, 3000)),
     ]).catch(() => {})
+    try { fs.rmSync(userDataFolder, { recursive: true, force: true }) } catch { void 0 }
     try { fs.rmSync(libraryFolder, { recursive: true, force: true }) } catch { void 0 }
   })
 
@@ -80,7 +92,8 @@ test.describe('Document CRUD', () => {
           const updated = await (window as any).api.documents.update(id, { title: 'Updated Title' })
           return { ok: true, data: updated }
         } catch (e: unknown) {
-          return { ok: false, error: e as { code: string; message: string } }
+          const error = e as { code?: string; message?: string }
+          return { ok: false, error: { code: error.code, message: error.message } }
         }
       },
       docId,
@@ -170,28 +183,29 @@ test.describe('Document CRUD', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await electronPage.evaluate((id: string) => (window as any).api.documents.delete(id) as Promise<void>, docId)
 
-    const refetched = await electronPage.evaluate(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (id: string) => (window as any).api.documents.get(id) as Promise<Record<string, unknown> | null>,
-      docId,
+    const documents = await electronPage.evaluate(() =>
+      (window as Window & {
+        api: { documents: { list(filter: { mode: string }): Promise<Array<{ id: string }>> } }
+      }).api.documents.list({ mode: 'all' })
     )
-    expect(refetched).toBeNull()
+    expect(documents.some((document) => document.id === docId)).toBe(false)
   })
 
   test('bulk delete 3 documents', async () => {
     const pdfPath = path.resolve(__dirname, '..', 'fixtures', 'valid.pdf')
+    const thirdPdfPath = path.join(userDataFolder, 'third.pdf')
+    fs.writeFileSync(thirdPdfPath, Buffer.concat([fs.readFileSync(pdfPath), Buffer.from('\n% third\n')]))
     const ids = await electronPage.evaluate(
-      async (absPath: string) => {
+      async ({ firstPath, thirdPath }: { firstPath: string; thirdPath: string }) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const a = (window as any).api
-        const id1 = (await a.import.addFiles([absPath])).added[0]
-        const pdf2 = absPath.replace('valid.pdf', 'with-doi.pdf')
-        const pdf3 = absPath.replace('valid.pdf', 'encrypted.pdf')
-        const id2 = (await a.import.addFiles([pdf2])).added[0]
-        const id3 = (await a.import.addFiles([pdf3])).added[0]
+        const id1 = (await a.import.addFiles([firstPath])).added[0]
+        const secondPath = firstPath.replace('valid.pdf', 'with-doi.pdf')
+        const id2 = (await a.import.addFiles([secondPath])).added[0]
+        const id3 = (await a.import.addFiles([thirdPath])).added[0]
         return [id1, id2, id3]
       },
-      pdfPath,
+      { firstPath: pdfPath, thirdPath: thirdPdfPath },
     )
     expect(ids.length).toBe(3)
 
@@ -201,14 +215,12 @@ test.describe('Document CRUD', () => {
       ids,
     )
 
-    for (const id of ids) {
-      const doc = await electronPage.evaluate(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (cid: string) => (window as any).api.documents.get(cid) as Promise<Record<string, unknown> | null>,
-        id,
-      )
-      expect(doc).toBeNull()
-    }
+    const documents = await electronPage.evaluate(() =>
+      (window as Window & {
+        api: { documents: { list(filter: { mode: string }): Promise<Array<{ id: string }>> } }
+      }).api.documents.list({ mode: 'all' })
+    )
+    expect(documents.some((document) => ids.includes(document.id))).toBe(false)
   })
 
   test('categories CRUD round-trip', async () => {

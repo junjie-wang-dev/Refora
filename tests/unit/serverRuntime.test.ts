@@ -45,7 +45,7 @@ describe('server Python runtime', () => {
         'langchain-core': '1.5.1',
         langgraph: '1.2.9',
         'langchain-openai': '1.4.1',
-        'langgraph-checkpoint-sqlite': '3.1.0',
+        'langgraph-checkpoint-sqlite': '3.1.1',
         aiosqlite: '0.22.1'
       },
       installedAt: 1

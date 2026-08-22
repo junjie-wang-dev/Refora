@@ -244,6 +244,12 @@
     "theme": "主题",
     "language": "语言",
     "proxy": "代理 (HTTP/HTTPS)",
+    "loadFailed": "无法加载设置",
+    "librarySwitchFailed": "无法切换库文件夹",
+    "proxySaveFailed": "无法保存代理设置",
+    "crossrefMailtoSaveFailed": "无法保存 Crossref 邮箱",
+    "sidebarSaveFailed": "无法更新侧边栏设置",
+    "languageSaveFailed": "无法切换语言",
     "pdfOpenMode": {
       "title": "PDF 打开方式",
       "desc": "使用支持多标签和本地批注的内置阅读器，或继续交给系统默认应用打开。",
@@ -583,6 +589,7 @@
     "bibtexExported": "已导出 {{count}} 条到 BibTeX",
     "bibtexCopied": "已复制 {{count}} 条 BibTeX 到剪贴板",
     "copyFailed": "复制失败",
+    "copyCode": "复制代码",
     "movedToTrash": "已移至废纸篓（{{count}}）",
     "deleteFailed": "删除文献失败",
     "close": "关闭"

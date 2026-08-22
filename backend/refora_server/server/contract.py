@@ -89,13 +89,13 @@ def source_http_routes() -> list[dict[str, str]]:
 
 
 def runtime_http_routes(app: Any) -> list[dict[str, str]]:
-    from fastapi.routing import APIRoute
+    from fastapi.routing import APIRoute, iter_route_contexts
 
     routes = {
         (method, route.path)
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        for method in route.methods
+        for route in iter_route_contexts(app.routes)
+        if isinstance(route.original_route, APIRoute) and route.path is not None
+        for method in route.methods or set()
         if method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
     }
     return [_route(method, path) for method, path in sorted(routes)]

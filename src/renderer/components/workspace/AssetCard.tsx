@@ -15,7 +15,11 @@ import {
   WarningCircle
 } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
-import type { WorkspaceAsset, WorkspaceAssetTextPreview } from '../../../shared/ipc-types'
+import {
+  errorMessage,
+  type WorkspaceAsset,
+  type WorkspaceAssetTextPreview
+} from '../../../shared/ipc-types'
 import { api } from '../../ipc'
 import { createMarkdownComponents, REHYPE_PLUGINS, REMARK_PLUGINS } from '../../utils/markdown'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
@@ -73,7 +77,7 @@ export default function AssetCard({ asset, onOpen, onReveal, onDelete, onCopy }:
     void api.workspaceAssets.textPreview(asset.id).then((preview) => {
       if (!cancelled) setTextPreview(preview)
     }).catch((error) => {
-      if (!cancelled) setPreviewError(error instanceof Error ? error.message : String(error))
+      if (!cancelled) setPreviewError(errorMessage(error))
     })
     return () => {
       cancelled = true

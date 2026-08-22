@@ -110,14 +110,6 @@ function mockRequest(
   return { req, res, responsePromise }
 }
 
-function makeRepos(overrides: Partial<{ getRaw: ReturnType<typeof vi.fn> }> = {}) {
-  return {
-    aiProviders: {
-      getRaw: overrides.getRaw ?? vi.fn(() => null)
-    }
-  } as unknown as Parameters<typeof createNativeRpc>[0]['repos']
-}
-
 function makeSafeStorage(overrides: Partial<{ decrypt: ReturnType<typeof vi.fn> }> = {}) {
   return {
     isEncryptionAvailable: vi.fn(() => true),
@@ -132,19 +124,19 @@ describe('nativeRpc', () => {
   })
 
   async function setup(overrides: {
-    repos?: Parameters<typeof createNativeRpc>[0]['repos']
     safeStorage?: ReturnType<typeof makeSafeStorage>
     token?: string
     copyFileToClipboard?: (path: string) => void
     setProxy?: (proxyRules: string) => Promise<void>
+    validatePath?: Parameters<typeof createNativeRpc>[0]['validatePath']
   } = {}) {
     const { factory, server } = createFakeHttpServer()
     const rpc = createNativeRpc({
-      repos: overrides.repos ?? makeRepos(),
       token: overrides.token ?? TOKEN,
       safeStorage: overrides.safeStorage ?? makeSafeStorage(),
       copyFileToClipboard: overrides.copyFileToClipboard,
       setProxy: overrides.setProxy,
+      validatePath: overrides.validatePath ?? ((path) => path),
       createHttpServer: factory
     })
     const info = await rpc.start()
@@ -192,6 +184,27 @@ describe('nativeRpc', () => {
       'wrong-token'
     )
     expect(status).toBe(401)
+  })
+
+  it('rejects invalid paths before invoking native shell operations', async () => {
+    const { server } = await setup({
+      validatePath: () => {
+        throw new Error('path must be absolute')
+      }
+    })
+    const { status, body } = await dispatch(
+      server,
+      'POST',
+      '/native/open-path',
+      { path: '../paper.pdf' },
+      TOKEN
+    )
+    expect(status).toBe(400)
+    expect(body).toEqual({
+      ok: false,
+      error: { code: 'invalid_path', message: 'path must be absolute' }
+    })
+    expect(electronMocks.openPath).not.toHaveBeenCalled()
   })
 
   it('rejects non-POST methods with 405', async () => {

@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   createCanvas,
@@ -7,6 +7,7 @@ import {
   type Canvas,
   type SKRSContext2D
 } from '@napi-rs/canvas'
+import { resolvePdfFilePath } from '../services/pdfPath'
 
 const parentPort = process.parentPort
 const pdfGlobals = globalThis as typeof globalThis & {
@@ -17,6 +18,8 @@ pdfGlobals.DOMMatrix ??= CanvasDOMMatrix
 pdfGlobals.Path2D ??= CanvasPath2D
 
 type PdfBinaryDataKind = 'cMapUrl' | 'standardFontDataUrl' | 'wasmUrl'
+const PDF_RANGE_CHUNK_SIZE = 64 * 1024
+const MAX_PDF_RANGE_BYTES = 1024 * 1024
 
 class FileBinaryDataFactory {
   private readonly roots: Record<PdfBinaryDataKind, string | null>
@@ -84,26 +87,74 @@ export async function renderPdfPreview(
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
   pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')
   const pdfRoot = dirname(dirname(dirname(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'))))
-  const data = new Uint8Array(readFileSync(filePath))
-  const loadingTask = pdfjsLib.getDocument({
-    data,
-    CanvasFactory: NapiCanvasFactory,
-    BinaryDataFactory: FileBinaryDataFactory,
-    useWorkerFetch: false,
-    useSystemFonts: false,
-    disableFontFace: true,
-    isOffscreenCanvasSupported: false,
-    isImageDecoderSupported: false,
-    useWasm: false,
-    disableAutoFetch: true,
-    standardFontDataUrl: join(pdfRoot, 'standard_fonts') + '/',
-    cMapUrl: join(pdfRoot, 'cmaps') + '/',
-    cMapPacked: true
-  })
+  const resolvedPath = resolvePdfFilePath(filePath)
+  const source = openSync(resolvedPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+  const sourceStats = fstatSync(source)
+  if (!sourceStats.isFile()) {
+    closeSync(source)
+    throw new Error('Selected path must be a regular PDF file')
+  }
+  let sourceClosed = false
+  const closeSource = (): void => {
+    if (sourceClosed) return
+    sourceClosed = true
+    closeSync(source)
+  }
+  class FileRangeTransport extends pdfjsLib.PDFDataRangeTransport {
+    constructor() {
+      super(sourceStats.size, null, true)
+    }
+
+    requestDataRange(begin: number, end: number): void {
+      if (sourceClosed) return
+      if (
+        !Number.isSafeInteger(begin) ||
+        !Number.isSafeInteger(end) ||
+        begin < 0 ||
+        end <= begin ||
+        end > sourceStats.size ||
+        end - begin > MAX_PDF_RANGE_BYTES
+      ) {
+        throw new Error('Invalid PDF byte range')
+      }
+      const bytes = new Uint8Array(end - begin)
+      let offset = 0
+      while (offset < bytes.length) {
+        const count = readSync(source, bytes, offset, bytes.length - offset, begin + offset)
+        if (count === 0) break
+        offset += count
+      }
+      this.onDataRange(begin, offset === bytes.length ? bytes : bytes.slice(0, offset))
+    }
+
+    abort(): void {
+      closeSource()
+    }
+  }
+  let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null
   let cleanupPage: { cleanup: () => boolean } | null = null
   let cleanupCanvas: Canvas | null = null
   try {
-    const pdfDoc = await loadingTask.promise
+    const range = new FileRangeTransport()
+    const task = pdfjsLib.getDocument({
+      range,
+      rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
+      CanvasFactory: NapiCanvasFactory,
+      BinaryDataFactory: FileBinaryDataFactory,
+      useWorkerFetch: false,
+      useSystemFonts: false,
+      disableFontFace: true,
+      isOffscreenCanvasSupported: false,
+      isImageDecoderSupported: false,
+      useWasm: false,
+      disableAutoFetch: true,
+      disableStream: true,
+      standardFontDataUrl: join(pdfRoot, 'standard_fonts') + '/',
+      cMapUrl: join(pdfRoot, 'cmaps') + '/',
+      cMapPacked: true
+    })
+    loadingTask = task
+    const pdfDoc = await task.promise
     const page = await pdfDoc.getPage(1)
     cleanupPage = page
     const baseViewport = page.getViewport({ scale: 1 })
@@ -133,29 +184,14 @@ export async function renderPdfPreview(
       cleanupCanvas.width = 0
       cleanupCanvas.height = 0
     }
-    await loadingTask.destroy().catch(() => {})
-  }
-}
-
-function isPdf(path: string): boolean {
-  try {
-    const stats = statSync(path)
-    return stats.isFile() && path.toLowerCase().endsWith('.pdf')
-  } catch {
-    return false
+    await loadingTask?.destroy().catch(() => {})
+    closeSource()
   }
 }
 
 if (parentPort) {
   parentPort.on('message', async (event: { data: WorkerRequest }) => {
     const { correlationId, filePath } = event.data
-    if (!isPdf(filePath)) {
-      parentPort.postMessage({
-        correlationId,
-        error: { type: 'other', message: `Not a PDF file: ${filePath}` }
-      } satisfies WorkerResponse)
-      return
-    }
     try {
       const preview = await renderPdfPreview(filePath)
       parentPort.postMessage({ correlationId, preview } satisfies WorkerResponse)

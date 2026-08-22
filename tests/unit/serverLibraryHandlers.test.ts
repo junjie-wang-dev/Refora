@@ -34,6 +34,19 @@ type Invocation = {
 }
 
 describe('createServerLibraryHandlers', () => {
+  it('notifies the main process after a setting is persisted', async () => {
+    const { client } = createClient()
+    const onSettingUpdated = vi.fn()
+    const handlers = createServerLibraryHandlers({
+      serverClient: client,
+      onSettingUpdated
+    }) as Record<string, (...args: unknown[]) => Promise<unknown>>
+
+    await handlers[IpcChannel.SettingsSet]('language', 'zh')
+
+    expect(onSettingUpdated).toHaveBeenCalledWith('language', 'zh')
+  })
+
   it('forwards every library IPC channel to the matching HTTP client method', async () => {
     const { client, methods } = createClient()
     const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
@@ -157,6 +170,34 @@ describe('createServerLibraryHandlers', () => {
     await handlers[IpcChannel.DocumentsOpenPdf]('doc-1', false)
 
     expect(methods.get('documentsOpenPdf')).toHaveBeenCalledWith('doc-1', false)
+  })
+
+  it('resolves PDF ranges through the current document id', async () => {
+    const { client, methods } = createClient()
+    void client.http.documentsGet
+    methods.get('documentsGet')?.mockResolvedValue({ filePath: '/library/paper.pdf' })
+    const readPdfRange = vi.fn().mockResolvedValue({
+      begin: 1024,
+      fileSize: 4096,
+      data: new Uint8Array([1, 2])
+    })
+    const handlers = createServerLibraryHandlers({
+      serverClient: client,
+      readPdfRange
+    }) as Record<string, (...args: unknown[]) => Promise<unknown>>
+
+    await expect(
+      handlers[IpcChannel.DocumentsReadPdfRange]('doc-1', 1024, 2048)
+    ).resolves.toEqual({
+      ok: true,
+      data: {
+        begin: 1024,
+        fileSize: 4096,
+        data: new Uint8Array([1, 2])
+      }
+    })
+    expect(methods.get('documentsGet')).toHaveBeenCalledWith('doc-1')
+    expect(readPdfRange).toHaveBeenCalledWith('/library/paper.pdf', 1024, 2048)
   })
 
   it('uses the saved provider preset when normalizing dynamically listed models', async () => {

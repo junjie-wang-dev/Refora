@@ -25,7 +25,9 @@ const mocks = vi.hoisted(() => ({
   settingsSet: vi.fn(),
   documentListRender: vi.fn(),
   workspacePanelRender: vi.fn(),
-  resizeObserverCallback: null as ResizeObserverCallback | null
+  resizeObserverCallback: null as ResizeObserverCallback | null,
+  onLibrarySwitched: vi.fn(),
+  eventsOff: vi.fn()
 }))
 
 class ResizeObserverTestMock {
@@ -95,6 +97,10 @@ vi.mock('@renderer/ipc', () => ({
     settings: {
       get: mocks.settingsGet,
       set: mocks.settingsSet
+    },
+    events: {
+      onLibrarySwitched: mocks.onLibrarySwitched,
+      off: mocks.eventsOff
     }
   }
 }))

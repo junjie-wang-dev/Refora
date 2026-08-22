@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
+import { isAbsolute, resolve as resolvePath } from 'node:path'
+import { lstatSync } from 'node:fs'
 import { shell, dialog, clipboard, session as electronSession, type BrowserWindow } from 'electron'
 import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from '../services/safeStorageProxy'
@@ -22,7 +24,10 @@ export interface NativeRpcDeps {
   createHttpServer?: typeof createServer
   copyFileToClipboard?: (path: string) => void
   setProxy?: (proxyRules: string) => Promise<void>
+  validatePath?: (path: string, kind: NativePathKind) => string
 }
+
+export type NativePathKind = 'file' | 'item'
 
 export interface NativeRpc {
   start(): Promise<NativeRpcInfo>
@@ -81,6 +86,18 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
 
+export function validateNativePath(path: string, kind: NativePathKind): string {
+  if (!isAbsolute(path)) throw new Error('path must be absolute')
+  const resolvedPath = resolvePath(path)
+  const stats = lstatSync(resolvedPath)
+  if (stats.isSymbolicLink()) throw new Error('symbolic links are not allowed')
+  if (kind === 'file' && !stats.isFile()) throw new Error('path must reference a file')
+  if (kind === 'item' && !stats.isFile() && !stats.isDirectory()) {
+    throw new Error('path must reference a file or directory')
+  }
+  return resolvedPath
+}
+
 interface TrashItemBody {
   path?: unknown
 }
@@ -125,6 +142,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const safeStorage = deps.safeStorage ?? createSafeStorageProxy()
   const createHttpServer = deps.createHttpServer ?? createServer
   const copyFileToClipboard = deps.copyFileToClipboard ?? writeFileToClipboard
+  const validatePath = deps.validatePath ?? validateNativePath
   const setProxy =
     deps.setProxy ??
     ((proxyRules: string) => electronSession.defaultSession.setProxy({ proxyRules }))
@@ -141,8 +159,14 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   async function handleTrashItem(body: TrashItemBody): Promise<Result<{ trashed: boolean }>> {
     const rawPath = asString(body.path)
     if (!rawPath) return fail('invalid_input', 'path is required')
+    let path: string
     try {
-      await shell.trashItem(rawPath)
+      path = validatePath(rawPath, 'item')
+    } catch (e) {
+      return fail('invalid_path', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      await shell.trashItem(path)
       return ok({ trashed: true })
     } catch (e) {
       return fail('trash_failed', e instanceof Error ? e.message : String(e))
@@ -152,8 +176,14 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   async function handleOpenPath(body: OpenPathBody): Promise<Result<{ opened: boolean }>> {
     const rawPath = asString(body.path)
     if (!rawPath) return fail('invalid_input', 'path is required')
+    let path: string
     try {
-      const message = await shell.openPath(rawPath)
+      path = validatePath(rawPath, 'item')
+    } catch (e) {
+      return fail('invalid_path', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      const message = await shell.openPath(path)
       if (message) return fail('open_failed', message)
       return ok({ opened: true })
     } catch (e) {
@@ -166,8 +196,14 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   ): Promise<Result<{ revealed: boolean }>> {
     const rawPath = asString(body.path)
     if (!rawPath) return fail('invalid_input', 'path is required')
+    let path: string
     try {
-      shell.showItemInFolder(rawPath)
+      path = validatePath(rawPath, 'item')
+    } catch (e) {
+      return fail('invalid_path', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      shell.showItemInFolder(path)
       return ok({ revealed: true })
     } catch (e) {
       return fail('reveal_failed', e instanceof Error ? e.message : String(e))
@@ -266,8 +302,14 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   async function handleClipboardWriteFile(
     body: ClipboardWriteFileBody
   ): Promise<Result<{ written: boolean }>> {
-    const path = asString(body.path)
-    if (!path) return fail('invalid_input', 'path is required')
+    const rawPath = asString(body.path)
+    if (!rawPath) return fail('invalid_input', 'path is required')
+    let path: string
+    try {
+      path = validatePath(rawPath, 'file')
+    } catch (e) {
+      return fail('invalid_path', e instanceof Error ? e.message : String(e))
+    }
     try {
       copyFileToClipboard(path)
       return ok({ written: true })

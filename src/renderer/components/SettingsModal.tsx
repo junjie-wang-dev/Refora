@@ -12,6 +12,7 @@ import type { MineruEngineStatus, MineruInstallProgress } from '../../shared/min
 import { IpcChannel } from '../../shared/ipc-channels'
 import { formatElapsedClock } from '../utils/format'
 import { useWorkspaceStore } from '../store/workspaceStore'
+import { usePdfReaderStore } from '../store/pdfReaderStore'
 import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
 import type { PdfOpenMode } from '../utils/openPdf'
@@ -23,12 +24,6 @@ interface SettingsModalProps {
   initialPage?: SettingsPage
   onOpenAccount?: () => void
 }
-
-const THEME_OPTIONS = [
-  { label: 'System', value: 'system' },
-  { label: 'Light', value: 'light' },
-  { label: 'Dark', value: 'dark' },
-]
 
 const LANG_OPTIONS = [
   { label: '中文', value: 'zh' },
@@ -450,7 +445,7 @@ export default function SettingsModal({
       setSidebarCollapsed(sc === '1')
       setPdfOpenMode(openMode === 'builtin' ? 'builtin' : 'system')
     } catch {
-      setError('Failed to load settings')
+      setError(t('settings.loadFailed'))
     }
   }
 
@@ -460,10 +455,11 @@ export default function SettingsModal({
       const path = await api.dialog.openDirectory()
       if (!path) return
       setSwitching(true)
+      await usePdfReaderStore.getState().prepareForLibrarySwitch()
       await api.library.switch(path)
       setLibraryFolderPath(path)
     } catch (e) {
-      setError(errorMessage(e, 'Failed to set library folder'))
+      setError(errorMessage(e, t('settings.librarySwitchFailed')))
     } finally {
       setSwitching(false)
     }
@@ -474,7 +470,7 @@ export default function SettingsModal({
     try {
       await api.settings.set('proxyUrl', proxyUrl)
     } catch (e) {
-      setError(errorMessage(e, 'Failed to save proxy'))
+      setError(errorMessage(e, t('settings.proxySaveFailed')))
     }
   }
 
@@ -483,7 +479,7 @@ export default function SettingsModal({
     try {
       await api.settings.set('crossrefMailto', crossrefMailto)
     } catch (e) {
-      setError(errorMessage(e, 'Failed to save mailto'))
+      setError(errorMessage(e, t('settings.crossrefMailtoSaveFailed')))
     }
   }
 
@@ -507,7 +503,7 @@ export default function SettingsModal({
       await api.settings.set('sidebarCollapsed', newVal ? '1' : '0')
     } catch (e) {
       setSidebarCollapsed(!newVal)
-      setError(errorMessage(e, 'Failed to update sidebar'))
+      setError(errorMessage(e, t('settings.sidebarSaveFailed')))
     }
   }
 
@@ -522,7 +518,7 @@ export default function SettingsModal({
       await api.settings.set('language', lang)
       await changeLanguage(lang)
     } catch (e) {
-      setError(errorMessage(e, 'Failed to change language'))
+      setError(errorMessage(e, t('settings.languageSaveFailed')))
     }
   }
 
@@ -702,7 +698,11 @@ export default function SettingsModal({
                 <Select
                   value={themeMode}
                   onChange={handleThemeChange}
-                  options={THEME_OPTIONS}
+                  options={[
+                    { label: t('settings.themeSystem'), value: 'system' },
+                    { label: t('settings.themeLight'), value: 'light' },
+                    { label: t('settings.themeDark'), value: 'dark' }
+                  ]}
                   size="small"
                   style={{ width: 140 }}
                 />

@@ -1,4 +1,5 @@
 import { useState, useRef, type ComponentPropsWithoutRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, Copy } from '@phosphor-icons/react'
 import type { Components, Options } from 'react-markdown'
 import { defaultUrlTransform } from 'react-markdown'
@@ -99,6 +100,7 @@ export function parseReforaDocLink(href: string): { docId: string; query?: strin
 }
 
 function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<'pre'>) {
+  const { t } = useTranslation()
   const ref = useRef<HTMLPreElement>(null)
   const [copied, setCopied] = useState(false)
 
@@ -117,7 +119,7 @@ function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<'pre'>) {
             window.setTimeout(() => setCopied(false), 1500)
           })
         }}
-        aria-label="Copy code"
+        aria-label={t('common.copyCode')}
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
       </button>

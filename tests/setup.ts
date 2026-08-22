@@ -49,7 +49,11 @@ const noop = async () => undefined
     bulkCategorize: noop,
     bulkRefreshMetadata: noop,
     openPdf: noop,
-    readPdf: async () => new Uint8Array(),
+    readPdfRange: async (_id: string, begin: number) => ({
+      begin,
+      fileSize: 1,
+      data: new Uint8Array([1])
+    }),
     pdfAnnotations: async () => [],
     setPdfAnnotations: async (_id: string, annotations: unknown[]) => annotations,
     openInFinder: noop,

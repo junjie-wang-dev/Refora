@@ -1,6 +1,7 @@
 import base64
 
 from fastapi import FastAPI, Request
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import refora_server.server.routes.library as library_routes
@@ -20,6 +21,7 @@ class Fakes:
         self.document_overrides = {}
         self.last_read_at = {}
         self.metadata_refreshes = []
+        self.emitted_events = []
         self.pdf_annotations = {}
         self.documents = {
             "list": self.list_documents,
@@ -163,6 +165,7 @@ class Fakes:
                 "set": self.set_pdf_annotations,
             },
         }
+        self.emit = lambda event, data: self.emitted_events.append((event, data))
 
     async def require_token(self, request: Request):
         self.token_calls += 1
@@ -274,7 +277,11 @@ def make_client():
 
 def test_registers_every_library_domain_protocol_route():
     client, _ = make_client()
-    routes = {(method, route.path) for route in client.app.routes for method in route.methods or []}
+    routes = {
+        (method, route.path)
+        for route in iter_route_contexts(client.app.routes)
+        for method in route.methods or []
+    }
     expected = {
         ("GET", "/documents"), ("GET", "/documents/count"), ("GET", "/documents/search"),
         ("GET", "/documents/{document_id}"), ("PATCH", "/documents/{document_id}"),
@@ -390,6 +397,20 @@ def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):
     assert response.json() == {"ok": True, "data": {"ack": True}}
     assert fakes.trashed == [str(source)]
     assert fakes.deleted_documents == ["doc-1"]
+
+
+def test_document_update_emits_updated_document():
+    client, fakes = make_client()
+
+    response = client.patch(
+        "/documents/doc-1",
+        headers={"X-Refora-Token": "test-token"},
+        json={"title": "Updated title"},
+    )
+
+    updated = {"id": "doc-1", "title": "Updated title"}
+    assert response.json() == {"ok": True, "data": updated}
+    assert fakes.emitted_events == [("document.updated", updated)]
 
 
 def test_bulk_delete_removes_records_when_files_are_missing_or_trash_fails(tmp_path):

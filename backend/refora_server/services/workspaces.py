@@ -5,6 +5,8 @@ import hashlib
 import inspect
 import os
 import shutil
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +17,8 @@ from refora_server.repositories.workspace_assets import workspace_asset_media_ty
 
 WORKSPACE_ASSET_TEXT_PREVIEW_LIMIT = 256 * 1024
 WORKSPACE_ASSET_DIRECTORY = "refora-assets"
+WORKSPACE_ASSET_IMPORT_LIMIT = 512 * 1024 * 1024
+WORKSPACE_ASSET_DISK_RESERVE = 64 * 1024 * 1024
 WORKSPACE_MARKDOWN_IMPORT_LIMIT = 16 * 1024 * 1024
 
 
@@ -53,12 +57,89 @@ def _read_markdown_file(raw_path: str) -> tuple[str, str]:
     return path.stem, content
 
 
-def _stream_file_hash(file_path: str) -> str:
-    h = hashlib.sha256()
-    with open(file_path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def _validate_asset_source(raw_path: str) -> tuple[str, int]:
+    resolved = _validate_source_file(raw_path)
+    try:
+        file_size = os.path.getsize(resolved)
+    except OSError as exc:
+        raise RepoError("invalid_path", f"Unable to inspect workspace asset: {resolved}") from exc
+    if file_size > WORKSPACE_ASSET_IMPORT_LIMIT:
+        raise RepoError(
+            "file_too_large",
+            "Workspace asset exceeds the 512 MiB limit",
+        )
+    return resolved, file_size
+
+
+def _require_asset_capacity(directory: str, file_size: int) -> None:
+    try:
+        free_bytes = shutil.disk_usage(directory).free
+    except OSError as exc:
+        raise RepoError("storage_unavailable", "Unable to inspect library disk space") from exc
+    if free_bytes < file_size + WORKSPACE_ASSET_DISK_RESERVE:
+        raise RepoError(
+            "insufficient_storage",
+            "Not enough disk space to import workspace asset",
+        )
+
+
+def _stage_asset_file(
+    source_path: str,
+    destination: str,
+    expected_size: int,
+    cancelled: threading.Event | None = None,
+) -> tuple[int, str]:
+    asset_directory = os.path.dirname(destination)
+    temporary_fd, temporary_path = tempfile.mkstemp(
+        prefix=".refora-import-", suffix=".tmp", dir=asset_directory
+    )
+    source_fd = -1
+    digest = hashlib.sha256()
+    copied = 0
+    try:
+        source_fd = os.open(
+            source_path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        with os.fdopen(source_fd, "rb") as source:
+            source_fd = -1
+            with os.fdopen(temporary_fd, "wb") as target:
+                temporary_fd = -1
+                while True:
+                    if cancelled is not None and cancelled.is_set():
+                        raise asyncio.CancelledError
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    copied += len(chunk)
+                    if copied > WORKSPACE_ASSET_IMPORT_LIMIT:
+                        raise RepoError(
+                            "file_too_large",
+                            "Workspace asset exceeds the 512 MiB limit",
+                        )
+                    target.write(chunk)
+                    digest.update(chunk)
+                target.flush()
+                os.fsync(target.fileno())
+        if copied != expected_size:
+            raise RepoError("source_changed", "Workspace asset changed during import")
+        shutil.copystat(source_path, temporary_path, follow_symlinks=False)
+        os.replace(temporary_path, destination)
+        directory_fd = os.open(asset_directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return copied, digest.hexdigest()
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
 
 
 def _require_library_folder(repos: dict[str, Any]) -> str:
@@ -398,6 +479,45 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     def get_asset(asset_id: str) -> dict[str, Any]:
         return _require_scoped("workspaceAssets", "workspace asset", asset_id)
 
+    def _unique_asset_paths(paths: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique_paths: list[str] = []
+        for raw in paths:
+            if isinstance(raw, str) and len(raw) > 0 and raw not in seen:
+                seen.add(raw)
+                unique_paths.append(raw)
+        return unique_paths
+
+    def _asset_record(
+        asset_id: str,
+        workspace_id: str,
+        source_path: str,
+        destination: str,
+        file_size: int,
+        file_hash: str,
+        library_folder: str,
+    ) -> dict[str, Any]:
+        file_name = os.path.basename(source_path)
+        media = workspace_asset_media_type(file_name)
+        now = _now_ms()
+        return {
+            "id": asset_id,
+            "workspaceId": workspace_id,
+            "fileName": file_name,
+            "filePath": _to_library_relative(destination, library_folder),
+            "sourcePath": source_path,
+            "mimeType": media["mimeType"],
+            "previewKind": media["previewKind"],
+            "fileSize": file_size,
+            "fileHash": file_hash,
+            "fileMissing": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+    def _asset_error(raw_path: str, exc: Exception) -> dict[str, str]:
+        return {"path": raw_path, "message": str(exc)}
+
     def import_assets(
         workspace_id: str,
         paths: list[str],
@@ -407,42 +527,30 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         library_folder = _require_library_folder(repos)
         imported: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
-        seen: set[str] = set()
-        unique_paths: list[str] = []
-        for raw in paths:
-            if isinstance(raw, str) and len(raw) > 0 and raw not in seen:
-                seen.add(raw)
-                unique_paths.append(raw)
 
-        for raw_path in unique_paths:
+        for raw_path in _unique_asset_paths(paths):
             asset_id = _new_id()
             asset_directory = os.path.join(library_folder, WORKSPACE_ASSET_DIRECTORY, asset_id)
+            directory_created = False
             try:
-                source_path = _validate_source_file(raw_path)
+                source_path, source_size = _validate_asset_source(raw_path)
                 file_name = os.path.basename(source_path)
                 destination = os.path.join(asset_directory, file_name)
-                os.makedirs(asset_directory, exist_ok=True)
-                if os.path.exists(destination):
-                    raise RepoError("duplicate", f"File already exists: {destination}")
-                shutil.copy2(source_path, destination)
-                file_size = os.path.getsize(destination)
-                file_hash = _stream_file_hash(destination)
-                media = workspace_asset_media_type(file_name)
-                now = _now_ms()
-                asset_record = {
-                    "id": asset_id,
-                    "workspaceId": workspace_id,
-                    "fileName": file_name,
-                    "filePath": _to_library_relative(destination, library_folder),
-                    "sourcePath": source_path,
-                    "mimeType": media["mimeType"],
-                    "previewKind": media["previewKind"],
-                    "fileSize": file_size,
-                    "fileHash": file_hash,
-                    "fileMissing": 0,
-                    "createdAt": now,
-                    "updatedAt": now,
-                }
+                os.makedirs(asset_directory, mode=0o700, exist_ok=False)
+                directory_created = True
+                _require_asset_capacity(asset_directory, source_size)
+                file_size, file_hash = _stage_asset_file(
+                    source_path, destination, source_size
+                )
+                asset_record = _asset_record(
+                    asset_id,
+                    workspace_id,
+                    source_path,
+                    destination,
+                    file_size,
+                    file_hash,
+                    library_folder,
+                )
                 saved = _transaction(
                     lambda: _insert_asset_with_item(
                         repos, asset_record, workspace_id, placement, len(imported)
@@ -450,10 +558,74 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
                 )
                 imported.append(saved)
             except Exception as exc:
-                shutil.rmtree(asset_directory, ignore_errors=True)
-                errors.append(
-                    {"path": raw_path, "message": str(exc) if isinstance(exc, RepoError) else str(exc)}
+                if directory_created:
+                    shutil.rmtree(asset_directory, ignore_errors=True)
+                errors.append(_asset_error(raw_path, exc))
+        return {"imported": imported, "errors": errors}
+
+    async def import_assets_async(
+        workspace_id: str,
+        paths: list[str],
+        placement: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _require_workspace(workspace_id)
+        library_folder = _require_library_folder(repos)
+        imported: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+
+        for raw_path in _unique_asset_paths(paths):
+            asset_id = _new_id()
+            asset_directory = os.path.join(library_folder, WORKSPACE_ASSET_DIRECTORY, asset_id)
+            directory_created = False
+            cancelled = threading.Event()
+            try:
+                source_path, source_size = _validate_asset_source(raw_path)
+                file_name = os.path.basename(source_path)
+                destination = os.path.join(asset_directory, file_name)
+                os.makedirs(asset_directory, mode=0o700, exist_ok=False)
+                directory_created = True
+                _require_asset_capacity(asset_directory, source_size)
+                worker = asyncio.create_task(
+                    asyncio.to_thread(
+                        _stage_asset_file,
+                        source_path,
+                        destination,
+                        source_size,
+                        cancelled,
+                    )
                 )
+                try:
+                    file_size, file_hash = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    try:
+                        await asyncio.shield(worker)
+                    except BaseException:
+                        pass
+                    raise
+                asset_record = _asset_record(
+                    asset_id,
+                    workspace_id,
+                    source_path,
+                    destination,
+                    file_size,
+                    file_hash,
+                    library_folder,
+                )
+                saved = _transaction(
+                    lambda: _insert_asset_with_item(
+                        repos, asset_record, workspace_id, placement, len(imported)
+                    )
+                )
+                imported.append(saved)
+            except asyncio.CancelledError:
+                if directory_created:
+                    await asyncio.to_thread(shutil.rmtree, asset_directory, True)
+                raise
+            except Exception as exc:
+                if directory_created:
+                    await asyncio.to_thread(shutil.rmtree, asset_directory, True)
+                errors.append(_asset_error(raw_path, exc))
         return {"imported": imported, "errors": errors}
 
     async def import_workspace_files(
@@ -536,7 +708,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
                 errors.append({"path": raw_path, "message": str(exc)})
 
         if asset_paths:
-            result = import_assets(workspace_id, asset_paths, placed(offset))
+            result = await import_assets_async(workspace_id, asset_paths, placed(offset))
             assets.extend(result["imported"])
             errors.extend(result["errors"])
 
@@ -706,6 +878,7 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "listAssets": list_assets,
         "getAsset": get_asset,
         "importAssets": import_assets,
+        "importAssetsAsync": import_assets_async,
         "importWorkspaceFiles": import_workspace_files,
         "previewAsset": preview_asset,
         "resolveAssetFile": resolve_asset_file,

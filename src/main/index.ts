@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
-import { join, resolve as resolvePath } from 'node:path'
+import { isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { createWriteStream, existsSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -45,6 +45,54 @@ let win: BrowserWindow | null = null
 let isQuitting = false
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let syncHandlerChannels: string[] = []
+let menuLanguage: 'zh' | 'en' = 'en'
+
+const MENU_COPY = {
+  en: {
+    file: 'File',
+    addFile: 'Add File',
+    addPdfFiles: 'Add PDF Files',
+    pdfFiles: 'PDF Files',
+    importIdentifier: 'Import by Identifier…',
+    addFolder: 'Add Folder',
+    importJson: 'Import JSON…',
+    importJsonTitle: 'Import JSON',
+    jsonFiles: 'JSON files',
+    importMode: 'Import Mode',
+    importModeMessage: 'How should the import handle existing data?',
+    merge: 'Merge (keep existing, add new)',
+    replace: 'Replace (clear all, import)',
+    cancel: 'Cancel',
+    importZotero: 'Import from Zotero…',
+    importMendeley: 'Import from Mendeley…',
+    exportJson: 'Export JSON…',
+    exportJsonTitle: 'Export JSON',
+    exportBibtex: 'Export BibTeX…',
+    failed: 'Failed'
+  },
+  zh: {
+    file: '文件',
+    addFile: '添加文件',
+    addPdfFiles: '添加 PDF 文件',
+    pdfFiles: 'PDF 文件',
+    importIdentifier: '从标识符导入…',
+    addFolder: '添加文件夹',
+    importJson: '导入 JSON…',
+    importJsonTitle: '导入 JSON',
+    jsonFiles: 'JSON 文件',
+    importMode: '导入模式',
+    importModeMessage: '如何处理已有数据？',
+    merge: '合并（保留已有数据并添加新数据）',
+    replace: '替换（清空后导入）',
+    cancel: '取消',
+    importZotero: '从 Zotero 导入…',
+    importMendeley: '从 Mendeley 导入…',
+    exportJson: '导出 JSON…',
+    exportJsonTitle: '导出 JSON',
+    exportBibtex: '导出 BibTeX…',
+    failed: '失败'
+  }
+} as const
 
 function registerSyncAccountHandlers(service: SyncAccountService): void {
   const handlers = createSyncHandlers(service)
@@ -101,7 +149,7 @@ function detectLanguage(): 'zh' | 'en' {
 function reportMenuError(action: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   logger.error(`${action}: ${message}`)
-  dialog.showErrorBox(`${action} Failed`, message)
+  dialog.showErrorBox(`${action} ${MENU_COPY[menuLanguage].failed}`, message)
 }
 
 function applyCsp(): void {
@@ -191,31 +239,34 @@ function registerDocumentProtocol(): void {
   })
 }
 
-function buildMenu(): Menu {
+function buildMenu(language: 'zh' | 'en' = menuLanguage): Menu {
+  const copy = MENU_COPY[language]
   const getWin = (): BrowserWindow | null => (win && !win.isDestroyed() ? win : null)
   const template: Electron.MenuItemConstructorOptions[] = [
     { role: 'appMenu' },
     {
-      label: 'File',
+      label: copy.file,
       submenu: [
         {
-          label: 'Add File',
+          label: copy.addFile,
           accelerator: 'Cmd+I',
-          click: async () => {
-            const w = getWin()
-            const assembly = serverAssembly
-            if (!w || !assembly) return
-            const result = await dialog.showOpenDialog(w, {
-              title: 'Add PDF Files',
-              properties: ['openFile', 'multiSelections'],
-              filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
-            })
-            if (result.canceled) return
-            void assembly.getClient().http.importFiles({ paths: result.filePaths })
+          click: () => {
+            void runMenuAction(async () => {
+              const w = getWin()
+              const assembly = serverAssembly
+              if (!w || !assembly) return
+              const result = await dialog.showOpenDialog(w, {
+                title: copy.addPdfFiles,
+                properties: ['openFile', 'multiSelections'],
+                filters: [{ name: copy.pdfFiles, extensions: ['pdf'] }]
+              })
+              if (result.canceled) return
+              await assembly.getClient().http.importFiles({ paths: result.filePaths })
+            }, (error) => reportMenuError(copy.addFile, error))
           }
         },
         {
-          label: 'Import by Identifier…',
+          label: copy.importIdentifier,
           accelerator: 'Cmd+Shift+I',
           click: () => {
             const w = getWin()
@@ -225,14 +276,14 @@ function buildMenu(): Menu {
           }
         },
         {
-          label: 'Add Folder',
+          label: copy.addFolder,
           click: () => {
             void runMenuAction(async () => {
               const w = getWin()
               const assembly = serverAssembly
               if (!w || !assembly) return
               const result = await dialog.showOpenDialog(w, {
-                title: 'Add Folder',
+                title: copy.addFolder,
                 properties: ['openDirectory']
               })
               if (result.canceled) return
@@ -240,28 +291,28 @@ function buildMenu(): Menu {
                 path: result.filePaths[0],
                 recursive: true
               })
-            }, (error) => reportMenuError('add folder', error))
+            }, (error) => reportMenuError(copy.addFolder, error))
           }
         },
         { type: 'separator' },
         {
-          label: 'Import JSON\u2026',
+          label: copy.importJson,
           click: () => {
             void runMenuAction(async () => {
               const w = getWin()
               const assembly = serverAssembly
               if (!w || !assembly) return
               const result = await dialog.showOpenDialog(w, {
-                title: 'Import JSON',
+                title: copy.importJsonTitle,
                 properties: ['openFile'],
-                filters: [{ name: 'JSON files', extensions: ['json'] }]
+                filters: [{ name: copy.jsonFiles, extensions: ['json'] }]
               })
               if (result.canceled || result.filePaths.length === 0) return
               const modeChoice = await dialog.showMessageBox(w, {
                 type: 'question',
-                title: 'Import Mode',
-                message: 'How should the import handle existing data?',
-                buttons: ['Merge (keep existing, add new)', 'Replace (clear all, import)', 'Cancel'],
+                title: copy.importMode,
+                message: copy.importModeMessage,
+                buttons: [copy.merge, copy.replace, copy.cancel],
                 defaultId: 0,
                 cancelId: 2
               })
@@ -272,19 +323,19 @@ function buildMenu(): Menu {
                 mode
               })
               logger.info(`import:json ${imported.imported} documents`)
-            }, (error) => reportMenuError('Import JSON', error))
+            }, (error) => reportMenuError(copy.importJsonTitle, error))
           }
         },
         { type: 'separator' },
         {
-          label: 'Import from Zotero\u2026',
+          label: copy.importZotero,
           click: () => {
             const w = getWin()
             if (w && !w.isDestroyed()) w.webContents.send('menu:import-zotero')
           }
         },
         {
-          label: 'Import from Mendeley\u2026',
+          label: copy.importMendeley,
           click: () => {
             const w = getWin()
             if (w && !w.isDestroyed()) w.webContents.send('menu:import-mendeley')
@@ -292,7 +343,7 @@ function buildMenu(): Menu {
         },
         { type: 'separator' },
         {
-          label: 'Export JSON\u2026',
+          label: copy.exportJson,
           accelerator: 'Cmd+E',
           click: () => {
             void runMenuAction(async () => {
@@ -300,18 +351,18 @@ function buildMenu(): Menu {
               const assembly = serverAssembly
               if (!w || !assembly) return
               const result = await dialog.showSaveDialog(w, {
-                title: 'Export JSON',
+                title: copy.exportJsonTitle,
                 defaultPath: `refora-export-${new Date().toISOString().slice(0, 10)}.json`,
-                filters: [{ name: 'JSON files', extensions: ['json'] }]
+                filters: [{ name: copy.jsonFiles, extensions: ['json'] }]
               })
               if (result.canceled || !result.filePath) return
               const payload = await assembly.getClient().http.exportJson({})
               writeFileSync(result.filePath, JSON.stringify(payload, null, 2), 'utf8')
-            }, (error) => reportMenuError('Export JSON', error))
+            }, (error) => reportMenuError(copy.exportJsonTitle, error))
           }
         },
         {
-          label: 'Export BibTeX\u2026',
+          label: copy.exportBibtex,
           accelerator: 'Cmd+Shift+B',
           click: () => {
             const w = getWin()
@@ -461,7 +512,16 @@ async function createPythonServerAssembly(
     : undefined
   const serverPython = app.isPackaged
     ? undefined
-    : await serverPythonRuntime.install(new AbortController().signal)
+    : await (async () => {
+        const configured = process.env['REFORA_SERVER_PYTHON_PATH']
+        if (!configured) {
+          return serverPythonRuntime.install(new AbortController().signal)
+        }
+        if (!isAbsolute(configured) || !existsSync(configured) || !statSync(configured).isFile()) {
+          throw new Error('REFORA_SERVER_PYTHON_PATH must reference an absolute Python executable')
+        }
+        return configured
+      })()
   const serverSourceRoot = join(__dirname, '../../backend')
   const serverState = createServerStateDirectory(app.getPath('userData'))
   const assembly = createServerAssembly({
@@ -484,7 +544,12 @@ async function createPythonServerAssembly(
       }
     }),
     getWin: () => win,
-    switchLibraryFolder
+    switchLibraryFolder,
+    onSettingUpdated: (key, value) => {
+      if (key !== 'language' || (value !== 'zh' && value !== 'en')) return
+      menuLanguage = value
+      Menu.setApplicationMenu(buildMenu(value))
+    }
   })
   return {
     start: async () => {
@@ -584,6 +649,7 @@ async function switchLibraryFolderPython(folder: string): Promise<LibrarySwitchR
 
 void app.whenReady().then(async () => {
   isDev = !app.isPackaged
+  menuLanguage = detectLanguage()
   initLogger()
   logger.info(`app:ready (dev=${isDev})`)
   if (app.isPackaged) app.setAsDefaultProtocolClient('refora')
@@ -635,6 +701,7 @@ void app.whenReady().then(async () => {
     )
     await serverAssembly.start()
     const bootstrap = await serverAssembly.getClient().http.appBootstrap()
+    menuLanguage = bootstrap.language
     nativeTheme.themeSource = bootstrap.theme
     if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
       activeLibraryFolder = resolvePath(bootstrap.libraryFolderPath)
@@ -650,7 +717,7 @@ void app.whenReady().then(async () => {
   }
   win = createWindow(savedBounds)
 
-  Menu.setApplicationMenu(buildMenu())
+  Menu.setApplicationMenu(buildMenu(menuLanguage))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

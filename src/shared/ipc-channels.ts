@@ -12,7 +12,7 @@ export const IpcChannel = {
   DocumentsBulkCategorize: 'documents:bulkCategorize',
   DocumentsBulkRefreshMetadata: 'documents:bulkRefreshMetadata',
   DocumentsOpenPdf: 'documents:openPdf',
-  DocumentsReadPdf: 'documents:readPdf',
+  DocumentsReadPdfRange: 'documents:readPdfRange',
   DocumentsPdfAnnotationsGet: 'documents:pdfAnnotations:get',
   DocumentsPdfAnnotationsSet: 'documents:pdfAnnotations:set',
   DocumentsOpenInFinder: 'documents:openInFinder',

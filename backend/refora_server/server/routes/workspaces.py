@@ -344,9 +344,18 @@ def create_workspaces_router(deps: Any) -> APIRouter:
                 paths = await _select_workspace_files(connector)
             if not paths:
                 return {"imported": [], "errors": []}
-            return workspaces["importAssets"](
-                workspace_id, paths, _placement(payload)
-            )
+            import_operation = workspaces.get("importAssetsAsync")
+            if import_operation is None:
+                return await asyncio.to_thread(
+                    workspaces["importAssets"],
+                    workspace_id,
+                    paths,
+                    _placement(payload),
+                )
+            result = import_operation(workspace_id, paths, _placement(payload))
+            if inspect.isawaitable(result):
+                result = await result
+            return result
 
         return await _invoke(operation)
 

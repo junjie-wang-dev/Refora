@@ -242,6 +242,7 @@ def create_library_router(deps: Any) -> APIRouter:
     exporter = _dependency(deps, "exporter", "export")
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
+    emit = _dependency(deps, "emit")
     ai_summaries = _value(repos, "aiSummaries")
     ai_reports = _value(repos, "aiReports")
     pdf_annotations = _value(repos, "pdfAnnotations")
@@ -513,7 +514,12 @@ def create_library_router(deps: Any) -> APIRouter:
                 )
                 if not patch:
                     return item
-            return await _call(documents, "update", document_id, patch)
+            item = await _call(documents, "update", document_id, patch)
+            if callable(emit):
+                emitted = emit("document.updated", dict(item))
+                if inspect.isawaitable(emitted):
+                    await emitted
+            return item
 
         return await run(action)
 
