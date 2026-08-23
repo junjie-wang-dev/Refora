@@ -86,6 +86,9 @@ DOCUMENT_COLUMNS: tuple[str, ...] = (
     "editedFields",
     "remoteValues",
     "fileMissing",
+    "fileDevice",
+    "fileInode",
+    "fileMtimeNs",
 )
 
 SORT_FIELDS: frozenset[str] = frozenset(
@@ -197,6 +200,9 @@ def _map_document(row: sqlite3.Row, library_folder: str) -> dict[str, Any]:
         "editedFields": _parse_edited_fields(row["editedFields"]),
         "remoteValues": _parse_remote_values(row["remoteValues"]),
         "fileMissing": row["fileMissing"],
+        "fileDevice": _safe_int(row["fileDevice"]),
+        "fileInode": _safe_int(row["fileInode"]),
+        "fileMtimeNs": _safe_int(row["fileMtimeNs"]),
     }
 
 
@@ -317,6 +323,22 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
 
     def insert(doc: dict[str, Any]) -> dict[str, Any]:
         lf = lib()
+        file_device = doc.get("fileDevice")
+        file_inode = doc.get("fileInode")
+        file_mtime_ns = doc.get("fileMtimeNs")
+        file_path = doc.get("filePath")
+        if (
+            isinstance(file_path, str)
+            and file_path
+            and (file_device is None or file_inode is None or file_mtime_ns is None)
+        ):
+            try:
+                file_stat = os.stat(file_path, follow_symlinks=False)
+                file_device = file_stat.st_dev
+                file_inode = file_stat.st_ino
+                file_mtime_ns = file_stat.st_mtime_ns
+            except OSError:
+                pass
         values: list[Any] = [
             doc["id"],
             toLibraryRelative(doc["filePath"], lf),
@@ -348,6 +370,9 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             json.dumps(doc.get("editedFields", [])),
             None if doc.get("remoteValues") is None else json.dumps(doc.get("remoteValues")),
             doc.get("fileMissing", 0),
+            file_device,
+            file_inode,
+            file_mtime_ns,
         ]
         placeholders = ", ".join("?" for _ in DOCUMENT_COLUMNS)
         col_list = ", ".join(DOCUMENT_COLUMNS)
@@ -429,13 +454,39 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         )
 
     def updateFileIdentity(
-        id: str, filePath: str, fileName: str, fileSize: int, fileHash: str
+        id: str,
+        filePath: str,
+        fileName: str,
+        fileSize: int,
+        fileHash: str,
+        fileDevice: int | None = None,
+        fileInode: int | None = None,
+        fileMtimeNs: int | None = None,
     ) -> None:
+        if fileDevice is None or fileInode is None or fileMtimeNs is None:
+            try:
+                file_stat = os.stat(filePath, follow_symlinks=False)
+                fileDevice = file_stat.st_dev
+                fileInode = file_stat.st_ino
+                fileMtimeNs = file_stat.st_mtime_ns
+            except OSError:
+                pass
         rel = toLibraryRelative(filePath, lib())
         db.execute(
             "UPDATE documents SET filePath = ?, fileName = ?, fileSize = ?, fileHash = ?, "
-            "fileMissing = 0, updatedAt = ? WHERE id = ?",
-            [rel, fileName, fileSize, fileHash, now_ms(), id],
+            "fileMissing = 0, fileDevice = ?, fileInode = ?, fileMtimeNs = ?, "
+            "updatedAt = ? WHERE id = ?",
+            [
+                rel,
+                fileName,
+                fileSize,
+                fileHash,
+                fileDevice,
+                fileInode,
+                fileMtimeNs,
+                now_ms(),
+                id,
+            ],
         )
 
     def setMetadataStatus(

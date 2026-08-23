@@ -189,6 +189,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     !!input.trim() &&
     input.trim().length <= MAX_INPUT_LENGTH &&
     !chat.streaming &&
+    !chat.loadingHistory &&
     !chat.pendingInterrupt
 
   useEffect(() => {
@@ -489,7 +490,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   )
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || chat.streaming || chat.pendingInterrupt) return
+    if (!input.trim() || chat.streaming || chat.loadingHistory || chat.pendingInterrupt) return
     const text = input.trim()
     if (text.length > MAX_INPUT_LENGTH) {
       chat.setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))

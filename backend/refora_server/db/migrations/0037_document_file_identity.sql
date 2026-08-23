@@ -1,0 +1,3 @@
+ALTER TABLE documents ADD COLUMN fileDevice INTEGER;
+ALTER TABLE documents ADD COLUMN fileInode INTEGER;
+ALTER TABLE documents ADD COLUMN fileMtimeNs INTEGER;

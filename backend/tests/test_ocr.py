@@ -8,7 +8,7 @@ import pytest
 
 from conftest import make_doc, make_docs_repo, make_ocr_repo, open_migrated_db
 from refora_server.ocr.types import MINERU_VERSION
-from refora_server.ocr.paths import get_ocr_result_root
+from refora_server.ocr.paths import get_ocr_document_root, get_ocr_result_root
 from refora_server.repositories.errors import RepoError
 from refora_server.services import ocr as ocr_mod
 from refora_server.services.mineru import MineruRuntime
@@ -21,6 +21,14 @@ class _FakeEngineStatus:
 
     def to_dict(self):
         return {"state": self.state}
+
+
+def test_ocr_document_root_accepts_safe_legacy_document_ids(tmp_path) -> None:
+    expected = tmp_path / ".refora" / "derived" / "OCR" / "legacy.Doc:part-2"
+    assert get_ocr_document_root(str(tmp_path), "legacy.Doc:part-2") == str(expected)
+    for invalid in ("../escape", ".hidden", "bad/path", "bad?query"):
+        with pytest.raises(RepoError, match="Invalid OCR document ID"):
+            get_ocr_document_root(str(tmp_path), invalid)
 
 
 class _FakeEngineManager:

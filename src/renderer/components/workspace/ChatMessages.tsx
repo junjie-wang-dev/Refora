@@ -18,9 +18,14 @@ import { useDocumentStore } from '../../store/documentStore'
 import { Button as UiButton } from '../ui'
 import { AgentTraceStepItem } from './AgentTrace'
 import AgentTodoList from './AgentTodoList'
-import type { AgentTraceStep, AiProvider, ChatMessage } from '../../../shared/ipc-types'
+import type { AgentTraceStep, AiProvider } from '../../../shared/ipc-types'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
+import {
+  enrichChatMessages,
+  type ChatTerminalStatus,
+  type ChatTimelineMessage
+} from '../../utils/chatUtils'
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
   (docId) => openDocumentPdf(docId),
@@ -103,11 +108,16 @@ function ReasoningPanel({
   )
 }
 
-function AnswerSegment({ content, streaming = false }: { content: string; streaming?: boolean }) {
+function AnswerSegment({
+  content,
+  streaming = false,
+  terminalStatus
+}: {
+  content: string
+  streaming?: boolean
+  terminalStatus?: ChatTerminalStatus
+}) {
   const { t } = useTranslation()
-  const cancelled =
-    content.includes('[Response cancelled by user]') ||
-    content.includes('[Response interrupted')
 
   return (
     <section className="chat-timeline-answer" data-timeline-kind="message">
@@ -115,10 +125,16 @@ function AnswerSegment({ content, streaming = false }: { content: string; stream
         className={`chat-assistant-content ${streaming ? 'chat-streaming-content ' : ''}chat-markdown`}
         aria-label={streaming ? t('workspace.chat.streamingResponse', 'AI response') : undefined}
       >
-        {cancelled ? (
-          <span className="italic text-muted">{content}</span>
-        ) : (
-          <StreamingMarkdown content={content} />
+        {content && <StreamingMarkdown content={content} />}
+        {terminalStatus === 'cancelled' && (
+          <span className="block italic text-muted">
+            {t('workspace.chat.responseCancelled', 'Response cancelled by user')}
+          </span>
+        )}
+        {terminalStatus === 'failed' && (
+          <span className="block italic text-muted">
+            {t('workspace.chat.runFailed', 'The agent run failed.')}
+          </span>
         )}
       </div>
     </section>
@@ -129,12 +145,14 @@ function RunTimeline({
   steps,
   fallbackAnswer,
   fallbackReasoning,
+  terminalStatus,
   streaming,
   elapsedSeconds
 }: {
   steps: AgentTraceStep[]
   fallbackAnswer: string
   fallbackReasoning: string
+  terminalStatus?: ChatTerminalStatus
   streaming: boolean
   elapsedSeconds: number
 }) {
@@ -187,12 +205,14 @@ function RunTimeline({
     : startedAt != null && endedAt != null
       ? formatRunDuration(endedAt - startedAt)
       : null
-  const hasError = steps.some((step) => step.status === 'error')
+  const hasError = terminalStatus === 'failed' || steps.some((step) => step.status === 'error')
   const runLabel = streaming
     ? t('workspace.chat.traceRunningLabel', 'Running…')
     : hasError
       ? t('workspace.chat.traceCompletedError', 'Completed with an error')
-      : t('workspace.chat.traceLlmDone', 'Completed')
+      : terminalStatus === 'cancelled'
+        ? t('workspace.chat.traceCancelledLabel', 'Cancelled')
+        : t('workspace.chat.traceLlmDone', 'Completed')
   const toggleLabel = open
     ? t('workspace.chat.traceCollapse', 'Hide details')
     : t('workspace.chat.traceExpand', 'Show details')
@@ -258,9 +278,10 @@ function RunTimeline({
           </div>
         )}
       </div>
-      {finalAnswer && (
+      {(finalAnswer || terminalStatus === 'cancelled' || terminalStatus === 'failed') && (
         <AnswerSegment
           content={finalAnswer}
+          terminalStatus={terminalStatus}
           streaming={streaming && (!finalMessageStep || finalMessageStep.status === 'running')}
         />
       )}
@@ -282,7 +303,7 @@ function formatElapsed(seconds: number): string {
 }
 
 export interface ChatMessagesProps {
-  messages: ChatMessage[]
+  messages: ChatTimelineMessage[]
   traceSteps: AgentTraceStep[]
   streaming: boolean
   streamingText: string
@@ -317,7 +338,10 @@ export default function ChatMessages({
   const { t } = useTranslation()
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
-  const displayMessages = useMemo(() => messages.filter((m) => m.role !== 'tool'), [messages])
+  const displayMessages = useMemo(
+    () => enrichChatMessages(messages, traceSteps).filter((message) => message.role !== 'tool'),
+    [messages, traceSteps]
+  )
   const showEmpty = displayMessages.length === 0 && !streaming && !streamingText && !streamingReasoning
   const visibleTodoRunId = useMemo(() => {
     if (activeRunId) return activeRunId
@@ -338,40 +362,19 @@ export default function ChatMessages({
     const sorted = [...traceSteps].sort(
       (a, b) => a.startedAt - b.startedAt || a.seq - b.seq
     )
-    const order: string[] = []
     const map = new Map<string, AgentTraceStep[]>()
     for (const s of sorted) {
       if (!map.has(s.runId)) {
         map.set(s.runId, [])
-        order.push(s.runId)
       }
       map.get(s.runId)!.push(s)
     }
-    const completedOrder = order.filter((runId) => {
-      const steps = map.get(runId) ?? []
-      const runStep = steps.filter((step) => step.kind === 'run').at(-1)
-      return runStep
-        ? runStep.status === 'done'
-        : steps.some((step) => step.kind === 'message')
-    })
-    return { completedOrder, map }
+    return map
   }, [traceSteps])
-
-  const assistantRunForIdx = useMemo(() => {
-    const result: (string | null)[] = new Array(displayMessages.length).fill(null)
-    let assistantCount = 0
-    for (let i = 0; i < displayMessages.length; i++) {
-      if (displayMessages[i].role === 'assistant') {
-        result[i] = runTraceGroups.completedOrder[assistantCount] ?? null
-        assistantCount++
-      }
-    }
-    return result
-  }, [displayMessages, runTraceGroups])
 
   const streamingSteps = useMemo(() => {
     if (!activeRunId) return []
-    return runTraceGroups.map.get(activeRunId) ?? []
+    return runTraceGroups.get(activeRunId) ?? []
   }, [activeRunId, runTraceGroups])
 
   const lastAssistantIdx = (() => {
@@ -472,8 +475,7 @@ export default function ChatMessages({
         ) : (
           <div className="mx-auto flex w-full max-w-[768px] flex-col gap-3">
             {displayMessages.map((m, idx) => {
-              const runId = assistantRunForIdx[idx]
-              const runSteps = runId ? (runTraceGroups.map.get(runId) ?? []) : []
+              const runSteps = m.runId ? (runTraceGroups.get(m.runId) ?? []) : []
               const showRegenerate =
                 m.role === 'assistant' && idx === lastAssistantIdx && !streaming
 
@@ -494,6 +496,7 @@ export default function ChatMessages({
                     steps={runSteps}
                     fallbackAnswer={m.content}
                     fallbackReasoning=""
+                    terminalStatus={m.terminalStatus}
                     streaming={false}
                     elapsedSeconds={0}
                   />

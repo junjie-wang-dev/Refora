@@ -300,6 +300,39 @@ describe('DocumentList', () => {
     expect(mockState.setColumns).toHaveBeenCalled()
   })
 
+  it('finishes an active column resize when the window loses focus', () => {
+    mockState.documents = [makeDoc()]
+    render(<DocumentList />)
+    const separator = screen.getAllByRole('separator', { name: 'list.resizeColumn' })[0]
+
+    fireEvent.mouseDown(separator, { clientX: 100 })
+    fireEvent.mouseMove(document, { clientX: 140 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+
+    fireEvent.blur(window)
+
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(mockState.setColumns).toHaveBeenCalled()
+  })
+
+  it('cleans up an active column resize when unmounted', () => {
+    mockState.documents = [makeDoc()]
+    const { unmount } = render(<DocumentList />)
+    const separator = screen.getAllByRole('separator', { name: 'list.resizeColumn' })[0]
+
+    fireEvent.mouseDown(separator, { clientX: 100 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+
+    unmount()
+
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(mockState.setColumns).not.toHaveBeenCalled()
+  })
+
   it('renders the compact two-line paper list under a closeable tab header', () => {
     const onClose = vi.fn()
     mockState.documents = [

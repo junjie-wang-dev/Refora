@@ -319,6 +319,7 @@ def create_library_router(deps: Any) -> APIRouter:
 
     async def trash_documents(ids: list[str]):
         items = []
+        library_folder = _json_setting(settings, "libraryFolderPath", "")
         for document_id in ids:
             item = await _call(documents, "get", document_id)
             items.append(item)
@@ -331,6 +332,9 @@ def create_library_router(deps: Any) -> APIRouter:
                     and path.lower().endswith(".pdf")
                     and not os.path.islink(path)
                     and os.path.isfile(path)
+                    and isinstance(library_folder, str)
+                    and bool(library_folder)
+                    and isInsideLibrary(path, library_folder)
                 ):
                     try:
                         await _connector(connector, "trash", path)

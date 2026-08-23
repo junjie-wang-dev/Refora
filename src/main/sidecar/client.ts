@@ -72,6 +72,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const WS_RECONNECT_BASE_MS = 500
 const WS_RECONNECT_MAX_MS = 15_000
 const WS_RECONNECT_MAX_ATTEMPTS = 10
+const WS_HANDSHAKE_TIMEOUT_MS = 10_000
 const CONNECTOR_DEFAULT_TIMEOUT_MS = 30_000
 
 export type WsEventName = ServerEventName | ConnectorEventName | ServerWebsocketEventName
@@ -108,6 +109,7 @@ export interface ServerClientDeps {
   requestTimeoutMs?: number
   connectorTimeoutMs?: number
   wsReconnectMaxAttempts?: number
+  wsHandshakeTimeoutMs?: number
 }
 
 export interface ConnectorResult {
@@ -530,6 +532,10 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return `?${search.toString()}`
 }
 
+function pathSegment(value: string): string {
+  return encodeURIComponent(value)
+}
+
 export function createServerClient(
   lifecycle: ServerLifecycle,
   nativeRpc: NativeRpc,
@@ -540,6 +546,7 @@ export function createServerClient(
   const requestTimeoutMs = deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   const connectorTimeoutMs = deps.connectorTimeoutMs ?? CONNECTOR_DEFAULT_TIMEOUT_MS
   const wsReconnectMaxAttempts = deps.wsReconnectMaxAttempts ?? WS_RECONNECT_MAX_ATTEMPTS
+  const wsHandshakeTimeoutMs = deps.wsHandshakeTimeoutMs ?? WS_HANDSHAKE_TIMEOUT_MS
 
   async function getConnection(): Promise<ServerConnection> {
     return lifecycle.getServerBaseUrl()
@@ -638,25 +645,25 @@ export function createServerClient(
     documentsList: (query) => get<Document[]>('/documents', query),
     documentsCount: () => get<DocumentCounts>('/documents/count'),
     documentsSearch: (q, page) => get<Document[]>('/documents/search', { q, ...page }),
-    documentsGet: (id) => get<Document>(`/documents/${id}`),
-    documentsUpdate: (id, p) => patch<Document>(`/documents/${id}`, p),
-    documentsSetStarred: (id, starred) => post<Document>(`/documents/${id}/starred`, { starred }),
-    documentsDelete: (id) => del<{ ack: boolean }>(`/documents/${id}`),
+    documentsGet: (id) => get<Document>(`/documents/${pathSegment(id)}`),
+    documentsUpdate: (id, p) => patch<Document>(`/documents/${pathSegment(id)}`, p),
+    documentsSetStarred: (id, starred) => post<Document>(`/documents/${pathSegment(id)}/starred`, { starred }),
+    documentsDelete: (id) => del<{ ack: boolean }>(`/documents/${pathSegment(id)}`),
     documentsBulkDelete: (ids) => post<{ ack: boolean }>('/documents/bulk-delete', { ids }),
     documentsBulkCategorize: (payload) => post<{ ack: boolean }>('/documents/bulk-categorize', payload),
     documentsBulkRefreshMetadata: (ids) => post<{ ack: boolean }>('/documents/bulk-refresh-metadata', { ids }),
-    documentsRefreshMetadata: (id) => post<Document>(`/documents/${id}/refresh-metadata`),
-    documentsRelocate: (id, payload) => post<Document>(`/documents/${id}/relocate`, payload),
-    documentsRestoreFile: (id) => post<Document>(`/documents/${id}/restore-file`),
+    documentsRefreshMetadata: (id) => post<Document>(`/documents/${pathSegment(id)}/refresh-metadata`),
+    documentsRelocate: (id, payload) => post<Document>(`/documents/${pathSegment(id)}/relocate`, payload),
+    documentsRestoreFile: (id) => post<Document>(`/documents/${pathSegment(id)}/restore-file`),
     documentsOpenPdf: (id, external) =>
-      request<Document>('POST', `/documents/${id}/open-pdf`, {
+      request<Document>('POST', `/documents/${pathSegment(id)}/open-pdf`, {
         query: external === false ? { external: false } : {}
       }),
-    documentsOpenInFinder: (id) => post<{ ack: boolean }>(`/documents/${id}/open-in-finder`),
+    documentsOpenInFinder: (id) => post<{ ack: boolean }>(`/documents/${pathSegment(id)}/open-in-finder`),
     documentsPdfAnnotations: (id) =>
-      get<PdfAnnotation[]>(`/documents/${id}/pdf-annotations`),
+      get<PdfAnnotation[]>(`/documents/${pathSegment(id)}/pdf-annotations`),
     documentsSetPdfAnnotations: (id, annotations) =>
-      request<PdfAnnotation[]>('PUT', `/documents/${id}/pdf-annotations`, {
+      request<PdfAnnotation[]>('PUT', `/documents/${pathSegment(id)}/pdf-annotations`, {
         body: { annotations }
       }),
 
@@ -669,15 +676,15 @@ export function createServerClient(
 
     categoriesList: () => get<Category[]>('/categories'),
     categoriesCreate: (payload) => post<Category>('/categories', payload),
-    categoriesUpdate: (id, p) => patch<Category>(`/categories/${id}`, p),
-    categoriesDelete: (id) => del<{ ack: boolean }>(`/categories/${id}`),
-    categoriesAssign: (id, payload) => post<{ ack: boolean }>(`/categories/${id}/assign`, payload),
-    categoriesUnassign: (id, payload) => post<{ ack: boolean }>(`/categories/${id}/unassign`, payload),
+    categoriesUpdate: (id, p) => patch<Category>(`/categories/${pathSegment(id)}`, p),
+    categoriesDelete: (id) => del<{ ack: boolean }>(`/categories/${pathSegment(id)}`),
+    categoriesAssign: (id, payload) => post<{ ack: boolean }>(`/categories/${pathSegment(id)}/assign`, payload),
+    categoriesUnassign: (id, payload) => post<{ ack: boolean }>(`/categories/${pathSegment(id)}/unassign`, payload),
 
     watchList: () => get<WatchFolder[]>('/watch'),
     watchAdd: (payload) => post<WatchFolder>('/watch', payload),
-    watchRemove: (id) => del<{ ack: boolean }>(`/watch/${id}`),
-    watchToggle: (id, payload) => post<WatchFolder>(`/watch/${id}/toggle`, payload),
+    watchRemove: (id) => del<{ ack: boolean }>(`/watch/${pathSegment(id)}`),
+    watchToggle: (id, payload) => post<WatchFolder>(`/watch/${pathSegment(id)}/toggle`, payload),
 
     librarySwitch: (payload) => post<{ ack: boolean }>('/library/switch', payload),
 
@@ -689,77 +696,77 @@ export function createServerClient(
 
     aiProvidersList: () => get<AiProvider[]>('/ai/providers'),
     aiProvidersCreate: (input) => post<AiProvider>('/ai/providers', input),
-    aiProvidersUpdate: (id, input) => patch<AiProvider>(`/ai/providers/${id}`, input),
-    aiProvidersDelete: (id) => del<{ ack: boolean }>(`/ai/providers/${id}`),
-    aiProvidersTest: (id) => post<{ ok: boolean; model?: string }>(`/ai/providers/${id}/test`),
+    aiProvidersUpdate: (id, input) => patch<AiProvider>(`/ai/providers/${pathSegment(id)}`, input),
+    aiProvidersDelete: (id) => del<{ ack: boolean }>(`/ai/providers/${pathSegment(id)}`),
+    aiProvidersTest: (id) => post<{ ok: boolean; model?: string }>(`/ai/providers/${pathSegment(id)}/test`),
     aiProvidersModels: (provider) => post<{ ok: boolean; models: string[]; error?: string }>('/ai/providers/models', provider),
 
     agentProfilesList: () => get<AgentProfile[]>('/ai/agent-profiles'),
     agentProfilesCreate: (input) => post<AgentProfile>('/ai/agent-profiles', input),
-    agentProfilesUpdate: (id, input) => patch<AgentProfile>(`/ai/agent-profiles/${id}`, input),
-    agentProfilesDelete: (id) => del<{ ack: boolean }>(`/ai/agent-profiles/${id}`),
-    agentProfilesTest: (id) => post<AgentProfileTestResult>(`/ai/agent-profiles/${id}/test`),
-    agentProfilesModels: (id) => post<{ ok: boolean; models: CliModelInfo[]; error?: string }>(`/ai/agent-profiles/${id}/models`),
+    agentProfilesUpdate: (id, input) => patch<AgentProfile>(`/ai/agent-profiles/${pathSegment(id)}`, input),
+    agentProfilesDelete: (id) => del<{ ack: boolean }>(`/ai/agent-profiles/${pathSegment(id)}`),
+    agentProfilesTest: (id) => post<AgentProfileTestResult>(`/ai/agent-profiles/${pathSegment(id)}/test`),
+    agentProfilesModels: (id) => post<{ ok: boolean; models: CliModelInfo[]; error?: string }>(`/ai/agent-profiles/${pathSegment(id)}/models`),
     agentProfilesScanRuntimes: () => get<CliRuntimeInfo[]>('/ai/cli-runtimes'),
 
-    aiDocTextGet: (id) => get<{ text: string }>(`/ai/doc-text/${id}`),
+    aiDocTextGet: (id) => get<{ text: string }>(`/ai/doc-text/${pathSegment(id)}`),
     aiSummarize: (payload) => post<{ summaryId: string }>('/ai/summarize', payload),
-    aiSummaryGet: (id) => get<AiSummary | null>(`/ai/summary/${id}`),
+    aiSummaryGet: (id) => get<AiSummary | null>(`/ai/summary/${pathSegment(id)}`),
 
     aiChatSend: (payload) => post<{ runId: string; threadId: string }>('/ai/chat/send', payload),
     aiChatResume: (payload) => post<{ runId: string }>('/ai/chat/resume', payload),
     aiChatCancel: (payload) => post<{ ack: boolean }>('/ai/chat/cancel', payload),
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
     aiUsageStats: () => get<AiUsageStats>('/ai/usage'),
-    aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${id}/history`),
-    aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${id}/traces`),
-    aiChatRun: (id) => get<AgentRun>(`/ai/chat/runs/${id}`),
-    aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/runs/${id}/pending-interrupt`),
-    aiChatDeleteThread: (id) => del<{ ack: boolean }>(`/ai/chat/threads/${id}`),
-    aiChatRenameThread: (id, payload) => patch<ChatThread>(`/ai/chat/threads/${id}`, payload),
+    aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${pathSegment(id)}/history`),
+    aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${pathSegment(id)}/traces`),
+    aiChatRun: (id) => get<AgentRun>(`/ai/chat/runs/${pathSegment(id)}`),
+    aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/runs/${pathSegment(id)}/pending-interrupt`),
+    aiChatDeleteThread: (id) => del<{ ack: boolean }>(`/ai/chat/threads/${pathSegment(id)}`),
+    aiChatRenameThread: (id, payload) => patch<ChatThread>(`/ai/chat/threads/${pathSegment(id)}`, payload),
     aiChatMemories: (workspaceId) => get<WorkspaceAgentMemory[]>('/ai/memories', { workspaceId: workspaceId ?? undefined }),
     aiChatUpdateMemory: (workspaceId, path, payload) => put<WorkspaceAgentMemory>('/ai/memories', { workspaceId, path, value: payload.value }),
     aiChatDeleteMemory: (workspaceId, path) => del<{ ack: boolean }>('/ai/memories', { workspaceId: workspaceId ?? undefined, path }),
 
     aiReportsList: (workspaceId) => get<AiReport[]>('/ai/reports', { workspaceId }),
-    aiReportsDelete: (id) => del<{ ack: boolean }>(`/ai/reports/${id}`),
-    aiReportsUpdate: (id, changes) => patch<AiReport>(`/ai/reports/${id}`, changes),
+    aiReportsDelete: (id) => del<{ ack: boolean }>(`/ai/reports/${pathSegment(id)}`),
+    aiReportsUpdate: (id, changes) => patch<AiReport>(`/ai/reports/${pathSegment(id)}`, changes),
 
     workspacesList: () => get<Workspace[]>('/workspaces'),
     workspacesCreate: (payload) => post<Workspace>('/workspaces', payload),
-    workspacesUpdate: (id, payload) => patch<Workspace>(`/workspaces/${id}`, payload),
-    workspacesDelete: (id) => del<{ ack: boolean }>(`/workspaces/${id}`),
-    workspacesOpenSandbox: (id) => post<{ ack: boolean }>(`/workspaces/${id}/open-sandbox`),
+    workspacesUpdate: (id, payload) => patch<Workspace>(`/workspaces/${pathSegment(id)}`, payload),
+    workspacesDelete: (id) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}`),
+    workspacesOpenSandbox: (id) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/open-sandbox`),
 
-    workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${id}/items`),
-    workspaceItemGet: (id) => get<WorkspaceItem>(`/workspace-items/${id}`),
-    workspaceItemsCreate: (id, input) => post<WorkspaceItem>(`/workspaces/${id}/items`, input),
-    workspaceItemsCreateBatch: (id, input) => post<WorkspaceItem[]>(`/workspaces/${id}/items/batch`, input),
-    workspaceItemsDelete: (id, itemId) => del<{ ack: boolean }>(`/workspaces/${id}/items/${itemId}`),
-    workspaceItemsReorder: (id, payload) => post<{ ack: boolean }>(`/workspaces/${id}/items/reorder`, payload),
-    workspaceItemResize: (id, itemId, payload) => patch<WorkspaceItem>(`/workspaces/${id}/items/${itemId}/size`, payload),
-    workspaceItemMove: (id, payload) => post<WorkspaceItem>(`/workspaces/${id}/items/move`, payload),
+    workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items`),
+    workspaceItemGet: (id) => get<WorkspaceItem>(`/workspace-items/${pathSegment(id)}`),
+    workspaceItemsCreate: (id, input) => post<WorkspaceItem>(`/workspaces/${pathSegment(id)}/items`, input),
+    workspaceItemsCreateBatch: (id, input) => post<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items/batch`, input),
+    workspaceItemsDelete: (id, itemId) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/items/${pathSegment(itemId)}`),
+    workspaceItemsReorder: (id, payload) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/items/reorder`, payload),
+    workspaceItemResize: (id, itemId, payload) => patch<WorkspaceItem>(`/workspaces/${pathSegment(id)}/items/${pathSegment(itemId)}/size`, payload),
+    workspaceItemMove: (id, payload) => post<WorkspaceItem>(`/workspaces/${pathSegment(id)}/items/move`, payload),
 
-    workspaceAssetsList: (id) => get<WorkspaceAsset[]>(`/workspaces/${id}/assets`),
-    workspaceAssetGet: (id) => get<WorkspaceAsset>(`/workspace-assets/${id}`),
-    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${id}/assets/files`, payload),
-    workspaceFilesAdd: (id, payload) => post<WorkspaceFileImportResult>(`/workspaces/${id}/files`, payload),
-    workspaceAssetPreview: (id, assetId) => get<WorkspaceAssetTextPreview>(`/workspaces/${id}/assets/${assetId}/preview`),
-    workspaceAssetOpen: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/open`),
-    workspaceAssetReveal: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}/reveal`),
-    workspaceAssetDelete: (id, assetId) => del<{ ack: boolean }>(`/workspaces/${id}/assets/${assetId}`),
+    workspaceAssetsList: (id) => get<WorkspaceAsset[]>(`/workspaces/${pathSegment(id)}/assets`),
+    workspaceAssetGet: (id) => get<WorkspaceAsset>(`/workspace-assets/${pathSegment(id)}`),
+    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${pathSegment(id)}/assets/files`, payload),
+    workspaceFilesAdd: (id, payload) => post<WorkspaceFileImportResult>(`/workspaces/${pathSegment(id)}/files`, payload),
+    workspaceAssetPreview: (id, assetId) => get<WorkspaceAssetTextPreview>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}/preview`),
+    workspaceAssetOpen: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}/open`),
+    workspaceAssetReveal: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}/reveal`),
+    workspaceAssetDelete: (id, assetId) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}`),
 
-    workspaceCanvasGet: (id) => get<unknown>(`/workspaces/${id}/canvas`),
-    workspaceCanvasUpdate: (id, canvas) => put<unknown>(`/workspaces/${id}/canvas`, canvas),
-    workspaceConnectionsList: (id) => get<WorkspaceConnection[]>(`/workspaces/${id}/connections`),
-    workspaceConnectionGet: (id) => get<WorkspaceConnection>(`/workspace-connections/${id}`),
-    workspaceConnectionsCreate: (id, input) => post<WorkspaceConnection>(`/workspaces/${id}/connections`, input),
-    workspaceConnectionsDelete: (id, connectionId) => del<{ ack: boolean }>(`/workspaces/${id}/connections/${connectionId}`),
-    workspaceNotesList: (id) => get<WorkspaceNote[]>(`/workspaces/${id}/notes`),
-    workspaceNoteGet: (id) => get<WorkspaceNote>(`/workspace-notes/${id}`),
-    workspaceNotesCreate: (id, input) => post<WorkspaceNote>(`/workspaces/${id}/notes`, input),
-    workspaceNotesUpdate: (id, noteId, input) => patch<WorkspaceNote>(`/workspaces/${id}/notes/${noteId}`, input),
-    workspaceNotesDelete: (id, noteId) => del<{ ack: boolean }>(`/workspaces/${id}/notes/${noteId}`),
+    workspaceCanvasGet: (id) => get<unknown>(`/workspaces/${pathSegment(id)}/canvas`),
+    workspaceCanvasUpdate: (id, canvas) => put<unknown>(`/workspaces/${pathSegment(id)}/canvas`, canvas),
+    workspaceConnectionsList: (id) => get<WorkspaceConnection[]>(`/workspaces/${pathSegment(id)}/connections`),
+    workspaceConnectionGet: (id) => get<WorkspaceConnection>(`/workspace-connections/${pathSegment(id)}`),
+    workspaceConnectionsCreate: (id, input) => post<WorkspaceConnection>(`/workspaces/${pathSegment(id)}/connections`, input),
+    workspaceConnectionsDelete: (id, connectionId) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/connections/${pathSegment(connectionId)}`),
+    workspaceNotesList: (id) => get<WorkspaceNote[]>(`/workspaces/${pathSegment(id)}/notes`),
+    workspaceNoteGet: (id) => get<WorkspaceNote>(`/workspace-notes/${pathSegment(id)}`),
+    workspaceNotesCreate: (id, input) => post<WorkspaceNote>(`/workspaces/${pathSegment(id)}/notes`, input),
+    workspaceNotesUpdate: (id, noteId, input) => patch<WorkspaceNote>(`/workspaces/${pathSegment(id)}/notes/${pathSegment(noteId)}`, input),
+    workspaceNotesDelete: (id, noteId) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/notes/${pathSegment(noteId)}`),
 
     mineruStatus: () => get<MineruEngineStatus>('/mineru/status'),
     mineruChooseInstallRoot: () => post<MineruEngineStatus>('/mineru/choose-install-root'),
@@ -769,7 +776,7 @@ export function createServerClient(
     ocrStart: (payload) => post<{ jobId: string }>('/ocr/start', payload),
     ocrCancel: (payload) => post<OcrJob>('/ocr/cancel', payload),
     ocrState: (documentId) => get<OcrDocumentState>('/ocr/state', { documentId }),
-    ocrMarkdown: (documentId, resultKey) => get<{ markdown: string }>(`/ocr/documents/${documentId}/results/${resultKey}/markdown`),
+    ocrMarkdown: (documentId, resultKey) => get<{ markdown: string }>(`/ocr/documents/${pathSegment(documentId)}/results/${pathSegment(resultKey)}/markdown`),
 
     exportJson: (payload) => post<unknown>('/export/json', payload),
     exportBibtex: (payload) => post<{ bibtex: string }>('/export/bibtex', payload),
@@ -1000,6 +1007,10 @@ export function createServerClient(
     ws = socket
     try {
       await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup()
+          reject(makeError('ws_timeout', `WebSocket handshake timed out after ${wsHandshakeTimeoutMs}ms: ${url}`))
+        }, wsHandshakeTimeoutMs)
         const onOpen = (): void => {
           cleanup()
           reconnectAttempts = 0
@@ -1020,6 +1031,7 @@ export function createServerClient(
           reject(makeError('ws_closed', `Connection closed before opening: ${url}`))
         }
         const cleanup = (): void => {
+          clearTimeout(timer)
           socket.removeEventListener('open', onOpen)
           socket.removeEventListener('error', onError)
           socket.removeEventListener('close', onClose)

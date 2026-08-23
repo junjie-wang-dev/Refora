@@ -465,14 +465,6 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             persisted = repos["agentRuns"]["get"](run_id)
             current = persisted["status"] if persisted else current
         final_text = partial
-        if final_text and status == RUN_STATUS_FAILED:
-            final_text = f"{final_text}\n\n[Response interrupted: {error}]"
-        if (
-            not final_text
-            and status == RUN_STATUS_CANCELLED
-            and "newer run" not in error
-        ):
-            final_text = "[Response cancelled by user]"
         assistant_message = None
         if final_text:
             assistant_message = repos["chat"]["addMessage"](

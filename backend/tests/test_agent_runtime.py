@@ -661,6 +661,11 @@ def test_send_failure_persists_failed_run_and_error_event(repos, db):
     assert result["status"] == "failed"
     assert repos["agentRuns"]["get"]("run-1")["status"] == "failed"
     assert repos["agentTraces"]["listByRun"]("run-1")[0]["status"] == "error"
+    assert [
+        message
+        for message in repos["chat"]["listMessages"]("thread-1")
+        if message["role"] == "assistant"
+    ] == []
     error = next(payload for event, payload in seen if event == "ai.chat.error")
     assert "secret-api-key" not in error["message"]
 
@@ -699,7 +704,37 @@ def test_cancel_terminalizes_active_run(repos, db):
     assert cancelled_runs == ["run-1"]
     assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
     assert repos["agentTraces"]["listByRun"]("run-1")[0]["status"] == "cancelled"
-    assert repos["chat"]["listMessages"]("thread-1")[-1]["content"] == "Starting"
+    cancelled_message = repos["chat"]["listMessages"]("thread-1")[-1]
+    assert cancelled_message["content"] == "Starting"
+    assert cancelled_message["runId"] == "run-1"
+    assert cancelled_message["runStatus"] == "cancelled"
+
+
+def test_cancel_without_partial_does_not_persist_assistant_message(repos, db):
+    insert_thread(db)
+    repos["agentRuns"]["create"](
+        {
+            "id": "run-1",
+            "threadId": "thread-1",
+            "providerId": "provider-1",
+            "modelId": "model-1",
+            "status": "running",
+        }
+    )
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createModel": lambda provider: "model",
+            "createAgent": lambda model, tools, req: Agent(),
+        },
+    )
+
+    result = asyncio.run(runtime["cancel"]("run-1"))
+
+    assert result == {"runId": "run-1", "cancelled": True}
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
+    assert repos["chat"]["listMessages"]("thread-1") == []
 
 
 def test_delete_thread_removes_checkpoint_rows(repos, db, tmp_path):
@@ -1600,8 +1635,9 @@ def test_failure_preserves_partial_response_and_emits_done(repos, db):
     assert result["status"] == "failed"
     assistant = repos["chat"]["listMessages"]("thread-1")[-1]
     assert assistant["role"] == "assistant"
-    assert assistant["content"].startswith("Partial answer")
-    assert "provider disconnected" in assistant["content"]
+    assert assistant["content"] == "Partial answer"
+    assert assistant["runId"] == "run-1"
+    assert assistant["runStatus"] == "failed"
     assert any(event == "ai.chat.done" for event, _ in seen)
     error = next(payload for event, payload in seen if event == "ai.chat.error")
     assert error["partialText"] == assistant["content"]

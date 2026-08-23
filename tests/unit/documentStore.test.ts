@@ -363,6 +363,7 @@ describe('DocumentStore', () => {
       await vi.advanceTimersByTimeAsync(200)
 
       expect(useDocumentStore.getState().searchResults).toEqual([])
+      expect(useDocumentStore.getState().toastMessage).toBe('search failed')
     })
 
     it('ignores an older in-flight search response', async () => {
@@ -700,6 +701,46 @@ describe('DocumentStore', () => {
       await useDocumentStore.getState().toggleStar('doc-1')
 
       expect(useDocumentStore.getState().documents[0].starred).toBe(0)
+      expect(useDocumentStore.getState().toastMessage).toBe('Failed to update star')
+    })
+
+    it('serializes rapid toggles so the final backend value matches the UI', async () => {
+      let resolveFirst!: () => void
+      mockSetStarred
+        .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = resolve }))
+        .mockResolvedValueOnce(undefined)
+      useDocumentStore.setState({ documents: [makeDoc({ starred: 0 })] })
+
+      const first = useDocumentStore.getState().toggleStar('doc-1')
+      const second = useDocumentStore.getState().toggleStar('doc-1')
+
+      expect(useDocumentStore.getState().documents[0].starred).toBe(0)
+      expect(mockSetStarred).toHaveBeenCalledTimes(1)
+      expect(mockSetStarred).toHaveBeenNthCalledWith(1, 'doc-1', true)
+
+      resolveFirst()
+      await Promise.all([first, second])
+
+      expect(mockSetStarred).toHaveBeenCalledTimes(2)
+      expect(mockSetStarred).toHaveBeenNthCalledWith(2, 'doc-1', false)
+      expect(useDocumentStore.getState().documents[0].starred).toBe(0)
+    })
+
+    it('rolls the UI back to the last confirmed value when the queued toggle fails', async () => {
+      let resolveFirst!: () => void
+      mockSetStarred
+        .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = resolve }))
+        .mockRejectedValueOnce(new Error('second update failed'))
+      useDocumentStore.setState({ documents: [makeDoc({ starred: 0 })] })
+
+      const first = useDocumentStore.getState().toggleStar('doc-1')
+      const second = useDocumentStore.getState().toggleStar('doc-1')
+      resolveFirst()
+      await Promise.all([first, second])
+
+      expect(mockSetStarred).toHaveBeenNthCalledWith(1, 'doc-1', true)
+      expect(mockSetStarred).toHaveBeenNthCalledWith(2, 'doc-1', false)
+      expect(useDocumentStore.getState().documents[0].starred).toBe(1)
       expect(useDocumentStore.getState().toastMessage).toBe('Failed to update star')
     })
 

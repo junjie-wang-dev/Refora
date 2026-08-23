@@ -47,6 +47,22 @@ describe('Python server packaging', () => {
     expect(script).toContain("'langgraph-checkpoint-sqlite'")
   })
 
+  it('repeats artifact and readiness checks against the final packaged app', () => {
+    const verifier = readFileSync('scripts/verify-packaged-sidecar.mjs', 'utf8')
+    const packageScript = readFileSync('scripts/package-macos.sh', 'utf8')
+    const manifestWriter = readFileSync('scripts/write-server-sidecar-manifest.mjs', 'utf8')
+    const sidecarVerifier = readFileSync('scripts/verify-server-sidecar.mjs', 'utf8')
+
+    expect(verifier).toContain("new URL('./verify-server-sidecar.mjs'")
+    expect(verifier).toContain("join(applicationPath, 'Contents', 'Resources', 'python-server')")
+    expect(manifestWriter).toContain('canonicalTreeSha256')
+    expect(sidecarVerifier).toContain('Sidecar dependency tree checksum mismatch')
+    expect(packageScript).toContain('verify-packaged-sidecar.mjs')
+    expect(packageScript.indexOf('electron-builder')).toBeLessThan(
+      packageScript.indexOf('verify-packaged-sidecar.mjs')
+    )
+  })
+
   it('packages only for Apple Silicon on native runners', () => {
     for (const workflow of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
       const contents = readFileSync(workflow, 'utf8')

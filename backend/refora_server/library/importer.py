@@ -17,6 +17,11 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from refora_server.library.paths import isInsideLibrary
+from refora_server.services.document_identity import (
+    file_signature,
+    refresh_document_identity,
+    stored_file_signature,
+)
 
 
 def _now_ms() -> int:
@@ -206,7 +211,20 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                 if path is None:
                     skipped.append(raw)
                     continue
-                if documents["findByPath"](path) is not None:
+                existing_path = documents["findByPath"](path)
+                if existing_path is not None:
+                    signature = file_signature(path)
+                    if (
+                        existing_path.get("fileMissing") == 1
+                        or stored_file_signature(existing_path) != signature
+                    ):
+                        current_hash = await call_work(hash_pdf, path)
+                        refresh_document_identity(
+                            repos,
+                            existing_path,
+                            lambda _path: current_hash,
+                            signature,
+                        )
                     skipped.append(path)
                     continue
                 stored_path = path

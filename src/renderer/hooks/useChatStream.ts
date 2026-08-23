@@ -20,9 +20,11 @@ import type {
 import { useWorkspaceStore } from '../store/workspaceStore'
 import {
   MAX_INPUT_LENGTH,
+  enrichChatMessages,
   pushRecentModel,
   localMessage,
   mergeTraceStep,
+  type ChatTimelineMessage,
   type ChatSendContext,
   type ChatReplacementOptions,
   type UseChatStreamParams,
@@ -38,7 +40,6 @@ interface ResumeRetryContext {
 const MIN_LIVE_ACTIVITY_MS = 160
 const RUN_RECOVERY_POLL_MS = 5000
 const LIVE_ACTIVITY_TOOL_NAMES = new Set(['write_file', 'edit_file', 'write_todos'])
-const CANCELLED_RESPONSE = '[Response cancelled by user]'
 
 function latestRunStep(steps: AgentTraceStep[], runId?: string | null): AgentTraceStep | null {
   const candidates = steps
@@ -112,7 +113,7 @@ export function useChatStream({
 }: UseChatStreamParams): UseChatStreamReturn {
   const { t } = useTranslation()
 
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatTimelineMessage[]>([])
   const [traceSteps, setTraceSteps] = useState<AgentTraceStep[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
@@ -144,6 +145,7 @@ export function useChatStream({
   const stickToBottomRef = useRef(true)
   const disposedRef = useRef(false)
   const traceSnapshotGenerationRef = useRef(0)
+  const historyRequestGenerationRef = useRef(0)
   const reconcileGenerationRef = useRef(0)
   const liveActivityStartedAtRef = useRef(new Map<string, number>())
   const deferredTraceTimersRef = useRef(
@@ -206,16 +208,22 @@ export function useChatStream({
       return
     }
     let cancelled = false
+    const historyRequestGeneration = ++historyRequestGenerationRef.current
     setLoadingHistory(true)
     void Promise.allSettled([
       api.ai.chatHistory(activeThreadId),
       api.ai.chatTraces(activeThreadId)
     ])
       .then(([historyResult, tracesResult]) => {
-        if (cancelled || threadIdRef.current !== activeThreadId) return
+        if (
+          cancelled ||
+          threadIdRef.current !== activeThreadId ||
+          historyRequestGenerationRef.current !== historyRequestGeneration ||
+          isSendingRef.current
+        ) return
         const history = historyResult.status === 'fulfilled' ? historyResult.value : []
         const traces = tracesResult.status === 'fulfilled' ? tracesResult.value : []
-        setMessages(history)
+        setMessages(enrichChatMessages(history, traces))
         setTraceSteps(traces)
         hadMessagesRef.current = history.length > 0
         setLoadingHistory(false)
@@ -317,25 +325,14 @@ export function useChatStream({
       rafIdRef.current = null
     }
     const partial = (options.partialText ?? streamingTextRef.current).trimEnd()
-    const interruptedText = options.error
-      ? tRef.current('workspace.chat.partialInterrupted', {
-          message: options.error,
-          defaultValue: 'Response interrupted: {{message}}'
-        })
-      : ''
-    const suffix = options.status === 'cancelled'
-      ? options.finalText || CANCELLED_RESPONSE
-      : options.status === 'failed'
-        ? interruptedText
-        : ''
-    const preservedPartial = partial
-      ? `${partial}${suffix ? `\n\n${suffix}` : ''}`
-      : options.status === 'cancelled'
-        ? suffix
-        : ''
     const completedText = options.status === 'completed'
       ? options.finalText?.trim() || partial
-      : preservedPartial
+      : partial
+    const terminalStatus = options.status === 'cancelled'
+      ? 'cancelled' as const
+      : options.status === 'failed'
+        ? 'failed' as const
+        : undefined
 
     if (options.traces) {
       traceSnapshotGenerationRef.current += 1
@@ -349,11 +346,22 @@ export function useChatStream({
           traceSnapshotGenerationRef.current !== traceSnapshotGeneration
         ) return
         setTraceSteps((current) => replaceRunTraceSnapshot(current, snapshot, runId))
+        setMessages((current) => enrichChatMessages(current, snapshot))
       }).catch(() => undefined)
     }
     setMessages((previous) => {
-      const base = options.history ?? previous
-      if (!completedText) return base
+      const base = options.history
+        ? enrichChatMessages(options.history, options.traces ?? [])
+        : previous
+      const existingRunMessage = base.find(
+        (message) => message.role === 'assistant' && message.runId === runId
+      )
+      if (existingRunMessage && terminalStatus) {
+        return base.map((message) => message.id === existingRunMessage.id
+          ? { ...message, content: completedText, terminalStatus }
+          : message)
+      }
+      if (!completedText && !terminalStatus) return base
       if (
         options.status === 'completed' &&
         base.some((message) =>
@@ -364,18 +372,12 @@ export function useChatStream({
       ) {
         return base
       }
-      const withoutTerminalPlaceholder = options.status === 'cancelled'
-        ? base.filter((message, index) =>
-            !(
-              index === base.length - 1 &&
-              message.role === 'assistant' &&
-              message.content === (options.finalText || CANCELLED_RESPONSE)
-            )
-          )
-        : base
       return [
-        ...withoutTerminalPlaceholder,
-        localMessage(options.threadId, 'assistant', completedText)
+        ...base,
+        localMessage(options.threadId, 'assistant', completedText, {
+          runId,
+          ...(terminalStatus ? { terminalStatus } : {})
+        })
       ]
     })
     isSendingRef.current = false
@@ -447,7 +449,7 @@ export function useChatStream({
       if (run.status === 'interrupted') {
         const interrupt = await api.ai.chatPendingInterrupt(runId)
         if (!isCurrent()) return
-        setMessages(history)
+        setMessages(enrichChatMessages(history, traces))
         isSendingRef.current = false
         pendingInterruptRef.current = interrupt
         setPendingInterrupt(interrupt)
@@ -526,7 +528,7 @@ export function useChatStream({
       onDone: (payload: ChatDoneEvent) => {
         if (payload.runId !== activeRunIdRef.current) return
         if (threadIdRef.current && payload.threadId !== threadIdRef.current) return
-        const status = cancelledRef.current || payload.finalText === CANCELLED_RESPONSE
+        const status = cancelledRef.current
           ? 'cancelled'
           : 'completed'
         settleRun(payload.runId, {
@@ -647,6 +649,7 @@ export function useChatStream({
   useEffect(() => {
     const resetForLibrarySwitch = () => {
       traceSnapshotGenerationRef.current += 1
+      historyRequestGenerationRef.current += 1
       reconcileGenerationRef.current += 1
       if (rafIdRef.current != null) {
         cancelAnimationFrame(rafIdRef.current)
@@ -777,6 +780,8 @@ export function useChatStream({
       return
     }
     traceSnapshotGenerationRef.current += 1
+    historyRequestGenerationRef.current += 1
+    setLoadingHistory(false)
     setMessages((prev) => [...prev, localMessage(existingThread ?? '', 'user', text)])
     setStreaming(true)
     isSendingRef.current = true

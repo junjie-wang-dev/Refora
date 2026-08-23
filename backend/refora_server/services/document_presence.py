@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 from typing import Any
+
+from refora_server.services.document_identity import (
+    file_signature,
+    refresh_document_identity,
+    stored_file_signature,
+    stream_file_hash,
+)
 
 
 def create_document_presence_service(
@@ -26,8 +32,42 @@ def create_document_presence_service(
         rows = documents["list"]({"mode": "all"})
         for index, document in enumerate(rows):
             path = document.get("filePath")
-            exists = isinstance(path, str) and os.path.exists(path)
+            signature = None
+            if isinstance(path, str) and path:
+                try:
+                    signature = file_signature(path)
+                except (OSError, ValueError):
+                    pass
+            exists = signature is not None
             missing = document.get("fileMissing") == 1
+            if exists and (
+                missing or stored_file_signature(document) != signature
+            ):
+                if not callable(documents.get("updateFileIdentity")):
+                    if missing:
+                        documents["setFileMissing"](document["id"], False)
+                        updated = documents["get"](document["id"])
+                        if updated is not None:
+                            changed.append(updated)
+                            await broadcast(updated)
+                    continue
+                try:
+                    file_hash = await asyncio.to_thread(stream_file_hash, path)
+                    updated = refresh_document_identity(
+                        repos, document, lambda _path: file_hash, signature
+                    )
+                    if updated is not None:
+                        changed.append(updated)
+                        await broadcast(updated)
+                        continue
+                except (OSError, RuntimeError, ValueError):
+                    if missing:
+                        documents["setFileMissing"](document["id"], False)
+                        updated = documents["get"](document["id"])
+                        if updated is not None:
+                            changed.append(updated)
+                            await broadcast(updated)
+                    continue
             if exists == missing:
                 documents["setFileMissing"](document["id"], not exists)
                 updated = documents["get"](document["id"])

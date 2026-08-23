@@ -675,6 +675,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool'
   content: string
   createdAt: number
+  runId?: string
+  runStatus?: AgentRunStatus
 }
 
 export interface AgentTurnIntent {

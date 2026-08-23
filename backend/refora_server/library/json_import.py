@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from refora_server.library.document_ids import is_safe_document_id
 from refora_server.library.paths import isInsideLibrary
 
 
@@ -65,7 +66,10 @@ def sanitizeImportedDoc(doc: Any, libraryFolder: str) -> dict[str, Any] | None:
         return None
     document_id = doc.get("id")
     raw_file_path = doc.get("filePath")
-    if not isinstance(document_id, str) or not document_id or not isinstance(raw_file_path, str):
+    if (
+        not is_safe_document_id(document_id)
+        or not isinstance(raw_file_path, str)
+    ):
         return None
     path = Path(raw_file_path)
     if path.is_absolute():
@@ -136,6 +140,69 @@ def sanitizeImportedDoc(doc: Any, libraryFolder: str) -> dict[str, Any] | None:
     }
 
 
+def _preflight_import(data: dict[str, Any], library_folder: str) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+]:
+    sanitized_documents: list[dict[str, Any]] = []
+    document_ids: set[str] = set()
+    for index, raw_document in enumerate(data["documents"]):
+        document = sanitizeImportedDoc(raw_document, library_folder)
+        if document is None:
+            raise ValueError(f"Invalid export document at index {index}")
+        document_id = document["id"]
+        if document_id in document_ids:
+            raise ValueError(f"Duplicate export document id: {document_id}")
+        document_ids.add(document_id)
+        sanitized_documents.append(document)
+
+    sanitized_categories: list[dict[str, str]] = []
+    category_ids: set[str] = set()
+    category_names: set[str] = set()
+    for index, raw_category in enumerate(data["categories"]):
+        if not isinstance(raw_category, dict):
+            raise ValueError(f"Invalid export category at index {index}")
+        category_id = raw_category.get("id")
+        name = raw_category.get("name")
+        if (
+            not isinstance(category_id, str)
+            or not category_id
+            or not isinstance(name, str)
+            or not name.strip()
+        ):
+            raise ValueError(f"Invalid export category at index {index}")
+        if category_id in category_ids:
+            raise ValueError(f"Duplicate export category id: {category_id}")
+        if name in category_names:
+            raise ValueError(f"Duplicate export category name: {name}")
+        category_ids.add(category_id)
+        category_names.add(name)
+        sanitized_categories.append({"id": category_id, "name": name})
+
+    sanitized_links: list[dict[str, str]] = []
+    links: set[tuple[str, str]] = set()
+    for index, raw_link in enumerate(data["documentCategories"]):
+        if not isinstance(raw_link, dict):
+            raise ValueError(f"Invalid export document category at index {index}")
+        document_id = raw_link.get("documentId")
+        category_id = raw_link.get("categoryId")
+        if not isinstance(document_id, str) or not isinstance(category_id, str):
+            raise ValueError(f"Invalid export document category at index {index}")
+        if document_id not in document_ids or category_id not in category_ids:
+            raise ValueError(f"Inconsistent export document category at index {index}")
+        key = (document_id, category_id)
+        if key in links:
+            raise ValueError(
+                f"Duplicate export document category: {document_id}/{category_id}"
+            )
+        links.add(key)
+        sanitized_links.append(
+            {"documentId": document_id, "categoryId": category_id}
+        )
+    return sanitized_documents, sanitized_categories, sanitized_links
+
+
 def importFromJson(
     repos: dict[str, Any],
     payload: str | dict[str, Any],
@@ -149,11 +216,9 @@ def importFromJson(
     documents = repos["documents"]
     categories = repos["categories"]
     library_folder = _library_folder(repos, options)
-    sanitized_documents = [
-        document
-        for raw_document in data["documents"]
-        if (document := sanitizeImportedDoc(raw_document, library_folder)) is not None
-    ]
+    sanitized_documents, sanitized_categories, sanitized_links = _preflight_import(
+        data, library_folder
+    )
 
     def operation() -> dict[str, int]:
         if mode == "replace":
@@ -162,13 +227,9 @@ def importFromJson(
                 categories["delete"](category["id"])
         category_ids: dict[str, str] = {}
         known_names = {category["name"]: category["id"] for category in categories["list"]()}
-        for category in data["categories"]:
-            if not isinstance(category, dict):
-                continue
-            old_id = category.get("id")
-            name = category.get("name")
-            if not isinstance(old_id, str) or not isinstance(name, str) or not name or old_id in category_ids:
-                continue
+        for category in sanitized_categories:
+            old_id = category["id"]
+            name = category["name"]
             category_ids[old_id] = known_names.get(name) or categories["create"](name)["id"]
             known_names[name] = category_ids[old_id]
         inserted: set[str] = set()
@@ -185,13 +246,9 @@ def importFromJson(
                 documents["insert"](document)
             inserted.add(document["id"])
             count += 1
-        for link in data["documentCategories"]:
-            if not isinstance(link, dict):
-                continue
-            document_id = link.get("documentId")
-            category_id = link.get("categoryId")
-            if not isinstance(document_id, str) or not isinstance(category_id, str):
-                continue
+        for link in sanitized_links:
+            document_id = link["documentId"]
+            category_id = link["categoryId"]
             new_category_id = category_ids.get(category_id)
             if document_id in inserted and new_category_id:
                 if mode == "merge":

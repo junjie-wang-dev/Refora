@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AiProvider, ReforaApi } from '../../src/shared/ipc-types'
+import type { AgentProfile, AiProvider, ReforaApi } from '../../src/shared/ipc-types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -119,6 +119,9 @@ vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 const { AiProvidersSection } = await import(
   '../../src/renderer/components/AiProvidersSection'
 )
+const { AgentProfilesSection } = await import(
+  '../../src/renderer/components/AgentProfilesSection'
+)
 const { default: SettingsModal } = await import(
   '../../src/renderer/components/SettingsModal'
 )
@@ -139,6 +142,8 @@ describe('AiProvidersSection', () => {
     create.mockReset()
     set.mockReset()
     api.aiProviders.list = vi.fn().mockResolvedValue([])
+    api.agentProfiles.list = vi.fn().mockResolvedValue([])
+    api.agentProfiles.scanRuntimes = vi.fn().mockResolvedValue([])
     api.aiProviders.listModels = vi.fn().mockResolvedValue({
       ok: true,
       models: [
@@ -365,6 +370,41 @@ describe('AiProvidersSection', () => {
     expect(screen.getByText('settings.aiProviders.deleteCleanupFail')).toBeInTheDocument()
   })
 
+  it('keeps a deleted Agent runtime removed when related setting cleanup fails', async () => {
+    const profile: AgentProfile = {
+      id: 'cli-profile',
+      name: 'CLI profile to delete',
+      kind: 'cli',
+      apiProviderId: null,
+      cliRuntimeId: 'codex',
+      executablePath: '/usr/local/bin/codex',
+      model: 'default',
+      reasoningEffort: 'medium',
+      nativeWebSearch: true,
+      webSearchPolicy: 'auto',
+      createdAt: 0,
+      updatedAt: 0
+    }
+    api.agentProfiles.list = vi.fn()
+      .mockResolvedValueOnce([profile])
+      .mockRejectedValueOnce(new Error('reload unavailable'))
+    api.agentProfiles.scanRuntimes = vi.fn().mockResolvedValue([])
+    api.agentProfiles.delete = vi.fn().mockResolvedValue(undefined)
+    api.settings.get = vi.fn().mockResolvedValue('')
+    render(<AgentProfilesSection />)
+
+    await screen.findByText('CLI profile to delete')
+    fireEvent.click(screen.getByRole('button', { name: 'common.delete' }))
+
+    await waitFor(() => {
+      expect(api.agentProfiles.delete).toHaveBeenCalledWith(profile.id)
+      expect(screen.queryByText('CLI profile to delete')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText(/settings\.agentProfiles\.deleteCleanupFail/)).toHaveTextContent(
+      'reload unavailable'
+    )
+  })
+
   it('saves an allowed reasoning effort when the model does not support the preset default', async () => {
     api.aiProviders.listModels = vi.fn().mockResolvedValue({
       ok: true,
@@ -471,6 +511,40 @@ describe('AiProvidersSection', () => {
     expect(await screen.findByText('Metadata sync is not available yet')).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: 'Enable metadata sync' })).not.toBeInTheDocument()
     expect(screen.getByText('No library data is being uploaded')).toBeInTheDocument()
+  })
+
+  it('does not let the initial settings load overwrite values after a library switch', async () => {
+    let resolveInitialLibrary!: (value: string) => void
+    let libraryReadCount = 0
+    api.settings.get = vi.fn((key: string, fallback: unknown) => {
+      if (key !== 'libraryFolderPath') return Promise.resolve(fallback)
+      libraryReadCount += 1
+      if (libraryReadCount === 1) {
+        return new Promise<string>((resolve) => { resolveInitialLibrary = resolve })
+      }
+      return Promise.resolve('/libraries/new')
+    }) as typeof api.settings.get
+    api.dialog.openDirectory = vi.fn().mockResolvedValue('/libraries/new')
+    api.library.switch = vi.fn().mockResolvedValue({
+      libraryFolderPath: '/libraries/new',
+      dbExisted: true,
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      errors: []
+    })
+    render(<SettingsModal open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
+    expect(await screen.findByText('/libraries/new')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveInitialLibrary('/libraries/old')
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('/libraries/new')).toBeInTheDocument()
+    expect(screen.queryByText('/libraries/old')).not.toBeInTheDocument()
   })
 
   it('uses a focused sign-up flow and confirms the password before submission', async () => {

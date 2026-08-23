@@ -236,12 +236,27 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         with lock:
             pending: set[str] = state["pending"]
             pending.add(path)
+        loop = _getLoop()
+        if loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(_armDebounce)
+        except RuntimeError:
+            return
+
+    def _armDebounce() -> None:
+        if not state["running"]:
+            return
+        loop = _getLoop()
+        if loop.is_closed():
+            return
+        lock = state["lock"]
+        if lock is None:
+            return
+        with lock:
             timer = state["debounceTimer"]
             if timer is not None:
                 timer.cancel()
-            loop = _getLoop()
-            if loop.is_closed():
-                return
             state["debounceTimer"] = loop.call_later(
                 debounce_ms / 1000.0, _flushImports
             )

@@ -6,6 +6,7 @@ import re
 import stat
 from pathlib import Path
 
+from refora_server.library.document_ids import is_safe_document_id
 from refora_server.repositories.errors import RepoError
 
 SAFE_SEGMENT = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -94,7 +95,9 @@ def get_ocr_root(library_folder: str) -> str:
 
 def get_ocr_document_root(library_folder: str, document_id: str) -> str:
     root = get_ocr_root(library_folder)
-    return require_safe_managed_path(root, os.path.join(root, _require_segment(document_id, "document ID")))
+    if not is_safe_document_id(document_id):
+        raise RepoError("invalid_path", "Invalid OCR document ID")
+    return require_safe_managed_path(root, os.path.join(root, document_id))
 
 
 def get_ocr_result_root(library_folder: str, document_id: str, result_key: str) -> str:

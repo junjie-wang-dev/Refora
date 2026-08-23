@@ -252,6 +252,86 @@ describe('serverLifecycle', () => {
     expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
   })
 
+  it('spawns a detached process group and terminates the whole group on macOS', async () => {
+    if (process.platform !== 'darwin') return
+    let child: FakeChildProcess
+    const spawn = vi.fn(() => {
+      child = createFakeChild()
+      queueMicrotask(() => announce(child, 9010))
+      return child as unknown as ChildProcess
+    })
+    const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals) => {
+      child.emit('close', 0, signal)
+      return true
+    })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9010, token }))
+    const lifecycle = createServerLifecycle(makeDeps({
+      spawnChild: spawn,
+      signalProcessGroup
+    }))
+
+    await lifecycle.start()
+    await lifecycle.stop()
+
+    expect(spawn).toHaveBeenCalledWith(
+      '/usr/bin/python3',
+      expect.any(Array),
+      expect.objectContaining({ detached: true })
+    )
+    expect(signalProcessGroup).toHaveBeenCalledWith(child.pid, 'SIGTERM')
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  it('cleans the detached process group after an unexpected sidecar exit', async () => {
+    if (process.platform !== 'darwin') return
+    let child: FakeChildProcess
+    const spawn = vi.fn(() => {
+      child = createFakeChild()
+      queueMicrotask(() => announce(child, 9011))
+      return child as unknown as ChildProcess
+    })
+    const signalProcessGroup = vi.fn(() => true)
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9011, token }))
+    const lifecycle = createServerLifecycle(makeDeps({
+      spawnChild: spawn,
+      signalProcessGroup
+    }))
+    await lifecycle.start()
+
+    child.emit('close', 1, null)
+
+    expect(signalProcessGroup).toHaveBeenCalledWith(child.pid, 'SIGKILL')
+  })
+
+  it('terminates the detached process group after a failed health check', async () => {
+    if (process.platform !== 'darwin') return
+    let child: FakeChildProcess
+    const spawn = vi.fn(() => {
+      child = createFakeChild()
+      queueMicrotask(() => announce(child, 9012))
+      return child as unknown as ChildProcess
+    })
+    const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals) => {
+      if (signal === 'SIGTERM') child.emit('close', null, signal)
+      return true
+    })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9012, token }))
+    mockFetchHealth.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const lifecycle = createServerLifecycle(makeDeps({
+      spawnChild: spawn,
+      signalProcessGroup,
+      healthIntervalMs: 100,
+      healthTimeoutMs: 50
+    }))
+    await lifecycle.start()
+
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(signalProcessGroup).toHaveBeenCalledWith(child.pid, 'SIGTERM')
+    expect(signalProcessGroup).toHaveBeenCalledWith(child.pid, 'SIGKILL')
+    await lifecycle.stop()
+  })
+
   it('falls back to SIGKILL after the grace period on stop', async () => {
     const spawn = makeSpawn((child) => {
       announce(child, 9001)

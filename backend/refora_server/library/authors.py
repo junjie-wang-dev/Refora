@@ -5,6 +5,16 @@ from collections.abc import Iterable
 
 _DBLP_SUFFIX = re.compile(r"\s+\d{4}$")
 _SUFFIX = re.compile(r"^(?:Jr\.?|Sr\.?|II|III|IV|V)$", re.IGNORECASE)
+_ORGANIZATION_SUFFIX = re.compile(
+    r"^(?:inc\.?|ltd\.?|llc|llp|plc|gmbh|ag|s\.?a\.?|corp\.?|corporation|co\.?|company)$",
+    re.IGNORECASE,
+)
+_ORGANIZATION_WORD = re.compile(
+    r"\b(?:university|institute|institution|laborator(?:y|ies)|department|cent(?:er|re)|"
+    r"association|society|corporation|company|foundation|organi[sz]ation|committee|"
+    r"consortium|council|agency|ministry|hospital|school|college|academy|government)\b",
+    re.IGNORECASE,
+)
 
 
 def normalizeAuthorName(value: str) -> str:
@@ -18,6 +28,8 @@ def normalizeAuthorName(value: str) -> str:
         return author
     if re.fullmatch(r"\d{4}", parts[0]):
         return " ".join(parts[1:])
+    if _ORGANIZATION_SUFFIX.fullmatch(parts[-1]) or _ORGANIZATION_WORD.search(author):
+        return ", ".join(parts)
 
     family = parts[0]
     if len(parts) >= 3 and _SUFFIX.fullmatch(parts[1]):

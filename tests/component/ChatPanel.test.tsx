@@ -49,6 +49,7 @@ const ChatPanelModule = await import('../../src/renderer/components/workspace/Ch
 const ChatPanel = ChatPanelModule.default
 const { parseReforaDocLink } = ChatPanelModule
 const { useChatStream } = await import('../../src/renderer/hooks/useChatStream')
+const { enrichChatMessages } = await import('../../src/renderer/utils/chatUtils')
 const { AgentTracePanel } = await import('../../src/renderer/components/workspace/AgentTrace')
 const ChatMessages = (await import('../../src/renderer/components/workspace/ChatMessages')).default
 const ChatInput = (await import('../../src/renderer/components/workspace/ChatInput')).default
@@ -954,6 +955,242 @@ function renderMessages(overrides: Partial<Parameters<typeof ChatMessages>[0]> =
 }
 
 describe('ChatMessages presentation', () => {
+  it('associates repeated assistant text with the run that finished before each message', () => {
+    const messages: ChatMessage[] = [
+      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Same answer', createdAt: 10 },
+      { id: 'a2', threadId: 't1', role: 'assistant', content: 'Same answer', createdAt: 30 }
+    ]
+    const makeTrace = (
+      id: string,
+      runId: string,
+      kind: AgentTraceStep['kind'],
+      startedAt: number,
+      endedAt: number,
+      output: string | null
+    ): AgentTraceStep => ({
+      id,
+      threadId: 't1',
+      runId,
+      kind,
+      name: kind === 'run' ? 'agent_run' : 'assistant_message',
+      input: null,
+      output,
+      status: 'done',
+      startedAt,
+      endedAt,
+      seq: kind === 'run' ? 0 : 1,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
+    })
+    const traces = [
+      makeTrace('run-1', 'run-1', 'run', 1, 5, null),
+      makeTrace('message-1', 'run-1', 'message', 4, 5, 'Same answer'),
+      makeTrace('run-2', 'run-2', 'run', 20, 25, null),
+      makeTrace('message-2', 'run-2', 'message', 24, 25, 'Same answer')
+    ]
+
+    expect(enrichChatMessages(messages, traces).map((message) => message.runId)).toEqual([
+      'run-1',
+      'run-2'
+    ])
+  })
+
+  it('prefers persisted run ids when overlapping runs produce identical text', () => {
+    const messages: ChatMessage[] = [
+      {
+        id: 'a1', threadId: 't1', role: 'assistant', content: 'Same answer', createdAt: 10,
+        runId: 'run-1', runStatus: 'completed'
+      },
+      {
+        id: 'a2', threadId: 't1', role: 'assistant', content: 'Same answer', createdAt: 11,
+        runId: 'run-2', runStatus: 'completed'
+      }
+    ]
+    const base = {
+      threadId: 't1', kind: 'run' as const, name: 'agent_run', input: null,
+      output: 'Same answer', status: 'done' as const, seq: 0, inputTokens: null,
+      outputTokens: null, totalTokens: null, parentStepId: null, agentName: null,
+      namespace: null, depth: 0, checkpointId: null
+    }
+    const traces: AgentTraceStep[] = [
+      { ...base, id: 'trace-1', runId: 'run-1', startedAt: 1, endedAt: 8 },
+      { ...base, id: 'trace-2', runId: 'run-2', startedAt: 2, endedAt: 9 }
+    ]
+
+    expect(enrichChatMessages(messages, traces).map((message) => message.runId)).toEqual([
+      'run-1',
+      'run-2'
+    ])
+  })
+
+  it('keeps failed and completed answers associated with their own runs', () => {
+    const messages: ChatMessage[] = [
+      { id: 'a1', threadId: 't1', role: 'assistant', content: 'Partial answer', createdAt: 10 },
+      { id: 'a2', threadId: 't1', role: 'assistant', content: 'Completed answer', createdAt: 30 }
+    ]
+    const base = {
+      threadId: 't1',
+      name: 'agent_run',
+      input: null,
+      seq: 0,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
+    }
+    const traces: AgentTraceStep[] = [
+      {
+        ...base,
+        id: 'failed-run',
+        runId: 'run-failed',
+        kind: 'run',
+        output: 'Provider failed',
+        status: 'error',
+        startedAt: 1,
+        endedAt: 9
+      },
+      {
+        ...base,
+        id: 'failed-message',
+        runId: 'run-failed',
+        kind: 'message',
+        name: 'assistant_message',
+        output: 'Partial answer',
+        status: 'done',
+        startedAt: 8,
+        endedAt: 9,
+        seq: 1
+      },
+      {
+        ...base,
+        id: 'completed-run',
+        runId: 'run-completed',
+        kind: 'run',
+        output: 'Completed answer',
+        status: 'done',
+        startedAt: 20,
+        endedAt: 29
+      },
+      {
+        ...base,
+        id: 'completed-message',
+        runId: 'run-completed',
+        kind: 'message',
+        name: 'assistant_message',
+        output: 'Completed answer',
+        status: 'done',
+        startedAt: 28,
+        endedAt: 29,
+        seq: 1
+      }
+    ]
+
+    expect(enrichChatMessages(messages, traces)).toMatchObject([
+      { runId: 'run-failed', terminalStatus: 'failed' },
+      { runId: 'run-completed' }
+    ])
+  })
+
+  it('binds a persisted cancelled partial from terminal run output without adding a placeholder', () => {
+    const messages: ChatMessage[] = [{
+      id: 'partial',
+      threadId: 't1',
+      role: 'assistant',
+      content: 'Persisted partial',
+      createdAt: 10
+    }]
+    const trace: AgentTraceStep = {
+      id: 'cancelled-run',
+      threadId: 't1',
+      runId: 'run-cancelled',
+      kind: 'run',
+      name: 'agent_run',
+      input: null,
+      output: 'Persisted partial',
+      status: 'cancelled',
+      startedAt: 1,
+      endedAt: 9,
+      seq: 0,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
+    }
+
+    expect(enrichChatMessages(messages, [trace])).toMatchObject([{
+      id: 'partial',
+      content: 'Persisted partial',
+      runId: 'run-cancelled',
+      terminalStatus: 'cancelled'
+    }])
+  })
+
+  it('clears an earlier failed terminal status when the same run later completes', () => {
+    const message = {
+      id: 'partial',
+      threadId: 't1',
+      role: 'assistant' as const,
+      content: 'Recovered answer',
+      createdAt: 10,
+      runId: 'run-recovered',
+      terminalStatus: 'failed' as const
+    }
+    const completed = {
+      ...makeRunStep('run-recovered', 'done'),
+      threadId: 't1',
+      output: 'Recovered answer',
+      startedAt: 1,
+      endedAt: 9
+    }
+
+    expect(enrichChatMessages([message], [completed])).toEqual([{
+      id: 'partial',
+      threadId: 't1',
+      role: 'assistant',
+      content: 'Recovered answer',
+      createdAt: 10,
+      runId: 'run-recovered'
+    }])
+  })
+
+  it('does not let a stale running trace erase an explicit live terminal status', () => {
+    const message = {
+      id: 'cancelled',
+      threadId: 't1',
+      role: 'assistant' as const,
+      content: 'Partial',
+      createdAt: 10,
+      runId: 'run-cancelled',
+      runStatus: 'running' as const,
+      terminalStatus: 'cancelled' as const
+    }
+    const staleRunning = {
+      ...makeRunStep('run-cancelled', 'running'),
+      threadId: 't1',
+      output: 'Partial',
+      startedAt: 1
+    }
+
+    expect(enrichChatMessages([message], [staleRunning])).toMatchObject([{
+      runId: 'run-cancelled',
+      terminalStatus: 'cancelled'
+    }])
+  })
+
   it('shows the latest todo plan at the top and strikes completed items', () => {
     const todoStep = makeTodoStep('todo-2', 2, [
       { content: 'Inspect the papers', status: 'completed' },
@@ -1306,6 +1543,43 @@ describe('ChatMessages presentation', () => {
     expect(screen.getByText('workspace.chat.traceLlmDone')).toBeInTheDocument()
   })
 
+  it('renders persisted failed status without trace steps as a localized interruption', () => {
+    const messages: ChatMessage[] = [{
+      id: 'failed-answer',
+      threadId: 't1',
+      role: 'assistant',
+      content: 'Partial persisted answer',
+      createdAt: 20,
+      runId: 'run-failed',
+      runStatus: 'failed'
+    }]
+
+    renderMessages({ messages, traceSteps: [], streaming: false })
+
+    expect(screen.getByText('Partial persisted answer')).toBeInTheDocument()
+    expect(screen.getByText('workspace.chat.traceCompletedError')).toBeInTheDocument()
+    expect(screen.getByText('workspace.chat.runFailed')).toBeInTheDocument()
+    expect(screen.queryByText('workspace.chat.traceLlmDone')).not.toBeInTheDocument()
+  })
+
+  it('renders persisted cancelled status without trace steps with a cancelled run label', () => {
+    const messages: ChatMessage[] = [{
+      id: 'cancelled-answer',
+      threadId: 't1',
+      role: 'assistant',
+      content: '',
+      createdAt: 20,
+      runId: 'run-cancelled',
+      runStatus: 'cancelled'
+    }]
+
+    renderMessages({ messages, traceSteps: [], streaming: false })
+
+    expect(screen.getByText('workspace.chat.traceCancelledLabel')).toBeInTheDocument()
+    expect(screen.getByText('workspace.chat.responseCancelled')).toBeInTheDocument()
+    expect(screen.queryByText('workspace.chat.traceLlmDone')).not.toBeInTheDocument()
+  })
+
   it('keeps resumed run steps chronological and expandable after completion', () => {
     const messages: ChatMessage[] = [
       { id: 'a1', threadId: 't1', role: 'assistant', content: 'Final answer', createdAt: 100 }
@@ -1495,6 +1769,39 @@ function renderChatStream(
 }
 
 describe('useChatStream lifecycle', () => {
+  it('does not let a late history response overwrite a message sent while history loads', async () => {
+    let resolveHistory!: (messages: ChatMessage[]) => void
+    setupApi([])
+    mockChatHistory.mockReturnValue(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+    await waitFor(() => expect(result.current.loadingHistory).toBe(true))
+
+    await act(async () => {
+      await result.current.sendText('New message', [], 'thread-1')
+    })
+    expect(result.current.messages.at(-1)?.content).toBe('New message')
+
+    await act(async () => {
+      resolveHistory([makeMessage('Stale history')])
+      await Promise.resolve()
+    })
+
+    expect(result.current.messages.map((message) => message.content)).toContain('New message')
+    expect(result.current.messages.map((message) => message.content)).not.toContain('Stale history')
+  })
+
   it('settles an active run when the library changes', async () => {
     const setChatStreaming = vi.fn()
     setupApi([])
@@ -1568,6 +1875,38 @@ describe('useChatStream lifecycle', () => {
     expect(result.current.messages).toEqual([])
     expect(result.current.traceSteps).toEqual(traces)
     expect(result.current.error).toBe('history unavailable')
+  })
+
+  it('restores a localized cancelled response from terminal traces without persisted text', async () => {
+    const cancelledTrace = makeRunStep('cancelled-run', 'cancelled')
+    setupApi([])
+    mockChatTraces.mockResolvedValue([cancelledTrace])
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+
+    expect(result.current.messages).toMatchObject([{
+      content: '',
+      runId: cancelledTrace.runId,
+      terminalStatus: 'cancelled'
+    }])
+    renderMessages({
+      messages: result.current.messages,
+      traceSteps: result.current.traceSteps,
+      streaming: false
+    })
+    expect(screen.getByText('workspace.chat.responseCancelled')).toBeInTheDocument()
+    expect(screen.queryByText('[Response cancelled by user]')).not.toBeInTheDocument()
   })
 
   it('retries with the reader document from the original send', async () => {
@@ -2165,7 +2504,11 @@ describe('useChatStream lifecycle', () => {
       })
     })
     expect(result.current.streaming).toBe(false)
-    expect(result.current.messages.at(-1)?.content).toBe('[Response cancelled by user]')
+    expect(result.current.messages.at(-1)).toMatchObject({
+      content: '',
+      runId: requestedRunId,
+      terminalStatus: 'cancelled'
+    })
   })
 
   it('preserves streamed text when a run is cancelled', async () => {
@@ -2187,9 +2530,11 @@ describe('useChatStream lifecycle', () => {
     })
 
     expect(result.current.streaming).toBe(false)
-    expect(result.current.messages.at(-1)?.content).toBe(
-      'Partial answer\n\n[Response cancelled by user]'
-    )
+    expect(result.current.messages.at(-1)).toMatchObject({
+      content: 'Partial answer',
+      runId,
+      terminalStatus: 'cancelled'
+    })
   })
 
   it('preserves streamed text when a run fails', async () => {
@@ -2211,9 +2556,11 @@ describe('useChatStream lifecycle', () => {
     })
 
     expect(result.current.streaming).toBe(false)
-    expect(result.current.messages.at(-1)?.content).toBe(
-      'Partial answer\n\nworkspace.chat.partialInterrupted'
-    )
+    expect(result.current.messages.at(-1)).toMatchObject({
+      content: 'Partial answer',
+      runId,
+      terminalStatus: 'failed'
+    })
     const messageCount = result.current.messages.length
     act(() => {
       chatDoneHandler?.({
@@ -2223,9 +2570,11 @@ describe('useChatStream lifecycle', () => {
       })
     })
     expect(result.current.messages).toHaveLength(messageCount)
-    expect(result.current.messages.at(-1)?.content).toBe(
-      'Partial answer\n\nworkspace.chat.partialInterrupted'
-    )
+    expect(result.current.messages.at(-1)).toMatchObject({
+      content: 'Partial answer',
+      runId,
+      terminalStatus: 'failed'
+    })
   })
 
   it('reconciles a terminal run-status event from the persisted snapshot', async () => {

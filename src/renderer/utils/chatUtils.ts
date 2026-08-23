@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction, MutableRefObject } from 'react'
 import type {
   AgentInterrupt,
   AgentInterruptDecision,
+  AgentRunStatus,
   AgentTraceStep,
   AiReasoningEffort,
   ChatMessage
@@ -29,6 +30,12 @@ export type ChatReplacementOptions = {
   activeDocumentId?: string | null
 }
 
+export type ChatTerminalStatus = 'cancelled' | 'failed'
+
+export type ChatTimelineMessage = ChatMessage & {
+  terminalStatus?: ChatTerminalStatus
+}
+
 export const MAX_INPUT_LENGTH = 32000
 
 export interface UseChatStreamParams {
@@ -45,8 +52,8 @@ export interface UseChatStreamParams {
 }
 
 export interface UseChatStreamReturn {
-  messages: ChatMessage[]
-  setMessages: Dispatch<SetStateAction<ChatMessage[]>>
+  messages: ChatTimelineMessage[]
+  setMessages: Dispatch<SetStateAction<ChatTimelineMessage[]>>
   traceSteps: AgentTraceStep[]
   setTraceSteps: Dispatch<SetStateAction<AgentTraceStep[]>>
   streaming: boolean
@@ -59,7 +66,7 @@ export interface UseChatStreamReturn {
   clearError: () => void
   canRetry: boolean
   loadingHistory: boolean
-  displayMessages: ChatMessage[]
+  displayMessages: ChatTimelineMessage[]
   pendingInterrupt: AgentInterrupt | null
   activeOcrDocumentId: string | null
   sendText: (
@@ -111,15 +118,118 @@ export async function pushRecentModel(model: string, providerId: string): Promis
 export function localMessage(
   threadId: string,
   role: ChatMessage['role'],
-  content: string
-): ChatMessage {
+  content: string,
+  metadata: Pick<ChatTimelineMessage, 'runId' | 'terminalStatus'> = {}
+): ChatTimelineMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     threadId,
     role,
     content,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...metadata
   }
+}
+
+export function enrichChatMessages(
+  messages: ChatMessage[],
+  traces: AgentTraceStep[]
+): ChatTimelineMessage[] {
+  const runGroups = new Map<string, AgentTraceStep[]>()
+  for (const step of traces) {
+    const group = runGroups.get(step.runId) ?? []
+    group.push(step)
+    runGroups.set(step.runId, group)
+  }
+  const runs = [...runGroups.entries()].map(([runId, steps]) => {
+    const ordered = [...steps].sort(
+      (left, right) => left.startedAt - right.startedAt || left.seq - right.seq
+    )
+    const runStep = ordered.filter((step) => step.kind === 'run').at(-1)
+    const messageOutputs = ordered
+      .filter((step) => step.kind === 'message' && step.output)
+      .map((step) => step.output!)
+    return {
+      runId,
+      threadId: ordered[0]?.threadId ?? '',
+      status: runStep?.status,
+      startedAt: ordered[0]?.startedAt ?? 0,
+      endedAt: runStep?.endedAt ?? ordered.reduce(
+        (latest, step) => Math.max(latest, step.endedAt ?? step.startedAt),
+        0
+      ),
+      terminalOutput: runStep?.output ?? null,
+      messageOutputs
+    }
+  })
+  const assignedRuns = new Set<string>()
+  const terminalStatusFor = (
+    status: AgentTraceStep['status'] | AgentRunStatus | undefined
+  ) => status === 'cancelled'
+    ? 'cancelled' as const
+    : status === 'error' || status === 'failed' || status === 'interrupted'
+      ? 'failed' as const
+      : undefined
+  const enriched = messages.map((message) => {
+    if (message.role !== 'assistant') return message
+    const existingRunId = (message as ChatTimelineMessage).runId
+    if (existingRunId) {
+      assignedRuns.add(existingRunId)
+      const run = runs.find((candidate) => candidate.runId === existingRunId)
+      if (!run && !(message as ChatTimelineMessage).runStatus) return message
+      const {
+        terminalStatus: existingTerminalStatus,
+        ...rest
+      } = message as ChatTimelineMessage
+      let terminalStatus = existingTerminalStatus
+      if (rest.runStatus && rest.runStatus !== 'queued' && rest.runStatus !== 'running') {
+        terminalStatus = terminalStatusFor(rest.runStatus)
+      } else if (run?.status && run.status !== 'running') {
+        terminalStatus = terminalStatusFor(run.status)
+      }
+      return {
+        ...rest,
+        ...(terminalStatus ? { terminalStatus } : {})
+      }
+    }
+    const exact = runs
+      .filter((run) =>
+        !assignedRuns.has(run.runId) &&
+        run.startedAt <= message.createdAt &&
+        (run.messageOutputs.includes(message.content) || run.terminalOutput === message.content)
+      )
+      .sort((left, right) => right.endedAt - left.endedAt)[0]
+    const nearest = exact ?? runs
+      .filter((run) =>
+        !assignedRuns.has(run.runId) &&
+        run.startedAt <= message.createdAt &&
+        run.messageOutputs.length > 0
+      )
+      .sort((left, right) => right.endedAt - left.endedAt)[0]
+    if (!nearest) return message
+    assignedRuns.add(nearest.runId)
+    const terminalStatus: ChatTerminalStatus | undefined = terminalStatusFor(nearest.status)
+    return {
+      ...message,
+      runId: nearest.runId,
+      ...(terminalStatus ? { terminalStatus } : {})
+    }
+  })
+  const cancelledPlaceholders: ChatTimelineMessage[] = runs
+    .filter((run) => run.status === 'cancelled' && !assignedRuns.has(run.runId))
+    .map((run) => ({
+      id: `terminal-${run.runId}`,
+      threadId: run.threadId,
+      role: 'assistant',
+      content: '',
+      createdAt: run.endedAt || run.startedAt,
+      runId: run.runId,
+      terminalStatus: 'cancelled'
+    }))
+  if (cancelledPlaceholders.length === 0) return enriched
+  return [...enriched, ...cancelledPlaceholders].sort(
+    (left, right) => left.createdAt - right.createdAt
+  )
 }
 
 export function mergeTraceStep(prev: AgentTraceStep[], step: AgentTraceStep): AgentTraceStep[] {

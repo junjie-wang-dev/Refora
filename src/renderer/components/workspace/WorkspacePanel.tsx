@@ -71,16 +71,6 @@ export default function WorkspacePanel() {
     setMarkdownTabs([])
   }, [activeWorkspaceId])
 
-  useEffect(() => {
-    if (!markdownCardRequest) return
-    const card: ActiveMarkdownCard = { ...markdownCardRequest, mode: 'read' }
-    setActiveMarkdownCard(card)
-    setMarkdownTabs((current) => current.some(
-      (item) => isSameMarkdownCard(item, card)
-    ) ? current : [...current, card])
-    clearMarkdownCardRequest()
-  }, [clearMarkdownCardRequest, markdownCardRequest])
-
   const handleOpenMarkdownCard = useCallback((
     card: WorkspaceMarkdownCard,
     mode: WorkspaceMarkdownCardMode = 'read'
@@ -124,6 +114,24 @@ export default function WorkspacePanel() {
     if (panelView !== 'markdown') return true
     return markdownViewRef.current?.requestClose() ?? true
   }, [panelView])
+
+  useEffect(() => {
+    if (!markdownCardRequest) return
+    let cancelled = false
+    void saveActiveMarkdown().then((saved) => {
+      if (cancelled) return
+      clearMarkdownCardRequest()
+      if (!saved) return
+      const card: ActiveMarkdownCard = { ...markdownCardRequest, mode: 'read' }
+      setActiveMarkdownCard(card)
+      setMarkdownTabs((current) => current.some(
+        (item) => isSameMarkdownCard(item, card)
+      ) ? current : [...current, card])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [clearMarkdownCardRequest, markdownCardRequest, saveActiveMarkdown])
 
   const handleSelectWorkspace = useCallback(async (workspaceId: string) => {
     await requestActiveWorkspace(workspaceId)

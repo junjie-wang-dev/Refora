@@ -186,6 +186,14 @@ class FakeRepos:
         self.calls.append(("chat.listMessages", thread_id))
         return [
             {"id": "message-1", "threadId": thread_id, "role": "user", "content": "Hello"},
+            {
+                "id": "message-assistant",
+                "threadId": thread_id,
+                "role": "assistant",
+                "content": "Partial",
+                "runId": "run-1",
+                "runStatus": "interrupted",
+            },
             {"id": "message-tool", "threadId": thread_id, "role": "tool", "content": "tool output"},
         ]
 
@@ -515,6 +523,8 @@ def test_chat_history_traces_interrupt_threads_and_memories() -> None:
 
     assert threads.json()["data"][0]["id"] == "thread-1"
     assert history.json()["data"][0]["content"] == "Hello"
+    assert history.json()["data"][1]["runId"] == "run-1"
+    assert history.json()["data"][1]["runStatus"] == "interrupted"
     assert traces.json()["data"][0]["id"] == "trace-1"
     assert usage.json()["data"]["totalTokens"] == 120
     assert run.json()["data"]["status"] == "interrupted"
@@ -652,7 +662,7 @@ def test_chat_history_filters_tool_messages() -> None:
     history = request(client, "GET", "/ai/chat/threads/thread-1/history")
 
     messages = history.json()["data"]
-    assert [message["role"] for message in messages] == ["user"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
     assert all(message["role"] != "tool" for message in messages)
 
 

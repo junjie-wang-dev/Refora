@@ -33,12 +33,24 @@ interface WorkerSlot {
   active: number
 }
 
+interface ExecutionWaiter {
+  resolve: () => void
+  reject: (reason: Error) => void
+}
+
+interface PdfTextServiceDeps {
+  workerTimeoutMs?: number
+}
+
 const WORKER_TIMEOUT_MS = 120_000
 const WORKER_IDLE_TIMEOUT_MS = 60_000
 const MAX_WORKERS = 3
 
-export function createPdfTextService() {
+export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
+  const workerTimeoutMs = deps.workerTimeoutMs ?? WORKER_TIMEOUT_MS
   let destroyed = false
+  let executionCount = 0
+  const executionWaiters: ExecutionWaiter[] = []
   const previewRequests = new Map<string, Promise<Uint8Array>>()
   const pool: WorkerSlot[] = Array.from({ length: MAX_WORKERS }, () => ({
     proc: null,
@@ -69,12 +81,14 @@ export function createPdfTextService() {
       slot.idleTimer = null
     }
     if (slot.proc && !slot.killed) return slot
-    slot.proc = utilityProcess.fork(join(__dirname, 'worker/pdf-worker.js'), [], {
+    const proc = utilityProcess.fork(join(__dirname, 'worker/pdf-worker.js'), [], {
       serviceName: `PDF Text Worker ${index + 1}`,
       stdio: 'pipe'
     })
+    slot.proc = proc
     slot.killed = false
-    slot.proc.on('message', (msg: WorkerResponse) => {
+    proc.on('message', (msg: WorkerResponse) => {
+      if (slot.proc !== proc) return
       const req = slot.pending.get(msg.correlationId)
       if (req) {
         clearTimeout(req.timer)
@@ -82,7 +96,8 @@ export function createPdfTextService() {
         req.resolve(msg)
       }
     })
-    slot.proc.on('exit', (code) => {
+    proc.on('exit', (code) => {
+      if (slot.proc !== proc) return
       logger.warn(`pdfText-worker:exit idx=${index} code=${code} pending=${slot.pending.size}`)
       if (slot.idleTimer) {
         clearTimeout(slot.idleTimer)
@@ -96,8 +111,8 @@ export function createPdfTextService() {
       slot.proc = null
       slot.killed = true
     })
-    if (slot.proc.stderr) {
-      slot.proc.stderr.on('data', (chunk: Buffer) => {
+    if (proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => {
         logger.error(`pdfText-worker:stderr idx=${index} ${chunk.toString().trim()}`)
       })
     }
@@ -139,17 +154,59 @@ export function createPdfTextService() {
     payload: { action: 'preview' }
   ): Promise<WorkerResponse> {
     const correlationId = randomUUID()
+    const proc = slot.proc
+    if (!proc || slot.killed) return Promise.reject(new Error('PDF text worker is unavailable'))
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         slot.pending.delete(correlationId)
+        if (slot.proc === proc && !slot.killed) {
+          slot.proc = null
+          slot.killed = true
+          try {
+            proc.kill()
+          } catch (error) {
+            logger.warn(`pdfText-worker:timeout-kill ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
         reject(new Error(`PDF text worker request timed out: ${filePath}`))
-      }, WORKER_TIMEOUT_MS)
+      }, workerTimeoutMs)
       slot.pending.set(correlationId, { resolve, reject, timer })
-      slot.proc!.postMessage({ correlationId, filePath, ...payload })
+      try {
+        proc.postMessage({ correlationId, filePath, ...payload })
+      } catch (error) {
+        clearTimeout(timer)
+        slot.pending.delete(correlationId)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
 
+  function acquireExecution(): Promise<void> {
+    if (destroyed) return Promise.reject(new Error('PDF text service destroyed'))
+    if (executionCount < MAX_WORKERS) {
+      executionCount += 1
+      return Promise.resolve()
+    }
+    return new Promise((resolve, reject) => {
+      executionWaiters.push({ resolve, reject })
+    })
+  }
+
+  function releaseExecution(): void {
+    const waiter = executionWaiters.shift()
+    if (waiter) {
+      waiter.resolve()
+      return
+    }
+    executionCount = Math.max(0, executionCount - 1)
+  }
+
   async function renderPreview(filePath: string, fileName: string): Promise<Uint8Array> {
+    await acquireExecution()
+    if (destroyed) {
+      releaseExecution()
+      throw new Error('PDF text service destroyed')
+    }
     const slot = acquireSlot()
     slot.active++
     try {
@@ -162,6 +219,7 @@ export function createPdfTextService() {
     } finally {
       slot.active--
       if (slot.active === 0 && slot.pending.size === 0) scheduleIdleKill(slot)
+      releaseExecution()
     }
   }
 
@@ -195,6 +253,9 @@ export function createPdfTextService() {
 
   function destroy(): void {
     destroyed = true
+    for (const waiter of executionWaiters.splice(0)) {
+      waiter.reject(new Error('PDF text service destroyed'))
+    }
     for (const slot of pool) {
       if (slot.idleTimer) {
         clearTimeout(slot.idleTimer)

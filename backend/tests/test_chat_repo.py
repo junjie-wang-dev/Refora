@@ -200,6 +200,32 @@ def test_list_messages_ordered_by_createdAt(db):
     assert [m["id"] for m in messages] == [m1["id"], m2["id"], m3["id"]]
 
 
+def test_list_messages_returns_exact_assistant_run_association(db):
+    workspace = make_workspaces_repo(db)["create"]("Research")
+    chat = make_chat_repo(db)
+    thread = chat["createThread"](workspace["id"], "provider")
+    first = chat["addMessage"](thread["id"], "assistant", "same content")
+    second = chat["addMessage"](thread["id"], "assistant", "same content")
+    db.execute(
+        "UPDATE chat_messages SET createdAt = 1 WHERE id IN (?, ?)",
+        [first["id"], second["id"]],
+    )
+    db.execute(
+        "INSERT INTO agent_runs "
+        "(id, threadId, providerId, modelId, status, assistantMessageId, startedAt) "
+        "VALUES ('run-first', ?, 'provider', 'model', 'cancelled', ?, 1), "
+        "('run-second', ?, 'provider', 'model', 'failed', ?, 2)",
+        [thread["id"], first["id"], thread["id"], second["id"]],
+    )
+
+    messages = chat["listMessages"](thread["id"])
+
+    assert messages[0]["runId"] == "run-first"
+    assert messages[0]["runStatus"] == "cancelled"
+    assert messages[1]["runId"] == "run-second"
+    assert messages[1]["runStatus"] == "failed"
+
+
 def test_list_messages_empty(db):
     ws = make_workspaces_repo(db)
     w = ws["create"]("Research")

@@ -69,12 +69,16 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   const [results, setResults] = useState<GlobalSearchResult>(EMPTY_RESULTS)
   const [resolvedQuery, setResolvedQuery] = useState('')
   const [loading, setLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchRetry, setSearchRetry] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const requestVersionRef = useRef(0)
   const documentSearchSyncedRef = useRef(false)
+  const translationRef = useRef(t)
+  translationRef.current = t
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId)
   const chatStreaming = useWorkspaceStore((state) => state.chatStreaming)
 
@@ -94,6 +98,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     setResults(EMPTY_RESULTS)
     setResolvedQuery('')
     setLoading(false)
+    setSearchError(null)
     setExpanded(false)
     setActiveIndex(0)
   }, [])
@@ -116,9 +121,11 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       setLoading(false)
       setExpanded(false)
       setActiveIndex(0)
+      setSearchError(null)
       return
     }
     setLoading(true)
+    setSearchError(null)
     setExpanded(true)
     const timer = window.setTimeout(() => {
       void api.search.global(trimmed)
@@ -126,12 +133,14 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
           if (requestVersionRef.current !== requestVersion) return
           setResults(nextResults)
           setResolvedQuery(trimmed)
+          setSearchError(null)
           setActiveIndex(0)
         })
-        .catch(() => {
+        .catch((cause) => {
           if (requestVersionRef.current !== requestVersion) return
           setResults(EMPTY_RESULTS)
-          setResolvedQuery(trimmed)
+          setResolvedQuery('')
+          setSearchError(errorMessage(cause, translationRef.current('globalSearch.searchFailed')))
           setActiveIndex(0)
         })
         .finally(() => {
@@ -139,7 +148,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
         })
     }, 180)
     return () => window.clearTimeout(timer)
-  }, [query])
+  }, [query, searchRetry])
 
   useEffect(() => {
     if (!documentListOpen) {
@@ -361,7 +370,19 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
             aria-label={t('globalSearch.results')}
             className="no-drag absolute left-0 right-0 top-[calc(100%+6px)] max-h-[min(66vh,560px)] overflow-y-auto rounded-lg border border-border bg-panel p-1.5 shadow-lg"
           >
-            {!loading && total === 0 && (
+            {!loading && searchError && (
+              <div className="flex items-center gap-3 px-4 py-6 text-xs text-error" role="alert">
+                <span className="min-w-0 flex-1">{searchError}</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-md border border-error/30 px-2 py-1 font-medium hover:bg-error/10"
+                  onClick={() => setSearchRetry((current) => current + 1)}
+                >
+                  {t('globalSearch.retry')}
+                </button>
+              </div>
+            )}
+            {!loading && !searchError && total === 0 && (
               <div className="px-4 py-8 text-center text-xs text-muted">
                 {t('globalSearch.noResults')}
               </div>

@@ -1,6 +1,9 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { canonicalSha256 } from './server-sidecar-integrity.mjs'
+import {
+  canonicalSha256,
+  canonicalTreeSha256
+} from './server-sidecar-integrity.mjs'
 
 const [outputDirectory, architecture, pythonVersion] = process.argv.slice(2)
 if (!outputDirectory || !['arm64', 'x64'].includes(architecture) || !pythonVersion) {
@@ -11,13 +14,15 @@ if (!outputDirectory || !['arm64', 'x64'].includes(architecture) || !pythonVersi
 
 const executable = join(outputDirectory, 'refora-server')
 const digest = await canonicalSha256(executable)
+const treeDigest = await canonicalTreeSha256(outputDirectory)
 const manifest = {
-  formatVersion: 1,
+  formatVersion: 2,
   platform: 'darwin',
   architecture,
   pythonVersion,
   executable: 'refora-server',
-  canonicalSha256: digest
+  canonicalSha256: digest,
+  canonicalTreeSha256: treeDigest
 }
 await writeFile(
   join(outputDirectory, 'sidecar-manifest.json'),

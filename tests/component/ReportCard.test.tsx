@@ -634,15 +634,45 @@ describe('WorkspacePanel tab header', () => {
     expect(screen.queryByText('Chat panel')).not.toBeInTheDocument()
   })
 
-  it('opens a Markdown card requested by global search', () => {
+  it('opens a Markdown card requested by global search', async () => {
     mockWorkspacePanelState.reports = [makeReport({ id: 'report-1' })]
     mockWorkspacePanelState.markdownCardRequest = { kind: 'report', id: 'report-1' }
     mockWorkspacePanelState.panelView = 'markdown'
 
     render(<WorkspacePanel />)
 
-    expect(screen.getByRole('tab', { name: 'Test Report' })).toBeInTheDocument()
-    expect(mockWorkspacePanelState.clearMarkdownCardRequest).toHaveBeenCalledOnce()
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Test Report' })).toBeInTheDocument()
+      expect(mockWorkspacePanelState.clearMarkdownCardRequest).toHaveBeenCalledOnce()
+    })
+  })
+
+  it('keeps the current Markdown card when saving before a same-workspace switch fails', async () => {
+    mockWorkspacePanelState.reports = [
+      makeReport({ id: 'report-1', title: 'First report' }),
+      makeReport({ id: 'report-2', title: 'Second report' })
+    ]
+    mockWorkspacePanelState.panelView = 'markdown'
+    mockWorkspacePanelState.markdownCardRequest = { kind: 'report', id: 'report-1' }
+    const view = render(<WorkspacePanel />)
+    await screen.findByRole('tab', { name: 'First report' })
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownEdit' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'workspace.reportContentLabel' }), {
+      target: { value: 'Unsaved draft' }
+    })
+    mockWorkspacePanelState.updateReport.mockResolvedValue(false)
+
+    mockWorkspacePanelState.markdownCardRequest = { kind: 'report', id: 'report-2' }
+    view.rerender(<WorkspacePanel />)
+
+    await waitFor(() => {
+      expect(mockWorkspacePanelState.updateReport).toHaveBeenCalledWith('report-1', {
+        title: 'First report',
+        contentMd: 'Unsaved draft'
+      })
+    })
+    expect(screen.getByRole('tab', { name: 'First report' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Second report' })).not.toBeInTheDocument()
   })
 
   it('saves Markdown body edits before closing the workspace tab', async () => {

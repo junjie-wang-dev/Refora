@@ -39,6 +39,7 @@ export interface ServerLifecycleDeps {
   spawnChild?: typeof spawn
   readFile?: (path: string) => Promise<string>
   fetchHealth?: (url: string, timeoutMs: number) => Promise<boolean>
+  signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => boolean
 }
 
 export interface ServerLifecycle {
@@ -99,6 +100,20 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   const spawnChild = deps.spawnChild ?? spawn
   const readFile = deps.readFile ?? defaultReadFile
   const fetchHealth = deps.fetchHealth ?? defaultFetchHealth
+  const useProcessGroup = process.platform === 'darwin' && (
+    deps.spawnChild === undefined || deps.signalProcessGroup !== undefined
+  )
+  const signalProcessGroup = deps.signalProcessGroup ?? ((pid, signal) => {
+    try {
+      process.kill(-pid, signal)
+      return true
+    } catch (error) {
+      if (error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === 'ESRCH') {
+        return true
+      }
+      throw error
+    }
+  })
 
   let child: ChildProcess | null = null
   let connection: ServerConnection | null = null
@@ -162,7 +177,8 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     const spawned = spawnChild(command, args, {
       cwd: deps.stateDir,
       env: deps.environment,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: useProcessGroup
     })
 
     let resolved = false
@@ -271,6 +287,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
 
   function attachCrashHandler(spawned: ChildProcess): void {
     spawned.once('close', (code, signal) => {
+      if (!stopping && useProcessGroup) terminate(spawned, 'SIGKILL')
       handleUnexpectedExit(spawned, code ?? signal)
     })
   }
@@ -289,6 +306,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
         if (escalationTimer) clearTimeout(escalationTimer)
         if (settleTimer) clearTimeout(settleTimer)
         spawned.removeListener('close', finish)
+        if (useProcessGroup) terminate(spawned, 'SIGKILL')
         resolve()
       }
       const force = (): void => {
@@ -366,6 +384,15 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
 
   function terminate(spawned: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): boolean {
     if (!spawned.pid) return true
+    if (useProcessGroup) {
+      try {
+        if (signalProcessGroup(spawned.pid, signal)) return true
+      } catch (error) {
+        logger.warn(
+          `serverLifecycle:failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    }
     try {
       return spawned.kill(signal)
     } catch (error) {

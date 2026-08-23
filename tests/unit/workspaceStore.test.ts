@@ -303,6 +303,24 @@ describe('WorkspaceStore', () => {
 
       expect(useWorkspaceStore.getState().reports).toEqual([r1, r2])
     })
+
+    it('restores only the removed report when a refresh completes before deletion fails', async () => {
+      let rejectDelete!: (error: Error) => void
+      const r1 = makeReport({ id: 'r1' })
+      const r2 = makeReport({ id: 'r2', title: 'Second' })
+      const refreshed = makeReport({ id: 'r3', title: 'From refresh' })
+      mockReportsDelete.mockReturnValue(new Promise((_resolve, reject) => {
+        rejectDelete = reject
+      }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1', reports: [r1, r2] })
+
+      const deletion = useWorkspaceStore.getState().deleteReport(r1.id)
+      useWorkspaceStore.setState({ reports: [r2, refreshed] })
+      rejectDelete(new Error('network'))
+      await deletion
+
+      expect(useWorkspaceStore.getState().reports).toEqual([r1, r2, refreshed])
+    })
   })
 
   describe('fetchReports', () => {
@@ -551,6 +569,34 @@ describe('WorkspaceStore', () => {
 
       expect(mockWorkspaceItemsReorder).toHaveBeenCalledWith('ws-1', ['second', 'first'])
       expect(useWorkspaceStore.getState().items).toEqual(saved)
+    })
+
+    it('does not overwrite refreshed items when optimistic reorder persistence fails', async () => {
+      let rejectReorder!: (error: Error) => void
+      const first = makeItem({ id: 'first', sortOrder: 0 })
+      const second = makeItem({ id: 'second', sortOrder: 1 })
+      const refreshed = makeItem({ id: 'refreshed', sortOrder: 0, x: 800 })
+      mockWorkspaceItemsReorder.mockReturnValue(new Promise((_resolve, reject) => {
+        rejectReorder = reject
+      }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1', items: [first, second] })
+
+      const reorder = useWorkspaceStore.getState().reorderItems(['second', 'first'])
+      useWorkspaceStore.setState({
+        items: [
+          refreshed,
+          { ...first, sortOrder: 10, x: 100 },
+          { ...second, sortOrder: 11, x: 200 }
+        ]
+      })
+      rejectReorder(new Error('disk'))
+      await reorder
+
+      expect(useWorkspaceStore.getState().items).toEqual([
+        refreshed,
+        { ...first, sortOrder: 10, x: 100 },
+        { ...second, sortOrder: 11, x: 200 }
+      ])
     })
 
     it('restores the previous card size when persistence fails', async () => {
@@ -1019,6 +1065,35 @@ describe('WorkspaceStore', () => {
       expect(useWorkspaceStore.getState().items).toEqual([])
       await deletion
       expect(mockWorkspaceAssetsDelete).toHaveBeenCalledWith(asset.id)
+    })
+
+    it('restores only a failed asset deletion while preserving refreshed assets and cards', async () => {
+      let rejectDelete!: (error: Error) => void
+      const asset = makeAsset()
+      const otherAsset = makeAsset({ id: 'asset-other', fileName: 'other.txt' })
+      const refreshedAsset = makeAsset({ id: 'asset-refreshed', fileName: 'refreshed.txt' })
+      const assetItem = makeItem({ kind: 'asset', docId: null, assetId: asset.id })
+      const otherItem = makeItem({ id: 'item-other', assetId: otherAsset.id })
+      const refreshedItem = makeItem({ id: 'item-refreshed', assetId: refreshedAsset.id })
+      mockWorkspaceAssetsDelete.mockReturnValue(new Promise((_resolve, reject) => {
+        rejectDelete = reject
+      }))
+      useWorkspaceStore.setState({
+        activeWorkspaceId: 'ws-1',
+        assets: [asset, otherAsset],
+        items: [assetItem, otherItem]
+      })
+
+      const deletion = useWorkspaceStore.getState().deleteAsset(asset.id)
+      useWorkspaceStore.setState({
+        assets: [otherAsset, refreshedAsset],
+        items: [otherItem, refreshedItem]
+      })
+      rejectDelete(new Error('delete failed'))
+      await deletion
+
+      expect(useWorkspaceStore.getState().assets).toEqual([asset, otherAsset, refreshedAsset])
+      expect(useWorkspaceStore.getState().items).toEqual([assetItem, otherItem, refreshedItem])
     })
 
     it('classifies dropped files and refreshes every affected workspace collection', async () => {

@@ -46,6 +46,12 @@ class _SqliteAdapter:
         ).fetchone()
         return row is not None
 
+    def execute(self, sql: str, params: list[object]) -> None:
+        self._db.execute(sql, params)
+
+    def fetchall(self, sql: str, params: list[object]) -> list[sqlite3.Row]:
+        return list(self._db.execute(sql, params).fetchall())
+
 
 def _migration_lock(db_path: str):
     if fcntl is None or db_path == ":memory:" or "file::memory:" in db_path:

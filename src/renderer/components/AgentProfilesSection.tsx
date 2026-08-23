@@ -132,11 +132,15 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
 
   const availableRuntimes = runtimes.length > 0 ? runtimes : FALLBACK_RUNTIMES
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (surfaceError = true): Promise<unknown | null> => {
     try {
       setProfiles(await api.agentProfiles.list())
+      return null
     } catch (cause) {
-      setError(errorMessage(cause, translationRef.current('settings.agentProfiles.loadFail')))
+      if (surfaceError) {
+        setError(errorMessage(cause, translationRef.current('settings.agentProfiles.loadFail')))
+      }
+      return cause
     }
   }, [])
 
@@ -164,7 +168,8 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
     setError(null)
     try {
       await api.agentProfiles.update(profile.id, patch)
-      await load()
+      const loadFailure = await load(false)
+      if (loadFailure) throw loadFailure
       notifyAiProvidersChanged()
     } catch (cause) {
       setError(errorMessage(cause, t('settings.agentProfiles.saveFail')))
@@ -225,6 +230,14 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
     setError(null)
     try {
       await api.agentProfiles.delete(profile.id)
+    } catch (cause) {
+      setError(errorMessage(cause, t('settings.agentProfiles.deleteFail')))
+      return
+    }
+    setProfiles((current) => current.filter((item) => item.id !== profile.id))
+    setForm((current) => current?.id === profile.id ? null : current)
+    notifyAiProvidersChanged()
+    try {
       const [active, selected] = await Promise.all([
         api.settings.get<string>('activeAgentProfileId', ''),
         api.settings.get<string>('chatSelectedAgentProfileId', '')
@@ -234,10 +247,12 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
         await api.settings.set('chatSelectedAgentProfileId', '')
         await api.settings.set('chatSelectedModel', '')
       }
-      await load()
-      notifyAiProvidersChanged()
+      const loadFailure = await load(false)
+      if (loadFailure) throw loadFailure
     } catch (cause) {
-      setError(errorMessage(cause, t('settings.agentProfiles.deleteFail')))
+      const cleanupMessage = t('settings.agentProfiles.deleteCleanupFail')
+      const detail = errorMessage(cause, '')
+      setError(detail ? `${cleanupMessage} ${detail}` : cleanupMessage)
     }
   }
 

@@ -1,6 +1,7 @@
 import pytest
 
 from conftest import make_docs_repo, open_migrated_db
+from refora_server.library import bib_import as bib_import_module
 from refora_server.library.bib_import import (
     extractAttachmentPaths,
     importBibtex,
@@ -8,6 +9,55 @@ from refora_server.library.bib_import import (
     normalizeAuthors,
     parseBibtex,
 )
+
+
+def test_atomic_copy_removes_published_file_when_directory_fsync_fails(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source" / "paper.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF-1.4\nsource")
+    library = tmp_path / "library"
+    original_fsync = bib_import_module.os.fsync
+    calls = 0
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory fsync failed")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(bib_import_module.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        bib_import_module._copy_to_library(str(source), str(library))
+
+    assert source.read_bytes() == b"%PDF-1.4\nsource"
+    assert list(library.iterdir()) == []
+
+
+def test_atomic_copy_removes_published_file_when_resolve_fails(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source" / "paper.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF-1.4\nsource")
+    library = tmp_path / "library"
+    original_resolve = bib_import_module.Path.resolve
+
+    def fail_destination_resolve(path, strict: bool = False):
+        if path.parent == library and path.name == "paper.pdf":
+            raise OSError("resolve failed")
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(bib_import_module.Path, "resolve", fail_destination_resolve)
+
+    with pytest.raises(OSError, match="resolve failed"):
+        bib_import_module._copy_to_library(str(source), str(library))
+
+    assert source.read_bytes() == b"%PDF-1.4\nsource"
+    assert list(library.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -35,6 +85,12 @@ def test_normalize_authors_does_not_rearrange_no_comma_names() -> None:
     assert normalizeAuthors("John Smith") == "John Smith"
     assert normalizeAuthors("Mary Jane Watson") == "Mary Jane Watson"
     assert normalizeAuthors("John Smith and Mary Jane Watson") == "John Smith; Mary Jane Watson"
+
+
+def test_normalize_authors_preserves_recognizable_institutions() -> None:
+    assert normalizeAuthors("OpenAI, Inc. and University of California, Berkeley") == (
+        "OpenAI, Inc.; University of California, Berkeley"
+    )
 
 
 def test_parse_bibtex_handles_nested_values_and_ignored_entries() -> None:
@@ -133,6 +189,7 @@ async def test_import_from_bibtex_restores_zotero_pdf_and_arxiv_support(tmp_path
     assert document["fileMissing"] == 0
     assert document["filePath"] == str(library / "paper.pdf")
     assert (library / "paper.pdf").read_bytes() == pdf.read_bytes()
+    assert list(library.glob(".refora-bib-import-*")) == []
     assert verified == [(document["id"], "2401.01234")]
 
 
@@ -186,3 +243,68 @@ async def test_bibtex_duplicate_hash_preserves_edited_fields_as_remote_values(tm
         "value": "New Imported Title",
         "source": "manual",
     }
+
+
+@pytest.mark.asyncio
+async def test_bibtex_copy_failure_does_not_insert_external_attachment(tmp_path) -> None:
+    source_folder = tmp_path / "zotero"
+    source_folder.mkdir()
+    pdf = source_folder / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsource")
+    bib = source_folder / "library.bib"
+    bib.write_text(
+        "@article{paper, title={Paper}, file={paper.pdf}}",
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    documents = make_docs_repo(open_migrated_db(), str(library))
+
+    def fail_copy(_source: str, _library: str) -> str:
+        raise OSError("copy failed")
+
+    result = await importFromBibtex(
+        {"documents": documents},
+        str(bib),
+        "zotero",
+        deps={
+            "getLibraryFolder": lambda: str(library),
+            "copyToLibrary": fail_copy,
+        },
+    )
+
+    assert result["added"] == []
+    assert result["errors"] == [{"key": "paper", "message": "copy failed"}]
+    assert documents["list"]({"mode": "all"}) == []
+    assert pdf.read_bytes() == b"%PDF-1.4\nsource"
+
+
+@pytest.mark.asyncio
+async def test_bibtex_rejects_copy_result_outside_library_without_removing_source(
+    tmp_path,
+) -> None:
+    source_folder = tmp_path / "mendeley"
+    source_folder.mkdir()
+    pdf = source_folder / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsource")
+    bib = source_folder / "library.bib"
+    bib.write_text(
+        f"@article{{paper, title={{Paper}}, file={{{pdf}}}}}",
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    documents = make_docs_repo(open_migrated_db(), str(library))
+
+    result = await importFromBibtex(
+        {"documents": documents},
+        str(bib),
+        "mendeley",
+        deps={
+            "getLibraryFolder": lambda: str(library),
+            "copyToLibrary": lambda source, _library: source,
+        },
+    )
+
+    assert result["added"] == []
+    assert "outside the library" in result["errors"][0]["message"]
+    assert documents["list"]({"mode": "all"}) == []
+    assert pdf.exists()

@@ -7,7 +7,8 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import {
   architectures,
-  canonicalSha256
+  canonicalSha256,
+  canonicalTreeSha256
 } from './server-sidecar-integrity.mjs'
 
 const [sidecarDirectory, expectedArchitecture] = process.argv.slice(2)
@@ -21,7 +22,7 @@ const manifestPath = join(resolvedSidecarDirectory, 'sidecar-manifest.json')
 await access(executable, constants.X_OK)
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
 if (
-  manifest.formatVersion !== 1 ||
+  manifest.formatVersion !== 2 ||
   manifest.platform !== 'darwin' ||
   manifest.architecture !== expectedArchitecture ||
   !/^3\.12\.[0-9]+$/.test(manifest.pythonVersion) ||
@@ -42,6 +43,10 @@ if (
 const digest = await canonicalSha256(executable)
 if (manifest.canonicalSha256 !== digest) {
   throw new Error(`Sidecar checksum mismatch: ${manifestPath}`)
+}
+const treeDigest = await canonicalTreeSha256(resolvedSidecarDirectory)
+if (manifest.canonicalTreeSha256 !== treeDigest) {
+  throw new Error(`Sidecar dependency tree checksum mismatch: ${manifestPath}`)
 }
 
 const runFile = promisify(execFile)

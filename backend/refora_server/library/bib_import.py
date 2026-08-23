@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -312,13 +313,41 @@ def _copy_to_library(source: str, library_folder: str) -> str:
     folder = Path(library_folder)
     folder.mkdir(parents=True, exist_ok=True)
     source_path = Path(source)
-    destination = folder / source_path.name
-    number = 1
-    while destination.exists():
-        destination = folder / f"{source_path.stem} ({number}){source_path.suffix}"
-        number += 1
-    shutil.copy2(source_path, destination)
-    return str(destination.resolve())
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".refora-bib-import-", suffix=".pdf", dir=folder
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    published: Path | None = None
+    completed = False
+    try:
+        shutil.copy2(source_path, temporary)
+        with temporary.open("rb") as copied:
+            os.fsync(copied.fileno())
+        number = 0
+        while True:
+            suffix = "" if number == 0 else f" ({number})"
+            destination = folder / f"{source_path.stem}{suffix}{source_path.suffix}"
+            try:
+                os.link(temporary, destination)
+                published = destination
+                break
+            except FileExistsError:
+                number += 1
+        folder_descriptor = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(folder_descriptor)
+        finally:
+            os.close(folder_descriptor)
+        resolved = destination.resolve(strict=True)
+        completed = True
+        return str(resolved)
+    finally:
+        try:
+            if published is not None and not completed:
+                published.unlink(missing_ok=True)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
@@ -441,6 +470,7 @@ async def importFromBibtex(
 
     for number, entry in enumerate(entries, start=1):
         key = entry["citekey"] or f"entry-{number}"
+        copied_path: str | None = None
         try:
             metadata = extractMetadataFromEntry(entry)
             arxiv_id = metadata.pop("arxivId", None)
@@ -450,33 +480,43 @@ async def importFromBibtex(
                 file_hash: str | None = None
                 if existing is None:
                     file_hash = hash_pdf(pdf_path)
-                    if file_hash:
-                        existing = documents["findByHash"](file_hash)
+                    if not file_hash:
+                        raise RuntimeError("Unable to hash attached PDF")
+                    existing = documents["findByHash"](file_hash)
                 if existing is not None:
                     _apply_metadata_to_existing(documents, existing["id"], metadata, entry["citekey"])
                     await apply_arxiv(existing["id"], arxiv_id, key)
                     skipped.append(existing["id"])
                     continue
-                stat = os.stat(pdf_path)
+                if not library_folder:
+                    raise ValueError("Library folder is not configured")
+                stored_path = pdf_path
+                if not isInsideLibrary(pdf_path, library_folder):
+                    copied = copy_to_library(pdf_path, library_folder)
+                    validated_copy = _validate_pdf_path(copied, library_folder)
+                    if validated_copy is None or not isInsideLibrary(
+                        validated_copy, library_folder
+                    ):
+                        raise ValueError("Copied PDF path is outside the library folder")
+                    copied_path = validated_copy
+                    stored_path = validated_copy
+                    copied_hash = hash_pdf(stored_path)
+                    if not copied_hash or copied_hash != file_hash:
+                        raise RuntimeError("Copied PDF failed integrity verification")
+                    file_hash = copied_hash
+                stat = os.stat(stored_path, follow_symlinks=False)
                 base = _base_document(metadata, entry["citekey"], now_ms, make_id)
                 document = documents["insert"](
                     {
                         **base,
-                        "filePath": pdf_path,
+                        "filePath": stored_path,
                         "originalFolderPath": str(Path(pdf_path).parent),
-                        "fileName": Path(pdf_path).name,
+                        "fileName": Path(stored_path).name,
                         "fileSize": stat.st_size,
                         "fileHash": file_hash,
                     }
                 )
-                if library_folder and not isInsideLibrary(pdf_path, library_folder):
-                    try:
-                        copied_path = copy_to_library(pdf_path, library_folder)
-                        documents["updateFilePath"](
-                            document["id"], copied_path, Path(copied_path).name
-                        )
-                    except Exception:
-                        pass
+                copied_path = None
                 added.append(document["id"])
                 await apply_arxiv(document["id"], arxiv_id, key)
                 continue
@@ -495,6 +535,11 @@ async def importFromBibtex(
             added.append(document["id"])
             await apply_arxiv(document["id"], arxiv_id, key)
         except Exception as error:
+            if copied_path:
+                try:
+                    Path(copied_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
             errors.append({"key": key, "message": str(error)})
     return {"added": added, "skipped": skipped, "errors": errors}
 

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 import time
 
 import pytest
@@ -255,6 +256,71 @@ def test_completed_stabilizer_is_removed_from_state(tmp_path):
 
         assert _wait_for(lambda: path not in svc["_state"]["stabilizers"])
         svc["stopScanning"]()
+    finally:
+        db.close()
+
+
+def test_watchdog_timer_schedules_debounce_on_event_loop_thread(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", False)
+    db = open_migrated_db()
+    try:
+        captured: list[str] = []
+        svc = _make_watcher(
+            {"watchFolders": make_watch_folders_repo(db)},
+            captured=captured,
+            poll_interval=1,
+            stability_threshold_ms=10,
+            debounce_ms=10,
+        )
+        path = str(tmp_path / "thread-safe.pdf")
+        (tmp_path / "thread-safe.pdf").write_bytes(b"%PDF")
+
+        async def run():
+            asyncio.get_running_loop().set_debug(True)
+            svc["startScanning"]()
+            try:
+                svc["_markStabilizing"](path)
+                for _ in range(50):
+                    if captured:
+                        break
+                    await asyncio.sleep(0.01)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == [path]
+    finally:
+        db.close()
+
+
+def test_watchdog_timer_tolerates_loop_closing_race(tmp_path, monkeypatch):
+    class ClosingLoop:
+        def is_closed(self):
+            return False
+
+        def call_soon_threadsafe(self, _callback):
+            raise RuntimeError("Event loop is closed")
+
+    db = open_migrated_db()
+    errors = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: errors.append(args.exc_value))
+    try:
+        svc = _make_watcher(
+            {"watchFolders": make_watch_folders_repo(db)},
+            stability_threshold_ms=10,
+        )
+        path = str(tmp_path / "closing.pdf")
+        (tmp_path / "closing.pdf").write_bytes(b"%PDF")
+        svc["_state"]["running"] = True
+        svc["_state"]["loop"] = ClosingLoop()
+
+        svc["_markStabilizing"](path)
+
+        assert _wait_for(lambda: path not in svc["_state"]["stabilizers"])
+        assert errors == []
+        svc["_state"]["running"] = False
     finally:
         db.close()
 

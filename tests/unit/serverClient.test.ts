@@ -320,6 +320,23 @@ describe('serverClient', () => {
       expect(calls[3].url).toContain('/documents/d4/open-pdf')
     })
 
+    it('encodes every dynamic URL path segment', async () => {
+      const { fetch, calls } = makeFetchSpy(() => makeResponse({ ack: true }))
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
+      const documentId = 'existing-id?alias#part/论文'
+      const resultKey = 'result?#/一'
+
+      await client.http.documentsDelete(documentId)
+      await client.http.ocrMarkdown(documentId, resultKey)
+
+      expect(new URL(calls[0].url).pathname).toBe(
+        `/documents/${encodeURIComponent(documentId)}`
+      )
+      expect(new URL(calls[1].url).pathname).toBe(
+        `/ocr/documents/${encodeURIComponent(documentId)}/results/${encodeURIComponent(resultKey)}/markdown`
+      )
+    })
+
     it('routes import endpoints', async () => {
       const { fetch, calls } = makeFetchSpy(() => makeResponse({ imported: 1 }))
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
@@ -447,6 +464,27 @@ describe('serverClient', () => {
       const ws = await openWs(client)
       expect(ws.url).toBe(`ws://127.0.0.1:${PORT}/ws`)
       expect(ws.protocols).toEqual([`refora-token.${TOKEN}`])
+      expect(client.ws.isConnected()).toBe(true)
+    })
+
+    it('times out a stalled handshake and allows a fresh connection', async () => {
+      vi.useFakeTimers()
+      const client = createServerClient(lifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        wsHandshakeTimeoutMs: 100
+      })
+      const stalled = client.ws.connect()
+      const rejection = expect(stalled).rejects.toMatchObject({ code: 'ws_timeout' })
+
+      await vi.advanceTimersByTimeAsync(101)
+      await rejection
+      expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.CLOSED)
+
+      const reconnected = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      FakeWebSocket.instances[1].open()
+      await reconnected
       expect(client.ws.isConnected()).toBe(true)
     })
 

@@ -30,13 +30,19 @@ def _map_thread(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _map_message(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    message = {
         "id": row["id"],
         "threadId": row["threadId"],
         "role": row["role"],
         "content": row["content"],
         "createdAt": row["createdAt"],
     }
+    keys = row.keys()
+    if "runId" in keys and row["runId"] is not None:
+        message["runId"] = row["runId"]
+    if "runStatus" in keys and row["runStatus"] is not None:
+        message["runStatus"] = row["runStatus"]
+    return message
 
 
 def createChatRepository(db):
@@ -87,7 +93,14 @@ def createChatRepository(db):
 
     def listMessages(threadId: str) -> list[dict[str, Any]]:
         cur = db.execute(
-            "SELECT * FROM chat_messages WHERE threadId = ? ORDER BY createdAt",
+            "SELECT m.*, r.id AS runId, r.status AS runStatus "
+            "FROM chat_messages m "
+            "LEFT JOIN agent_runs r ON r.id = ("
+            "SELECT candidate.id FROM agent_runs candidate "
+            "WHERE candidate.assistantMessageId = m.id "
+            "ORDER BY candidate.startedAt DESC, candidate.id DESC LIMIT 1"
+            ") "
+            "WHERE m.threadId = ? ORDER BY m.createdAt, m.rowid",
             [threadId],
         )
         rows = cur.fetchall()

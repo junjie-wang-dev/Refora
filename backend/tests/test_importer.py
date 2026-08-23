@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from conftest import make_docs_repo, open_migrated_db
+from conftest import make_doc, make_docs_repo, open_migrated_db
 import refora_server.library.importer as importer_module
 from refora_server.library.importer import createImporter
+from refora_server.repositories import RepositoryDeps, create_repositories
 
 
 def _pdf(path: Path, content: bytes) -> None:
@@ -259,3 +260,46 @@ async def test_database_failure_removes_the_published_library_copy(tmp_path: Pat
     ]
     assert list(library.iterdir()) == []
     assert source.exists()
+
+
+@pytest.mark.asyncio
+async def test_watched_existing_path_refreshes_replaced_file_identity(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    pdf = library / "paper.pdf"
+    _pdf(pdf, b"old")
+    old_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    repos["documents"]["insert"](
+        make_doc(
+            id="paper",
+            file_path=str(pdf),
+            file_name=pdf.name,
+            file_size=pdf.stat().st_size,
+            file_hash=old_hash,
+        )
+    )
+    repos["aiSummaries"]["setFullText"]("paper", "old text", old_hash)
+    replacement = library / "replacement.pdf"
+    _pdf(replacement, b"new")
+    replacement.replace(pdf)
+    importer = createImporter(
+        repos,
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["importFiles"]([str(pdf)], True)
+
+    document = repos["documents"]["get"]("paper")
+    assert result["skipped"] == [str(pdf)]
+    assert document["fileHash"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
+    assert document["fileHash"] != old_hash
+    assert document["fileInode"] == pdf.stat().st_ino
+    assert repos["aiSummaries"]["getFullText"]("paper") is None

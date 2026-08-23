@@ -256,6 +256,12 @@ def createDocumentOcrRepository(db):
             [documentId, resultKey],
         )
 
+    def deleteForDocument(documentId: str) -> None:
+        db.execute(
+            "DELETE FROM document_ocr_results WHERE documentId = ?",
+            [documentId],
+        )
+
     return {
         "createJob": createJob,
         "getJob": getJob,
@@ -267,4 +273,5 @@ def createDocumentOcrRepository(db):
         "getResult": getResult,
         "getResultByKey": getResultByKey,
         "deleteResult": deleteResult,
+        "deleteForDocument": deleteForDocument,
     }

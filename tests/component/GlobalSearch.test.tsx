@@ -359,6 +359,24 @@ describe('GlobalSearch', () => {
     await waitFor(() => expect(mocks.showToast).toHaveBeenCalledWith('Cannot open asset'))
   })
 
+  it('shows search failures explicitly and retries the same query', async () => {
+    api.search.global = vi.fn()
+      .mockRejectedValueOnce(new Error('Search unavailable'))
+      .mockResolvedValueOnce(results)
+    render(<GlobalSearch />)
+    const input = screen.getByRole('combobox', { name: 'globalSearch.label' })
+
+    fireEvent.change(input, { target: { value: 'transformer' } })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Search unavailable')
+    expect(screen.queryByText('globalSearch.noResults')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'globalSearch.retry' }))
+
+    await waitFor(() => expect(api.search.global).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('globalSearch.papers · 1')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('does not open a workspace result when pending renderer drafts fail to save', async () => {
     mocks.requestActiveWorkspace.mockResolvedValue(false)
     render(<GlobalSearch />)

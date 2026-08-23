@@ -10,6 +10,7 @@ DOCUMENT_COLUMN_MIGRATIONS = [
     "0004_add_pages_issue.sql",
     "0012_add_affiliations.sql",
     "0022_add_arxiv_id.sql",
+    "0037_document_file_identity.sql",
 ]
 
 

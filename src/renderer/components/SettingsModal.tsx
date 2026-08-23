@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { useState, useEffect, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Modal, Button, Select } from '@lobehub/ui'
 import { Brain, ChartDonut, CloudArrowUp, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
@@ -423,31 +423,45 @@ export default function SettingsModal({
   const [error, setError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
   const [activePage, setActivePage] = useState<SettingsPage>('general')
+  const settingsLoadGenerationRef = useRef(0)
+  const translationRef = useRef(t)
+  translationRef.current = t
 
-  useEffect(() => {
-    if (open) {
-      setError(null)
-      setActivePage(initialPage)
-      void loadSettings()
-    }
-  }, [initialPage, open])
-
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
+    const generation = ++settingsLoadGenerationRef.current
     try {
-      const lib = await api.settings.get<string>('libraryFolderPath', '')
-      const proxy = await api.settings.get<string>('proxyUrl', '')
-      const mailto = await api.settings.get<string>('crossrefMailto', '')
-      const sc = await api.settings.get<string>('sidebarCollapsed', '0')
-      const openMode = await api.settings.get<PdfOpenMode>('pdfOpenMode', 'system')
+      const [lib, proxy, mailto, sc, openMode] = await Promise.all([
+        api.settings.get<string>('libraryFolderPath', ''),
+        api.settings.get<string>('proxyUrl', ''),
+        api.settings.get<string>('crossrefMailto', ''),
+        api.settings.get<string>('sidebarCollapsed', '0'),
+        api.settings.get<PdfOpenMode>('pdfOpenMode', 'system')
+      ])
+      if (settingsLoadGenerationRef.current !== generation) return
       setLibraryFolderPath(lib)
       setProxyUrl(proxy)
       setCrossrefMailto(mailto)
       setSidebarCollapsed(sc === '1')
       setPdfOpenMode(openMode === 'builtin' ? 'builtin' : 'system')
     } catch {
-      setError(t('settings.loadFailed'))
+      if (settingsLoadGenerationRef.current === generation) {
+        setError(translationRef.current('settings.loadFailed'))
+      }
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (!open) {
+      settingsLoadGenerationRef.current += 1
+      return
+    }
+    setError(null)
+    setActivePage(initialPage)
+    void loadSettings()
+    return () => {
+      settingsLoadGenerationRef.current += 1
+    }
+  }, [initialPage, loadSettings, open])
 
   const handleChooseFolder = async () => {
     setError(null)

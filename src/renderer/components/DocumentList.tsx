@@ -79,13 +79,22 @@ function ColumnHeader({
   const isSorted = sortField === id
   const startRef = useRef({ x: 0, w: 0 })
   const currentWidthRef = useRef(width)
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    if (!resizeCleanupRef.current) return
+    resizeCleanupRef.current()
+    onLiveResizeEnd()
+  }, [onLiveResizeEnd])
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
       e.stopPropagation()
+      resizeCleanupRef.current?.()
       startRef.current = { x: e.clientX, w: width }
       currentWidthRef.current = width
+      let finished = false
 
       const onMouseMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startRef.current.x
@@ -94,19 +103,32 @@ function ColumnHeader({
         onLiveResize(id, newWidth)
       }
 
-      const onMouseUp = () => {
+      const cleanup = () => {
         document.removeEventListener('mousemove', onMouseMove)
         document.removeEventListener('mouseup', onMouseUp)
+        window.removeEventListener('blur', onWindowBlur)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null
+      }
+
+      const finish = () => {
+        if (finished) return
+        finished = true
+        cleanup()
         onResize(id, currentWidthRef.current)
         onLiveResizeEnd()
       }
 
+      const onMouseUp = () => finish()
+      const onWindowBlur = () => finish()
+
       document.addEventListener('mousemove', onMouseMove)
       document.addEventListener('mouseup', onMouseUp)
+      window.addEventListener('blur', onWindowBlur)
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
+      resizeCleanupRef.current = cleanup
     },
     [id, width, onResize, onLiveResize, onLiveResizeEnd]
   )

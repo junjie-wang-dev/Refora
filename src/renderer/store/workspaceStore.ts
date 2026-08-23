@@ -104,6 +104,22 @@ function addOpenWorkspace(ids: string[], id: string | null): string[] {
   return id && !ids.includes(id) ? [...ids, id] : ids
 }
 
+function restoreRemoved<T extends { id: string }>(
+  current: T[],
+  previous: T[],
+  removed: T[]
+): T[] {
+  const restored = [...current]
+  const removedIds = new Set(removed.map((item) => item.id))
+  for (const [index, item] of previous.entries()) {
+    if (!removedIds.has(item.id) || restored.some((currentItem) => currentItem.id === item.id)) {
+      continue
+    }
+    restored.splice(Math.min(index, restored.length), 0, item)
+  }
+  return restored
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activeWorkspaceId: null,
@@ -569,6 +585,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const workspaceId = get().activeWorkspaceId
     const previousAssets = get().assets
     const previousItems = get().items
+    const removedAssets = previousAssets.filter((asset) => asset.id === id)
+    const removedItems = previousItems.filter((item) => item.assetId === id)
     set((state) => ({
       assets: state.assets.filter((asset) => asset.id !== id),
       items: state.items.filter((item) => item.assetId !== id)
@@ -577,7 +595,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await api.workspaceAssets.delete(id)
     } catch (e) {
       if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
-        set({ assets: previousAssets, items: previousItems })
+        set((state) => ({
+          assets: restoreRemoved(state.assets, previousAssets, removedAssets),
+          items: restoreRemoved(state.items, previousItems, removedItems)
+        }))
       }
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.deleteFile')))
@@ -632,7 +653,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
     } catch (e) {
       if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
-        set({ items: previous })
+        const optimisticSortOrders = new Map(orderedIds.map((id, index) => [id, index]))
+        const previousSortOrders = new Map(previous.map((item) => [item.id, item.sortOrder]))
+        set((state) => ({
+          items: state.items
+            .map((item) => {
+              const optimisticSortOrder = optimisticSortOrders.get(item.id)
+              const previousSortOrder = previousSortOrders.get(item.id)
+              return optimisticSortOrder !== undefined &&
+                previousSortOrder !== undefined &&
+                item.sortOrder === optimisticSortOrder
+                ? { ...item, sortOrder: previousSortOrder }
+                : item
+            })
+            .sort((left, right) => left.sortOrder - right.sortOrder)
+        }))
       }
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.reorderItems')))
@@ -746,6 +781,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const workspaceId = get().activeWorkspaceId
     const previousReports = get().reports
     const previousItems = get().items
+    const removedReports = previousReports.filter((report) => report.id === id)
+    const removedItems = previousItems.filter((item) => item.reportId === id)
     set((s) => ({
       reports: s.reports.filter((r) => r.id !== id),
       items: s.items.filter((item) => item.reportId !== id)
@@ -754,7 +791,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await api.reports.delete(id)
     } catch (e) {
       if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
-        set({ reports: previousReports, items: previousItems })
+        set((state) => ({
+          reports: restoreRemoved(state.reports, previousReports, removedReports),
+          items: restoreRemoved(state.items, previousItems, removedItems)
+        }))
       }
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.deleteReport')))
@@ -837,6 +877,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const workspaceId = get().activeWorkspaceId
     const previousNotes = get().notes
     const previousItems = get().items
+    const removedNotes = previousNotes.filter((note) => note.id === id)
+    const removedItems = previousItems.filter((item) => item.noteId === id)
     set((s) => ({
       notes: s.notes.filter((note) => note.id !== id),
       items: s.items.filter((item) => item.noteId !== id)
@@ -845,7 +887,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await api.workspaceNotes.delete(id)
     } catch (e) {
       if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) {
-        set({ notes: previousNotes, items: previousItems })
+        set((state) => ({
+          notes: restoreRemoved(state.notes, previousNotes, removedNotes),
+          items: restoreRemoved(state.items, previousItems, removedItems)
+        }))
       }
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.deleteNote')))

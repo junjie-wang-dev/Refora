@@ -151,6 +151,14 @@ let documentRequestVersion = 0
 let searchRequestVersion = 0
 let documentCountsRequestVersion = 0
 let categoriesRequestVersion = 0
+let starUpdateGeneration = 0
+interface StarUpdateQueue {
+  confirmed: boolean
+  desired: boolean
+  generation: number
+  task: Promise<void> | null
+}
+const starUpdateQueues = new Map<string, StarUpdateQueue>()
 const DOCUMENT_PAGE_SIZE = 100
 
 const IDENTIFIER_NETWORK_ERROR_CODES = new Set([
@@ -171,6 +179,34 @@ function ipcErrorCode(error: unknown): string | null {
 function findKnownDocument(state: DocumentState, docId: string): Document | undefined {
   return state.documents.find((doc) => doc.id === docId) ??
     state.searchResults.find((doc) => doc.id === docId)
+}
+
+function patchStarredValue(documents: Document[], docId: string, starred: boolean): Document[] {
+  return documents.map((document) => document.id === docId
+    ? { ...document, starred: starred ? 1 : 0 }
+    : document)
+}
+
+async function runStarUpdateQueue(docId: string, queue: StarUpdateQueue): Promise<void> {
+  while (queue.desired !== queue.confirmed) {
+    const target = queue.desired
+    try {
+      await api.documents.setStarred(docId, target)
+      if (queue.generation !== starUpdateGeneration) return
+      queue.confirmed = target
+      void useDocumentStore.getState().fetchDocumentCounts()
+    } catch {
+      if (queue.generation !== starUpdateGeneration) return
+      if (queue.desired === target) {
+        queue.desired = queue.confirmed
+        useDocumentStore.setState((state) => ({
+          documents: patchStarredValue(state.documents, docId, queue.confirmed),
+          searchResults: patchStarredValue(state.searchResults, docId, queue.confirmed)
+        }))
+        useDocumentStore.getState().showToast(i18n.t('documentErrors.starFailed'))
+      }
+    }
+  }
 }
 
 function restoreRemovedDocuments(
@@ -362,21 +398,30 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const doc = findKnownDocument(get(), docId)
     if (!doc) return
     const newValue = !doc.starred
-    get().patchDocument(docId, { ...doc, starred: newValue ? 1 : 0 })
-    try {
-      await api.documents.setStarred(docId, newValue)
-      void get().fetchDocumentCounts()
-    } catch {
-      const rollback = (documents: Document[]) => documents.map((current) =>
-        current.id === docId && Boolean(current.starred) === newValue
-          ? { ...current, starred: doc.starred }
-          : current)
-      set((state) => ({
-        documents: rollback(state.documents),
-        searchResults: rollback(state.searchResults)
-      }))
-      get().showToast(i18n.t('documentErrors.starFailed'))
+    set((state) => ({
+      documents: patchStarredValue(state.documents, docId, newValue),
+      searchResults: patchStarredValue(state.searchResults, docId, newValue)
+    }))
+    let queue = starUpdateQueues.get(docId)
+    if (!queue || queue.generation !== starUpdateGeneration) {
+      queue = {
+        confirmed: Boolean(doc.starred),
+        desired: newValue,
+        generation: starUpdateGeneration,
+        task: null
+      }
+      starUpdateQueues.set(docId, queue)
+    } else {
+      queue.desired = newValue
     }
+    if (!queue.task) {
+      const activeQueue = queue
+      const task = runStarUpdateQueue(docId, activeQueue).finally(() => {
+        if (starUpdateQueues.get(docId) === activeQueue) starUpdateQueues.delete(docId)
+      })
+      activeQueue.task = task
+    }
+    await queue.task
   },
 
   openPdf: async (docId: string) => {
@@ -703,6 +748,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
     librarySwitchedCb[0] = () => {
       columnPersistenceGeneration += 1
+      starUpdateGeneration += 1
+      starUpdateQueues.clear()
       if (persistTimeout) clearTimeout(persistTimeout)
       persistTimeout = null
       pendingColumnState = null
@@ -834,9 +881,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
           })
         }
-      } catch {
+      } catch (error) {
         if (requestVersion === searchRequestVersion) {
           set({ searchResults: [] })
+          get().showToast(errorMessage(error, i18n.t('documentErrors.searchFailed')))
         }
       }
     }, 200)
@@ -874,9 +922,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
         }
       })
-    } catch {
+    } catch (error) {
       if (requestVersion === searchRequestVersion) {
-        set({ hasMoreSearchResults: false })
+        get().showToast(errorMessage(error, i18n.t('documentErrors.searchFailed')))
       }
     } finally {
       if (requestVersion === searchRequestVersion) {
@@ -901,6 +949,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   destroy: () => {
     columnPersistenceGeneration++
+    starUpdateGeneration++
+    starUpdateQueues.clear()
     documentRequestVersion++
     searchRequestVersion++
     documentCountsRequestVersion++

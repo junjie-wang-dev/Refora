@@ -424,6 +424,7 @@ def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):
     client, fakes = make_client()
     source = tmp_path / "source.pdf"
     source.write_bytes(b"%PDF-1.4\n")
+    fakes.settings["set"]("libraryFolderPath", str(tmp_path))
     fakes.document_overrides["doc-1"] = {
         "id": "doc-1",
         "filePath": str(source),
@@ -433,6 +434,31 @@ def test_document_delete_uses_token_connector_and_result_envelope(tmp_path):
     assert response.status_code == 200
     assert response.json() == {"ok": True, "data": {"ack": True}}
     assert fakes.trashed == [str(source)]
+    assert fakes.deleted_documents == ["doc-1"]
+
+
+def test_document_delete_never_trashes_pdf_outside_managed_library(tmp_path):
+    client, fakes = make_client()
+    library = tmp_path / "library"
+    source_folder = tmp_path / "zotero"
+    library.mkdir()
+    source_folder.mkdir()
+    source = source_folder / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+    fakes.settings["set"]("libraryFolderPath", str(library))
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": str(source),
+        "fileMissing": 0,
+    }
+
+    response = client.delete(
+        "/documents/doc-1", headers={"X-Refora-Token": "test-token"}
+    )
+
+    assert response.status_code == 200
+    assert fakes.trashed == []
+    assert source.exists()
     assert fakes.deleted_documents == ["doc-1"]
 
 

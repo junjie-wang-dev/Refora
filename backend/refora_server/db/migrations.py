@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+
+from refora_server.library.authors import normalizeAuthors
+from refora_server.library.document_ids import is_safe_document_id
 
 SCHEMA_DIR = Path(__file__).resolve().parent
 SCHEMA_FILE = SCHEMA_DIR / "schema.sql"
@@ -22,6 +28,36 @@ FTS_COLUMNS: tuple[str, ...] = (
 )
 
 _FILENAME_VERSION_RE = re.compile(r"(\d+)_")
+_AUTHOR_ACRONYM_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{1,9}")
+_AUTHOR_WORD_RE = re.compile(r"[A-Za-z0-9]+")
+_INSTITUTION_PHRASE_RE = re.compile(
+    r"\b(?:university|institute|institution|laborator(?:y|ies)|department|"
+    r"cent(?:er|re)|association|society|corporation|company|foundation|"
+    r"organi[sz]ation|committee|consortium|council|agency|ministry|hospital|"
+    r"school|college|academy|government)\b",
+    re.IGNORECASE,
+)
+_ACRONYM_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "de",
+        "der",
+        "for",
+        "in",
+        "la",
+        "of",
+        "on",
+        "the",
+        "to",
+    }
+)
+_EXACT_LEGACY_AUTHOR_REPAIRS = {
+    "CSAIL California Institute of Technology": "California Institute of Technology, CSAIL",
+    "CSAIL Massachusetts Institute of Technology": "Massachusetts Institute of Technology, CSAIL",
+}
 
 
 @dataclass(frozen=True)
@@ -45,6 +81,8 @@ class SqliteLike(Protocol):
     def set_user_version(self, version: int) -> None: ...
     def has_column(self, table: str, column: str) -> bool: ...
     def has_object(self, type: str, name: str) -> bool: ...
+    def execute(self, sql: str, params: list[object]) -> None: ...
+    def fetchall(self, sql: str, params: list[object]) -> list[Any]: ...
 
 
 _cached_migrations: list[MigrationFile] | None = None
@@ -235,7 +273,282 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
         )
     if version == 34:
         return _sync_library_identity_schema_present(db)
+    if version == 37:
+        return _has_columns(
+            db,
+            "documents",
+            ["fileDevice", "fileInode", "fileMtimeNs"],
+        )
     return version <= current
+
+
+def _regular_file(path: str) -> bool:
+    return os.path.isfile(path) and not os.path.islink(path)
+
+
+def _repair_legacy_paths(db: SqliteLike) -> None:
+    if not db.has_object("table", "legacy_path_repair_candidates"):
+        return
+    rows = db.fetchall(
+        "SELECT c.documentId, c.candidatePath, c.relativePath, s.value "
+        "FROM legacy_path_repair_candidates c "
+        "LEFT JOIN settings s ON s.key = 'libraryFolderPath'",
+        [],
+    )
+    if not rows:
+        return
+    db.exec("BEGIN")
+    try:
+        for row in rows:
+            document_id = row[0]
+            candidate_path = row[1]
+            relative_path = row[2]
+            raw_library = row[3]
+            if not all(
+                isinstance(value, str)
+                for value in (document_id, candidate_path, relative_path, raw_library)
+            ):
+                continue
+            try:
+                library_folder = json.loads(raw_library)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(library_folder, str) or not library_folder:
+                continue
+            library_path = os.path.realpath(
+                os.path.join(library_folder, relative_path)
+            )
+            if _regular_file(library_path):
+                db.execute(
+                    "DELETE FROM legacy_path_repair_candidates WHERE documentId = ?",
+                    [document_id],
+                )
+                continue
+            if not _regular_file(candidate_path):
+                continue
+            db.execute(
+                "UPDATE documents SET filePath = ? WHERE id = ? AND filePath = ?",
+                [candidate_path, document_id, relative_path],
+            )
+            db.execute(
+                "DELETE FROM legacy_path_repair_candidates WHERE documentId = ?",
+                [document_id],
+            )
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
+
+
+def _new_document_id(db: SqliteLike) -> str:
+    while True:
+        candidate = str(uuid.uuid4())
+        if not db.fetchall("SELECT 1 FROM documents WHERE id = ?", [candidate]):
+            return candidate
+
+
+def _repair_report_sources(db: SqliteLike, old_id: str, new_id: str) -> None:
+    rows = db.fetchall("SELECT id, sourceDocIds FROM ai_reports", [])
+    for row in rows:
+        report_id = row[0]
+        raw_sources = row[1]
+        if not isinstance(report_id, str) or not isinstance(raw_sources, str):
+            continue
+        try:
+            sources = json.loads(raw_sources)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(sources, list) or old_id not in sources:
+            continue
+        updated = [new_id if source == old_id else source for source in sources]
+        db.execute(
+            "UPDATE ai_reports SET sourceDocIds = ? WHERE id = ?",
+            [json.dumps(updated, ensure_ascii=False), report_id],
+        )
+
+
+def _repair_unsafe_document_ids(db: SqliteLike) -> None:
+    if not db.has_object("table", "legacy_document_id_repair_candidates"):
+        return
+    rows = db.fetchall(
+        "SELECT documentId FROM legacy_document_id_repair_candidates ORDER BY documentId",
+        [],
+    )
+    candidates = [row[0] for row in rows if isinstance(row[0], str)]
+    if not candidates:
+        return
+    columns = [
+        row[1]
+        for row in db.fetchall("PRAGMA table_info(documents)", [])
+        if isinstance(row[1], str) and row[1] != "id"
+    ]
+    quoted_columns = ", ".join(f'"{column}"' for column in columns)
+    db.exec("BEGIN")
+    try:
+        for old_id in candidates:
+            if is_safe_document_id(old_id):
+                db.execute(
+                    "DELETE FROM legacy_document_id_repair_candidates WHERE documentId = ?",
+                    [old_id],
+                )
+                continue
+            new_id = _new_document_id(db)
+            db.execute(
+                f'INSERT INTO documents (id, {quoted_columns}) '
+                f'SELECT ?, {quoted_columns} FROM documents WHERE id = ?',
+                [new_id, old_id],
+            )
+            for table, column in (
+                ("document_categories", "documentId"),
+                ("workspace_items", "docId"),
+                ("document_ocr_jobs", "documentId"),
+                ("document_ocr_results", "documentId"),
+                ("pdf_annotations", "documentId"),
+                ("agent_runs", "activeDocumentId"),
+                ("legacy_path_repair_candidates", "documentId"),
+            ):
+                db.execute(
+                    f'UPDATE "{table}" SET "{column}" = ? WHERE "{column}" = ?',
+                    [new_id, old_id],
+                )
+            db.execute(
+                "UPDATE ai_summaries SET docId = ? WHERE docId = ?",
+                [new_id, old_id],
+            )
+            _repair_report_sources(db, old_id, new_id)
+            db.execute(
+                "DELETE FROM legacy_document_id_repair_candidates WHERE documentId = ?",
+                [old_id],
+            )
+            db.execute("DELETE FROM documents WHERE id = ?", [old_id])
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
+
+
+def _cleanup_legacy_chat_terminal_messages(db: SqliteLike) -> None:
+    if not db.has_object("table", "legacy_chat_terminal_cleanup"):
+        return
+    if not db.fetchall("SELECT 1 FROM legacy_chat_terminal_cleanup WHERE id = 1", []):
+        return
+    rows = db.fetchall(
+        "SELECT m.id, m.content, r.status FROM chat_messages m "
+        "JOIN agent_runs r ON r.assistantMessageId = m.id "
+        "WHERE r.status IN ('cancelled', 'failed')",
+        [],
+    )
+    cancelled_suffix = "\n\n[Response cancelled by user]"
+    failed_marker = "\n\n[Response interrupted: "
+    db.exec("BEGIN")
+    try:
+        for row in rows:
+            message_id = row[0]
+            content = row[1]
+            status = row[2]
+            if not all(isinstance(value, str) for value in (message_id, content, status)):
+                continue
+            cleaned: str | None = None
+            if status == "cancelled":
+                if content == "[Response cancelled by user]":
+                    cleaned = ""
+                elif content.endswith(cancelled_suffix):
+                    cleaned = content[: -len(cancelled_suffix)]
+            elif status == "failed" and content.endswith("]"):
+                marker_index = content.rfind(failed_marker)
+                if marker_index >= 0:
+                    cleaned = content[:marker_index]
+            if cleaned is None:
+                continue
+            if cleaned:
+                db.execute(
+                    "UPDATE chat_messages SET content = ? WHERE id = ?",
+                    [cleaned, message_id],
+                )
+            else:
+                db.execute("DELETE FROM chat_messages WHERE id = ?", [message_id])
+        db.execute("DELETE FROM legacy_chat_terminal_cleanup WHERE id = 1", [])
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
+
+
+def _repair_institution_author(author: str) -> str:
+    exact = _EXACT_LEGACY_AUTHOR_REPAIRS.get(author)
+    if exact is not None:
+        return exact
+    if "," in author:
+        return author
+    acronym, separator, phrase = author.partition(" ")
+    if not separator or not _AUTHOR_ACRONYM_RE.fullmatch(acronym):
+        return author
+    if not _INSTITUTION_PHRASE_RE.search(phrase):
+        return author
+    words = _AUTHOR_WORD_RE.findall(phrase)
+    derived = "".join(
+        word[0] for word in words if word.casefold() not in _ACRONYM_STOPWORDS
+    )
+    if len(derived) < 2 or acronym.casefold() != derived.casefold():
+        return author
+    return f"{phrase}, {acronym}"
+
+
+def _repair_legacy_authors(db: SqliteLike) -> None:
+    if not db.has_object("table", "legacy_author_repair_pending"):
+        return
+    if not db.fetchall("SELECT 1 FROM legacy_author_repair_pending WHERE id = 1", []):
+        return
+    db.exec("BEGIN")
+    try:
+        rows = db.fetchall(
+            "SELECT rowid, authors FROM documents "
+            "WHERE authors IS NOT NULL AND trim(authors) <> ''",
+            [],
+        )
+        for row in rows:
+            rowid = row[0]
+            authors = row[1]
+            if not isinstance(authors, str):
+                continue
+            parts = [part.strip() for part in authors.split(";") if part.strip()]
+            repaired = [_repair_institution_author(part) for part in parts]
+            if repaired != parts:
+                db.execute(
+                    "UPDATE documents SET authors = ? WHERE rowid = ?",
+                    ["; ".join(repaired), rowid],
+                )
+        db.execute("DELETE FROM legacy_author_repair_pending WHERE id = 1", [])
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
+
+
+def _normalize_document_authors(db: SqliteLike) -> None:
+    rows = db.fetchall(
+        "SELECT rowid, authors FROM documents "
+        "WHERE authors IS NOT NULL AND trim(authors) <> ''",
+        [],
+    )
+    db.exec("BEGIN")
+    try:
+        for row in rows:
+            rowid = row[0]
+            authors = row[1]
+            if not isinstance(authors, str):
+                continue
+            normalized = normalizeAuthors(authors)
+            if normalized != authors:
+                db.execute(
+                    "UPDATE documents SET authors = ? WHERE rowid = ?",
+                    [normalized, rowid],
+                )
+        db.set_user_version(27)
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
 
 
 def run_migrations(db: SqliteLike) -> MigrationResult:
@@ -250,6 +563,9 @@ def run_migrations(db: SqliteLike) -> MigrationResult:
         current_version = db.get_user_version()
         if migration.version < 12 and migration.version <= current_version:
             continue
+        if migration.version == 27 and current_version < 27:
+            _normalize_document_authors(db)
+            continue
         if migration.version >= 12 and migration_schema_present(db, migration.version):
             if current_version < migration.version:
                 db.set_user_version(migration.version)
@@ -261,6 +577,11 @@ def run_migrations(db: SqliteLike) -> MigrationResult:
         except Exception:
             db.exec("ROLLBACK")
             raise
+
+    _repair_legacy_paths(db)
+    _repair_legacy_authors(db)
+    _repair_unsafe_document_ids(db)
+    _cleanup_legacy_chat_terminal_messages(db)
 
     to_version = db.get_user_version()
     return MigrationResult(
