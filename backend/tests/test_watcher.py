@@ -122,6 +122,13 @@ def test_scanOnce_detects_new_pdfs(tmp_path):
         db.close()
 
 
+def test_event_path_allows_visible_directories_containing_dots():
+    root = "/Volumes/Research.v2"
+    path = "/Volumes/Research.v2/Papers.final/article.pdf"
+
+    assert watcher_module._shouldIgnorePath(path, root, "") is False
+
+
 def test_scanOnce_skips_disabled_folders(tmp_path):
     db = open_migrated_db()
     try:
@@ -228,6 +235,26 @@ def test_stopScanning_marks_not_running():
             assert svc["_state"]["running"] is False
 
         asyncio.run(run())
+    finally:
+        db.close()
+
+
+def test_completed_stabilizer_is_removed_from_state(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        svc = _make_watcher(
+            {"watchFolders": wf_repo},
+            stability_threshold_ms=10,
+            debounce_ms=100,
+        )
+        path = str(tmp_path / "stable.pdf")
+        (tmp_path / "stable.pdf").write_bytes(b"%PDF")
+
+        svc["_markStabilizing"](path)
+
+        assert _wait_for(lambda: path not in svc["_state"]["stabilizers"])
+        svc["stopScanning"]()
     finally:
         db.close()
 

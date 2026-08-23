@@ -37,6 +37,11 @@ type SearchSelection =
   | { kind: 'workspaceContent'; value: WorkspaceContentSearchResult }
   | { kind: 'chat'; value: ChatSearchResult }
 
+function searchSelectionId(selection: SearchSelection): string {
+  const id = selection.kind === 'chat' ? selection.value.threadId : selection.value.id
+  return `global-search-option-${selection.kind}-${encodeURIComponent(id)}`
+}
+
 function highlightMatch(text: string, query: string): ReactNode {
   const tokens = query.trim().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return text
@@ -174,7 +179,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     documentSearchSyncedRef.current = true
   }, [documentListOpen, query, resolvedQuery, results.documents])
 
-  const selectResult = useCallback((selection: SearchSelection) => {
+  const selectResult = useCallback(async (selection: SearchSelection) => {
     if (selection.kind === 'document') {
       useDocumentStore.setState({
         focusedDocId: selection.value.id,
@@ -186,7 +191,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
         if (store.chatStreaming) return
-        store.setActiveWorkspace(selection.value.workspaceId)
+        if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else {
         store.openPanel()
       }
@@ -199,7 +204,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
         if (store.chatStreaming) return
-        store.setActiveWorkspace(selection.value.workspaceId)
+        if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else {
         store.openPanel()
       }
@@ -208,7 +213,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       const store = useWorkspaceStore.getState()
       if (store.chatStreaming) return
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
-        store.setActiveWorkspace(selection.value.workspaceId)
+        if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else if (selection.value.workspaceId) {
         store.openPanel()
       }
@@ -271,7 +276,8 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
         onMouseEnter={() => {
           if (!unavailable) setActiveIndex(index)
         }}
-        onClick={() => selectResult(selection)}
+        id={searchSelectionId(selection)}
+        onClick={() => void selectResult(selection)}
       >
         {content}
       </button>
@@ -302,6 +308,9 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
           aria-label={t('globalSearch.label')}
           aria-autocomplete="list"
           aria-controls="global-search-results"
+          aria-activedescendant={showResults && selections[activeIndex]
+            ? searchSelectionId(selections[activeIndex])
+            : undefined}
           aria-expanded={showResults}
           maxLength={500}
           onFocus={() => {
@@ -327,7 +336,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
               !selectionUnavailable(selections[activeIndex])
             ) {
               event.preventDefault()
-              selectResult(selections[activeIndex])
+              void selectResult(selections[activeIndex])
             }
           }}
         />

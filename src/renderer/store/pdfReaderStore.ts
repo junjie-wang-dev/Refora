@@ -24,6 +24,7 @@ export type PdfTool =
   | 'eraser'
 
 export type PdfAnnotationSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+export type PdfAnnotationLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
 interface PdfAnnotationDeletion {
   documentId: string
@@ -37,6 +38,7 @@ interface PdfReaderState {
   tabs: Document[]
   activeDocumentId: string | null
   annotations: Record<string, PdfAnnotation[]>
+  loadStatus: Record<string, PdfAnnotationLoadStatus>
   saveStatus: Record<string, PdfAnnotationSaveStatus>
   tool: PdfTool | null
   color: string
@@ -58,7 +60,7 @@ interface PdfReaderState {
   toggleSidebar: () => void
   selectAnnotation: (id: string | null) => void
   selectAnnotations: (ids: string[]) => void
-  addAnnotation: (documentId: string, annotation: PdfAnnotationDraft) => PdfAnnotation
+  addAnnotation: (documentId: string, annotation: PdfAnnotationDraft) => PdfAnnotation | null
   updateAnnotation: (
     documentId: string,
     annotationId: string,
@@ -70,6 +72,7 @@ interface PdfReaderState {
   removeAnnotation: (documentId: string, annotationId: string) => void
   removeAnnotations: (documentId: string, annotationIds: string[]) => void
   consumeCommentFocus: () => void
+  retryLoad: (documentId: string) => Promise<void>
   retrySave: (documentId: string) => void
   undoLastDeletion: () => void
   clearLastDeletion: () => void
@@ -78,9 +81,21 @@ interface PdfReaderState {
   resetForLibrarySwitch: () => void
 }
 
-const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const persistVersions = new Map<string, number>()
-const persistTasks = new Map<string, Promise<void>>()
+interface AnnotationSnapshot {
+  annotations: PdfAnnotation[]
+  version: number
+}
+
+interface AnnotationPersistQueue {
+  active: boolean
+  failed: (AnnotationSnapshot & { error: unknown }) | null
+  pending: AnnotationSnapshot | null
+  running: Promise<void> | null
+  timer: ReturnType<typeof setTimeout> | null
+  version: number
+}
+
+const persistQueues = new Map<string, AnnotationPersistQueue>()
 let libraryGeneration = 0
 
 function isAnnotation(value: unknown): value is PdfAnnotation {
@@ -96,78 +111,112 @@ function isAnnotation(value: unknown): value is PdfAnnotation {
     typeof item.createdAt === 'number'
 }
 
-function persist(documentId: string, annotations: PdfAnnotation[]): void {
-  const existing = persistTimers.get(documentId)
-  if (existing) clearTimeout(existing)
-  const version = (persistVersions.get(documentId) ?? 0) + 1
-  persistVersions.set(documentId, version)
-  usePdfReaderStore.setState((state) => ({
-    saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
-  }))
-  persistTimers.set(documentId, setTimeout(() => {
-    persistTimers.delete(documentId)
-    const task = api.documents.setPdfAnnotations(documentId, annotations)
-      .then(() => {
-        if (persistVersions.get(documentId) !== version) return
+function persistQueue(documentId: string): AnnotationPersistQueue {
+  const existing = persistQueues.get(documentId)
+  if (existing) return existing
+  const queue: AnnotationPersistQueue = {
+    active: true,
+    failed: null,
+    pending: null,
+    running: null,
+    timer: null,
+    version: 0
+  }
+  persistQueues.set(documentId, queue)
+  return queue
+}
+
+function startPersist(documentId: string, queue: AnnotationPersistQueue): Promise<void> | null {
+  if (!queue.active || persistQueues.get(documentId) !== queue) return null
+  if (queue.running || !queue.pending) return queue.running
+  const snapshot = queue.pending
+  queue.pending = null
+  const generation = libraryGeneration
+  const task = api.documents.setPdfAnnotations(documentId, snapshot.annotations)
+    .then(() => {
+      if (generation !== libraryGeneration) return
+      queue.failed = null
+      if (!queue.pending && queue.version === snapshot.version) {
         usePdfReaderStore.setState((state) => ({
           saveStatus: { ...state.saveStatus, [documentId]: 'saved' }
         }))
-      })
-      .catch(() => {
-        if (persistVersions.get(documentId) !== version) return
+      }
+    })
+    .catch((error) => {
+      if (generation === libraryGeneration && !queue.pending && queue.version === snapshot.version) {
+        queue.failed = { ...snapshot, error }
         usePdfReaderStore.setState((state) => ({
           saveStatus: { ...state.saveStatus, [documentId]: 'error' }
         }))
-      })
-      .finally(() => {
-        if (persistTasks.get(documentId) === task) persistTasks.delete(documentId)
-      })
-    persistTasks.set(documentId, task)
-  }, 250))
+      }
+      throw error
+    })
+    .finally(() => {
+      if (queue.running === task) queue.running = null
+      if (
+        generation === libraryGeneration &&
+        queue.active &&
+        persistQueues.get(documentId) === queue &&
+        queue.pending
+      ) {
+        void startPersist(documentId, queue)?.catch(() => undefined)
+      }
+    })
+  queue.running = task
+  return task
+}
+
+function persist(documentId: string, annotations: PdfAnnotation[]): void {
+  const queue = persistQueue(documentId)
+  if (queue.timer) clearTimeout(queue.timer)
+  queue.version += 1
+  queue.pending = { annotations, version: queue.version }
+  queue.failed = null
+  usePdfReaderStore.setState((state) => ({
+    saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
+  }))
+  queue.timer = setTimeout(() => {
+    queue.timer = null
+    void startPersist(documentId, queue)?.catch(() => undefined)
+  }, 250)
+}
+
+async function flushPersistQueue(
+  documentId: string,
+  queue: AnnotationPersistQueue
+): Promise<void> {
+  if (queue.timer) {
+    clearTimeout(queue.timer)
+    queue.timer = null
+  }
+  if (queue.failed && !queue.pending) {
+    queue.pending = {
+      annotations: queue.failed.annotations,
+      version: queue.failed.version
+    }
+    queue.failed = null
+    usePdfReaderStore.setState((state) => ({
+      saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
+    }))
+  }
+  while (true) {
+    const task = queue.running ?? startPersist(documentId, queue)
+    if (task) await task.catch(() => undefined)
+    if (queue.pending || queue.running) continue
+    if (queue.failed) throw queue.failed.error
+    return
+  }
 }
 
 async function flushPendingSaves(): Promise<void> {
-  const pendingIds = new Set<string>()
   while (true) {
-    for (const [documentId, timer] of persistTimers) {
-      clearTimeout(timer)
-      persistTimers.delete(documentId)
-      pendingIds.add(documentId)
-    }
-    await Promise.all(persistTasks.values())
-    for (const [documentId, status] of Object.entries(
-      usePdfReaderStore.getState().saveStatus
-    )) {
-      if (status === 'error') pendingIds.add(documentId)
-    }
-    if (pendingIds.size === 0) {
-      if (persistTimers.size === 0 && persistTasks.size === 0) return
-      continue
-    }
-    const ids = [...pendingIds]
-    pendingIds.clear()
-    const results = await Promise.allSettled(ids.map(async (documentId) => {
-      const version = persistVersions.get(documentId)
-      const annotations = usePdfReaderStore.getState().annotations[documentId] ?? []
-      usePdfReaderStore.setState((state) => ({
-        saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
-      }))
-      try {
-        await api.documents.setPdfAnnotations(documentId, annotations)
-        if (persistVersions.get(documentId) === version) {
-          usePdfReaderStore.setState((state) => ({
-            saveStatus: { ...state.saveStatus, [documentId]: 'saved' }
-          }))
-        }
-      } catch (error) {
-        if (persistVersions.get(documentId) === version) {
-          usePdfReaderStore.setState((state) => ({
-            saveStatus: { ...state.saveStatus, [documentId]: 'error' }
-          }))
-        }
-        throw error
-      }
-    }))
+    const pending = [...persistQueues].filter(([, queue]) =>
+      queue.active && Boolean(queue.timer || queue.pending || queue.running || queue.failed)
+    )
+    if (pending.length === 0) return
+    const results = await Promise.allSettled(
+      pending.map(([documentId, queue]) => flushPersistQueue(documentId, queue))
+    )
     const failure = results.find((result): result is PromiseRejectedResult =>
       result.status === 'rejected'
     )
@@ -181,14 +230,19 @@ async function prepareForLibrarySwitch(): Promise<void> {
 
 function resetForLibrarySwitch(): void {
   libraryGeneration += 1
-  for (const timer of persistTimers.values()) clearTimeout(timer)
-  persistTimers.clear()
-  persistVersions.clear()
-  persistTasks.clear()
+  for (const queue of persistQueues.values()) {
+    if (queue.timer) clearTimeout(queue.timer)
+    queue.active = false
+    queue.failed = null
+    queue.pending = null
+    queue.timer = null
+  }
+  persistQueues.clear()
   usePdfReaderStore.setState({
     tabs: [],
     activeDocumentId: null,
     annotations: {},
+    loadStatus: {},
     saveStatus: {},
     tool: null,
     sidebarOpen: false,
@@ -209,6 +263,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   tabs: [],
   activeDocumentId: null,
   annotations: {},
+  loadStatus: {},
   saveStatus: {},
   tool: null,
   color: '#f2c94c',
@@ -223,6 +278,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   open: async (document) => {
     const generation = libraryGeneration
     const alreadyLoaded = Object.hasOwn(get().annotations, document.id)
+    const alreadyLoading = get().loadStatus[document.id] === 'loading'
     set((state) => ({
       tabs: state.tabs.some((tab) => tab.id === document.id)
         ? state.tabs.map((tab) => tab.id === document.id ? document : tab)
@@ -232,7 +288,10 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
       selectedAnnotationIds: [],
       pendingCommentFocusId: null
     }))
-    if (alreadyLoaded) return
+    if (alreadyLoaded || alreadyLoading) return
+    set((state) => ({
+      loadStatus: { ...state.loadStatus, [document.id]: 'loading' }
+    }))
     try {
       const saved = await api.documents.pdfAnnotations(document.id)
       if (generation !== libraryGeneration) return
@@ -241,15 +300,13 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
         annotations: Object.hasOwn(state.annotations, document.id)
           ? state.annotations
           : { ...state.annotations, [document.id]: annotations },
+        loadStatus: { ...state.loadStatus, [document.id]: 'loaded' },
         saveStatus: { ...state.saveStatus, [document.id]: 'saved' }
       }))
     } catch {
       if (generation !== libraryGeneration) return
       set((state) => ({
-        annotations: Object.hasOwn(state.annotations, document.id)
-          ? state.annotations
-          : { ...state.annotations, [document.id]: [] },
-        saveStatus: { ...state.saveStatus, [document.id]: 'error' }
+        loadStatus: { ...state.loadStatus, [document.id]: 'error' }
       }))
     }
   },
@@ -309,6 +366,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   }),
 
   addAnnotation: (documentId, draft) => {
+    if (!Object.hasOwn(get().annotations, documentId)) return null
     const annotation: PdfAnnotation = {
       ...draft,
       id: createAnnotationId(),
@@ -327,6 +385,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   updateAnnotation: (documentId, annotationId, patch) => {
+    if (!Object.hasOwn(get().annotations, documentId)) return
     const annotations = (get().annotations[documentId] ?? []).map((annotation) =>
       annotation.id === annotationId ? { ...annotation, ...patch } : annotation
     )
@@ -341,6 +400,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   removeAnnotations: (documentId, annotationIds) => {
+    if (!Object.hasOwn(get().annotations, documentId)) return
     const ids = new Set(annotationIds)
     const currentAnnotations = get().annotations[documentId] ?? []
     const deleted = currentAnnotations.flatMap((annotation, index) =>
@@ -367,8 +427,15 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
 
   consumeCommentFocus: () => set({ pendingCommentFocusId: null }),
 
+  retryLoad: async (documentId) => {
+    const document = get().tabs.find((tab) => tab.id === documentId)
+    if (!document || Object.hasOwn(get().annotations, documentId)) return
+    await get().open(document)
+  },
+
   retrySave: (documentId) => {
-    persist(documentId, get().annotations[documentId] ?? [])
+    if (!Object.hasOwn(get().annotations, documentId)) return
+    persist(documentId, get().annotations[documentId])
   },
 
   undoLastDeletion: () => {

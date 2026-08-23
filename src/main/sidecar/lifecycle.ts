@@ -105,6 +105,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   let restartResetTimer: ReturnType<typeof setTimeout> | null = null
   let stopping = false
   let restartCount = 0
+  let restartExhaustedError: Error | null = null
 
   function defaultReadFile(path: string): Promise<string> {
     return import('node:fs/promises').then((fs) => fs.readFile(path, 'utf8'))
@@ -244,9 +245,11 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       clearHealthTimer()
       clearRestartResetTimer()
       if (restartCount >= maxRestarts) {
-        logger.error(
-          `serverLifecycle:crashed and reached max restarts (${maxRestarts})`
+        restartExhaustedError = Object.assign(
+          new Error(`Server crashed and exhausted ${maxRestarts} restart attempts`),
+          { code: 'server_restart_exhausted' }
         )
+        logger.error(`serverLifecycle:${restartExhaustedError.message}`)
         connection = null
         startPromise = null
         return
@@ -302,6 +305,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
 
   function start(): Promise<ServerConnection> {
     if (connection) return Promise.resolve(connection)
+    if (restartExhaustedError) return Promise.reject(restartExhaustedError)
     if (startPromise) return startPromise
     startPromise = doStart().finally(() => {
       startPromise = null

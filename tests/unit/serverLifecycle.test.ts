@@ -366,6 +366,10 @@ describe('serverLifecycle', () => {
     thirdChild.emit('close', 1, null)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(spawnCount).toBe(3)
+    await expect(lifecycle.getServerBaseUrl()).rejects.toMatchObject({
+      code: 'server_restart_exhausted'
+    })
+    expect(spawnCount).toBe(3)
   })
 
   it('restores the restart budget after a stable running window', async () => {

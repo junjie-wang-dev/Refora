@@ -44,7 +44,12 @@ describe('sync runtime', () => {
         REFORA_SUPABASE_URL: 'https://project.supabase.co',
         REFORA_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_key'
       },
-      safeStorage
+      safeStorage,
+      issueConfirmationRedirect: () => ({
+        url: 'refora://auth/confirmed?nonce=test',
+        clear: vi.fn(),
+        rollback: vi.fn()
+      })
     })
 
     await expect(service.status()).resolves.toMatchObject({

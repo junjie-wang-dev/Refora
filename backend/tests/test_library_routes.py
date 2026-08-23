@@ -5,7 +5,10 @@ from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import refora_server.server.routes.library as library_routes
+from refora_server.db.connection import open_database
+from refora_server.repositories import create_repositories
 from refora_server.server.routes.library import create_library_router
+from refora_server.services.agent_profiles import createAgentProfilesService
 
 
 class Fakes:
@@ -302,8 +305,8 @@ class Fakes:
         }
 
 
-def make_client():
-    fakes = Fakes()
+def make_client(fakes=None):
+    fakes = fakes or Fakes()
     app = FastAPI()
     app.include_router(create_library_router(fakes))
     return TestClient(app), fakes
@@ -1200,6 +1203,96 @@ def test_provider_api_key_is_encrypted_before_repository_storage():
         "name": "Test",
         "apiKeyEnc": b"encrypted:secret",
     }
+
+
+def _provider_delete_client(db, fail_after_delete=False):
+    repos = create_repositories(db)
+    provider = repos["aiProviders"]["create"](
+        {
+            "presetId": "openai",
+            "name": "Provider",
+            "baseUrl": "https://api.openai.com/v1",
+            "model": "gpt-5.6-terra",
+        }
+    )
+    profiles = createAgentProfilesService(repos)
+    profile = profiles["ensureApiProfile"](provider)
+    for key, setting_value in {
+        "activeProviderId": provider["id"],
+        "chatSelectedProviderId": provider["id"],
+        "activeAgentProfileId": profile["id"],
+        "chatSelectedAgentProfileId": profile["id"],
+        "chatSelectedModel": "gpt-5.6-terra",
+        "chatSelectedVariant": "high",
+    }.items():
+        repos["settings"].set(key, setting_value)
+    provider_repo = repos["aiProviders"]
+    if fail_after_delete:
+        real_delete = provider_repo["delete"]
+
+        def failing_delete(provider_id):
+            real_delete(provider_id)
+            raise RuntimeError("delete failed after mutation")
+
+        provider_repo = {**provider_repo, "delete": failing_delete}
+    fakes = Fakes()
+    fakes.settings = repos["settings"]
+    fakes.ai_providers_repo = provider_repo
+    fakes.services["agentProfiles"] = profiles
+    fakes.repos["transaction"] = repos["transaction"]
+    client, _ = make_client(fakes)
+    return client, repos, provider, profile
+
+
+def test_provider_delete_atomically_clears_matching_settings_and_api_profile(tmp_path):
+    db, _ = open_database(str(tmp_path / "cleanup.db"))
+    try:
+        client, repos, provider, profile = _provider_delete_client(db)
+
+        response = client.delete(
+            f"/ai/providers/{provider['id']}",
+            headers={"X-Refora-Token": "test-token"},
+        )
+
+        assert response.json() == {"ok": True, "data": {"ack": True}}
+        assert repos["aiProviders"]["getRaw"](provider["id"]) is None
+        assert repos["agentProfiles"]["get"](profile["id"]) is None
+        for key in (
+            "activeProviderId",
+            "chatSelectedProviderId",
+            "activeAgentProfileId",
+            "chatSelectedAgentProfileId",
+            "chatSelectedModel",
+            "chatSelectedVariant",
+        ):
+            assert repos["settings"].get(key) == ""
+    finally:
+        db.close()
+
+
+def test_provider_delete_rolls_back_settings_profile_and_provider_on_failure(tmp_path):
+    db, _ = open_database(str(tmp_path / "rollback.db"))
+    try:
+        client, repos, provider, profile = _provider_delete_client(
+            db, fail_after_delete=True
+        )
+
+        response = client.delete(
+            f"/ai/providers/{provider['id']}",
+            headers={"X-Refora-Token": "test-token"},
+        )
+
+        assert response.status_code == 500
+        assert repos["aiProviders"]["getRaw"](provider["id"]) is not None
+        assert repos["agentProfiles"]["get"](profile["id"]) is not None
+        assert repos["settings"].get("activeProviderId") == provider["id"]
+        assert repos["settings"].get("chatSelectedProviderId") == provider["id"]
+        assert repos["settings"].get("activeAgentProfileId") == profile["id"]
+        assert repos["settings"].get("chatSelectedAgentProfileId") == profile["id"]
+        assert repos["settings"].get("chatSelectedModel") == "gpt-5.6-terra"
+        assert repos["settings"].get("chatSelectedVariant") == "high"
+    finally:
+        db.close()
 
 
 def test_saved_provider_test_and_models_use_native_stored_key():

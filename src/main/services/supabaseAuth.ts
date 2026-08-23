@@ -1,5 +1,5 @@
 import { MainProcessError } from './errors'
-import { AUTH_CONFIRMATION_REDIRECT_URL } from './authDeepLink'
+import type { AuthConfirmationRedirect } from './authDeepLink'
 
 export interface SupabaseUser {
   id: string
@@ -30,6 +30,7 @@ export interface SupabaseAuthClientDeps {
   url: string
   publishableKey: string
   fetch: (input: string, init?: RequestInit) => Promise<Response>
+  issueConfirmationRedirect: () => AuthConfirmationRedirect
   requestTimeoutMs?: number
 }
 
@@ -88,6 +89,7 @@ export function createSupabaseAuthClient({
   url,
   publishableKey,
   fetch,
+  issueConfirmationRedirect,
   requestTimeoutMs = 15_000
 }: SupabaseAuthClientDeps): SupabaseAuthClient {
   const baseUrl = url.replace(/\/+$/, '')
@@ -155,23 +157,32 @@ export function createSupabaseAuthClient({
       return parseSession(payload as AuthPayload)
     },
     async signUp(email, password) {
-      const redirectTo = encodeURIComponent(AUTH_CONFIRMATION_REDIRECT_URL)
-      const payload = await request(
-        `/auth/v1/signup?redirect_to=${redirectTo}`,
-        { email, password }
-      ) as AuthPayload
-      const user = parseUser(payload.user ?? payload)
-      return {
-        user,
-        session: typeof payload.access_token === 'string' ? parseSession(payload) : null
+      const redirect = issueConfirmationRedirect()
+      try {
+        const payload = await request(
+          `/auth/v1/signup?redirect_to=${encodeURIComponent(redirect.url)}`,
+          { email, password }
+        ) as AuthPayload
+        const user = parseUser(payload.user ?? payload)
+        const session = typeof payload.access_token === 'string' ? parseSession(payload) : null
+        if (session) redirect.clear()
+        return { user, session }
+      } catch (error) {
+        redirect.rollback()
+        throw error
       }
     },
     async resendConfirmation(email) {
-      const redirectTo = encodeURIComponent(AUTH_CONFIRMATION_REDIRECT_URL)
-      await request(`/auth/v1/resend?redirect_to=${redirectTo}`, {
-        type: 'signup',
-        email
-      })
+      const redirect = issueConfirmationRedirect()
+      try {
+        await request(`/auth/v1/resend?redirect_to=${encodeURIComponent(redirect.url)}`, {
+          type: 'signup',
+          email
+        })
+      } catch (error) {
+        redirect.rollback()
+        throw error
+      }
     },
     async refresh(refreshToken) {
       const payload = await request('/auth/v1/token?grant_type=refresh_token', {

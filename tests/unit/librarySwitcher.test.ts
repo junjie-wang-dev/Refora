@@ -132,4 +132,36 @@ describe('library switcher', () => {
     expect(createAssembly).not.toHaveBeenCalled()
     expect(state.assembly).toBe(previous)
   })
+
+  it('restores the active library and rejects when the preference cannot be persisted', async () => {
+    const previous = assembly()
+    const target = assembly()
+    const restored = assembly()
+    let state = { assembly: previous as ServerAssembly | null, dbPath: '/old/db', libraryFolder: '/old' }
+    const persistLibraryFolder = vi.fn(() => {
+      throw new Error('preference disk full')
+    })
+    const emitSwitched = vi.fn()
+    const switchLibrary = createLibrarySwitcher({
+      resolveFolder: (folder) => folder,
+      isDirectory: () => true,
+      dbPathForFolder: () => '/new/db',
+      dbExistsInFolder: () => true,
+      createAssembly: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(restored),
+      getState: () => state,
+      setState: (next) => { state = next },
+      persistLibraryFolder,
+      emitSwitched,
+      onRecoveryFailed: vi.fn()
+    })
+
+    await expect(switchLibrary('/new')).rejects.toThrow('preference disk full')
+
+    expect(target.stop).toHaveBeenCalledOnce()
+    expect(restored.start).toHaveBeenCalledOnce()
+    expect(state).toEqual({ assembly: restored, dbPath: '/old/db', libraryFolder: '/old' })
+    expect(emitSwitched).not.toHaveBeenCalled()
+  })
 })

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Brain,
@@ -177,6 +177,9 @@ export function AiProvidersSection() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testStates, setTestStates] = useState<Record<string, TestState>>({})
+  const formRef = useRef<ProviderForm | null>(null)
+  const modelRequestGenerationRef = useRef(0)
+  formRef.current = form
 
   const load = useCallback(async () => {
     try {
@@ -235,14 +238,35 @@ export function AiProvidersSection() {
     (form.presetId === 'custom' || (!loadingModels && models.length === 0))
 
   const openPreset = (preset: ProviderPreset) => {
-    setForm(formFromPreset(preset))
+    modelRequestGenerationRef.current += 1
+    const next = formFromPreset(preset)
+    formRef.current = next
+    setForm(next)
     setModels([])
+    setLoadingModels(false)
     setModelFilter('')
     setShowAdvanced(preset.id === 'custom')
     setError(null)
   }
 
   const fetchModels = async (current: ProviderForm): Promise<ProviderModelInfo[] | null> => {
+    const generation = ++modelRequestGenerationRef.current
+    const requestIdentity = [
+      current.id ?? '',
+      current.presetId,
+      current.baseUrl.trim(),
+      current.apiKey.trim()
+    ].join('\u0000')
+    const isCurrent = () => {
+      const active = formRef.current
+      if (!active || modelRequestGenerationRef.current !== generation) return false
+      return [
+        active.id ?? '',
+        active.presetId,
+        active.baseUrl.trim(),
+        active.apiKey.trim()
+      ].join('\u0000') === requestIdentity
+    }
     setLoadingModels(true)
     setError(null)
     try {
@@ -252,6 +276,7 @@ export function AiProvidersSection() {
         baseUrl: current.baseUrl.trim() || undefined,
         apiKey: current.apiKey.trim() || undefined
       })
+      if (!isCurrent()) return null
       if (!result.ok) {
         setModels([])
         setError(result.error || t('settings.aiProviders.modelsFetchFail'))
@@ -260,16 +285,19 @@ export function AiProvidersSection() {
       setModels(result.models)
       return result.models
     } catch (cause) {
+      if (!isCurrent()) return null
       setModels([])
       setError(errorMessage(cause, t('settings.aiProviders.modelsFetchFail')))
       return null
     } finally {
-      setLoadingModels(false)
+      if (modelRequestGenerationRef.current === generation) setLoadingModels(false)
     }
   }
 
   const openEdit = (provider: AiProvider) => {
     const next = formFromProvider(provider)
+    modelRequestGenerationRef.current += 1
+    formRef.current = next
     setForm(next)
     setModels([])
     setModelFilter('')
@@ -279,8 +307,11 @@ export function AiProvidersSection() {
   }
 
   const closeForm = () => {
+    modelRequestGenerationRef.current += 1
+    formRef.current = null
     setForm(null)
     setModels([])
+    setLoadingModels(false)
     setModelFilter('')
     setError(null)
   }
@@ -395,11 +426,16 @@ export function AiProvidersSection() {
   }
 
   const removeProvider = async (provider: AiProvider) => {
+    let deleted = false
     try {
       const profile = (await api.agentProfiles.list()).find(
         (candidate) => candidate.apiProviderId === provider.id
       )
       await api.aiProviders.delete(provider.id)
+      deleted = true
+      setProviders((current) => current.filter((candidate) => candidate.id !== provider.id))
+      if (formRef.current?.id === provider.id) closeForm()
+      notifyAiProvidersChanged()
       const [
         activeProviderId,
         chatSelectedProviderId,
@@ -430,7 +466,17 @@ export function AiProvidersSection() {
       await load()
       notifyAiProvidersChanged()
     } catch (cause) {
-      setError(errorMessage(cause, t('settings.aiProviders.deleteFail')))
+      if (deleted) {
+        try {
+          setProviders(await api.aiProviders.list())
+        } catch {
+          setProviders((current) => current.filter((candidate) => candidate.id !== provider.id))
+        }
+        notifyAiProvidersChanged()
+        setError(t('settings.aiProviders.deleteCleanupFail'))
+      } else {
+        setError(errorMessage(cause, t('settings.aiProviders.deleteFail')))
+      }
     }
   }
 

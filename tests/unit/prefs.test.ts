@@ -72,4 +72,14 @@ describe('prefs helpers', () => {
     writeLibraryFolderPath('/ud', '/my/lib')
     expect(mockMkdirSync).toHaveBeenCalled()
   })
+
+  it('writeLibraryFolderPath exposes persistence failures', () => {
+    mockExistsSync.mockReturnValue(true)
+    mockReadFileSync.mockReturnValue('{}')
+    mockRenameSync.mockImplementation(() => {
+      throw new Error('disk full')
+    })
+
+    expect(() => writeLibraryFolderPath('/ud', '/my/lib')).toThrow('disk full')
+  })
 })

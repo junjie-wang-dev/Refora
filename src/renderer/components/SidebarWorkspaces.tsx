@@ -15,7 +15,7 @@ export default function SidebarWorkspaces() {
 
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
-  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
+  const requestActiveWorkspace = useWorkspaceStore((s) => s.requestActiveWorkspace)
   const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
   const fetchWorkspaces = useWorkspaceStore((s) => s.fetchWorkspaces)
   const createWorkspace = useWorkspaceStore((s) => s.createWorkspace)
@@ -215,7 +215,7 @@ export default function SidebarWorkspaces() {
                   label={w.name}
                   active={activeWorkspaceId === w.id}
                   disabled={chatStreaming && activeWorkspaceId !== w.id}
-                  onClick={() => setActiveWorkspace(w.id)}
+                  onClick={() => void requestActiveWorkspace(w.id)}
                   onContextMenu={(e) => handleWsItemContext(e, w)}
                 />
               )}

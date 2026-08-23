@@ -297,6 +297,74 @@ describe('AiProvidersSection', () => {
     )
   })
 
+  it('ignores a model response after the provider connection fields change', async () => {
+    let resolveModels: ((result: Awaited<ReturnType<ReforaApi['aiProviders']['listModels']>>) => void) | undefined
+    api.aiProviders.listModels = vi.fn().mockReturnValue(new Promise((resolve) => {
+      resolveModels = resolve
+    }))
+    render(<AiProvidersSection />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Custom provider/ }))
+    const dialog = screen.getByRole('dialog')
+    const baseUrl = within(dialog).getByPlaceholderText('https://api.example.com/v1')
+    fireEvent.change(baseUrl, { target: { value: 'https://old.example/v1' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fetch models' }))
+    fireEvent.change(baseUrl, { target: { value: 'https://new.example/v1' } })
+
+    await act(async () => {
+      resolveModels?.({
+        ok: true,
+        models: [{
+          id: 'old-provider-model',
+          supportsVariants: false,
+          supportsReasoning: false,
+          reasoningEfforts: [],
+          supportsVision: false,
+          supportsTools: false,
+          supportedParameters: []
+        }]
+      })
+      await Promise.resolve()
+    })
+
+    expect(within(dialog).queryByText('old-provider-model')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Fetch models' })).not.toBeDisabled()
+  })
+
+  it('keeps the provider list consistent when related setting cleanup fails', async () => {
+    const provider: AiProvider = {
+      id: 'provider-openai',
+      presetId: 'openai',
+      name: 'Provider to delete',
+      baseUrl: 'https://api.openai.com/v1',
+      apiProtocol: 'openai-responses',
+      reasoningControl: 'openai',
+      reasoningEffort: 'medium',
+      model: 'gpt-5.6-terra',
+      models: null,
+      baseModel: 'gpt-5.6-terra',
+      variant: '',
+      variantFormat: 'none',
+      hasKey: true,
+      temperature: null,
+      maxTokens: null,
+      createdAt: 0
+    }
+    api.aiProviders.list = vi.fn().mockResolvedValue([provider])
+    api.aiProviders.delete = vi.fn().mockResolvedValue(undefined)
+    api.agentProfiles.list = vi.fn().mockResolvedValue([])
+    api.settings.get = vi.fn().mockResolvedValue(provider.id)
+    api.settings.set = vi.fn().mockRejectedValueOnce(new Error('settings unavailable'))
+    render(<AiProvidersSection />)
+
+    await screen.findByText('Provider to delete')
+    api.aiProviders.list = vi.fn().mockResolvedValue([])
+    fireEvent.click(screen.getByRole('button', { name: 'settings.aiProviders.delete' }))
+
+    await waitFor(() => expect(screen.queryByText('Provider to delete')).not.toBeInTheDocument())
+    expect(screen.getByText('settings.aiProviders.deleteCleanupFail')).toBeInTheDocument()
+  })
+
   it('saves an allowed reasoning effort when the model does not support the preset default', async () => {
     api.aiProviders.listModels = vi.fn().mockResolvedValue({
       ok: true,

@@ -48,6 +48,31 @@ import {
 import useBoardSpacePan from './useBoardSpacePan'
 
 const EMPTY_NOTES: WorkspaceNote[] = []
+const BOARD_LOAD_CONCURRENCY = 4
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  operation: (value: T) => Promise<R>
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results = new Array<PromiseSettledResult<R>>(values.length)
+  let index = 0
+  const workers = Array.from(
+    { length: Math.min(BOARD_LOAD_CONCURRENCY, values.length) },
+    async () => {
+      while (index < values.length) {
+        const current = index
+        index += 1
+        try {
+          results[current] = { status: 'fulfilled', value: await operation(values[current]) }
+        } catch (reason) {
+          results[current] = { status: 'rejected', reason }
+        }
+      }
+    }
+  )
+  await Promise.all(workers)
+  return results
+}
 
 interface MarqueeSelection {
   left: number
@@ -354,44 +379,66 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   useEffect(() => {
     let cancelled = false
-    const workspaceIds = new Set(workspaceDocIds)
     setLoadedSummaryDocIds((previous) => previous.size === 0 ? previous : new Set())
-    void Promise.all(
-      allDocIds.map(async (docId) => {
-        try {
-          const [doc, summary] = await Promise.all([
-            api.documents.get(docId),
-            workspaceIds.has(docId) ? api.ai.summaryGet(docId) : Promise.resolve(null)
-          ])
-          if (cancelled) return
-          setDocs((previous) => {
-            if (!doc) return previous
-            const next = new Map(previous)
-            next.set(docId, doc)
-            return next
-          })
-          if (workspaceIds.has(docId)) {
-            setSummaries((previous) => {
-              const next = new Map(previous)
-              if (summary) next.set(docId, summary)
-              else next.delete(docId)
-              return next
-            })
-            setLoadedSummaryDocIds((previous) => new Set(previous).add(docId))
-          }
-        } catch (e) {
-          if (cancelled) return
-          useDocumentStore.getState().showToast(
-            errorMessage(e, t('workspace.openDocFailed'))
-          )
-          if (workspaceIds.has(docId)) {
-            setSummaryErrors((previous) =>
-              new Map(previous).set(docId, t('workspace.openDocFailed'))
-            )
-          }
+    void (async () => {
+      const documentState = useDocumentStore.getState() as ReturnType<typeof useDocumentStore.getState> & {
+        documents?: Document[]
+        searchResults?: Document[]
+      }
+      const knownDocuments = new Map(
+        [...(documentState.documents ?? []), ...(documentState.searchResults ?? [])]
+          .map((document) => [document.id, document])
+      )
+      const cachedDocuments = new Map(
+        allDocIds
+          .map((docId) => [docId, knownDocuments.get(docId)] as const)
+          .filter((entry): entry is readonly [string, Document] => entry[1] !== undefined)
+      )
+      if (!cancelled && cachedDocuments.size > 0) setDocs(cachedDocuments)
+      const missingDocIds = allDocIds.filter((docId) => !knownDocuments.has(docId))
+      const [documentResults, summaryResults] = await Promise.all([
+        mapConcurrent(missingDocIds, async (docId) => ({
+          docId,
+          document: await api.documents.get(docId)
+        })),
+        mapConcurrent(workspaceDocIds, async (docId) => ({
+          docId,
+          summary: await api.ai.summaryGet(docId)
+        }))
+      ])
+      if (cancelled) return
+      const nextDocuments = new Map(cachedDocuments)
+      let firstFailure: unknown = null
+      for (const result of documentResults) {
+        if (result.status === 'rejected') {
+          firstFailure ??= result.reason
+        } else if (result.value.document) {
+          nextDocuments.set(result.value.docId, result.value.document)
         }
+      }
+      const nextSummaries = new Map<string, AiSummary>()
+      const loadedIds = new Set<string>()
+      const nextSummaryErrors = new Map<string, string>()
+      summaryResults.forEach((result, resultIndex) => {
+        const docId = workspaceDocIds[resultIndex]
+        if (result.status === 'rejected') {
+          firstFailure ??= result.reason
+          nextSummaryErrors.set(docId, t('workspace.openDocFailed'))
+          return
+        }
+        loadedIds.add(docId)
+        if (result.value.summary) nextSummaries.set(docId, result.value.summary)
       })
-    )
+      setDocs(nextDocuments)
+      setSummaries(nextSummaries)
+      setLoadedSummaryDocIds(loadedIds)
+      setSummaryErrors(nextSummaryErrors)
+      if (firstFailure) {
+        useDocumentStore.getState().showToast(
+          errorMessage(firstFailure, t('workspace.openDocFailed'))
+        )
+      }
+    })()
     return () => {
       cancelled = true
     }

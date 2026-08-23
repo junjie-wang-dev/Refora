@@ -722,6 +722,36 @@ describe('Board workspace assets', () => {
 })
 
 describe('Board error handling', () => {
+  it('bounds concurrent document loading for large report source sets', async () => {
+    const sourceDocIds = Array.from({ length: 12 }, (_, index) => `doc-${index}`)
+    mockReports = [{
+      id: 'report-many-sources',
+      workspaceId: 'ws-1',
+      title: 'Many sources',
+      contentMd: '',
+      sourceDocIds,
+      model: null,
+      createdAt: 1
+    }]
+    let active = 0
+    let maximumActive = 0
+    const api = window.api as unknown as Record<string, unknown>
+    const documents = api.documents as Record<string, unknown>
+    documents.get = vi.fn(async (docId: string) => {
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return { id: docId, fileName: `${docId}.pdf`, title: docId } as Document
+    })
+
+    render(<Board />)
+
+    await waitFor(() => expect(documents.get).toHaveBeenCalledTimes(sourceDocIds.length))
+    await waitFor(() => expect(active).toBe(0))
+    expect(maximumActive).toBeLessThanOrEqual(4)
+  })
+
   it('reports document loading failures through the toast', async () => {
     mockItems = [
       {

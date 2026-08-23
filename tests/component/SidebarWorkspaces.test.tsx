@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   deleteWorkspace: vi.fn(),
   fetchWorkspaces: vi.fn(),
   renameWorkspace: vi.fn(),
-  setActiveWorkspace: vi.fn(),
+  requestActiveWorkspace: vi.fn(),
   showConfirm: vi.fn(),
   showContextMenu: vi.fn(),
   state: {
@@ -34,7 +34,7 @@ vi.mock('../../src/renderer/store/workspaceStore', () => ({
       deleteWorkspace: mocks.deleteWorkspace,
       fetchWorkspaces: mocks.fetchWorkspaces,
       renameWorkspace: mocks.renameWorkspace,
-      setActiveWorkspace: mocks.setActiveWorkspace
+      requestActiveWorkspace: mocks.requestActiveWorkspace
     })
 }))
 
@@ -56,7 +56,7 @@ describe('SidebarWorkspaces', () => {
     mocks.deleteWorkspace.mockReset().mockResolvedValue(undefined)
     mocks.fetchWorkspaces.mockReset().mockResolvedValue(undefined)
     mocks.renameWorkspace.mockReset().mockResolvedValue(undefined)
-    mocks.setActiveWorkspace.mockReset()
+    mocks.requestActiveWorkspace.mockReset().mockResolvedValue(true)
     mocks.showConfirm.mockReset()
     mocks.showContextMenu.mockReset()
     mocks.state.activeWorkspaceId = 'ws-1'
@@ -94,7 +94,7 @@ describe('SidebarWorkspaces', () => {
     const active = screen.getByRole('button', { name: 'Research' })
     const other = screen.getByRole('button', { name: 'Reading' })
     fireEvent.click(active)
-    expect(mocks.setActiveWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-1')
     expect(active).toHaveClass('sidebar-item-active')
     expect(other).toHaveAttribute('aria-disabled', 'true')
   })

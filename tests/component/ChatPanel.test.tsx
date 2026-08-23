@@ -1534,6 +1534,11 @@ describe('useChatStream lifecycle', () => {
     })
 
     await act(async () => {
+      await result.current.sendText('Start another run', [], 'thread-1')
+    })
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
       await result.current.resolveInterrupt('edit', [{
         name: 'propose_workspace_memory_update',
         args: { path: '/brief.md', content: 'Updated' }
@@ -2139,6 +2144,45 @@ describe('useChatStream lifecycle', () => {
     expect(mockChatRun).toHaveBeenCalledWith(runId)
     expect(result.current.messages.at(-1)?.content).toContain('Recovered partial')
     expect(result.current.error).toBe('Worker stopped')
+  })
+
+  it('ignores an older recovery snapshot that finishes after a newer one', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Recover this run', [], 'thread-1')
+    })
+    const runId = result.current.activeRunId!
+    const olderTrace = { ...makeRunStep(runId, 'running'), id: 'older-trace' }
+    const newerTrace = { ...makeRunStep(runId, 'running'), id: 'newer-trace', seq: 2 }
+    let resolveOlderRun: ((run: AgentRun) => void) | undefined
+    let resolveOlderTraces: ((traces: AgentTraceStep[]) => void) | undefined
+    mockChatRun
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveOlderRun = resolve
+      }))
+      .mockResolvedValueOnce(makeRun({ id: runId, status: 'running' }))
+    mockChatTraces
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveOlderTraces = resolve
+      }))
+      .mockResolvedValueOnce([newerTrace])
+
+    act(() => {
+      chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'failed' })
+      chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'failed' })
+    })
+    await waitFor(() => expect(result.current.traceSteps).toEqual([newerTrace]))
+
+    await act(async () => {
+      resolveOlderRun?.(makeRun({ id: runId, status: 'running' }))
+      resolveOlderTraces?.([olderTrace])
+      await Promise.resolve()
+    })
+
+    expect(result.current.traceSteps).toEqual([newerTrace])
   })
 
   it('refreshes the completed run trace after the done event', async () => {

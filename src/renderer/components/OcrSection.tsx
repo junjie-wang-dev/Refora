@@ -12,7 +12,8 @@ import type {
   OcrDocumentState,
   OcrErrorEvent,
   OcrProfile,
-  OcrProgressEvent
+  OcrProgressEvent,
+  OcrResult
 } from '../../shared/mineru-types'
 import { IpcChannel } from '../../shared/ipc-channels'
 import { Button } from './ui'
@@ -26,6 +27,13 @@ export default function OcrSection({ doc }: { doc: Document }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const refreshGeneration = useRef(0)
+  const stateRef = useRef<OcrDocumentState | null>(null)
+  const eventRefreshPendingRef = useRef(false)
+  const pendingEventRef = useRef<
+    | { kind: 'progress'; job: OcrProgressEvent['job'] }
+    | { kind: 'completed'; result: OcrResult }
+    | null
+  >(null)
   const readerFailedMessage = t('ocr.readerFailed')
 
   const refresh = useCallback(async () => {
@@ -34,7 +42,15 @@ export default function OcrSection({ doc }: { doc: Document }) {
     try {
       const next = await api.ocr.getState(doc.id)
       if (refreshGeneration.current !== generation) return
-      setState(next)
+      const pending = pendingEventRef.current
+      const merged = pending?.kind === 'progress'
+        ? { ...next, activeJob: pending.job }
+        : pending?.kind === 'completed'
+          ? { ...next, activeJob: null, result: pending.result }
+          : next
+      pendingEventRef.current = null
+      stateRef.current = merged
+      setState(merged)
       setError(null)
     } catch (value) {
       if (refreshGeneration.current !== generation) return
@@ -45,24 +61,61 @@ export default function OcrSection({ doc }: { doc: Document }) {
   }, [doc.id, readerFailedMessage])
 
   useEffect(() => {
+    stateRef.current = null
+    pendingEventRef.current = null
+    eventRefreshPendingRef.current = false
     setState(null)
     setError(null)
     setLoading(true)
     void refresh()
+    const refreshAfterEvent = () => {
+      if (eventRefreshPendingRef.current) return
+      eventRefreshPendingRef.current = true
+      refreshGeneration.current += 1
+      void refresh().finally(() => {
+        eventRefreshPendingRef.current = false
+      })
+    }
     const onProgress = (payload: OcrProgressEvent) => {
       if (payload.job.documentId !== doc.id) return
-      void refresh()
+      const current = stateRef.current
+      if (current) {
+        refreshGeneration.current += 1
+        const next = { ...current, activeJob: payload.job }
+        stateRef.current = next
+        setState(next)
+        setLoading(false)
+      } else {
+        pendingEventRef.current = { kind: 'progress', job: payload.job }
+        refreshAfterEvent()
+      }
       setError(null)
     }
     const onCompleted = (payload: OcrCompletedEvent) => {
       if (payload.documentId !== doc.id) return
-      void refresh()
+      const current = stateRef.current
+      if (current) {
+        refreshGeneration.current += 1
+        const next = { ...current, activeJob: null, result: payload.result }
+        stateRef.current = next
+        setState(next)
+        setLoading(false)
+      } else {
+        pendingEventRef.current = { kind: 'completed', result: payload.result }
+        refreshAfterEvent()
+      }
       setError(null)
     }
     const onError = (payload: OcrErrorEvent) => {
       if (payload.documentId !== doc.id) return
       refreshGeneration.current += 1
-      setState((current) => current ? { ...current, activeJob: null } : current)
+      pendingEventRef.current = null
+      const current = stateRef.current
+      if (current) {
+        const next = { ...current, activeJob: null }
+        stateRef.current = next
+        setState(next)
+      }
       setLoading(false)
       setError(t('ocr.failed', { message: payload.message }))
     }
@@ -75,6 +128,9 @@ export default function OcrSection({ doc }: { doc: Document }) {
     api.events.onMineruInstallProgress(onInstallProgress)
     return () => {
       refreshGeneration.current += 1
+      stateRef.current = null
+      pendingEventRef.current = null
+      eventRefreshPendingRef.current = false
       api.events.off(IpcChannel.EventOcrProgress, onProgress)
       api.events.off(IpcChannel.EventOcrCompleted, onCompleted)
       api.events.off(IpcChannel.EventOcrError, onError)
@@ -86,7 +142,12 @@ export default function OcrSection({ doc }: { doc: Document }) {
     setError(null)
     try {
       const job = await api.ocr.start(doc.id, profile)
-      setState((current) => current ? { ...current, activeJob: job } : current)
+      const current = stateRef.current
+      if (current) {
+        const next = { ...current, activeJob: job }
+        stateRef.current = next
+        setState(next)
+      }
     } catch (value) {
       setError(errorMessage(value, readerFailedMessage))
     }

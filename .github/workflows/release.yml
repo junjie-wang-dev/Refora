@@ -61,6 +61,9 @@ jobs:
       - name: Python server tests
         run: npm run test:backend
 
+      - name: Python source validation
+        run: uv run --project backend --locked python -m compileall -q backend/refora_server backend/workers
+
       - name: Audit Python dependencies
         run: |
           uv export --project backend --locked --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/refora-requirements.txt"
@@ -188,12 +191,14 @@ jobs:
       - name: Create checksums
         shell: bash
         run: |
-          artifacts=(dist/*.dmg)
+          cd dist
+          artifacts=(*.dmg)
           if [[ ! -e "${artifacts[0]}" ]]; then
             echo "No DMG artifact was produced" >&2
             exit 1
           fi
-          shasum -a 256 "${artifacts[@]}" > dist/SHA256SUMS.txt
+          LC_ALL=C shasum -a 256 "${artifacts[@]}" > SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
 
       - name: Publish GitHub release
         shell: bash

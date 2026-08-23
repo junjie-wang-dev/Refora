@@ -1,4 +1,12 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { showContextMenu } from '@lobehub/ui'
 import type { Document } from '../../src/shared/ipc-types'
@@ -151,6 +159,8 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.renderPage.mockClear()
     pdfMocks.cancelRender.mockClear()
     pdfMocks.document.numPages = 1
+    pdfMocks.document.getPage.mockReset().mockResolvedValue(pdfMocks.page)
+    pdfMocks.page.getTextContent.mockReset().mockResolvedValue({ items: [] })
     pdfMocks.destroyDocument.mockClear()
     pdfMocks.getDocument.mockClear()
     pdfMocks.gateLoad(null)
@@ -163,6 +173,7 @@ describe('PdfReader rendering visibility', () => {
       tabs: [document()],
       activeDocumentId: 'paper',
       annotations: { paper: [] },
+      loadStatus: { paper: 'loaded' },
       saveStatus: { paper: 'saved' },
       tool: null,
       color: '#f2c94c',
@@ -235,6 +246,79 @@ describe('PdfReader rendering visibility', () => {
     })
     await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(2))
     expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
+  })
+
+  it('defers loading distant pages until they enter the reader preload window', async () => {
+    pdfMocks.document.numPages = 4
+    pdfMocks.document.getPage.mockClear()
+    render(<PdfReader />)
+
+    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(2))
+    const thirdPageObserver = observers.find(
+      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '3'
+    )
+    expect(thirdPageObserver).toBeDefined()
+
+    act(() => {
+      thirdPageObserver?.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        thirdPageObserver as unknown as IntersectionObserver
+      )
+    })
+
+    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(3))
+  })
+
+  it('reports PDF text search failures without leaving the search busy', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    await waitFor(() => expect(pdfMocks.page.getTextContent).toHaveBeenCalled())
+    pdfMocks.page.getTextContent.mockReset()
+    pdfMocks.page.getTextContent.mockRejectedValue(new Error('text unavailable'))
+    const input = screen.getByPlaceholderText('pdfReader.search')
+    fireEvent.change(input, { target: { value: 'query' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('pdfReader.searchFailed')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('does not let an older search overwrite a newer result', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalled())
+    Element.prototype.scrollIntoView = vi.fn()
+    let resolveOlderPage: ((page: typeof pdfMocks.page) => void) | undefined
+    const newerPage = {
+      ...pdfMocks.page,
+      getTextContent: vi.fn().mockResolvedValue({ items: [{ str: 'old new result' }] })
+    }
+    const olderPage = {
+      ...pdfMocks.page,
+      getTextContent: vi.fn().mockResolvedValue({ items: [] })
+    }
+    pdfMocks.document.getPage
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveOlderPage = resolve
+      }))
+      .mockResolvedValueOnce(newerPage)
+    const input = screen.getByPlaceholderText('pdfReader.search')
+    fireEvent.change(input, { target: { value: 'old' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(1))
+    fireEvent.change(input, { target: { value: 'new' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+
+    await screen.findByText('1/1')
+    await act(async () => {
+      resolveOlderPage?.(olderPage)
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+    expect(newerPage.getTextContent).toHaveBeenCalledTimes(1)
+    expect(olderPage.getTextContent).toHaveBeenCalledTimes(1)
   })
 
   it('uses text selection over text and annotation selection over page whitespace by default', async () => {
@@ -339,6 +423,38 @@ describe('PdfReader rendering visibility', () => {
     })).toBe(false)
     expect(removeAllRanges).toHaveBeenCalled()
   })
+
+  it.each(['loading', 'error'] as const)(
+    'keeps annotation input read-only while annotation loading is %s',
+    async (loadStatus) => {
+      usePdfReaderStore.setState({
+        loadStatus: { paper: loadStatus },
+        tool: 'ink'
+      })
+
+      const view = render(<PdfReader />)
+      const toolbar = view.container.querySelector<HTMLElement>(
+        '[data-pdf-annotation-toolbar]'
+      )
+      expect(toolbar).not.toBeNull()
+      expect(within(toolbar!).getAllByRole('button')).toHaveLength(7)
+      within(toolbar!).getAllByRole('button').forEach((button) => {
+        expect(button).toBeDisabled()
+      })
+
+      const pdfPage = await waitFor(() => {
+        const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
+        expect(element).not.toBeNull()
+        return element!
+      })
+      expect(pdfPage.querySelector('[data-annotation-input-layer]'))
+        .toHaveClass('pointer-events-none')
+      await waitFor(() => expect(usePdfReaderStore.getState().tool).toBeNull())
+
+      fireEvent.keyDown(window, { key: 'p' })
+      expect(usePdfReaderStore.getState().tool).toBeNull()
+    }
+  )
 
   it('offers copy, current-color highlight, and AI actions for selected text', async () => {
     const writeText = vi.spyOn(api.clipboard, 'writeText').mockResolvedValue(undefined)

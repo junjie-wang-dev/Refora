@@ -54,6 +54,9 @@ jobs:
       - name: Python Server Tests
         run: npm run test:backend
 
+      - name: Python source validation
+        run: uv run --project backend --locked python -m compileall -q backend/refora_server backend/workers
+
       - name: Audit Python dependencies
         run: |
           uv export --project backend --locked --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/refora-requirements.txt"

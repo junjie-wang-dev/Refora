@@ -501,7 +501,7 @@ export default function DocumentList({
 
   return (
     <div
-      className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
+      className="document-list flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -514,7 +514,12 @@ export default function DocumentList({
       ) : null}
       {colHeaderBar}
 
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
+      <div
+        ref={parentRef}
+        className="min-h-0 flex-1 overflow-auto"
+        role="grid"
+        aria-label={t('list.documentList')}
+      >
         {isLoading ? (
           <SkeletonRows compact={compact} />
         ) : displayDocs.length === 0 ? (
@@ -548,6 +553,7 @@ export default function DocumentList({
           )
         ) : (
           <div
+            role="rowgroup"
             style={{
               height: virtualizer.getTotalSize(),
               width: '100%',
@@ -564,6 +570,7 @@ export default function DocumentList({
               return (
                 <div
                   key={vr.key}
+                  role="presentation"
                   data-index={vr.index}
                   data-document-id={doc.id}
                   ref={virtualizer.measureElement}
@@ -579,6 +586,9 @@ export default function DocumentList({
                   onContextMenu={(e) => handleRowContextMenu(doc, e)}
                 >
                   <div
+                    role="row"
+                    tabIndex={0}
+                    aria-selected={isSelected}
                     className={`flex ${
                       compact ? 'items-start px-2 py-2' : 'items-center px-3'
                     } text-xs cursor-pointer transition-colors duration-150 ${
@@ -586,10 +596,16 @@ export default function DocumentList({
                     }`}
                     style={{ height: rowHeight }}
                     onClick={(e) => handleRowClick(doc.id, e)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      setFocusedDoc(doc.id)
+                      onDocumentFocus?.()
+                    }}
                   >
                     {!compact && (
                       <>
-                        <div className="flex w-10 flex-shrink-0 items-center justify-center">
+                        <div role="gridcell" className="flex w-10 flex-shrink-0 items-center justify-center">
                           <input
                             type="checkbox"
                             className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
@@ -601,7 +617,7 @@ export default function DocumentList({
                             onClick={(e) => e.stopPropagation()}
                           />
                         </div>
-                        <div className="flex w-8 flex-shrink-0 items-center justify-center text-center">
+                        <div role="gridcell" className="flex w-8 flex-shrink-0 items-center justify-center text-center">
                           {isMissing ? (
                             <span title={t('detail.relocate') ?? 'Relocate'}>
                               <Warning className="h-4 w-4 text-warning" />
@@ -622,7 +638,7 @@ export default function DocumentList({
                         </div>
                       </>
                     )}
-                    <div className={`flex-shrink-0 text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
+                    <div role="gridcell" className={`flex-shrink-0 text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
                       <button
                         className="cursor-pointer"
                         title={t('sidebar.starred')}
@@ -640,7 +656,7 @@ export default function DocumentList({
                       </button>
                     </div>
                     {compact ? (
-                      <div className="min-w-0 flex-1 pl-1">
+                      <div role="gridcell" className="min-w-0 flex-1 pl-1">
                         <div className="flex min-w-0 items-center gap-1.5">
                           <span className={`min-w-0 flex-1 truncate text-xs font-medium leading-4 ${isMissing ? 'text-muted' : 'text-foreground'}`}>
                             {isSearching ? highlightMatch(renderCell(doc, 'title'), searchQuery) : renderCell(doc, 'title')}
@@ -659,6 +675,7 @@ export default function DocumentList({
                       return (
                         <div
                           key={col.id}
+                          role="gridcell"
                           className="truncate px-1"
                           style={{ width: liveWidths[col.id] ?? col.width, flexShrink: 0 }}
                         >
@@ -673,7 +690,7 @@ export default function DocumentList({
                       )
                     })}
                     {!compact && hasError && !isMissing && (
-                      <div className="ml-1 flex-shrink-0" title={`${t('common.networkError')} (${doc.metadataAttempts})`}>
+                      <div role="gridcell" className="ml-1 flex-shrink-0" title={`${t('common.networkError')} (${doc.metadataAttempts})`}>
                         <Lightning className="h-3.5 w-3.5 text-error" aria-hidden="true" />
                       </div>
                     )}

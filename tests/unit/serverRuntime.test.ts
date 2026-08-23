@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   SERVER_PYTHON_RUNTIME_VERSION,
-  createServerPythonRuntime
+  createServerPythonRuntime,
+  runFile
 } from '../../src/main/sidecar/runtime'
 
 describe('server Python runtime', () => {
@@ -80,5 +84,41 @@ describe('server Python runtime', () => {
     await expect(runtime.install(new AbortController().signal)).rejects.toMatchObject({
       name: 'AbortError'
     })
+  })
+
+  it('waits after SIGTERM and escalates a stuck installer to SIGKILL', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = new EventEmitter() as ChildProcess
+      Object.assign(child, {
+        pid: 42,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => true)
+      })
+      const spawnChild = vi.fn(() => child) as unknown as typeof spawn
+      const killProcess = vi.fn(() => true) as unknown as typeof process.kill
+      const controller = new AbortController()
+      const operation = runFile('/usr/bin/tool', [], {
+        cwd: '/tmp',
+        env: {},
+        signal: controller.signal,
+        terminationGraceMs: 500,
+        spawnChild,
+        killProcess
+      })
+      operation.catch(() => undefined)
+
+      controller.abort()
+      expect(killProcess).toHaveBeenCalledWith(-42, 'SIGTERM')
+      expect(killProcess).not.toHaveBeenCalledWith(-42, 'SIGKILL')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(killProcess).toHaveBeenCalledWith(-42, 'SIGKILL')
+      child.emit('close', null, 'SIGKILL')
+
+      await expect(operation).rejects.toMatchObject({ name: 'AbortError' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

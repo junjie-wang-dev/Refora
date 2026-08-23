@@ -25,6 +25,7 @@ function dispatch(key: string, opts: { meta?: boolean; ctrl?: boolean; target?: 
   window.dispatchEvent(evt)
 }
 
+let documentList: HTMLDivElement
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -38,9 +39,13 @@ beforeEach(() => {
   vi.spyOn(useDocumentStore.getState(), 'requestDeleteConfirm').mockImplementation(() => {})
   vi.spyOn(useDocumentStore.getState(), 'openPdf').mockImplementation(() => Promise.resolve())
   vi.spyOn(useDocumentStore.getState(), 'setFocusedDoc').mockImplementation(() => {})
+  documentList = document.createElement('div')
+  documentList.className = 'document-list'
+  document.body.append(documentList)
 })
 
 afterEach(() => {
+  documentList.remove()
   cleanup()
   vi.restoreAllMocks()
 })
@@ -138,5 +143,20 @@ describe('useAppShortcuts', () => {
     renderHook(() => useAppShortcuts())
     dispatch('ArrowDown', { target: input })
     expect(useDocumentStore.getState().setFocusedDoc).not.toHaveBeenCalled()
+  })
+
+  it('ignores shortcuts while a modal dialog is open', () => {
+    const modal = document.createElement('div')
+    modal.className = 'dialog-overlay'
+    document.body.append(modal)
+    useDocumentStore.setState({ selectedIds: ['x'] })
+    renderHook(() => useAppShortcuts())
+
+    dispatch('Backspace', { meta: true })
+    dispatch('ArrowDown')
+
+    expect(useDocumentStore.getState().requestDeleteConfirm).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().setFocusedDoc).not.toHaveBeenCalled()
+    modal.remove()
   })
 })

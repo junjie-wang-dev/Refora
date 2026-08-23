@@ -31,6 +31,9 @@ export default function PdfAnnotationSidebar({
   const saveStatus = usePdfReaderStore(
     (state) => state.saveStatus[documentId] ?? 'idle'
   )
+  const loadStatus = usePdfReaderStore(
+    (state) => state.loadStatus[documentId] ?? 'idle'
+  )
   const updateAnnotation = usePdfReaderStore((state) => state.updateAnnotation)
   const removeAnnotation = usePdfReaderStore((state) => state.removeAnnotation)
   const [query, setQuery] = useState('')
@@ -97,20 +100,34 @@ export default function PdfAnnotationSidebar({
         </span>
         <button
           type="button"
-          disabled={saveStatus !== 'error'}
+          disabled={loadStatus !== 'error' && saveStatus !== 'error'}
           aria-live="polite"
           className={`ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-label ${
-            saveStatus === 'error' ? 'text-error' : 'text-muted'
+            loadStatus === 'error' || saveStatus === 'error' ? 'text-error' : 'text-muted'
           } disabled:cursor-default`}
-          title={t(`pdfReader.saveStatus.${saveStatus}`)}
-          onClick={() => usePdfReaderStore.getState().retrySave(documentId)}
+          title={loadStatus === 'error'
+            ? t('pdfReader.annotationLoadFailed')
+            : t(`pdfReader.saveStatus.${saveStatus}`)}
+          onClick={() => {
+            const store = usePdfReaderStore.getState()
+            if (loadStatus === 'error') void store.retryLoad(documentId)
+            else store.retrySave(documentId)
+          }}
         >
-          {saveStatus === 'saved' && <CheckCircle className="h-3.5 w-3.5" weight="fill" />}
-          {saveStatus === 'error' && <WarningCircle className="h-3.5 w-3.5" weight="fill" />}
+          {loadStatus !== 'error' && saveStatus === 'saved' && (
+            <CheckCircle className="h-3.5 w-3.5" weight="fill" />
+          )}
+          {(loadStatus === 'error' || saveStatus === 'error') && (
+            <WarningCircle className="h-3.5 w-3.5" weight="fill" />
+          )}
           <span>
-            {saveStatus === 'error'
-              ? t('pdfReader.retrySave')
-              : t(`pdfReader.saveStatus.${saveStatus}`)}
+            {loadStatus === 'loading'
+              ? t('pdfReader.loadingAnnotations')
+              : loadStatus === 'error'
+                ? t('pdfReader.retryLoadAnnotations')
+                : saveStatus === 'error'
+                  ? t('pdfReader.retrySave')
+                  : t(`pdfReader.saveStatus.${saveStatus}`)}
           </span>
         </button>
         {overlay && (
@@ -137,7 +154,23 @@ export default function PdfAnnotationSidebar({
         </div>
       </div>
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-2">
-        {annotations.length === 0 ? (
+        {loadStatus === 'error' ? (
+          <div className="flex flex-col items-center px-5 py-12 text-center text-xs text-error" role="alert">
+            <WarningCircle className="mb-3 h-8 w-8" weight="fill" />
+            <span className="font-medium">{t('pdfReader.annotationLoadFailed')}</span>
+            <button
+              type="button"
+              className="mt-3 rounded-md border border-error/40 px-2.5 py-1.5 hover:bg-error/10"
+              onClick={() => void usePdfReaderStore.getState().retryLoad(documentId)}
+            >
+              {t('pdfReader.retryLoadAnnotations')}
+            </button>
+          </div>
+        ) : loadStatus === 'loading' || loadStatus === 'idle' ? (
+          <div className="px-3 py-10 text-center text-xs text-muted" role="status">
+            {t('pdfReader.loadingAnnotations')}
+          </div>
+        ) : annotations.length === 0 ? (
           <div className="flex flex-col items-center px-5 py-12 text-center text-xs text-muted">
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-panel-2 text-accent">
               <Highlighter className="h-5 w-5" />

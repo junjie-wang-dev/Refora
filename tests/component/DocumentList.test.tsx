@@ -225,6 +225,18 @@ describe('DocumentList', () => {
     expect(mockState.setFocusedDoc).toHaveBeenCalledWith('doc-1')
   })
 
+  it('focuses a document row from the keyboard', () => {
+    const onDocumentFocus = vi.fn()
+    mockState.documents = [makeDoc({ id: 'doc-keyboard', title: 'Keyboard Paper' })]
+    render(<DocumentList onDocumentFocus={onDocumentFocus} />)
+    const row = screen.getByRole('row', { selected: false, name: /Keyboard Paper/ })
+
+    fireEvent.keyDown(row, { key: 'Enter' })
+
+    expect(mockState.setFocusedDoc).toHaveBeenCalledWith('doc-keyboard')
+    expect(onDocumentFocus).toHaveBeenCalled()
+  })
+
   it('calls setSort when a column header is clicked', async () => {
     mockState.documents = [makeDoc({ id: 'doc-1', title: 'Alpha Paper' })]
 

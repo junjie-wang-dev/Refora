@@ -22,6 +22,7 @@ export function useAppShortcuts(): void {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (document.getElementsByClassName('dialog-overlay').length > 0) return
       const mod = e.metaKey || e.ctrlKey
 
       if (mod && (e.key === 'f' || e.key === 'F')) {
@@ -29,6 +30,7 @@ export function useAppShortcuts(): void {
         focusSearch()
         return
       }
+      if (document.getElementsByClassName('document-list').length === 0) return
       if (mod && e.key === 'Backspace' && !isInteractive(e.target)) {
         e.preventDefault()
         const store = useDocumentStore.getState()

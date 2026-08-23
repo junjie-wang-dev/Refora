@@ -193,6 +193,8 @@ export default function PdfPage({
   const textLayerRef = useRef<HTMLDivElement>(null)
   const textLayerTaskRef = useRef<TextLayer | null>(null)
   const [page, setPage] = useState<PDFPageProxy | null>(null)
+  const [pageLoadError, setPageLoadError] = useState(false)
+  const [pageLoadAttempt, setPageLoadAttempt] = useState(0)
   const [visible, setVisible] = useState(pageNumber <= 2)
   const [inkPoints, setInkPoints] = useState<PdfPoint[] | null>(null)
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
@@ -226,14 +228,18 @@ export default function PdfPage({
     tool === 'strikeout'
 
   useEffect(() => {
+    if (!visible || page) return
     let cancelled = false
+    setPageLoadError(false)
     void pdf.getPage(pageNumber).then((nextPage) => {
       if (!cancelled) setPage(nextPage)
+    }).catch(() => {
+      if (!cancelled) setPageLoadError(true)
     })
     return () => {
       cancelled = true
     }
-  }, [pageNumber, pdf])
+  }, [page, pageLoadAttempt, pageNumber, pdf, visible])
 
   useEffect(() => {
     const element = pageElementRef.current
@@ -633,6 +639,18 @@ export default function PdfPage({
       onPointerUp={finishPointer}
       onPointerCancel={cancelPointer}
     >
+      {pageLoadError && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-panel text-sm text-error" role="alert">
+          <span>{t('pdfReader.pageLoadFailed', { page: pageNumber })}</span>
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-1 text-xs text-foreground hover:bg-hover"
+            onClick={() => setPageLoadAttempt((attempt) => attempt + 1)}
+          >
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
       {page && viewport && canvasLayout?.tiles.map((tile) => (
         <PdfCanvasTileView
           key={`${tile.pixelX}-${tile.pixelY}`}
@@ -911,4 +929,3 @@ export default function PdfPage({
     </div>
   )
 }
-

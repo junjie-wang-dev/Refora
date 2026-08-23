@@ -34,6 +34,7 @@ const mockWorkspacePanelState = vi.hoisted(() => ({
   notes: [] as WorkspaceNote[],
   markdownCardRequest: null as { kind: 'report' | 'note'; id: string } | null,
   setActiveWorkspace: vi.fn(),
+  requestActiveWorkspace: vi.fn(),
   closeWorkspaceTab: vi.fn(),
   toggleFullscreen: vi.fn(),
   closePanel: vi.fn(),
@@ -191,6 +192,12 @@ beforeEach(() => {
     }
     mockWorkspacePanelState.panelView = 'workspace'
   })
+  mockWorkspacePanelState.requestActiveWorkspace.mockReset().mockImplementation(
+    async (id: string | null) => {
+      mockWorkspacePanelState.setActiveWorkspace(id)
+      return true
+    }
+  )
   mockWorkspacePanelState.closeWorkspaceTab.mockReset()
   mockWorkspacePanelState.closeWorkspaceTab.mockImplementation((id: string) => {
     mockWorkspacePanelState.openWorkspaceIds = mockWorkspacePanelState.openWorkspaceIds.filter(

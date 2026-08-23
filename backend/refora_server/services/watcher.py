@@ -77,8 +77,6 @@ def _shouldIgnorePath(testPath: str, root: str, libraryFolder: str) -> bool:
             return True
         if part.startswith(_HIDDEN_PREFIXES):
             return True
-        if "." in part and not part.lower().endswith(".pdf"):
-            return True
     return False
 
 
@@ -302,9 +300,14 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             timer = stabilizers.get(path)
             if timer is not None:
                 timer.cancel()
-            t = threading.Timer(
-                stability_threshold_ms / 1000.0, _onStable, args=(path, allow_library)
-            )
+            def complete() -> None:
+                with lock:
+                    if stabilizers.get(path) is not t:
+                        return
+                    stabilizers.pop(path, None)
+                _onStable(path, allow_library)
+
+            t = threading.Timer(stability_threshold_ms / 1000.0, complete)
             t.daemon = True
             stabilizers[path] = t
         t.start()
@@ -572,5 +575,6 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "startScanning": startScanning,
         "stopScanning": stopScanning,
         "scanOnce": scanOnce,
+        "_markStabilizing": _markStabilizing,
         "_state": state,
     }

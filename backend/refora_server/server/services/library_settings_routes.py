@@ -285,7 +285,49 @@ def register_library_settings_routes(
     @router.delete("/ai/providers/{provider_id}")
     async def delete_provider(provider_id: str):
         async def action():
-            await call(provider_repo, "delete", provider_id)
+            def persist() -> None:
+                profile = next(
+                    (
+                        candidate
+                        for candidate in method(agent_profiles, "list")()
+                        if isinstance(candidate, Mapping)
+                        and candidate.get("kind") == "api"
+                        and candidate.get("apiProviderId") == provider_id
+                    ),
+                    None,
+                )
+                profile_id = profile.get("id") if isinstance(profile, Mapping) else None
+                provider_selected = method(settings, "get")(
+                    "activeProviderId", ""
+                ) == provider_id
+                chat_provider_selected = method(settings, "get")(
+                    "chatSelectedProviderId", ""
+                ) == provider_id
+                profile_selected = isinstance(profile_id, str) and method(
+                    settings, "get"
+                )("activeAgentProfileId", "") == profile_id
+                chat_profile_selected = isinstance(profile_id, str) and method(
+                    settings, "get"
+                )("chatSelectedAgentProfileId", "") == profile_id
+                if provider_selected:
+                    method(settings, "set")("activeProviderId", "")
+                if chat_provider_selected:
+                    method(settings, "set")("chatSelectedProviderId", "")
+                if profile_selected:
+                    method(settings, "set")("activeAgentProfileId", "")
+                if chat_profile_selected:
+                    method(settings, "set")("chatSelectedAgentProfileId", "")
+                if chat_provider_selected or chat_profile_selected:
+                    method(settings, "set")("chatSelectedModel", "")
+                    method(settings, "set")("chatSelectedVariant", "")
+                method(provider_repo, "delete")(provider_id)
+
+            if callable(transaction):
+                result = transaction(persist)
+                if inspect.isawaitable(result):
+                    await result
+            else:
+                persist()
             return {"ack": True}
         return await run(action)
 

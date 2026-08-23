@@ -150,6 +150,7 @@
     "paste": "Paste"
   },
   "list": {
+    "documentList": "Documents",
     "compact": "Compact paper list",
     "expand": "Expand paper list",
     "close": "Close document list",
@@ -530,6 +531,7 @@
       "saveFail": "Failed to save provider",
       "activateFail": "Failed to activate provider",
       "deleteFail": "Failed to delete provider",
+      "deleteCleanupFail": "Provider deleted, but related chat settings could not be fully cleared.",
       "encryptionUnavailable": "The macOS keychain is unavailable, so the API key cannot be stored securely.",
       "effort": {
         "none": "Off",
@@ -661,6 +663,7 @@
   "pdfReader": {
     "loading": "Loading PDF…",
     "loadFailed": "This PDF could not be loaded.",
+    "pageLoadFailed": "Page {{page}} could not be loaded.",
     "closeReader": "Close reader",
     "closeTab": "Close PDF tab",
     "previousPage": "Previous page",
@@ -672,6 +675,7 @@
     "rotate": "Rotate clockwise",
     "fitWidth": "Fit page width",
     "search": "Search in PDF",
+    "searchFailed": "Search failed",
     "previousResult": "Previous result",
     "nextResult": "Next result",
     "openInSystem": "Open in system default app",
@@ -700,6 +704,9 @@
     "deletedAnnotations_other": "Deleted {{count}} annotations",
     "undo": "Undo",
     "retrySave": "Retry save",
+    "loadingAnnotations": "Loading annotations…",
+    "annotationLoadFailed": "Annotations could not be loaded. Editing is disabled to protect saved annotations.",
+    "retryLoadAnnotations": "Retry loading",
     "contextMenu": {
       "copy": "Copy text",
       "copySuccess": "Text copied",

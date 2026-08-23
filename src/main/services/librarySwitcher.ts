@@ -46,6 +46,7 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
     const dbExisted = deps.dbExistsInFolder(resolvedFolder)
     let nextAssembly: ServerAssembly | null = null
     let switchStarted = false
+    let preferenceCommitted = false
     try {
       await deps.beforeSwitch?.()
       switchStarted = true
@@ -76,12 +77,13 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
         scanned = imported + skipped + importResult.errors.length
         errors.push(...importResult.errors)
       }
+      deps.persistLibraryFolder(resolvedFolder)
+      preferenceCommitted = true
       deps.setState({
         assembly: nextAssembly,
         dbPath: targetDbPath,
         libraryFolder: resolvedFolder
       })
-      deps.persistLibraryFolder(resolvedFolder)
       const result: LibrarySwitchResult = {
         libraryFolderPath: resolvedFolder,
         dbExisted,
@@ -104,6 +106,7 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
           )
           await restored.start()
           await deps.activateAssembly?.(restored)
+          if (preferenceCommitted) deps.persistLibraryFolder(previous.libraryFolder)
           deps.setState({ ...previous, assembly: restored })
         } catch (recoveryError) {
           await restored?.stop().catch(() => undefined)

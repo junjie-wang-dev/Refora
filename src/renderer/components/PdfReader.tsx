@@ -135,6 +135,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const tabs = usePdfReaderStore((state) => state.tabs)
   const activeDocumentId = usePdfReaderStore((state) => state.activeDocumentId)
   const annotationMap = usePdfReaderStore((state) => state.annotations)
+  const annotationLoadStatus = usePdfReaderStore((state) => state.loadStatus)
   const tool = usePdfReaderStore((state) => state.tool)
   const color = usePdfReaderStore((state) => state.color)
   const fontSize = usePdfReaderStore((state) => state.fontSize)
@@ -143,6 +144,9 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const selectedAnnotationIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
   const lastDeletion = usePdfReaderStore((state) => state.lastDeletion)
   const activeDocument = tabs.find((tab) => tab.id === activeDocumentId) ?? null
+  const annotationsLoaded = !!activeDocumentId &&
+    annotationLoadStatus[activeDocumentId] === 'loaded'
+  const effectiveTool = annotationsLoaded ? tool : null
   const annotations = activeDocumentId ? annotationMap[activeDocumentId] ?? [] : []
   const selectedAnnotations = annotations.filter((annotation) =>
     selectedAnnotationIds.includes(annotation.id)
@@ -157,7 +161,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
   const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    tool !== null && tool !== 'eraser'
+    effectiveTool !== null && effectiveTool !== 'eraser'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -169,6 +173,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const [searching, setSearching] = useState(false)
   const [searchPages, setSearchPages] = useState<number[]>([])
   const [searchIndex, setSearchIndex] = useState(0)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [compactLayout, setCompactLayout] = useState(false)
   const [devicePixelRatio, setDevicePixelRatio] = useState(
@@ -176,6 +181,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   )
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const searchGenerationRef = useRef(0)
 
   useEffect(() => {
     const updateDevicePixelRatio = () => {
@@ -209,15 +215,20 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   useEffect(() => {
     if (
       !compactLayout ||
-      tool === null ||
+      effectiveTool === null ||
       !usePdfReaderStore.getState().sidebarOpen
     ) return
     usePdfReaderStore.getState().toggleSidebar()
-  }, [compactLayout, tool])
+  }, [compactLayout, effectiveTool])
 
   useEffect(() => {
-    if (tool !== null) window.getSelection()?.removeAllRanges()
-  }, [tool])
+    if (effectiveTool !== null) window.getSelection()?.removeAllRanges()
+  }, [effectiveTool])
+
+  useEffect(() => {
+    if (annotationsLoaded || tool === null) return
+    usePdfReaderStore.getState().setTool(null)
+  }, [activeDocumentId, annotationsLoaded, tool])
 
   useEffect(() => {
     if (!activeDocument) {
@@ -231,7 +242,9 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     setPdf(null)
     setCurrentPage(1)
     setPageInput('1')
+    searchGenerationRef.current += 1
     setSearchPages([])
+    setSearchError(null)
     void Promise.all([
       loadPdfRuntime(),
       api.documents.readPdfRange(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
@@ -288,6 +301,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     })
     return () => {
       cancelled = true
+      searchGenerationRef.current += 1
       void document?.cleanup()?.catch(() => undefined)
       void loadingTask?.destroy()?.catch(() => undefined)
     }
@@ -329,30 +343,40 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }, [activeDocumentId, compactLayout])
 
   const runSearch = useCallback(async () => {
+    const generation = ++searchGenerationRef.current
     const query = searchQuery.trim().toLocaleLowerCase()
     if (!pdf || !query) {
       setSearchPages([])
+      setSearchError(null)
       return
     }
     setSearching(true)
+    setSearchError(null)
     const pages: number[] = []
     try {
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
         const page = await pdf.getPage(pageNumber)
         const content = await page.getTextContent()
+        if (searchGenerationRef.current !== generation) return
         const text = content.items
           .map((item) => 'str' in item ? item.str : '')
           .join(' ')
           .toLocaleLowerCase()
         if (text.includes(query)) pages.push(pageNumber)
       }
+      if (searchGenerationRef.current !== generation) return
       setSearchPages(pages)
       setSearchIndex(0)
       if (pages[0]) navigateToPage(pages[0])
+    } catch {
+      if (searchGenerationRef.current !== generation) return
+      setSearchPages([])
+      setSearchIndex(0)
+      setSearchError(t('pdfReader.searchFailed'))
     } finally {
-      setSearching(false)
+      if (searchGenerationRef.current === generation) setSearching(false)
     }
-  }, [navigateToPage, pdf, searchQuery])
+  }, [navigateToPage, pdf, searchQuery, t])
 
   const cycleSearch = (direction: number) => {
     if (searchPages.length === 0) return
@@ -370,7 +394,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }
 
   const changeFontSize = (delta: number) => {
-    if (!activeDocumentId) return
+    if (!activeDocumentId || !annotationsLoaded) return
     const current = selectedTextAnnotations[0]?.fontSize ?? fontSize
     const next = Math.max(8, Math.min(72, current + delta))
     usePdfReaderStore.getState().setFontSize(next)
@@ -384,7 +408,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }
 
   const changeStrokeWidth = (delta: number) => {
-    if (!activeDocumentId) return
+    if (!activeDocumentId || !annotationsLoaded) return
     const current = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
     const next = Math.max(1, Math.min(12, current + delta))
     usePdfReaderStore.getState().setStrokeWidth(next)
@@ -398,6 +422,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }
 
   const changeColor = (nextColor: string) => {
+    if (!annotationsLoaded) return
     usePdfReaderStore.getState().setColor(nextColor)
     if (!activeDocumentId) return
     selectedAnnotations.forEach((annotation) => {
@@ -410,7 +435,11 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }
 
   const removeSelectedAnnotations = () => {
-    if (!activeDocumentId || selectedAnnotationIds.length === 0) return
+    if (
+      !activeDocumentId ||
+      !annotationsLoaded ||
+      selectedAnnotationIds.length === 0
+    ) return
     usePdfReaderStore.getState().removeAnnotations(
       activeDocumentId,
       selectedAnnotationIds
@@ -434,9 +463,13 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         target instanceof HTMLSelectElement ||
         (target instanceof HTMLElement && target.isContentEditable)
       ) return
+      const currentState = usePdfReaderStore.getState()
+      const annotationShortcutsEnabled = !!currentState.activeDocumentId &&
+        currentState.loadStatus[currentState.activeDocumentId] === 'loaded'
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLocaleLowerCase() === 'z' &&
+        annotationShortcutsEnabled &&
         usePdfReaderStore.getState().lastDeletion
       ) {
         event.preventDefault()
@@ -446,6 +479,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       if (event.metaKey || event.ctrlKey || event.altKey) return
       if (
         (event.key === 'Backspace' || event.key === 'Delete') &&
+        annotationShortcutsEnabled &&
         usePdfReaderStore.getState().selectedAnnotationIds.length > 0
       ) {
         event.preventDefault()
@@ -475,6 +509,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       }
       const nextTool = shortcuts[event.key.toLocaleLowerCase()]
       if (nextTool === undefined) return
+      if (!annotationShortcutsEnabled) return
       event.preventDefault()
       const currentTool = usePdfReaderStore.getState().tool
       usePdfReaderStore.getState().setTool(currentTool === nextTool ? null : nextTool)
@@ -572,9 +607,10 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
               key={item}
               label={t(`pdfReader.tools.${item}`)}
               shortcut={TOOL_SHORTCUTS[item]}
-              active={tool === item}
+              active={effectiveTool === item}
+              disabled={!annotationsLoaded}
               onClick={() => usePdfReaderStore.getState().setTool(
-                tool === item ? null : item
+                effectiveTool === item ? null : item
               )}
             >
               <Icon className="h-4 w-4" />
@@ -587,14 +623,14 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
           data-active-pdf-tool
           className="shrink-0 rounded-md bg-active px-2 py-1 text-label font-medium text-accent"
         >
-          {t(tool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${tool}`)}
+          {t(effectiveTool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${effectiveTool}`)}
         </span>
       )}
-      {(tool === 'text' || selectedTextAnnotations.length > 0) && (
+      {(effectiveTool === 'text' || selectedTextAnnotations.length > 0) && (
         <div className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md bg-panel px-0.5">
           <ReaderButton
             label={t('pdfReader.decreaseFontSize')}
-            disabled={displayedFontSize <= 8}
+            disabled={!annotationsLoaded || displayedFontSize <= 8}
             onClick={() => changeFontSize(-2)}
           >
             <Minus className="h-3 w-3" />
@@ -607,18 +643,18 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
           </span>
           <ReaderButton
             label={t('pdfReader.increaseFontSize')}
-            disabled={displayedFontSize >= 72}
+            disabled={!annotationsLoaded || displayedFontSize >= 72}
             onClick={() => changeFontSize(2)}
           >
             <Plus className="h-3 w-3" />
           </ReaderButton>
         </div>
       )}
-      {(tool === 'ink' || selectedInkAnnotations.length > 0) && (
+      {(effectiveTool === 'ink' || selectedInkAnnotations.length > 0) && (
         <div className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md bg-panel px-0.5">
           <ReaderButton
             label={t('pdfReader.decreaseStrokeWidth')}
-            disabled={displayedStrokeWidth <= 1}
+            disabled={!annotationsLoaded || displayedStrokeWidth <= 1}
             onClick={() => changeStrokeWidth(-1)}
           >
             <Minus className="h-3 w-3" />
@@ -631,7 +667,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
           </span>
           <ReaderButton
             label={t('pdfReader.increaseStrokeWidth')}
-            disabled={displayedStrokeWidth >= 12}
+            disabled={!annotationsLoaded || displayedStrokeWidth >= 12}
             onClick={() => changeStrokeWidth(1)}
           >
             <Plus className="h-3 w-3" />
@@ -647,6 +683,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
             label={t('pdfReader.deleteSelected', {
               count: selectedAnnotationIds.length
             })}
+            disabled={!annotationsLoaded}
             onClick={removeSelectedAnnotations}
           >
             <Trash className="h-4 w-4 text-error" />
@@ -669,6 +706,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   : 'border-transparent'
               }`}
               style={{ background: item }}
+              disabled={!annotationsLoaded}
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => changeColor(item)}
             />
@@ -695,7 +733,13 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
           autoFocus={compactLayout && searchOpen}
           placeholder={t('pdfReader.search')}
           className="h-7 w-full rounded-md border border-border bg-panel pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
-          onChange={(event) => setSearchQuery(event.target.value)}
+          aria-invalid={searchError ? true : undefined}
+          onChange={(event) => {
+            searchGenerationRef.current += 1
+            setSearchQuery(event.target.value)
+            setSearching(false)
+            setSearchError(null)
+          }}
           onKeyDown={(event) => {
             if (event.key !== 'Escape' || !compactLayout) return
             setSearchOpen(false)
@@ -706,6 +750,8 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       <span className="min-w-10 text-center text-label text-muted">
         {searching
           ? '…'
+          : searchError
+            ? <span className="text-error" role="status">{searchError}</span>
           : searchPages.length > 0
             ? `${searchIndex + 1}/${searchPages.length}`
             : ''}
@@ -760,38 +806,51 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         >
           <ArrowLeft className="h-4 w-4" />
         </ReaderButton>
-        <div className="ml-2 flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+        <div
+          className="ml-2 flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
+          role="tablist"
+        >
           {tabs.map((tab) => (
-            <button
+            <div
               key={tab.id}
-              type="button"
-              className={`group flex h-8 min-w-36 max-w-64 items-center gap-2 rounded-t-lg border border-b-0 px-3 text-left text-xs ${
+              className={`group flex h-8 min-w-36 max-w-64 items-center rounded-t-lg border border-b-0 text-left text-xs ${
                 tab.id === activeDocumentId
                   ? 'border-border bg-background text-foreground'
                   : 'border-transparent bg-transparent text-muted hover:bg-hover'
               }`}
-              onClick={() => usePdfReaderStore.getState().activate(tab.id)}
             >
-              <span className="min-w-0 flex-1 truncate">{tab.title || tab.fileName}</span>
-              <span
-                role="button"
-                tabIndex={0}
-                className="rounded p-0.5 opacity-50 hover:bg-hover group-hover:opacity-100"
-                aria-label={t('pdfReader.closeTab')}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  handleCloseTab(tab.id)
-                }}
+              <button
+                type="button"
+                role="tab"
+                tabIndex={tab.id === activeDocumentId ? 0 : -1}
+                aria-selected={tab.id === activeDocumentId}
+                className="min-w-0 flex-1 truncate py-2 pl-3 text-left"
+                onClick={() => usePdfReaderStore.getState().activate(tab.id)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.stopPropagation()
-                    handleCloseTab(tab.id)
-                  }
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                  event.preventDefault()
+                  const tabButtons = Array.from(
+                    event.currentTarget.closest('[role="tablist"]')
+                      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []
+                  )
+                  const index = tabButtons.indexOf(event.currentTarget)
+                  const offset = event.key === 'ArrowLeft' ? -1 : 1
+                  const next = tabButtons[(index + offset + tabButtons.length) % tabButtons.length]
+                  next?.click()
+                  next?.focus()
                 }}
               >
+                {tab.title || tab.fileName}
+              </button>
+              <button
+                type="button"
+                className="mr-2 rounded p-0.5 opacity-50 hover:bg-hover group-hover:opacity-100"
+                aria-label={t('pdfReader.closeTab')}
+                onClick={() => handleCloseTab(tab.id)}
+              >
                 <X className="h-3 w-3" />
-              </span>
-            </button>
+              </button>
+            </div>
           ))}
         </div>
       </div>}
@@ -861,7 +920,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   documentId={activeDocument.id}
                   documentTitle={activeDocument.title || activeDocument.fileName}
                   annotations={annotations.filter((annotation) => annotation.page === index + 1)}
-                  tool={tool}
+                  tool={effectiveTool}
                   color={displayedColor}
                   fontSize={fontSize}
                   strokeWidth={strokeWidth}

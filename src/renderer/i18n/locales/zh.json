@@ -150,6 +150,7 @@
     "paste": "粘贴"
   },
   "list": {
+    "documentList": "文献列表",
     "compact": "缩略论文列表",
     "expand": "展开论文列表",
     "close": "关闭文档列表",
@@ -529,6 +530,7 @@
       "saveFail": "无法保存服务商",
       "activateFail": "无法启用服务商",
       "deleteFail": "无法删除服务商",
+      "deleteCleanupFail": "服务商已删除，但相关聊天设置未能完全清除。",
       "encryptionUnavailable": "macOS 钥匙串当前不可用，无法安全保存 API 密钥。",
       "effort": {
         "none": "关闭",
@@ -660,6 +662,7 @@
   "pdfReader": {
     "loading": "正在加载 PDF…",
     "loadFailed": "无法加载此 PDF。",
+    "pageLoadFailed": "无法加载第 {{page}} 页。",
     "closeReader": "关闭阅读器",
     "closeTab": "关闭 PDF 标签页",
     "previousPage": "上一页",
@@ -671,6 +674,7 @@
     "rotate": "顺时针旋转",
     "fitWidth": "适合页面宽度",
     "search": "在 PDF 中搜索",
+    "searchFailed": "搜索失败",
     "previousResult": "上一个结果",
     "nextResult": "下一个结果",
     "openInSystem": "使用系统默认应用打开",
@@ -699,6 +703,9 @@
     "deletedAnnotations_other": "已删除 {{count}} 条批注",
     "undo": "撤销",
     "retrySave": "重试保存",
+    "loadingAnnotations": "正在加载批注…",
+    "annotationLoadFailed": "无法加载批注。为保护已保存的批注，编辑功能已停用。",
+    "retryLoadAnnotations": "重新加载",
     "contextMenu": {
       "copy": "复制文本",
       "copySuccess": "已复制文本",

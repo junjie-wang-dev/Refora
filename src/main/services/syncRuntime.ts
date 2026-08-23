@@ -4,6 +4,7 @@ import { createSupabaseAuthClient } from './supabaseAuth'
 import { createSyncSessionStore } from './syncSessionStore'
 import { createSyncAccountService, type SyncAccountService } from './syncAccount'
 import { logger } from './logger'
+import type { AuthConfirmationRedirect } from './authDeepLink'
 
 declare const __REFORA_SUPABASE_URL__: string
 declare const __REFORA_SUPABASE_PUBLISHABLE_KEY__: string
@@ -13,6 +14,7 @@ export interface SyncRuntimeDeps {
   fetch: (input: string, init?: RequestInit) => Promise<Response>
   env?: NodeJS.ProcessEnv
   safeStorage?: SafeStorageProxy
+  issueConfirmationRedirect: () => AuthConfirmationRedirect
 }
 
 export function validSupabaseUrl(value: string): boolean {
@@ -51,7 +53,8 @@ export function createSyncRuntime({
   userDataDir,
   fetch,
   env = process.env,
-  safeStorage = createSafeStorageProxy()
+  safeStorage = createSafeStorageProxy(),
+  issueConfirmationRedirect
 }: SyncRuntimeDeps): SyncAccountService {
   const embeddedUrl = typeof __REFORA_SUPABASE_URL__ === 'string'
     ? __REFORA_SUPABASE_URL__
@@ -67,7 +70,7 @@ export function createSyncRuntime({
     logger.warn('sync: Supabase configuration is incomplete or invalid')
   }
   const auth = configured
-    ? createSupabaseAuthClient({ url, publishableKey, fetch })
+    ? createSupabaseAuthClient({ url, publishableKey, fetch, issueConfirmationRedirect })
     : null
   return createSyncAccountService({
     configured,

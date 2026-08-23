@@ -144,6 +144,7 @@ export function useChatStream({
   const stickToBottomRef = useRef(true)
   const disposedRef = useRef(false)
   const traceSnapshotGenerationRef = useRef(0)
+  const reconcileGenerationRef = useRef(0)
   const liveActivityStartedAtRef = useRef(new Map<string, number>())
   const deferredTraceTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>()
@@ -164,6 +165,7 @@ export function useChatStream({
     threadIdRef.current = activeThreadId
     if (!isSendingRef.current) {
       traceSnapshotGenerationRef.current += 1
+      reconcileGenerationRef.current += 1
       for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
       deferredTraceTimersRef.current.clear()
       liveActivityStartedAtRef.current.clear()
@@ -391,12 +393,17 @@ export function useChatStream({
     threadId: string,
     hintedStatus?: AgentRunStatus
   ) => {
+    const generation = ++reconcileGenerationRef.current
+    const isCurrent = () =>
+      generation === reconcileGenerationRef.current &&
+      activeRunIdRef.current === runId &&
+      threadIdRef.current === threadId
     try {
       const [run, traces] = await Promise.all([
         api.ai.chatRun(runId),
         api.ai.chatTraces(threadId)
       ])
-      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      if (!isCurrent()) return
       setTraceSteps(traces)
       for (const step of traces) {
         if (
@@ -422,10 +429,10 @@ export function useChatStream({
         return
       }
       const history = await api.ai.chatHistory(threadId)
-      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      if (!isCurrent()) return
       if (run.status === 'interrupted') {
         const interrupt = await api.ai.chatPendingInterrupt(runId)
-        if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+        if (!isCurrent()) return
         setMessages(history)
         isSendingRef.current = false
         pendingInterruptRef.current = interrupt
@@ -447,7 +454,7 @@ export function useChatStream({
         traces
       })
     } catch (cause) {
-      if (activeRunIdRef.current !== runId || threadIdRef.current !== threadId) return
+      if (!isCurrent()) return
       if (hintedStatus === 'failed' || hintedStatus === 'cancelled') {
         settleRun(runId, {
           status: hintedStatus,
@@ -645,10 +652,17 @@ export function useChatStream({
 
   useEffect(() => {
     if (!streaming || !activeRunId || !activeThreadId) return
-    const reconcile = () => {
-      void reconcileRunSnapshot(activeRunId, activeThreadId)
+    let reconciling = false
+    const reconcile = async () => {
+      if (reconciling) return
+      reconciling = true
+      try {
+        await reconcileRunSnapshot(activeRunId, activeThreadId)
+      } finally {
+        reconciling = false
+      }
     }
-    const timer = setInterval(reconcile, RUN_RECOVERY_POLL_MS)
+    const timer = setInterval(() => void reconcile(), RUN_RECOVERY_POLL_MS)
     return () => clearInterval(timer)
   }, [streaming, activeRunId, activeThreadId, reconcileRunSnapshot])
 
@@ -694,7 +708,7 @@ export function useChatStream({
     replacement: ChatReplacementOptions = {}
   ) => {
     if (isSendingRef.current) return
-    if (!activeProviderId || !text.trim() || streaming) return
+    if (pendingInterruptRef.current || !activeProviderId || !text.trim() || streaming) return
     cancelledRef.current = false
     if (text.length > MAX_INPUT_LENGTH) {
       setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))

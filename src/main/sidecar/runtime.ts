@@ -18,6 +18,8 @@ export const SERVER_PYTHON_RUNTIME_VERSION = '0.3.0'
 const UV_VERSION = '0.11.16'
 const SERVER_PYTHON_VERSION = '3.12.13'
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000
+const TERMINATION_GRACE_MS = 5_000
+const KILL_WAIT_MS = 1_000
 const UV_RELEASES = {
   arm64: {
     archive: 'uv-aarch64-apple-darwin.tar.gz',
@@ -56,23 +58,37 @@ interface ServerPythonRuntimeDeps {
   downloadFile: (url: string, destination: string, signal: AbortSignal) => Promise<void>
 }
 
-interface RunFileOptions {
+export interface RunFileOptions {
   cwd: string
   env: NodeJS.ProcessEnv
   signal: AbortSignal
   timeoutMs?: number
+  terminationGraceMs?: number
+  spawnChild?: typeof spawn
+  killProcess?: typeof process.kill
 }
 
 function executable(path: string): Promise<boolean> {
   return access(path, constants.X_OK).then(() => true, () => false)
 }
 
-function terminate(child: ChildProcess): void {
-  if (!child.pid) return
+function signalChild(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  killProcess: typeof process.kill
+): boolean {
+  if (!child.pid) return true
+  let groupSignaled: boolean
   try {
-    process.kill(-child.pid, 'SIGTERM')
+    groupSignaled = killProcess(-child.pid, signal)
   } catch {
-    child.kill('SIGTERM')
+    groupSignaled = false
+  }
+  if (groupSignaled) return true
+  try {
+    return child.kill(signal)
+  } catch {
+    return false
   }
 }
 
@@ -99,10 +115,10 @@ function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
   })
 }
 
-function runFile(command: string, args: string[], options: RunFileOptions): Promise<string> {
+export function runFile(command: string, args: string[], options: RunFileOptions): Promise<string> {
   if (options.signal.aborted) return Promise.reject(cancelled())
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = (options.spawnChild ?? spawn)(command, args, {
       cwd: options.cwd,
       env: options.env,
       detached: true,
@@ -111,22 +127,42 @@ function runFile(command: string, args: string[], options: RunFileOptions): Prom
     let stdout = ''
     let stderr = ''
     let completed = false
+    let terminationError: Error | null = null
+    let escalationTimer: ReturnType<typeof setTimeout> | null = null
+    let killWaitTimer: ReturnType<typeof setTimeout> | null = null
     const append = (current: string, chunk: Buffer): string =>
       `${current}${chunk.toString('utf8')}`.slice(-1_000_000)
     const finish = (callback: () => void): void => {
       if (completed) return
       completed = true
-      clearTimeout(timer)
+      clearTimeout(operationTimer)
+      if (escalationTimer) clearTimeout(escalationTimer)
+      if (killWaitTimer) clearTimeout(killWaitTimer)
       options.signal.removeEventListener('abort', abort)
       callback()
     }
-    const abort = (): void => {
-      terminate(child)
-      finish(() => reject(cancelled()))
+    const rejectTermination = (): void => {
+      const error = terminationError ?? cancelled()
+      finish(() => reject(error))
     }
-    const timer = setTimeout(() => {
-      terminate(child)
-      finish(() => reject(new Error('Server Python runtime setup timed out')))
+    const escalate = (): void => {
+      signalChild(child, 'SIGKILL', options.killProcess ?? process.kill)
+      killWaitTimer = setTimeout(rejectTermination, KILL_WAIT_MS)
+    }
+    const requestTermination = (error: Error): void => {
+      if (completed || terminationError) return
+      terminationError = error
+      clearTimeout(operationTimer)
+      const sent = signalChild(child, 'SIGTERM', options.killProcess ?? process.kill)
+      if (sent) {
+        escalationTimer = setTimeout(escalate, options.terminationGraceMs ?? TERMINATION_GRACE_MS)
+      } else {
+        escalate()
+      }
+    }
+    const abort = (): void => requestTermination(cancelled())
+    const operationTimer = setTimeout(() => {
+      requestTermination(new Error('Server Python runtime setup timed out'))
     }, options.timeoutMs ?? INSTALL_TIMEOUT_MS)
     options.signal.addEventListener('abort', abort, { once: true })
     child.stdout.on('data', (chunk: Buffer) => {
@@ -135,8 +171,12 @@ function runFile(command: string, args: string[], options: RunFileOptions): Prom
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = append(stderr, chunk)
     })
-    child.once('error', (error) => finish(() => reject(error)))
+    child.once('error', (error) => finish(() => reject(terminationError ?? error)))
     child.once('close', (code, signal) => finish(() => {
+      if (terminationError) {
+        reject(terminationError)
+        return
+      }
       if (code !== 0) {
         reject(new Error(
           stderr.trim() || stdout.trim() || `Server Python setup exited with ${code ?? signal}`
@@ -145,6 +185,7 @@ function runFile(command: string, args: string[], options: RunFileOptions): Prom
       }
       resolve(stdout.trim())
     }))
+    if (options.signal.aborted) abort()
   })
 }
 

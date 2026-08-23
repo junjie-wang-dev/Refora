@@ -7,6 +7,11 @@ const sessionPayload = {
   expires_at: 2_000_000_000,
   user: { id: 'user-1', email: 'reader@example.com' }
 }
+const issueConfirmationRedirect = () => ({
+  url: 'refora://auth/confirmed?nonce=test-nonce',
+  clear: vi.fn(),
+  rollback: vi.fn()
+})
 
 describe('Supabase auth client', () => {
   it('signs in with the publishable key and parses the session', async () => {
@@ -14,7 +19,8 @@ describe('Supabase auth client', () => {
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co/',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect
     })
 
     await expect(client.signIn('reader@example.com', 'password')).resolves.toEqual({
@@ -41,7 +47,8 @@ describe('Supabase auth client', () => {
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect
     })
 
     await expect(client.signUp('reader@example.com', 'password')).resolves.toEqual({
@@ -49,17 +56,19 @@ describe('Supabase auth client', () => {
       session: null
     })
     expect(fetch).toHaveBeenCalledWith(
-      'https://project.supabase.co/auth/v1/signup?redirect_to=refora%3A%2F%2Fauth%2Fconfirmed',
+      'https://project.supabase.co/auth/v1/signup?redirect_to=refora%3A%2F%2Fauth%2Fconfirmed%3Fnonce%3Dtest-nonce',
       expect.objectContaining({ method: 'POST' })
     )
   })
 
   it('supports sign-up responses that immediately create a session', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(sessionPayload)))
+    const redirect = issueConfirmationRedirect()
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect: () => redirect
     })
 
     await expect(client.signUp('reader@example.com', 'password')).resolves.toEqual({
@@ -71,6 +80,8 @@ describe('Supabase auth client', () => {
         user: { id: 'user-1', email: 'reader@example.com' }
       }
     })
+    expect(redirect.clear).toHaveBeenCalledOnce()
+    expect(redirect.rollback).not.toHaveBeenCalled()
   })
 
   it('resends signup confirmation with the desktop callback', async () => {
@@ -78,12 +89,13 @@ describe('Supabase auth client', () => {
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect
     })
 
     await expect(client.resendConfirmation('reader@example.com')).resolves.toBeUndefined()
     expect(fetch).toHaveBeenCalledWith(
-      'https://project.supabase.co/auth/v1/resend?redirect_to=refora%3A%2F%2Fauth%2Fconfirmed',
+      'https://project.supabase.co/auth/v1/resend?redirect_to=refora%3A%2F%2Fauth%2Fconfirmed%3Fnonce%3Dtest-nonce',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ type: 'signup', email: 'reader@example.com' })
@@ -99,7 +111,8 @@ describe('Supabase auth client', () => {
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect
     })
 
     await expect(client.signIn('reader@example.com', 'password')).rejects.toMatchObject({
@@ -115,6 +128,7 @@ describe('Supabase auth client', () => {
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
       fetch,
+      issueConfirmationRedirect,
       requestTimeoutMs: 5
     })
 
@@ -131,7 +145,8 @@ describe('Supabase auth client', () => {
     const client = createSupabaseAuthClient({
       url: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_key',
-      fetch
+      fetch,
+      issueConfirmationRedirect
     })
 
     await expect(client.signIn('reader@example.com', 'wrong')).rejects.toMatchObject({
@@ -139,4 +154,25 @@ describe('Supabase auth client', () => {
       message: 'Invalid login credentials'
     })
   })
+
+  it.each(['signUp', 'resendConfirmation'] as const)(
+    'rolls back the pending confirmation nonce when %s fails',
+    async (operation) => {
+      const fetch = vi.fn().mockRejectedValue(new Error('offline'))
+      const redirect = issueConfirmationRedirect()
+      const client = createSupabaseAuthClient({
+        url: 'https://project.supabase.co',
+        publishableKey: 'sb_publishable_key',
+        fetch,
+        issueConfirmationRedirect: () => redirect
+      })
+
+      const request = operation === 'signUp'
+        ? client.signUp('reader@example.com', 'password')
+        : client.resendConfirmation('reader@example.com')
+      await expect(request).rejects.toMatchObject({ code: 'sync_network_error' })
+      expect(redirect.rollback).toHaveBeenCalledOnce()
+      expect(redirect.clear).not.toHaveBeenCalled()
+    }
+  )
 })

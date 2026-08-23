@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   clearSearch: vi.fn(),
   openPdf: vi.fn(),
   showToast: vi.fn(),
-  setActiveWorkspace: vi.fn(),
+  requestActiveWorkspace: vi.fn(),
   openPanel: vi.fn(),
   openMarkdownCard: vi.fn(),
   setActiveThreadId: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock('@renderer/store/workspaceStore', () => {
   const getState = () => ({
     activeWorkspaceId: mocks.workspaceState.activeWorkspaceId,
     chatStreaming: mocks.workspaceState.chatStreaming,
-    setActiveWorkspace: mocks.setActiveWorkspace,
+    requestActiveWorkspace: mocks.requestActiveWorkspace,
     openPanel: mocks.openPanel,
     openMarkdownCard: mocks.openMarkdownCard,
     setActiveThreadId: mocks.setActiveThreadId
@@ -112,6 +112,7 @@ describe('GlobalSearch', () => {
     vi.clearAllMocks()
     mocks.workspaceState.activeWorkspaceId = 'ws-current'
     mocks.workspaceState.chatStreaming = false
+    mocks.requestActiveWorkspace.mockResolvedValue(true)
     mocks.documentStoreSubscriber = null
     mocks.documentStoreSubscribe.mockImplementation((callback) => {
       mocks.documentStoreSubscriber = callback
@@ -166,6 +167,18 @@ describe('GlobalSearch', () => {
     expect(screen.getByRole('option', { name: 'globalSearch.openWorkspaceFile: transformer-data.csv' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'globalSearch.openWorkspaceContent: Transformer synthesis' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'globalSearch.openChat: Transformer discussion' })).toBeInTheDocument()
+    expect(input).toHaveAttribute(
+      'aria-activedescendant',
+      'global-search-option-document-paper-1'
+    )
+    expect(screen.getByRole('option', {
+      name: 'globalSearch.openPaper: Transformer Research'
+    })).toHaveAttribute('id', 'global-search-option-document-paper-1')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input).toHaveAttribute(
+      'aria-activedescendant',
+      'global-search-option-workspaceFile-asset-1'
+    )
   })
 
   it('focuses papers without opening PDFs and synchronizes the document list search state', async () => {
@@ -238,8 +251,10 @@ describe('GlobalSearch', () => {
     const fileOption = await screen.findByRole('option', { name: 'globalSearch.openWorkspaceFile: transformer-data.csv' })
 
     fireEvent.click(fileOption)
-    expect(mocks.setActiveWorkspace).toHaveBeenCalledWith('ws-files')
-    expect(api.workspaceAssets.open).toHaveBeenCalledWith('asset-1')
+    await waitFor(() => {
+      expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-files')
+      expect(api.workspaceAssets.open).toHaveBeenCalledWith('asset-1')
+    })
 
     fireEvent.focus(input)
     const contentOption = await screen.findByRole('option', {
@@ -247,16 +262,20 @@ describe('GlobalSearch', () => {
     })
     fireEvent.click(contentOption)
 
-    expect(mocks.setActiveWorkspace).toHaveBeenCalledWith('ws-content')
-    expect(mocks.openMarkdownCard).toHaveBeenCalledWith('report', 'report-1')
+    await waitFor(() => {
+      expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-content')
+      expect(mocks.openMarkdownCard).toHaveBeenCalledWith('report', 'report-1')
+    })
 
     fireEvent.focus(input)
     const chatOption = await screen.findByRole('option', { name: 'globalSearch.openChat: Transformer discussion' })
     fireEvent.click(chatOption)
 
-    expect(mocks.setActiveWorkspace).toHaveBeenCalledWith('ws-chat')
-    expect(mocks.setActiveThreadId).toHaveBeenCalledWith('thread-1')
-    expect(onOpenChat).toHaveBeenCalledOnce()
+    await waitFor(() => {
+      expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-chat')
+      expect(mocks.setActiveThreadId).toHaveBeenCalledWith('thread-1')
+      expect(onOpenChat).toHaveBeenCalledOnce()
+    })
   })
 
   it('opens a global chat result without opening an empty workspace panel', async () => {
@@ -282,10 +301,12 @@ describe('GlobalSearch', () => {
     expect(option).toHaveTextContent('globalSearch.globalChat')
     fireEvent.click(option)
 
-    expect(mocks.setActiveWorkspace).toHaveBeenCalledWith(null)
+    await waitFor(() => {
+      expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith(null)
+      expect(mocks.setActiveThreadId).toHaveBeenCalledWith('global-thread')
+      expect(onOpenChat).toHaveBeenCalledOnce()
+    })
     expect(mocks.openPanel).not.toHaveBeenCalled()
-    expect(mocks.setActiveThreadId).toHaveBeenCalledWith('global-thread')
-    expect(onOpenChat).toHaveBeenCalledOnce()
   })
 
   it('supports keyboard selection and clears document search state', async () => {
@@ -338,6 +359,23 @@ describe('GlobalSearch', () => {
     await waitFor(() => expect(mocks.showToast).toHaveBeenCalledWith('Cannot open asset'))
   })
 
+  it('does not open a workspace result when pending renderer drafts fail to save', async () => {
+    mocks.requestActiveWorkspace.mockResolvedValue(false)
+    render(<GlobalSearch />)
+    const input = screen.getByRole('combobox', { name: 'globalSearch.label' })
+    fireEvent.change(input, { target: { value: 'transformer' } })
+    const option = await screen.findByRole('option', {
+      name: 'globalSearch.openWorkspaceContent: Transformer synthesis'
+    })
+
+    fireEvent.click(option)
+
+    await waitFor(() => {
+      expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-content')
+    })
+    expect(mocks.openMarkdownCard).not.toHaveBeenCalled()
+  })
+
   it('focuses missing papers without trying to open the file', async () => {
     api.search.global = vi.fn().mockResolvedValue({
       ...results,
@@ -373,7 +411,7 @@ describe('GlobalSearch', () => {
     fireEvent.click(fileOption)
     fireEvent.click(contentOption)
     fireEvent.click(chatOption)
-    expect(mocks.setActiveWorkspace).not.toHaveBeenCalled()
+    expect(mocks.requestActiveWorkspace).not.toHaveBeenCalled()
     expect(mocks.setActiveThreadId).not.toHaveBeenCalled()
     expect(mocks.openMarkdownCard).not.toHaveBeenCalled()
     expect(api.workspaceAssets.open).not.toHaveBeenCalled()

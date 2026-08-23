@@ -7,9 +7,14 @@ import { initLogger, logger } from './services/logger'
 import { createPdfTextService } from './services/pdfText'
 import type { PdfTextService } from './services/pdfText'
 import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './services/dbPath'
-import { readLibraryFolderPath, writeLibraryFolderPath } from './services/prefs'
+import {
+  readLibraryFolderPath,
+  readPendingAuthConfirmation,
+  writeLibraryFolderPath,
+  writePendingAuthConfirmation
+} from './services/prefs'
 import { IpcChannel } from '../shared/ipc-channels'
-import type { BootstrapData, LibrarySwitchResult } from '../shared/ipc-types'
+import type { BootstrapData, LibrarySwitchResult, WindowBounds } from '../shared/ipc-types'
 import { runMenuAction } from './services/menuAction'
 import { createServerPythonRuntime } from './sidecar/runtime'
 import type { ServerPythonRuntime } from './sidecar/runtime'
@@ -18,7 +23,7 @@ import { createServerAssembly, type ServerAssembly } from './sidecar/assembly'
 import { createServerStateDirectory } from './sidecar/stateDirectory'
 import { createSyncRuntime } from './services/syncRuntime'
 import type { SyncAccountService } from './services/syncAccount'
-import { parseAuthConfirmationDeepLink } from './services/authDeepLink'
+import { createAuthConfirmationGuard } from './services/authDeepLink'
 import type { SyncAuthConfirmation } from '../shared/sync-types'
 import { createSyncHandlers } from './sidecar/ipc/sync'
 import { createLibrarySwitcher } from './services/librarySwitcher'
@@ -29,6 +34,7 @@ import { createAppLifecycleIpcHandlers } from './services/appLifecycleIpc'
 import { runPersistenceGuard, type PersistenceFailureAction } from './services/persistenceGuard'
 import { createRendererPathCapabilities } from './services/fileCapabilities'
 import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
+import { consumeDeepLinkArguments, handoffSecondInstance } from './services/instanceHandoff'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -40,6 +46,9 @@ protocol.registerSchemesAsPrivileged([
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
   }
 ])
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
 
 let isDev = false
 const IS_MAC = process.platform === 'darwin'
@@ -60,6 +69,10 @@ const rendererFlushCoordinator = createRendererFlushCoordinator()
 const appLifecycleIpcHandlers = createAppLifecycleIpcHandlers({
   completeRendererFlush: (requestId, error) =>
     rendererFlushCoordinator.complete(requestId, error)
+})
+const authConfirmationGuard = createAuthConfirmationGuard({
+  readPending: () => readPendingAuthConfirmation(app.getPath('userData')),
+  writePending: (pending) => writePendingAuthConfirmation(app.getPath('userData'), pending)
 })
 
 for (const [channel, handler] of Object.entries(appLifecycleIpcHandlers)) {
@@ -197,20 +210,27 @@ function deliverAuthConfirmation(): void {
 }
 
 function handleAuthDeepLink(value: string): boolean {
-  const confirmation = parseAuthConfirmationDeepLink(value)
-  if (!confirmation) return false
-  pendingAuthConfirmation = confirmation
-  deliverAuthConfirmation()
-  return true
+  try {
+    const confirmation = authConfirmationGuard.consume(value)
+    if (!confirmation) return false
+    pendingAuthConfirmation = confirmation
+    deliverAuthConfirmation()
+    return true
+  } catch (error) {
+    logger.error(`auth deep link rejected: ${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
 }
 
-app.on('open-url', (event, url) => {
-  if (!handleAuthDeepLink(url)) return
-  event.preventDefault()
-})
-
-for (const argument of process.argv.slice(1)) {
-  if (handleAuthDeepLink(argument)) break
+if (hasSingleInstanceLock) {
+  app.on('open-url', (event, url) => {
+    if (!handleAuthDeepLink(url)) return
+    event.preventDefault()
+  })
+  app.on('second-instance', (_event, argv) => {
+    handoffSecondInstance(argv, handleAuthDeepLink, () => win)
+  })
+  consumeDeepLinkArguments(process.argv, handleAuthDeepLink)
 }
 
 function detectLanguage(): 'zh' | 'en' {
@@ -453,7 +473,7 @@ function buildMenu(language: 'zh' | 'en' = menuLanguage): Menu {
   return Menu.buildFromTemplate(template)
 }
 
-function createWindow(bounds?: { x?: number; y?: number; width?: number; height?: number } | null): BrowserWindow {
+function createWindow(bounds?: WindowBounds | null): BrowserWindow {
   const bw = new BrowserWindow({
     x: bounds?.x,
     y: bounds?.y,
@@ -480,7 +500,12 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
     }
   }
 
+  let initialWindowStateApplied = false
   bw.webContents.on('did-finish-load', () => {
+    if (!initialWindowStateApplied) {
+      initialWindowStateApplied = true
+      if (bounds?.isMaximized) bw.maximize()
+    }
     bw.show()
     sendWindowFocus(bw.isFocused())
     deliverAuthConfirmation()
@@ -495,14 +520,15 @@ function createWindow(bounds?: { x?: number; y?: number; width?: number; height?
     const assembly = serverAssembly
     if (!assembly || bw.isDestroyed()) return
     try {
-      const bounds = bw.getBounds()
+      const maximized = bw.isMaximized()
+      const bounds = maximized ? bw.getNormalBounds() : bw.getBounds()
       await assembly.getClient().http.settingsUpdate({
         windowBounds: {
           x: bounds.x,
           y: bounds.y,
           width: bounds.width,
           height: bounds.height,
-          isMaximized: bw.isMaximized()
+          isMaximized: maximized
         }
       })
     } catch (e) {
@@ -730,7 +756,7 @@ const switchLibraryFolderPython = createLibrarySwitcher({
   }
 })
 
-void app.whenReady().then(async () => {
+if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   isDev = !app.isPackaged
   menuLanguage = detectLanguage()
   initLogger()
@@ -755,7 +781,8 @@ void app.whenReady().then(async () => {
   pdfTextService = createPdfTextService()
   syncAccountService = createSyncRuntime({
     userDataDir: app.getPath('userData'),
-    fetch: (input, init) => net.fetch(input, init)
+    fetch: (input, init) => net.fetch(input, init),
+    issueConfirmationRedirect: () => authConfirmationGuard.issue()
   })
   registerSyncAccountHandlers(syncAccountService)
 
@@ -775,7 +802,7 @@ void app.whenReady().then(async () => {
   activeLibraryFolder = libraryFolder
   registerWorkspaceAssetProtocol()
   registerDocumentProtocol()
-  let savedBounds: { x?: number; y?: number; width?: number; height?: number } | null = null
+  let savedBounds: WindowBounds | null = null
   try {
     serverAssembly = await createPythonServerAssembly(
       dbPath,
@@ -836,10 +863,11 @@ const handleBeforeQuit = createShutdownHandler({
   resolvePersistenceFailure
 })
 
-app.on('before-quit', handleBeforeQuit)
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+if (hasSingleInstanceLock) {
+  app.on('before-quit', handleBeforeQuit)
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit()
+    }
+  })
+}

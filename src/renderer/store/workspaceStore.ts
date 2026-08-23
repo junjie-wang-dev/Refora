@@ -17,7 +17,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import { useDocumentStore } from './documentStore'
 import i18n from '../i18n'
-import { trackRendererPersistence } from '../persistence'
+import { flushRendererPersistence, trackRendererPersistence } from '../persistence'
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -42,6 +42,7 @@ interface WorkspaceState {
   renameWorkspace: (id: string, name: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
   setActiveWorkspace: (id: string | null) => void
+  requestActiveWorkspace: (id: string | null) => Promise<boolean>
   closeWorkspaceTab: (id: string) => void
   setActiveThreadId: (id: string | null) => void
   setChatStreaming: (streaming: boolean) => void
@@ -294,6 +295,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       void get().fetchAssets()
     }
     void get().fetchThreads({ selectLatestIfNone: true })
+  },
+
+  requestActiveWorkspace: async (id: string | null) => {
+    try {
+      await flushRendererPersistence()
+    } catch {
+      return false
+    }
+    get().setActiveWorkspace(id)
+    return true
   },
 
   closeWorkspaceTab: (id: string) => {

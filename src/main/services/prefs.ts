@@ -5,6 +5,10 @@ import { logger } from './logger'
 
 interface UserPrefs {
   libraryFolderPath?: string
+  pendingAuthConfirmation?: {
+    nonce: string
+    createdAt: number
+  } | null
 }
 
 function prefsPath(userDataDir: string): string {
@@ -36,6 +40,7 @@ function updatePrefs(userDataDir: string, patch: Partial<UserPrefs>): void {
     renameSync(temporary, p)
   } catch (e) {
     logger.warn(`prefs:write failed: ${e instanceof Error ? e.message : String(e)}`)
+    throw e
   }
 }
 
@@ -45,4 +50,26 @@ export function readLibraryFolderPath(userDataDir: string): string {
 
 export function writeLibraryFolderPath(userDataDir: string, folder: string): void {
   updatePrefs(userDataDir, { libraryFolderPath: folder })
+}
+
+export function readPendingAuthConfirmation(userDataDir: string): {
+  nonce: string
+  createdAt: number
+} | null {
+  const pending = readPrefs(userDataDir).pendingAuthConfirmation
+  if (
+    !pending
+    || typeof pending.nonce !== 'string'
+    || !pending.nonce
+    || typeof pending.createdAt !== 'number'
+    || !Number.isFinite(pending.createdAt)
+  ) return null
+  return pending
+}
+
+export function writePendingAuthConfirmation(
+  userDataDir: string,
+  pending: { nonce: string; createdAt: number } | null
+): void {
+  updatePrefs(userDataDir, { pendingAuthConfirmation: pending })
 }

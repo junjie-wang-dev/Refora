@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
+import { registerRendererFlushTask } from '../../src/renderer/persistence'
 import migrationSql from '../../backend/refora_server/db/migrations/0014_workspace_board.sql?raw'
 import canvasMigrationSql from '../../backend/refora_server/db/migrations/0015_workspace_canvas.sql?raw'
 import noteTypesMigrationSql from '../../backend/refora_server/db/migrations/0016_workspace_note_types.sql?raw'
@@ -345,6 +346,43 @@ describe('WorkspaceStore', () => {
   })
 
   describe('setActiveWorkspace', () => {
+    it('waits for renderer drafts before switching workspaces', async () => {
+      let release: () => void = () => undefined
+      const draftSave = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const unregister = registerRendererFlushTask(() => draftSave)
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-old' })
+
+      try {
+        const switching = useWorkspaceStore.getState().requestActiveWorkspace('ws-new')
+        await Promise.resolve()
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-old')
+
+        release()
+        await expect(switching).resolves.toBe(true)
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-new')
+      } finally {
+        unregister()
+      }
+    })
+
+    it('keeps the current workspace when a renderer draft cannot be saved', async () => {
+      const unregister = registerRendererFlushTask(async () => {
+        throw new Error('save failed')
+      })
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-old' })
+
+      try {
+        await expect(
+          useWorkspaceStore.getState().requestActiveWorkspace('ws-new')
+        ).resolves.toBe(false)
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-old')
+      } finally {
+        unregister()
+      }
+    })
+
     it('sets active workspace and fetches the latest thread', async () => {
       mockChatThreads.mockResolvedValue([
         { id: 'thread-1', workspaceId: 'ws-1', providerId: 'p1', createdAt: 0 }

@@ -43,10 +43,12 @@ function document(id: string): Document {
 describe('PDF reader state', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    usePdfReaderStore.getState().resetForLibrarySwitch()
     usePdfReaderStore.setState({
       tabs: [],
       activeDocumentId: null,
       annotations: {},
+      loadStatus: {},
       saveStatus: {},
       tool: null,
       color: '#f2c94c',
@@ -304,6 +306,112 @@ describe('PDF reader state', () => {
     expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saved')
   })
 
+  it('keeps a failed annotation load separate from save state and retries the read', async () => {
+    const savedAnnotation = {
+      id: 'saved-note',
+      kind: 'note' as const,
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: 'Already saved',
+      createdAt: 10,
+      point: { x: 0.5, y: 0.5 }
+    }
+    vi.mocked(api.documents.pdfAnnotations)
+      .mockRejectedValueOnce(new Error('temporary read failure'))
+      .mockResolvedValueOnce([savedAnnotation])
+
+    await usePdfReaderStore.getState().open(document('paper'))
+
+    expect(Object.hasOwn(usePdfReaderStore.getState().annotations, 'paper')).toBe(false)
+    expect(usePdfReaderStore.getState().loadStatus.paper).toBe('error')
+    expect(usePdfReaderStore.getState().saveStatus.paper).toBeUndefined()
+
+    usePdfReaderStore.getState().retrySave('paper')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.documents.setPdfAnnotations).not.toHaveBeenCalled()
+
+    await usePdfReaderStore.getState().retryLoad('paper')
+
+    expect(usePdfReaderStore.getState().loadStatus.paper).toBe('loaded')
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([savedAnnotation])
+  })
+
+  it('serializes full annotation snapshots so an older save cannot finish last', async () => {
+    let resolveFirst: () => void = () => undefined
+    let resolveSecond: () => void = () => undefined
+    vi.mocked(api.documents.setPdfAnnotations)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = () => resolve([]) }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = () => resolve([]) }))
+    await usePdfReaderStore.getState().open(document('paper'))
+    const annotation = usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'note',
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: 'First',
+      point: { x: 0.5, y: 0.5 }
+    })
+    expect(annotation).not.toBeNull()
+
+    await vi.advanceTimersByTimeAsync(300)
+    usePdfReaderStore.getState().updateAnnotation('paper', annotation!.id, {
+      comment: 'Second'
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
+    expect(api.documents.setPdfAnnotations).toHaveBeenNthCalledWith(
+      1,
+      'paper',
+      [expect.objectContaining({ comment: 'First' })]
+    )
+
+    resolveFirst()
+    await vi.waitFor(() => expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(2))
+    expect(api.documents.setPdfAnnotations).toHaveBeenNthCalledWith(
+      2,
+      'paper',
+      [expect.objectContaining({ comment: 'Second' })]
+    )
+    resolveSecond()
+    await usePdfReaderStore.getState().flushPendingSaves()
+    expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saved')
+  })
+
+  it('discards a queued snapshot when the library resets during an active save', async () => {
+    let resolveFirst: () => void = () => undefined
+    vi.mocked(api.documents.setPdfAnnotations).mockReturnValueOnce(
+      new Promise((resolve) => { resolveFirst = () => resolve([]) })
+    )
+    await usePdfReaderStore.getState().open(document('paper'))
+    const annotation = usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'note',
+      page: 1,
+      color: '#f2c94c',
+      text: '',
+      comment: 'First',
+      point: { x: 0.5, y: 0.5 }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    usePdfReaderStore.getState().updateAnnotation('paper', annotation!.id, {
+      comment: 'Queued for the old library'
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    resolveFirst()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
+    expect(usePdfReaderStore.getState()).toMatchObject({
+      annotations: {},
+      loadStatus: {},
+      saveStatus: {}
+    })
+  })
+
   it('flushes pending annotations before a library switch and clears reader state afterward', async () => {
     await usePdfReaderStore.getState().open(document('paper'))
     usePdfReaderStore.getState().addAnnotation('paper', {
@@ -376,6 +484,7 @@ describe('PDF reader state', () => {
       tabs: [],
       activeDocumentId: null,
       annotations: {},
+      loadStatus: {},
       saveStatus: {}
     })
   })

@@ -16,6 +16,12 @@ describe('main-process web security', () => {
     expect(production).not.toContain('ws://')
     expect(development).toContain("script-src 'self' 'unsafe-inline'")
     expect(development).toContain('ws://localhost:*')
+    for (const policy of [production, development]) {
+      expect(policy).toContain("base-uri 'none'")
+      expect(policy).toContain("object-src 'none'")
+      expect(policy).toContain("frame-src 'none'")
+      expect(policy).toContain("form-action 'none'")
+    }
   })
 
   it('always returns isolated and sandboxed web preferences', () => {

@@ -53,6 +53,7 @@ export default function WorkspacePanel() {
   const showWorkspace = useWorkspaceStore((s) => s.showWorkspace)
   const showMarkdown = useWorkspaceStore((s) => s.showMarkdown)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
+  const requestActiveWorkspace = useWorkspaceStore((s) => s.requestActiveWorkspace)
   const closeWorkspaceTab = useWorkspaceStore((s) => s.closeWorkspaceTab)
   const clearMarkdownCardRequest = useWorkspaceStore((s) => s.clearMarkdownCardRequest)
   const updateNote = useWorkspaceStore((s) => s.updateNote)
@@ -125,9 +126,8 @@ export default function WorkspacePanel() {
   }, [panelView])
 
   const handleSelectWorkspace = useCallback(async (workspaceId: string) => {
-    if (!(await saveActiveMarkdown())) return
-    setActiveWorkspace(workspaceId)
-  }, [saveActiveMarkdown, setActiveWorkspace])
+    await requestActiveWorkspace(workspaceId)
+  }, [requestActiveWorkspace])
 
   const handleSelectMarkdown = useCallback(async (card: ActiveMarkdownCard) => {
     if (!(await saveActiveMarkdown())) return
