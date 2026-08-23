@@ -703,6 +703,26 @@ describe('DocumentStore', () => {
       expect(useDocumentStore.getState().toastMessage).toBe('Failed to update star')
     })
 
+    it('rolls back only the starred field when a document update arrives in flight', async () => {
+      let rejectStar!: (error: Error) => void
+      const original = makeDoc({ starred: 0, title: 'Original title' })
+      mockSetStarred.mockReturnValue(new Promise((_resolve, reject) => { rejectStar = reject }))
+      useDocumentStore.getState().init()
+      await Promise.resolve()
+      useDocumentStore.setState({ documents: [original] })
+
+      const pending = useDocumentStore.getState().toggleStar(original.id)
+      const documentUpdated = mockOnDocUpdated.mock.calls[0][0] as (doc: Document) => void
+      documentUpdated({ ...original, starred: 1, title: 'Updated title' })
+      rejectStar(new Error('fail'))
+      await pending
+
+      expect(useDocumentStore.getState().documents[0]).toMatchObject({
+        title: 'Updated title',
+        starred: 0
+      })
+    })
+
     it('does nothing if docId is not in documents', async () => {
       await useDocumentStore.getState().toggleStar('nonexistent')
 

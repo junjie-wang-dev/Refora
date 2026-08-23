@@ -8,6 +8,7 @@ import pytest
 
 from conftest import make_doc, make_docs_repo, make_ocr_repo, open_migrated_db
 from refora_server.ocr.types import MINERU_VERSION
+from refora_server.ocr.paths import get_ocr_result_root
 from refora_server.repositories.errors import RepoError
 from refora_server.services import ocr as ocr_mod
 from refora_server.services.mineru import MineruRuntime
@@ -123,7 +124,22 @@ def db():
 def repos(db, library_folder):
     docs = make_docs_repo(db, library_folder=library_folder)
     ocr_repo = make_ocr_repo(db)
-    return {"documents": docs, "documentOcr": ocr_repo}
+
+    def transaction(operation):
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            result = operation()
+            db.execute("COMMIT")
+            return result
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+
+    return {
+        "documents": docs,
+        "documentOcr": ocr_repo,
+        "transaction": transaction,
+    }
 
 
 @pytest.fixture
@@ -355,6 +371,35 @@ async def test_failed_job_emits_error_and_marks_failed(repos, library_folder, pd
     assert job["errorCode"] != "cancelled"
     assert error_events
     assert error_events[0]["jobId"] == job_id
+
+
+@pytest.mark.asyncio
+async def test_success_persistence_rolls_back_result_and_files_atomically(
+    repos, library_folder, pdf_path
+):
+    _seed_doc(repos, pdf_path)
+    original_update = repos["documentOcr"]["updateJob"]
+
+    def fail_success_update(job_id, patch):
+        if patch.get("status") == "succeeded":
+            raise RuntimeError("job update failed")
+        return original_update(job_id, patch)
+
+    repos["documentOcr"]["updateJob"] = fail_success_update
+    service = create_ocr_service(
+        repos,
+        _make_deps(library_folder, _FakeWorker()),
+    )
+
+    job_id = await service["startOcr"]("doc-1", "balanced")
+    await asyncio.sleep(0.05)
+
+    job = repos["documentOcr"]["getJob"](job_id)
+    assert job["status"] == "failed"
+    assert repos["documentOcr"]["getResult"]("doc-1", "hash-doc-1") is None
+    assert not os.path.exists(
+        get_ocr_result_root(library_folder, "doc-1", job["resultKey"])
+    )
 
 
 @pytest.mark.asyncio

@@ -181,6 +181,11 @@ export function useChatStream({
       setStreamingReasoning('')
       setStreaming(false)
       activeRunIdRef.current = null
+      streamingStartTimeRef.current = null
+      if (elapsedTimerRef.current != null) {
+        clearInterval(elapsedTimerRef.current)
+        elapsedTimerRef.current = null
+      }
       setActiveRunId(null)
       setError(null)
       pendingInterruptRef.current = null
@@ -202,16 +207,31 @@ export function useChatStream({
     }
     let cancelled = false
     setLoadingHistory(true)
-    void Promise.all([
+    void Promise.allSettled([
       api.ai.chatHistory(activeThreadId),
       api.ai.chatTraces(activeThreadId)
     ])
-      .then(([history, traces]) => {
+      .then(([historyResult, tracesResult]) => {
         if (cancelled || threadIdRef.current !== activeThreadId) return
+        const history = historyResult.status === 'fulfilled' ? historyResult.value : []
+        const traces = tracesResult.status === 'fulfilled' ? tracesResult.value : []
         setMessages(history)
         setTraceSteps(traces)
         hadMessagesRef.current = history.length > 0
         setLoadingHistory(false)
+        if (historyResult.status === 'rejected') {
+          setError(errorMessage(
+            historyResult.reason,
+            tRef.current('workspace.chat.historyLoadFailed', 'Failed to load chat history')
+          ))
+        } else if (tracesResult.status === 'rejected') {
+          setError(errorMessage(
+            tracesResult.reason,
+            tRef.current('workspace.chat.traceLoadFailed', 'Failed to load agent activity')
+          ))
+        } else {
+          setError(null)
+        }
         const runStep = latestRunStep(traces)
         const status = traceRunStatus(runStep)
         if (runStep && (status === 'running' || status === 'interrupted')) {
@@ -221,12 +241,6 @@ export function useChatStream({
           setStreaming(status === 'running')
           void reconcileRunSnapshotRef.current?.(runStep.runId, activeThreadId, status ?? undefined)
         }
-      })
-      .catch(() => {
-        if (cancelled) return
-        setMessages([])
-        setTraceSteps([])
-        setLoadingHistory(false)
       })
     return () => {
       cancelled = true
@@ -629,6 +643,54 @@ export function useChatStream({
       api.events.off('ai:chat:titleUpdated', h.onTitleUpdated)
     }
   }, [])
+
+  useEffect(() => {
+    const resetForLibrarySwitch = () => {
+      traceSnapshotGenerationRef.current += 1
+      reconcileGenerationRef.current += 1
+      if (rafIdRef.current != null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
+      for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
+      deferredTraceTimersRef.current.clear()
+      liveActivityStartedAtRef.current.clear()
+      threadIdRef.current = null
+      activeRunIdRef.current = null
+      streamingStartTimeRef.current = null
+      if (elapsedTimerRef.current != null) {
+        clearInterval(elapsedTimerRef.current)
+        elapsedTimerRef.current = null
+      }
+      retrySendRef.current = null
+      latestSendRef.current = null
+      cancelledRef.current = false
+      cancelledRunRef.current = null
+      isSendingRef.current = false
+      streamingTextRef.current = ''
+      streamingReasoningRef.current = ''
+      streamingStepOutputRef.current.clear()
+      pendingInterruptRef.current = null
+      resumeRetryRef.current = null
+      hadMessagesRef.current = false
+      stickToBottomRef.current = true
+      setMessages([])
+      setTraceSteps([])
+      setStreaming(false)
+      setStreamingText('')
+      setStreamingReasoning('')
+      setActiveRunId(null)
+      setElapsedSeconds(0)
+      setPendingInterrupt(null)
+      setActiveOcrDocumentId(null)
+      setCanRetry(false)
+      setLoadingHistory(false)
+      setError(null)
+      setChatStreaming(false)
+    }
+    api.events.onLibrarySwitched(resetForLibrarySwitch)
+    return () => api.events.off('library:switched', resetForLibrarySwitch)
+  }, [setChatStreaming])
 
   useEffect(() => {
     disposedRef.current = false

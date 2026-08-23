@@ -286,6 +286,20 @@ describe('DocumentList', () => {
     expect(sortIndicator).toBeInTheDocument()
   })
 
+  it('exposes sortable column headers and keyboard-resizable separators', async () => {
+    mockState.documents = [makeDoc()]
+    render(<DocumentList />)
+    const titleHeader = screen.getByRole('columnheader', { name: 'list.title' })
+    expect(titleHeader).toHaveAttribute('aria-sort', 'none')
+
+    await userEvent.click(screen.getByRole('button', { name: 'list.title' }))
+    expect(mockState.setSort).toHaveBeenCalledWith('title')
+
+    const separator = screen.getAllByRole('separator', { name: 'list.resizeColumn' })[0]
+    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    expect(mockState.setColumns).toHaveBeenCalled()
+  })
+
   it('renders the compact two-line paper list under a closeable tab header', () => {
     const onClose = vi.fn()
     mockState.documents = [

@@ -221,14 +221,14 @@ describe('server workspace IPC handlers', () => {
 
   it('consumes renderer file approvals before workspace imports', async () => {
     const serverClient = makeClient()
-    const consumeFile = vi.fn((path: string) => `/approved${path}`)
-    const securedHandlers = createServerWorkspaceHandlers(serverClient.client, { consumeFile })
+    const consumeFiles = vi.fn((paths: readonly string[]) => paths.map((path) => `/approved${path}`))
+    const securedHandlers = createServerWorkspaceHandlers(serverClient.client, { consumeFiles })
 
     await securedHandlers[IpcChannel.WorkspaceAssetsAddFiles](workspace.id, ['/tmp/file.txt'])
     await securedHandlers[IpcChannel.WorkspaceFilesAdd](workspace.id, ['/tmp/paper.pdf'])
 
-    expect(consumeFile).toHaveBeenNthCalledWith(1, '/tmp/file.txt')
-    expect(consumeFile).toHaveBeenNthCalledWith(2, '/tmp/paper.pdf')
+    expect(consumeFiles).toHaveBeenNthCalledWith(1, ['/tmp/file.txt'])
+    expect(consumeFiles).toHaveBeenNthCalledWith(2, ['/tmp/paper.pdf'])
     expect(serverClient.http.workspaceAssetsAddFiles).toHaveBeenCalledWith(workspace.id, {
       paths: ['/approved/tmp/file.txt'],
       placement: undefined

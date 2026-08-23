@@ -110,6 +110,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const notes = useWorkspaceStore((s) => s.notes) ?? EMPTY_NOTES
   const assets = useWorkspaceStore((s) => s.assets) ?? []
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const panelView = useWorkspaceStore((s) => s.panelView)
   const addDocs = useWorkspaceStore((s) => s.addDocs)
   const addAssets = useWorkspaceStore((s) => s.addAssets)
   const addFiles = useWorkspaceStore((s) => s.addFiles)
@@ -137,7 +138,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set())
   const [animatingItemIds, setAnimatingItemIds] = useState<Set<string>>(new Set())
   const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelection | null>(null)
-  const { spacePressed, spacePressedRef } = useBoardSpacePan()
+  const { spacePressed, spacePressedRef } = useBoardSpacePan(panelView === 'workspace')
   const canvasRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
   const activeWorkspaceIdRef = useRef(activeWorkspaceId)
@@ -308,13 +309,19 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     if (!activeWorkspaceId) return
     const workspaceId = activeWorkspaceId
     let cancelled = false
+    let requestVersion = 0
     const loadConnections = () => {
+      const currentRequestVersion = ++requestVersion
       void api.workspaceConnections.list(workspaceId).then((saved) => {
-        if (!cancelled && activeWorkspaceIdRef.current === workspaceId) {
+        if (
+          !cancelled &&
+          currentRequestVersion === requestVersion &&
+          activeWorkspaceIdRef.current === workspaceId
+        ) {
           setConnections(saved)
         }
       }).catch((e) => {
-        if (!cancelled) {
+        if (!cancelled && currentRequestVersion === requestVersion) {
           useDocumentStore.getState().showToast(errorMessage(e, t('workspace.connectionLoadFailed')))
         }
       })

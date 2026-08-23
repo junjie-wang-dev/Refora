@@ -96,6 +96,7 @@ class SandboxOptions:
     read_only_paths: tuple[str, ...] = ()
     db_path: str | None = None
     documents_repo: Any = None
+    workspace_items_repo: Any = None
     workspace_assets_repo: Any = None
     extra_env: dict[str, str] = field(default_factory=dict)
     cancel_event: threading.Event | None = None
@@ -428,12 +429,13 @@ def _prepare_readonly_context(
     snapshot_path = readonly_root / f"refora-readonly-{token}.db"
     manifest_path = readonly_root / f"readonly-files-{token}.json"
     try:
-        create_db_snapshot(options.db_path, snapshot_path)
+        create_db_snapshot(options.db_path, snapshot_path, workspace_id)
         write_readonly_files_manifest(
             workspace_id,
             options.documents_repo,
             options.workspace_assets_repo,
             manifest_path,
+            options.workspace_items_repo,
         )
         return snapshot_path, manifest_path
     except Exception:

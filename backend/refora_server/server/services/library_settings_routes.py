@@ -20,6 +20,7 @@ from .library_route_support import (
     base64_blob,
     body_dict,
     call,
+    call_in_thread,
     connector_call,
     ids,
     json_setting,
@@ -334,7 +335,8 @@ def register_library_settings_routes(
     @router.post("/ai/providers/{provider_id}/test")
     async def test_provider(provider_id: str):
         async def action():
-            return await call(providers, "testProvider", provider_id, await provider_api_key(provider_id))
+            api_key = await provider_api_key(provider_id)
+            return await call_in_thread(providers, "testProvider", provider_id, api_key)
         return await run(action)
 
     @router.post("/ai/providers/models")
@@ -345,7 +347,8 @@ def register_library_settings_routes(
             if provider_id is not None:
                 if not isinstance(provider_id, str) or not provider_id.strip():
                     raise ValueError("providerId must be a non-empty string")
-                return await call(providers, "listModels", provider_id, await provider_api_key(provider_id))
+                api_key = await provider_api_key(provider_id)
+                return await call_in_thread(providers, "listModels", provider_id, api_key)
             base_url = parsed.get("baseUrl")
             api_key = parsed.get("apiKey", "")
             if not isinstance(base_url, str) or not base_url.strip():
@@ -363,7 +366,7 @@ def register_library_settings_routes(
                 {"aiProviders": {"getRaw": lambda provider: transient_raw if provider == "__transient__" else None}},
                 {"get_proxy": get_proxy},
             )
-            return await call(transient, "listModels", "__transient__", api_key)
+            return await call_in_thread(transient, "listModels", "__transient__", api_key)
         return await run(action)
 
     @router.get("/ai/agent-profiles")
@@ -394,11 +397,11 @@ def register_library_settings_routes(
 
     @router.post("/ai/agent-profiles/{profile_id}/test")
     async def test_agent_profile(profile_id: str):
-        return await run(lambda: call(agent_profiles, "test", profile_id))
+        return await run(lambda: call_in_thread(agent_profiles, "test", profile_id))
 
     @router.post("/ai/agent-profiles/{profile_id}/models")
     async def list_agent_profile_models(profile_id: str):
-        return await run(lambda: call(agent_profiles, "listModels", profile_id))
+        return await run(lambda: call_in_thread(agent_profiles, "listModels", profile_id))
 
     @router.post("/export/json")
     async def export_json(body: dict[str, Any]):

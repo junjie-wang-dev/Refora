@@ -367,7 +367,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       await api.documents.setStarred(docId, newValue)
       void get().fetchDocumentCounts()
     } catch {
-      get().patchDocument(docId, doc)
+      const rollback = (documents: Document[]) => documents.map((current) =>
+        current.id === docId && Boolean(current.starred) === newValue
+          ? { ...current, starred: doc.starred }
+          : current)
+      set((state) => ({
+        documents: rollback(state.documents),
+        searchResults: rollback(state.searchResults)
+      }))
       get().showToast(i18n.t('documentErrors.starFailed'))
     }
   },

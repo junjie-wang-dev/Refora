@@ -269,6 +269,30 @@ describe('serverClient', () => {
       await expect(client.http.documentsList()).rejects.toMatchObject({ code: 'timeout' })
     })
 
+    it('keeps the timeout active while reading the response body', async () => {
+      vi.useFakeTimers()
+      let signal: AbortSignal | null = null
+      const fetchFn = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        signal = init?.signal ?? null
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => new Promise(() => undefined)
+        })
+      }) as unknown as typeof fetch
+      const client = createServerClient(lifecycle, nativeRpc, {
+        fetchImpl: fetchFn,
+        requestTimeoutMs: 50
+      })
+      const request = client.http.documentsList()
+      const rejection = expect(request).rejects.toMatchObject({ code: 'timeout' })
+
+      await vi.advanceTimersByTimeAsync(51)
+
+      await rejection
+      expect(signal?.aborted).toBe(true)
+    })
+
     it('throws bad_response when body is not JSON', async () => {
       const fetchFn = vi.fn().mockResolvedValue({
         ok: true,
@@ -654,6 +678,29 @@ describe('serverClient', () => {
   })
 
   describe('ws reconnect', () => {
+    it('continues retrying when the first reconnect attempt fails', async () => {
+      vi.useFakeTimers()
+      const client = createServerClient(lifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        wsReconnectMaxAttempts: 3
+      })
+      const initialConnect = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      FakeWebSocket.instances[0].open()
+      await initialConnect
+
+      FakeWebSocket.instances[0].close()
+      await vi.advanceTimersByTimeAsync(600)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      FakeWebSocket.instances[1].error()
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(FakeWebSocket.instances).toHaveLength(3)
+      FakeWebSocket.instances[2].open()
+      expect(client.ws.isConnected()).toBe(true)
+    })
+
     it('attempts to reconnect after close', async () => {
       vi.useFakeTimers()
       const client = createServerClient(lifecycle, nativeRpc, {

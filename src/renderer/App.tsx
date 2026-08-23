@@ -209,7 +209,10 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   useEffect(() => () => useOcrReaderStore.getState().close(), [])
 
   useEffect(() => {
-    const reset = () => usePdfReaderStore.getState().resetForLibrarySwitch()
+    const reset = () => {
+      useOcrReaderStore.getState().close()
+      usePdfReaderStore.getState().resetForLibrarySwitch()
+    }
     api.events.onLibrarySwitched(reset)
     return () => api.events.off('library:switched', reset)
   }, [])

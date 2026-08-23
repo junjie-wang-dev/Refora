@@ -76,10 +76,12 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
           switchLibraryFolder: deps.switchLibraryFolder,
           onSettingUpdated: deps.onSettingUpdated,
           consumeFile: deps.rendererPathCapabilities?.consumeFile,
+          consumeFiles: deps.rendererPathCapabilities?.consumeFiles,
           consumeDirectory: deps.rendererPathCapabilities?.consumeDirectory
         }),
         ...createServerWorkspaceHandlers(serverClient, {
-          consumeFile: deps.rendererPathCapabilities?.consumeFile
+          consumeFile: deps.rendererPathCapabilities?.consumeFile,
+          consumeFiles: deps.rendererPathCapabilities?.consumeFiles
         }),
         ...createServerAiHandlers({ serverClient })
       }

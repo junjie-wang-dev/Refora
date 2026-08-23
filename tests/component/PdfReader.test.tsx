@@ -424,6 +424,41 @@ describe('PdfReader rendering visibility', () => {
     expect(removeAllRanges).toHaveBeenCalled()
   })
 
+  it('removes an empty text annotation when its editor loses focus', async () => {
+    usePdfReaderStore.setState({ tool: 'text' })
+    const view = render(<PdfReader />)
+    const pdfPage = await waitFor(() => {
+      const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    vi.spyOn(pdfPage, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 200,
+      top: 0,
+      bottom: 300,
+      width: 200,
+      height: 300,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    const inputLayer = pdfPage.querySelector<HTMLElement>('[data-annotation-input-layer]')!
+    fireEvent.pointerDown(inputLayer, {
+      pointerId: 1,
+      button: 0,
+      clientX: 40,
+      clientY: 40
+    })
+    const editor = await screen.findByPlaceholderText('pdfReader.textPlaceholder')
+    expect(usePdfReaderStore.getState().annotations.paper).toHaveLength(1)
+
+    fireEvent.blur(editor)
+
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    expect(screen.queryByPlaceholderText('pdfReader.textPlaceholder')).not.toBeInTheDocument()
+  })
+
   it.each(['loading', 'error'] as const)(
     'keeps annotation input read-only while annotation loading is %s',
     async (loadStatus) => {

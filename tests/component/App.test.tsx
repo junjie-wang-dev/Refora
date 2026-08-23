@@ -239,6 +239,7 @@ describe('App root layout', () => {
     mocks.workspaceState.panelOpen = true
     mocks.workspaceState.fullscreen = false
     mocks.workspaceState.chatStreaming = false
+    mocks.ocrReaderState.documentId = null
     mocks.resizeObserverCallback = null
     mocks.settingsGet.mockImplementation((_key: string, fallback: unknown) => Promise.resolve(fallback))
     mocks.settingsSet.mockResolvedValue(undefined)
@@ -441,6 +442,18 @@ describe('App root layout', () => {
     })
 
     expect(mocks.settingsSet).toHaveBeenCalledWith('sidebarWidth', 264)
+  })
+
+  it('closes the structured OCR reader when the library changes', async () => {
+    mocks.ocrReaderState.documentId = 'doc-1'
+    render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await act(async () => {
+      for (const [callback] of mocks.onLibrarySwitched.mock.calls) callback()
+      await Promise.resolve()
+    })
+
+    expect(mocks.ocrReaderState.close).toHaveBeenCalled()
   })
 
   it('keeps the sidebar outside the search bar and all main panels below it', async () => {

@@ -73,6 +73,7 @@ let chatReasoningHandler: ((payload: ChatReasoningEvent) => void) | undefined
 let chatTraceHandler: ((payload: ChatTraceEvent) => void) | undefined
 let chatInterruptedHandler: ((payload: ChatInterruptedEvent) => void) | undefined
 let chatRunStatusHandler: ((payload: ChatRunStatusEvent) => void) | undefined
+let librarySwitchedHandlers: Array<() => void> = []
 
 const TEST_PROVIDER: AiProvider = {
   id: 'p1',
@@ -213,6 +214,9 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.events.onAiChatRunStatus = (handler: (payload: ChatRunStatusEvent) => void) => {
     chatRunStatusHandler = handler
   }
+  w.api.events.onLibrarySwitched = (handler: () => void) => {
+    librarySwitchedHandlers.push(handler)
+  }
   mockChatHistory.mockResolvedValue(messages)
   mockChatSend.mockImplementation(async (req: ChatSendRequest) => ({
     threadId: req.threadId ?? 'thread-1',
@@ -256,6 +260,7 @@ beforeEach(() => {
   chatTraceHandler = undefined
   chatInterruptedHandler = undefined
   chatRunStatusHandler = undefined
+  librarySwitchedHandlers = []
   mockOpenPdf.mockResolvedValue(null)
   setupStore()
 })
@@ -1438,6 +1443,33 @@ describe('ChatInput attachment loading', () => {
     expect(screen.queryByText('First workspace paper')).toBeNull()
     expect(screen.getByText('Second workspace paper')).toBeInTheDocument()
   })
+
+  it('gives each attachment removal button an accessible name', async () => {
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.workspaceItems.list = vi.fn().mockResolvedValue([{ kind: 'document', docId: 'doc-1' }])
+    w.api.documents.get = vi.fn().mockResolvedValue({ id: 'doc-1', title: 'Named paper' })
+    const onSelectedAttachmentsChange = vi.fn()
+    render(<ChatInput
+      input=""
+      onInputChange={vi.fn()}
+      streaming={false}
+      selectedAttachments={['doc-1']}
+      onSelectedAttachmentsChange={onSelectedAttachmentsChange}
+      attachMenuOpen
+      onAttachMenuOpenChange={vi.fn()}
+      activeWorkspaceId="ws-1"
+      providers={[TEST_PROVIDER]}
+      canSend={false}
+      onSend={vi.fn()}
+      onCancel={vi.fn()}
+      textareaRef={{ current: null }}
+      inputAreaRef={{ current: null }}
+    />)
+
+    await waitFor(() => expect(screen.getAllByText('Named paper')).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.removeAttachment' }))
+    expect(onSelectedAttachmentsChange).toHaveBeenCalledWith(expect.any(Function))
+  })
 })
 
 function renderChatStream(
@@ -1463,6 +1495,81 @@ function renderChatStream(
 }
 
 describe('useChatStream lifecycle', () => {
+  it('settles an active run when the library changes', async () => {
+    const setChatStreaming = vi.fn()
+    setupApi([])
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming,
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Keep running', [], 'thread-1')
+    })
+    expect(result.current.streaming).toBe(true)
+
+    act(() => {
+      librarySwitchedHandlers.forEach((handler) => handler())
+    })
+
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.activeRunId).toBeNull()
+    expect(result.current.messages).toEqual([])
+    expect(setChatStreaming).toHaveBeenLastCalledWith(false)
+  })
+
+  it('keeps chat history when loading agent traces fails', async () => {
+    const history = [makeMessage('Visible history')]
+    setupApi(history)
+    mockChatTraces.mockRejectedValue(new Error('trace unavailable'))
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    expect(result.current.messages).toEqual(history)
+    expect(result.current.traceSteps).toEqual([])
+    expect(result.current.error).toBe('trace unavailable')
+  })
+
+  it('keeps agent traces when loading chat history fails', async () => {
+    const traces = [makeRunStep('completed-run', 'done')]
+    setupApi([])
+    mockChatHistory.mockRejectedValue(new Error('history unavailable'))
+    mockChatTraces.mockResolvedValue(traces)
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1',
+      activeDocumentId: null,
+      activeProviderId: 'p1',
+      activeThreadId: 'thread-1',
+      requestModel: '',
+      deepThinking: false,
+      setActiveThreadId: vi.fn(),
+      setChatStreaming: vi.fn(),
+      fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    expect(result.current.messages).toEqual([])
+    expect(result.current.traceSteps).toEqual(traces)
+    expect(result.current.error).toBe('history unavailable')
+  })
+
   it('retries with the reader document from the original send', async () => {
     setupApi([])
     mockChatSend

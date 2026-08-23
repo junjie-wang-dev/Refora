@@ -65,10 +65,11 @@ function InlineField({
   const [saveError, setSaveError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const statusRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const savingRef = useRef(false)
 
   useEffect(() => {
-    setText(value)
-  }, [value])
+    if (!editing || savingRef.current) setText(value)
+  }, [editing, value])
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -83,12 +84,14 @@ function InlineField({
   }, [])
 
   const save = useCallback(async () => {
+    if (savingRef.current) return
     const trimmed = text.trim()
     const current = (value ?? '')
     if (trimmed === current) {
       setEditing(false)
       return
     }
+    savingRef.current = true
     setStatus('saving')
     setSaveError(null)
     try {
@@ -104,6 +107,7 @@ function InlineField({
       setSaveError(errorMessage(error, t('detail.saveFailed')))
       setStatus('error')
     }
+    savingRef.current = false
     setEditing(false)
   }, [text, value, field, docId, onSaved, t])
 
@@ -158,6 +162,7 @@ function InlineField({
             autoResize
             className="flex-1 min-h-[2.5rem] resize-none"
             value={text}
+            disabled={status === 'saving'}
             rows={1}
             onChange={(e) => {
               setText(e.target.value)

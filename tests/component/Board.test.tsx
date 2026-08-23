@@ -7,6 +7,7 @@ import type {
   AiSummary,
   Document,
   WorkspaceAsset,
+  WorkspaceConnection,
   WorkspaceItem,
   WorkspaceItemsChangedEvent,
   WorkspaceNote
@@ -44,6 +45,7 @@ let mockReports: unknown[] = []
 let mockNotes: unknown[] = []
 let mockAssets: WorkspaceAsset[] = []
 let mockActiveWorkspaceId: string | null = 'ws-1'
+let mockPanelView: 'workspace' | 'markdown' | 'pdf' = 'workspace'
 let mockWorkspaceItemsChangedHandler: ((payload: WorkspaceItemsChangedEvent) => void) | null = null
 
 vi.mock('@renderer/store/workspaceStore', () => ({
@@ -54,6 +56,7 @@ vi.mock('@renderer/store/workspaceStore', () => ({
       notes: mockNotes,
       assets: mockAssets,
       activeWorkspaceId: mockActiveWorkspaceId,
+      panelView: mockPanelView,
       addDocs: mockAddDocs,
       addAssets: mockAddAssets,
       addFiles: mockAddFiles,
@@ -111,6 +114,7 @@ beforeEach(() => {
   mockNotes = []
   mockAssets = []
   mockActiveWorkspaceId = 'ws-1'
+  mockPanelView = 'workspace'
   mockWorkspaceItemsChangedHandler = null
 
   const api = window.api as unknown as Record<string, unknown>
@@ -1105,5 +1109,50 @@ describe('Board canvas controls and connections', () => {
     await waitFor(() => {
       expect(mockConnectionsList).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it('ignores an older connection reload that finishes after the newest one', async () => {
+    let resolveFirst!: (connections: WorkspaceConnection[]) => void
+    let resolveSecond!: (connections: WorkspaceConnection[]) => void
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
+    mockConnectionsList
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+    const { container } = render(<Board />)
+    await waitFor(() => expect(mockConnectionsList).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      mockWorkspaceItemsChangedHandler?.({ workspaceId: 'ws-1', reason: 'other' })
+    })
+    await waitFor(() => expect(mockConnectionsList).toHaveBeenCalledTimes(2))
+    resolveSecond([{
+      id: 'connection-newest',
+      workspaceId: 'ws-1',
+      sourceItemId: 'item-1',
+      targetItemId: 'item-2',
+      sourceAnchor: 'right',
+      targetAnchor: 'left',
+      createdAt: 1
+    }])
+    await act(async () => Promise.resolve())
+    resolveFirst([])
+    await act(async () => Promise.resolve())
+
+    expect(container.querySelector('svg g path[stroke="transparent"]')).not.toBeNull()
+  })
+
+  it('does not capture Space while the board is hidden', () => {
+    mockPanelView = 'pdf'
+    render(<Board />)
+    const event = new KeyboardEvent('keydown', {
+      code: 'Space',
+      key: ' ',
+      bubbles: true,
+      cancelable: true
+    })
+
+    window.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
   })
 })

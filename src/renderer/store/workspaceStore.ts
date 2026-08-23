@@ -89,6 +89,12 @@ const noteUpdateRevisions = new Map<
 >()
 let nextNoteUpdateRevision = 0
 let libraryGeneration = 0
+let workspaceRequestVersion = 0
+let threadRequestVersion = 0
+let itemRequestVersion = 0
+let assetRequestVersion = 0
+let reportRequestVersion = 0
+let noteRequestVersion = 0
 
 function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
@@ -195,11 +201,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchWorkspaces: async () => {
     const generation = libraryGeneration
+    const requestVersion = ++workspaceRequestVersion
     try {
       const list = await api.workspaces.list()
-      if (generation === libraryGeneration) set({ workspaces: list })
+      if (
+        generation === libraryGeneration &&
+        requestVersion === workspaceRequestVersion
+      ) set({ workspaces: list })
     } catch (e) {
-      if (generation !== libraryGeneration) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== workspaceRequestVersion
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadWorkspaces')))
     }
   },
@@ -352,12 +365,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchThreads: async (options) => {
     const generation = libraryGeneration
+    const requestVersion = ++threadRequestVersion
     const id = get().activeWorkspaceId
     try {
       const list = await api.ai.chatThreads(id)
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== threadRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       set((state) => {
-        if (generation !== libraryGeneration || state.activeWorkspaceId !== id) return state
+        if (
+          generation !== libraryGeneration ||
+          requestVersion !== threadRequestVersion ||
+          state.activeWorkspaceId !== id
+        ) return state
         const activeStillExists = list.some((thread) => thread.id === state.activeThreadId)
         const shouldSelectLatest =
           options?.selectLatestIfNone === true ||
@@ -372,7 +394,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         }
       })
     } catch (e) {
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== threadRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadThreads')))
     }
   },
@@ -428,6 +454,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchItems: async () => {
     const generation = libraryGeneration
+    const requestVersion = ++itemRequestVersion
     const id = get().activeWorkspaceId
     if (!id) {
       set({ items: [] })
@@ -435,10 +462,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceItems.list(id)
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== itemRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       set({ items: list })
     } catch (e) {
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== itemRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadItems')))
     }
   },
@@ -461,6 +496,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchAssets: async () => {
     const generation = libraryGeneration
+    const requestVersion = ++assetRequestVersion
     const id = get().activeWorkspaceId
     if (!id) {
       set({ assets: [] })
@@ -468,10 +504,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceAssets.list(id)
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== assetRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       set({ assets: list })
     } catch (e) {
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== assetRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadFiles')))
     }
   },
@@ -673,6 +717,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchReports: async () => {
     const generation = libraryGeneration
+    const requestVersion = ++reportRequestVersion
     const id = get().activeWorkspaceId
     if (!id) {
       set({ reports: [] })
@@ -680,10 +725,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.reports.list(id)
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== reportRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       set({ reports: list })
     } catch (e) {
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== reportRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadReports')))
     }
   },
@@ -728,6 +781,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   fetchNotes: async () => {
     const generation = libraryGeneration
+    const requestVersion = ++noteRequestVersion
     const id = get().activeWorkspaceId
     if (!id) {
       set({ notes: [] })
@@ -735,10 +789,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     try {
       const list = await api.workspaceNotes.list(id)
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== noteRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       set({ notes: list })
     } catch (e) {
-      if (generation !== libraryGeneration || get().activeWorkspaceId !== id) return
+      if (
+        generation !== libraryGeneration ||
+        requestVersion !== noteRequestVersion ||
+        get().activeWorkspaceId !== id
+      ) return
       toast(errorMessage(e, i18n.t('workspaceErrors.loadNotes')))
     }
   },

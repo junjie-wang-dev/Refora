@@ -203,6 +203,82 @@ describe('WorkspaceMarkdownView', () => {
     expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toHaveValue('# Findings\n\nInitial content')
   })
 
+  it('reconciles an external update when the local draft is clean', () => {
+    const onBack = vi.fn()
+    const onUpdate = vi.fn().mockResolvedValue(true)
+    const { rerender } = render(
+      <WorkspaceMarkdownView
+        kind="note"
+        id="note-1"
+        title="Original title"
+        contentMd="Original content"
+        timestamp={1}
+        onBack={onBack}
+        onUpdate={onUpdate}
+      />
+    )
+
+    rerender(
+      <WorkspaceMarkdownView
+        kind="note"
+        id="note-1"
+        title="External title"
+        contentMd="External content"
+        timestamp={2}
+        onBack={onBack}
+        onUpdate={onUpdate}
+      />
+    )
+
+    expect(screen.getByRole('heading', { name: 'External title' })).toBeInTheDocument()
+    expect(screen.getByText('External content')).toBeInTheDocument()
+  })
+
+  it('protects a dirty draft from an external update until the latest version is reloaded', async () => {
+    vi.useFakeTimers()
+    const onBack = vi.fn()
+    const onUpdate = vi.fn().mockResolvedValue(true)
+    const { rerender } = render(
+      <WorkspaceMarkdownView
+        kind="note"
+        id="note-1"
+        title="Original title"
+        contentMd="Original content"
+        timestamp={1}
+        initialMode="edit"
+        onBack={onBack}
+        onUpdate={onUpdate}
+      />
+    )
+    const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
+    fireEvent.change(content, { target: { value: 'Unsaved local content' } })
+
+    rerender(
+      <WorkspaceMarkdownView
+        kind="note"
+        id="note-1"
+        title="External title"
+        contentMd="External content"
+        timestamp={2}
+        initialMode="edit"
+        onBack={onBack}
+        onUpdate={onUpdate}
+      />
+    )
+
+    expect(content).toHaveValue('Unsaved local content')
+    expect(screen.getByRole('alert')).toHaveTextContent('workspace.externalUpdateConflict')
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownRead' }))
+    await act(async () => Promise.resolve())
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'workspace.markdownEdit' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.reloadExternalUpdate' }))
+    expect(screen.getByRole('textbox', { name: 'workspace.noteTitleLabel' })).toHaveValue('External title')
+    expect(content).toHaveValue('External content')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('places embedded reader actions inside the Markdown page', () => {
     renderView({ embedded: true })
 

@@ -58,11 +58,29 @@ def write_readonly_files_manifest(
     documents_repo: Any,
     assets_repo: Any,
     dest_path: str | Path,
+    workspace_items_repo: Any = None,
 ) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     list_documents = _method(documents_repo, "list")
+    allowed_document_ids: set[str] | None = None
+    if workspace_id:
+        allowed_document_ids = set()
+        list_items = _method(workspace_items_repo, "list")
+        if callable(list_items):
+            allowed_document_ids = {
+                item["docId"]
+                for item in list_items(workspace_id)
+                if isinstance(item, dict)
+                and item.get("kind") == "document"
+                and isinstance(item.get("docId"), str)
+            }
     if callable(list_documents):
         for document in list_documents({"mode": "all"}):
+            if (
+                allowed_document_ids is not None
+                and document.get("id") not in allowed_document_ids
+            ):
+                continue
             entry = _file_entry(document, "document")
             if entry is not None:
                 files.append(entry)
@@ -74,7 +92,8 @@ def write_readonly_files_manifest(
                 files.append(entry)
     files.sort(key=lambda item: (item["kind"], str(item["id"])))
     manifest = {
-        "version": 1,
+        "version": 2,
+        "scope": "workspace" if workspace_id else "library",
         "workspaceId": workspace_id,
         "revision": _revision(files),
         "files": files,

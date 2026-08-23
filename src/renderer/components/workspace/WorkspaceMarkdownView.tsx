@@ -82,7 +82,11 @@ const WorkspaceMarkdownView = forwardRef<
   const [draftContent, setDraftContent] = useState(contentMd)
   const [savedDraft, setSavedDraft] = useState({ title, contentMd })
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [externalConflict, setExternalConflict] = useState(false)
   const savedDraftRef = useRef<MarkdownDraft>({ title, contentMd })
+  const draftRef = useRef<MarkdownDraft>({ title, contentMd })
+  const incomingDraftRef = useRef({ id, draft: { title, contentMd } })
+  const externalConflictRef = useRef(false)
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true))
   const articleRef = useRef<HTMLElement>(null)
 
@@ -91,13 +95,51 @@ const WorkspaceMarkdownView = forwardRef<
   const titleLabel = t(isReport ? 'workspace.reportTitleLabel' : 'workspace.noteTitleLabel')
   const contentLabel = t(isReport ? 'workspace.reportContentLabel' : 'workspace.noteContentLabel')
   const saveFailed = t(isReport ? 'workspace.reportSaveFailed' : 'workspace.noteSaveFailed')
+  const externalConflictMessage = t('workspace.externalUpdateConflict')
   const typeLabel = t(kind === 'summary'
     ? 'workspace.aiSummary'
     : isReport ? 'workspace.cardTypeReport' : 'workspace.cardTypeNote')
   const isDirty = draftTitle !== savedDraft.title || draftContent !== savedDraft.contentMd
+  draftRef.current = { title: draftTitle, contentMd: draftContent }
+
+  useEffect(() => {
+    const incoming = { title, contentMd }
+    const previousIncoming = incomingDraftRef.current
+    if (
+      previousIncoming.id === id &&
+      previousIncoming.draft.title === incoming.title &&
+      previousIncoming.draft.contentMd === incoming.contentMd
+    ) return
+    incomingDraftRef.current = { id, draft: incoming }
+    const currentDraft = draftRef.current
+    const currentSaved = savedDraftRef.current
+    const dirty =
+      currentDraft.title !== currentSaved.title ||
+      currentDraft.contentMd !== currentSaved.contentMd
+    const incomingMatchesDraft =
+      (incoming.title === currentDraft.title || incoming.title === currentDraft.title.trim()) &&
+      incoming.contentMd === currentDraft.contentMd
+    if (previousIncoming.id !== id || !dirty || incomingMatchesDraft) {
+      savedDraftRef.current = incoming
+      setSavedDraft(incoming)
+      setDraftTitle(incoming.title)
+      setDraftContent(incoming.contentMd)
+      externalConflictRef.current = false
+      setExternalConflict(false)
+      setSaveError(null)
+      return
+    }
+    externalConflictRef.current = true
+    setExternalConflict(true)
+    setSaveError(externalConflictMessage)
+  }, [contentMd, externalConflictMessage, id, title])
 
   const save = useCallback((draft: MarkdownDraft) => {
     if (!onUpdate) return Promise.resolve(true)
+    if (externalConflictRef.current) {
+      setSaveError(externalConflictMessage)
+      return Promise.resolve(false)
+    }
     const nextTitle = draft.title.trim()
     if (!nextTitle) {
       setSaveError(t('workspace.titleRequired'))
@@ -132,7 +174,18 @@ const WorkspaceMarkdownView = forwardRef<
     const queuedSave = saveQueueRef.current.then(run, run)
     saveQueueRef.current = queuedSave
     return queuedSave
-  }, [id, onUpdate, saveFailed, t])
+  }, [externalConflictMessage, id, onUpdate, saveFailed, t])
+
+  const reloadExternalDraft = () => {
+    const incoming = incomingDraftRef.current.draft
+    savedDraftRef.current = incoming
+    setSavedDraft(incoming)
+    setDraftTitle(incoming.title)
+    setDraftContent(incoming.contentMd)
+    externalConflictRef.current = false
+    setExternalConflict(false)
+    setSaveError(null)
+  }
 
   useEffect(() => {
     if (!editable || mode !== 'edit' || !isDirty || !draftTitle.trim()) return
@@ -308,8 +361,17 @@ const WorkspaceMarkdownView = forwardRef<
           embedded && modeActions ? 'pt-16' : ''
         }`}>
           {saveError && (
-            <div className="mb-5 rounded-lg bg-error/10 px-3 py-2 text-sm text-error" role="alert">
-              {saveError}
+            <div className="mb-5 flex items-center gap-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error" role="alert">
+              <span className="min-w-0 flex-1">{saveError}</span>
+              {externalConflict ? (
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-2 py-1 font-medium hover:bg-error/10"
+                  onClick={reloadExternalDraft}
+                >
+                  {t('workspace.reloadExternalUpdate')}
+                </button>
+              ) : null}
             </div>
           )}
           {mode === 'edit' ? (
@@ -321,7 +383,7 @@ const WorkspaceMarkdownView = forwardRef<
                 value={draftTitle}
                 onChange={(event) => {
                   setDraftTitle(event.target.value)
-                  setSaveError(null)
+                  if (!externalConflictRef.current) setSaveError(null)
                 }}
                 aria-label={titleLabel}
               />
@@ -332,7 +394,7 @@ const WorkspaceMarkdownView = forwardRef<
                 value={draftContent}
                 onChange={(event) => {
                   setDraftContent(event.target.value)
-                  setSaveError(null)
+                  if (!externalConflictRef.current) setSaveError(null)
                 }}
                 aria-label={contentLabel}
               />

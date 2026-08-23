@@ -35,6 +35,7 @@ import { runPersistenceGuard, type PersistenceFailureAction } from './services/p
 import { createRendererPathCapabilities } from './services/fileCapabilities'
 import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
 import { consumeDeepLinkArguments, handoffSecondInstance } from './services/instanceHandoff'
+import { createLifecycleTransitionGate } from './services/lifecycleTransitionGate'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -66,6 +67,7 @@ let flushWindowState: () => Promise<void> = async () => undefined
 let allowWindowClose = false
 const rendererPathCapabilities = createRendererPathCapabilities()
 const rendererFlushCoordinator = createRendererFlushCoordinator()
+const lifecycleTransitionGate = createLifecycleTransitionGate()
 const appLifecycleIpcHandlers = createAppLifecycleIpcHandlers({
   completeRendererFlush: (requestId, error) =>
     rendererFlushCoordinator.complete(requestId, error)
@@ -716,7 +718,7 @@ async function activatePythonServerAssembly(assembly: ServerAssembly): Promise<B
   })
 }
 
-const switchLibraryFolderPython = createLibrarySwitcher({
+const switchLibraryFolder = createLibrarySwitcher({
   resolveFolder: realpathSync,
   isDirectory: (folder) => {
     try {
@@ -727,7 +729,8 @@ const switchLibraryFolderPython = createLibrarySwitcher({
   },
   dbPathForFolder: dbPathForLibraryFolder,
   dbExistsInFolder: dbExistsInLibraryFolder,
-  createAssembly: createPythonServerAssembly,
+  createAssembly: (dbPath, libraryFolder) =>
+    createPythonServerAssembly(dbPath, libraryFolder, switchLibraryFolderPython),
   beforeSwitch: () => flushRendererState(),
   activateAssembly: async (assembly) => {
     await activatePythonServerAssembly(assembly)
@@ -755,6 +758,9 @@ const switchLibraryFolderPython = createLibrarySwitcher({
     }
   }
 })
+
+const switchLibraryFolderPython = (folder: string): Promise<LibrarySwitchResult> =>
+  lifecycleTransitionGate.run(() => switchLibraryFolder(folder))
 
 if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   isDev = !app.isPackaged
@@ -838,6 +844,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 })
 
 const handleBeforeQuit = createShutdownHandler({
+  beginShutdown: () => lifecycleTransitionGate.beginShutdown(),
+  cancelShutdown: () => lifecycleTransitionGate.cancelShutdown(),
+  waitForTransitions: () => lifecycleTransitionGate.waitForIdle(),
   flushWindowState: () => flushWindowState(),
   flushRendererState: () => flushRendererState(),
   unregisterHandlers: unregisterSyncAccountHandlers,

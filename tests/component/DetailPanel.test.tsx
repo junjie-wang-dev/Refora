@@ -504,6 +504,25 @@ describe('DetailPanel', () => {
 
       expect(mockUpdateDoc).toHaveBeenCalledWith('1', { title: 'Enter Saved' })
     })
+
+    it('prevents additional edits while an Enter save is in flight', async () => {
+      let resolveSave!: (doc: Document) => void
+      mockUpdateDoc.mockReturnValue(new Promise((resolve) => { resolveSave = resolve }))
+      render(<DetailPanel />)
+      fireEvent.click(screen.getByRole('button', { name: 'Test Paper' }))
+      const input = screen.getByDisplayValue('Test Paper') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'Submitted title' } })
+
+      fireEvent.keyDown(input, { key: 'Enter', metaKey: true })
+
+      expect(input).toBeDisabled()
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        resolveSave({ ...mockDoc, title: 'Submitted title' })
+        await Promise.resolve()
+      })
+      expect(input).not.toBeInTheDocument()
+    })
   })
 
   describe('NoteField autosave', () => {

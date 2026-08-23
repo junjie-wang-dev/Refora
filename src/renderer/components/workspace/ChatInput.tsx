@@ -195,15 +195,17 @@ export default function ChatInput({
           <div className="flex flex-wrap gap-1 px-2 pt-1">
             {selectedAttachments.map((docId) => {
               const doc = workspaceDocs.find((d) => d.docId === docId)
+              const attachmentTitle = doc?.title ?? docId.slice(0, 8)
               return (
                 <span
                   key={docId}
                   className="inline-flex items-center gap-1 rounded-full border border-border bg-panel-2 px-2 py-0.5 text-caption text-foreground"
                 >
-                  <span className="max-w-[120px] truncate">{doc?.title ?? docId.slice(0, 8)}</span>
+                  <span className="max-w-[120px] truncate">{attachmentTitle}</span>
                   <button
                     type="button"
                     className="text-muted transition-colors duration-150 hover:text-error"
+                    aria-label={t('workspace.chat.removeAttachment', { title: attachmentTitle })}
                     onClick={() =>
                       onSelectedAttachmentsChange((prev) => prev.filter((id) => id !== docId))
                     }

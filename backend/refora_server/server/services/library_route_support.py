@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import json
@@ -59,6 +60,15 @@ def markdown_file_name(title: str) -> str:
 
 async def call(source: Any, name: str, *args: Any, **kwargs: Any) -> Any:
     result = method(source, name)(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def call_in_thread(
+    source: Any, name: str, *args: Any, **kwargs: Any
+) -> Any:
+    result = await asyncio.to_thread(method(source, name), *args, **kwargs)
     if inspect.isawaitable(result):
         return await result
     return result

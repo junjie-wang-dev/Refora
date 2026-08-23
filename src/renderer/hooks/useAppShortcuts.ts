@@ -30,7 +30,12 @@ export function useAppShortcuts(): void {
         focusSearch()
         return
       }
-      if (document.getElementsByClassName('document-list').length === 0) return
+      const documentList = document.querySelector<HTMLElement>('.document-list')
+      if (!documentList) return
+      const targetIsInList = e.target instanceof Node
+        ? documentList.contains(e.target)
+        : document.activeElement instanceof Node && documentList.contains(document.activeElement)
+      if (!targetIsInList) return
       if (mod && e.key === 'Backspace' && !isInteractive(e.target)) {
         e.preventDefault()
         const store = useDocumentStore.getState()

@@ -147,6 +147,68 @@ describe('sync account service', () => {
     expect(auth.refresh).toHaveBeenCalledTimes(1)
   })
 
+  it('does not restore a refreshed session after sign-out', async () => {
+    let resolveRefresh: (value: SupabaseSession) => void = () => undefined
+    const refreshResult = new Promise<SupabaseSession>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const { service, auth, sessions } = setup({ ...session, expiresAt: 1 })
+    auth.refresh.mockReturnValue(refreshResult)
+    const refreshing = service.status()
+    await vi.waitFor(() => expect(auth.refresh).toHaveBeenCalledOnce())
+
+    await service.signOut()
+    resolveRefresh({
+      ...session,
+      accessToken: 'stale-access',
+      refreshToken: 'stale-refresh'
+    })
+
+    await expect(refreshing).resolves.toMatchObject({ state: 'signedOut' })
+    await expect(service.status()).resolves.toMatchObject({ state: 'signedOut' })
+    expect(sessions.save).not.toHaveBeenCalled()
+  })
+
+  it('does not let an old refresh overwrite a newer sign-in', async () => {
+    let resolveRefresh: (value: SupabaseSession) => void = () => undefined
+    const refreshResult = new Promise<SupabaseSession>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const { service, auth, sessions } = setup({ ...session, expiresAt: 1 })
+    auth.refresh.mockReturnValue(refreshResult)
+    const refreshing = service.status()
+    await vi.waitFor(() => expect(auth.refresh).toHaveBeenCalledOnce())
+
+    await service.signIn({ email: session.user.email, password: 'password' })
+    const stale = {
+      ...session,
+      accessToken: 'stale-access',
+      refreshToken: 'stale-refresh'
+    }
+    resolveRefresh(stale)
+
+    await expect(refreshing).resolves.toMatchObject({ signedIn: true })
+    expect(sessions.save).toHaveBeenCalledWith(session)
+    expect(sessions.save).not.toHaveBeenCalledWith(stale)
+  })
+
+  it('does not complete a pending sign-in after a later sign-out', async () => {
+    let resolveSignIn: (value: SupabaseSession) => void = () => undefined
+    const signInResult = new Promise<SupabaseSession>((resolve) => {
+      resolveSignIn = resolve
+    })
+    const { service, auth, sessions } = setup()
+    auth.signIn.mockReturnValue(signInResult)
+    const signingIn = service.signIn({ email: session.user.email, password: 'password' })
+    await vi.waitFor(() => expect(auth.signIn).toHaveBeenCalledOnce())
+
+    await service.signOut()
+    resolveSignIn(session)
+
+    await expect(signingIn).resolves.toMatchObject({ state: 'signedOut' })
+    expect(sessions.save).not.toHaveBeenCalled()
+  })
+
   it('clears a session rejected by the refresh endpoint', async () => {
     const { service, auth, sessions } = setup({ ...session, expiresAt: 1 })
     auth.refresh.mockRejectedValue(Object.assign(new Error('Refresh token is invalid'), {

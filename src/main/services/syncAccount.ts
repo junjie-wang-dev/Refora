@@ -43,6 +43,7 @@ function normalizeCredentials(credentials: SyncCredentials): SyncCredentials {
 
 export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAccountService {
   let refreshInFlight: Promise<ReturnType<SyncSessionStore['load']>> | null = null
+  let sessionGeneration = 0
 
   function requireAuth(): SupabaseAuthClient {
     if (!deps.configured || !deps.auth) {
@@ -90,12 +91,29 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
     if (!session || !deps.configured || !deps.auth) return session
     if (session.expiresAt > Math.floor(Date.now() / 1000) + 60) return session
     if (refreshInFlight) return refreshInFlight
+    const generation = sessionGeneration
     refreshInFlight = (async () => {
       try {
         const refreshed = await deps.auth!.refresh(session.refreshToken)
+        const current = deps.sessions.load()
+        if (
+          generation !== sessionGeneration ||
+          !current ||
+          current.refreshToken !== session.refreshToken
+        ) {
+          return current
+        }
         deps.sessions.save(refreshed)
         return refreshed
       } catch (error) {
+        const current = deps.sessions.load()
+        if (
+          generation !== sessionGeneration ||
+          !current ||
+          current.refreshToken !== session.refreshToken
+        ) {
+          return current
+        }
         if (
           error
           && typeof error === 'object'
@@ -118,13 +136,24 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
     },
     async signIn(input) {
       const credentials = normalizeCredentials(input)
-      const session = await requireAuth().signIn(credentials.email, credentials.password)
+      const auth = requireAuth()
+      const generation = ++sessionGeneration
+      const session = await auth.signIn(credentials.email, credentials.password)
+      if (generation !== sessionGeneration) return currentStatus(deps.sessions.load())
       deps.sessions.save(session)
       return currentStatus(session)
     },
     async signUp(input) {
       const credentials = normalizeCredentials(input)
-      const response = await requireAuth().signUp(credentials.email, credentials.password)
+      const auth = requireAuth()
+      const generation = ++sessionGeneration
+      const response = await auth.signUp(credentials.email, credentials.password)
+      if (generation !== sessionGeneration) {
+        return {
+          status: currentStatus(deps.sessions.load()),
+          confirmationRequired: false
+        }
+      }
       if (response.session) {
         deps.sessions.save(response.session)
       } else {
@@ -140,6 +169,7 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
       await requireAuth().resendConfirmation(email)
     },
     async signOut() {
+      const generation = ++sessionGeneration
       const session = deps.sessions.load()
       deps.sessions.clear()
       if (session && deps.auth) {
@@ -151,7 +181,7 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
           )
         }
       }
-      return currentStatus(null)
+      return currentStatus(generation === sessionGeneration ? null : deps.sessions.load())
     },
     async setEnabled(enabled) {
       if (typeof enabled !== 'boolean') {

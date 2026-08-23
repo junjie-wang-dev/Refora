@@ -554,32 +554,50 @@ export function createServerClient(
     const conn = await getConnection()
     const url = `${conn.baseUrl}${path}${buildQuery(options.query ?? {})}`
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), requestTimeoutMs)
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`))
+      }, requestTimeoutMs)
+    })
     let response: Response
     try {
-      response = await fetchImpl(url, {
-        method,
-        headers: {
-          [TOKEN_HEADER]: conn.token,
-          ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {})
-        },
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal
-      })
+      response = await Promise.race([
+        fetchImpl(url, {
+          method,
+          headers: {
+            [TOKEN_HEADER]: conn.token,
+            ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {})
+          },
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+          signal: controller.signal
+        }),
+        timeout
+      ])
     } catch (e) {
-      clearTimeout(timer)
+      clearTimeout(timer!)
+      if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'timeout') throw e
       if (e instanceof Error && e.name === 'AbortError') {
         throw makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`)
       }
       throw makeError('network_error', e instanceof Error ? e.message : String(e))
     }
-    clearTimeout(timer)
 
     let payload: Result<T>
     try {
-      payload = (await response.json()) as Result<T>
+      payload = await Promise.race([
+        response.json() as Promise<Result<T>>,
+        timeout
+      ])
     } catch (e) {
+      if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'timeout') throw e
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`)
+      }
       throw makeError('bad_response', `Failed to parse response: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      clearTimeout(timer!)
     }
 
     if (payload.ok) return payload.data
@@ -966,6 +984,7 @@ export function createServerClient(
       if (manualClose) return
       const pending = doConnect().catch((error) => {
         logger.warn(`serverClient:reconnect failed: ${error instanceof Error ? error.message : String(error)}`)
+        if (!manualClose) scheduleReconnect()
       }).finally(() => {
         if (connectPromise === pending) connectPromise = null
       })
@@ -979,35 +998,45 @@ export function createServerClient(
     const url = `ws://127.0.0.1:${connection.port}/ws`
     const socket = new WebSocketCtor(url, [`refora-token.${connection.token}`])
     ws = socket
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = (): void => {
-        cleanup()
-        reconnectAttempts = 0
-        if (subscribedTopics.size > 0) {
-          sendRaw({
-            event: 'subscribe',
-            data: { topics: [...subscribedTopics] }
-          })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onOpen = (): void => {
+          cleanup()
+          reconnectAttempts = 0
+          if (subscribedTopics.size > 0) {
+            sendRaw({
+              event: 'subscribe',
+              data: { topics: [...subscribedTopics] }
+            })
+          }
+          resolve()
         }
-        resolve()
+        const onError = (): void => {
+          cleanup()
+          reject(makeError('ws_error', `Failed to connect to ${url}`))
+        }
+        const onClose = (): void => {
+          cleanup()
+          reject(makeError('ws_closed', `Connection closed before opening: ${url}`))
+        }
+        const cleanup = (): void => {
+          socket.removeEventListener('open', onOpen)
+          socket.removeEventListener('error', onError)
+          socket.removeEventListener('close', onClose)
+        }
+        socket.addEventListener('open', onOpen)
+        socket.addEventListener('error', onError)
+        socket.addEventListener('close', onClose)
+      })
+    } catch (error) {
+      if (ws === socket) ws = null
+      try {
+        socket.close()
+      } catch {
+        void 0
       }
-      const onError = (): void => {
-        cleanup()
-        reject(makeError('ws_error', `Failed to connect to ${url}`))
-      }
-      const onClose = (): void => {
-        cleanup()
-        reject(makeError('ws_closed', `Connection closed before opening: ${url}`))
-      }
-      const cleanup = (): void => {
-        socket.removeEventListener('open', onOpen)
-        socket.removeEventListener('error', onError)
-        socket.removeEventListener('close', onClose)
-      }
-      socket.addEventListener('open', onOpen)
-      socket.addEventListener('error', onError)
-      socket.addEventListener('close', onClose)
-    })
+      throw error
+    }
 
     if (manualClose || ws !== socket) return
     socket.addEventListener('message', (event: MessageEvent) => {

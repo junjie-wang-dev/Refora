@@ -2,6 +2,45 @@ import { describe, expect, it, vi } from 'vitest'
 import { createShutdownHandler } from '../../src/main/services/shutdown'
 
 describe('shutdown handler', () => {
+  it('closes the transition gate before flushing and waits for active work before stopping', async () => {
+    const order: string[] = []
+    let releaseTransition: () => void = () => undefined
+    const transition = new Promise<void>((resolve) => { releaseTransition = resolve })
+    const quit = vi.fn()
+    const handler = createShutdownHandler({
+      beginShutdown: () => order.push('begin'),
+      cancelShutdown: () => order.push('cancel'),
+      waitForTransitions: async () => {
+        order.push('wait')
+        await transition
+      },
+      flushWindowState: async () => { order.push('flush') },
+      flushRendererState: async () => { order.push('renderer') },
+      unregisterHandlers: () => order.push('unregister'),
+      stopServices: async () => { order.push('stop') },
+      destroyRuntimes: () => order.push('destroy'),
+      quit,
+      reportError: vi.fn(),
+      resolvePersistenceFailure: vi.fn()
+    })
+
+    handler({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(order).toEqual(['begin', 'flush', 'renderer', 'wait']))
+    expect(quit).not.toHaveBeenCalled()
+
+    releaseTransition()
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+    expect(order).toEqual([
+      'begin',
+      'flush',
+      'renderer',
+      'wait',
+      'unregister',
+      'stop',
+      'destroy'
+    ])
+  })
+
   it('flushes state and waits for services before quitting', async () => {
     const order: string[] = []
     let releaseStop: () => void = () => undefined
@@ -97,10 +136,12 @@ describe('shutdown handler', () => {
 
   it('cancels shutdown after a renderer persistence failure', async () => {
     const quit = vi.fn()
+    const cancelShutdown = vi.fn()
     const resolvePersistenceFailure = vi.fn().mockResolvedValue('cancel')
     const handler = createShutdownHandler({
       flushWindowState: async () => undefined,
       flushRendererState: vi.fn().mockRejectedValue(new Error('save failed')),
+      cancelShutdown,
       unregisterHandlers: vi.fn(),
       stopServices: vi.fn(),
       destroyRuntimes: vi.fn(),
@@ -113,6 +154,7 @@ describe('shutdown handler', () => {
 
     await vi.waitFor(() => expect(resolvePersistenceFailure).toHaveBeenCalledOnce())
     expect(quit).not.toHaveBeenCalled()
+    expect(cancelShutdown).toHaveBeenCalledOnce()
   })
 
   it('continues shutdown only after an explicit discard decision', async () => {

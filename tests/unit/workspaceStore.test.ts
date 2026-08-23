@@ -322,6 +322,25 @@ describe('WorkspaceStore', () => {
       await useWorkspaceStore.getState().fetchReports()
       expect(useWorkspaceStore.getState().reports).toEqual([])
     })
+
+    it('keeps the newest response when same-workspace requests finish out of order', async () => {
+      let resolveFirst!: (reports: AiReport[]) => void
+      let resolveSecond!: (reports: AiReport[]) => void
+      mockReportsList
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+
+      const first = useWorkspaceStore.getState().fetchReports()
+      const second = useWorkspaceStore.getState().fetchReports()
+      const newest = [makeReport({ id: 'newest' })]
+      resolveSecond(newest)
+      await second
+      resolveFirst([makeReport({ id: 'stale' })])
+      await first
+
+      expect(useWorkspaceStore.getState().reports).toEqual(newest)
+    })
   })
 
   describe('updateReport', () => {

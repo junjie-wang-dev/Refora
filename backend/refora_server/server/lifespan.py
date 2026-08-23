@@ -444,6 +444,7 @@ def create_lifespan(
                 ),
                 db_path=db_path,
                 documents_repo=repos.get("documents"),
+                workspace_items_repo=repos.get("workspaceItems"),
                 workspace_assets_repo={"list": list_readonly_workspace_assets},
             )
         )

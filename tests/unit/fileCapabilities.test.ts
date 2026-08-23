@@ -62,4 +62,37 @@ describe('renderer path capabilities', () => {
     expect(capabilities.consumeDirectory(directory)).toBe(realpathSync(directory))
     expect(() => capabilities.authorizeFile(alias)).toThrow('Symbolic links')
   })
+
+  it('consumes a batch atomically only after every file passes validation', () => {
+    const root = makeRoot()
+    const first = join(root, 'first.pdf')
+    const second = join(root, 'second.txt')
+    writeFileSync(first, 'pdf')
+    writeFileSync(second, 'text')
+    const capabilities = createRendererPathCapabilities()
+    capabilities.authorizeFile(first)
+    capabilities.authorizeFile(second)
+
+    expect(() => capabilities.consumeFiles([first, second], ['.pdf'])).toThrow('File must use')
+    expect(capabilities.consumeFile(first, ['.pdf'])).toBe(realpathSync(first))
+    expect(capabilities.consumeFile(second, ['.txt'])).toBe(realpathSync(second))
+  })
+
+  it('consumes every authorization after a successful batch', () => {
+    const root = makeRoot()
+    const first = join(root, 'first.pdf')
+    const second = join(root, 'second.pdf')
+    writeFileSync(first, 'pdf')
+    writeFileSync(second, 'pdf')
+    const capabilities = createRendererPathCapabilities()
+    capabilities.authorizeFile(first)
+    capabilities.authorizeFile(second)
+
+    expect(capabilities.consumeFiles([first, second], ['.pdf'])).toEqual([
+      realpathSync(first),
+      realpathSync(second)
+    ])
+    expect(() => capabilities.consumeFile(first)).toThrow('not selected by the user')
+    expect(() => capabilities.consumeFile(second)).toThrow('not selected by the user')
+  })
 })

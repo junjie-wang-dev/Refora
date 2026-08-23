@@ -10,6 +10,8 @@ const DEFAULT_HEALTH_INTERVAL_MS = 15_000
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000
 const DEFAULT_RESTART_STABILITY_MS = 60_000
 const BASE_BACKOFF_MS = 500
+const TERMINATION_GRACE_MS = 5_000
+const TERMINATION_SETTLE_MS = 1_000
 const LISTENING_PREFIX = 'LISTENING '
 const TOKEN_FILE = 'server.token'
 
@@ -106,6 +108,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   let stopping = false
   let restartCount = 0
   let restartExhaustedError: Error | null = null
+  const terminationPromises = new WeakMap<ChildProcess, Promise<void>>()
 
   function defaultReadFile(path: string): Promise<string> {
     return import('node:fs/promises').then((fs) => fs.readFile(path, 'utf8'))
@@ -237,35 +240,76 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     throw new Error('Server startup was cancelled')
   }
 
+  function handleUnexpectedExit(spawned: ChildProcess, reason: string | number | null): void {
+    if (stopping || child !== spawned) return
+    child = null
+    connection = null
+    clearHealthTimer()
+    clearRestartResetTimer()
+    if (restartCount >= maxRestarts) {
+      restartExhaustedError = Object.assign(
+        new Error(`Server crashed and exhausted ${maxRestarts} restart attempts`),
+        { code: 'server_restart_exhausted' }
+      )
+      logger.error(`serverLifecycle:${restartExhaustedError.message}`)
+      connection = null
+      startPromise = null
+      return
+    }
+    restartCount += 1
+    const backoff = BASE_BACKOFF_MS * 2 ** (restartCount - 1)
+    logger.warn(
+      `serverLifecycle:crashed (code=${reason}), restarting in ${backoff}ms (attempt ${restartCount}/${maxRestarts})`
+    )
+    setTimeout(() => {
+      if (stopping) return
+      void start().catch((error) => {
+        logger.error(`serverLifecycle:restart failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }, backoff)
+  }
+
   function attachCrashHandler(spawned: ChildProcess): void {
     spawned.once('close', (code, signal) => {
-      if (stopping) return
-      if (child === spawned) child = null
-      connection = null
-      clearHealthTimer()
-      clearRestartResetTimer()
-      if (restartCount >= maxRestarts) {
-        restartExhaustedError = Object.assign(
-          new Error(`Server crashed and exhausted ${maxRestarts} restart attempts`),
-          { code: 'server_restart_exhausted' }
-        )
-        logger.error(`serverLifecycle:${restartExhaustedError.message}`)
-        connection = null
-        startPromise = null
-        return
-      }
-      restartCount += 1
-      const backoff = BASE_BACKOFF_MS * 2 ** (restartCount - 1)
-      logger.warn(
-        `serverLifecycle:crashed (code=${code ?? signal}), restarting in ${backoff}ms (attempt ${restartCount}/${maxRestarts})`
-      )
-      setTimeout(() => {
-        if (stopping) return
-        void start().catch((error) => {
-          logger.error(`serverLifecycle:restart failed: ${error instanceof Error ? error.message : String(error)}`)
-        })
-      }, backoff)
+      handleUnexpectedExit(spawned, code ?? signal)
     })
+  }
+
+  function terminateAndWait(spawned: ChildProcess): Promise<void> {
+    if (!spawned.pid) return Promise.resolve()
+    const existing = terminationPromises.get(spawned)
+    if (existing) return existing
+    const operation = new Promise<void>((resolve) => {
+      let settled = false
+      let escalationTimer: ReturnType<typeof setTimeout> | null = null
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        if (escalationTimer) clearTimeout(escalationTimer)
+        if (settleTimer) clearTimeout(settleTimer)
+        spawned.removeListener('close', finish)
+        resolve()
+      }
+      const force = (): void => {
+        escalationTimer = null
+        if (!terminate(spawned, 'SIGKILL')) {
+          finish()
+          return
+        }
+        settleTimer = setTimeout(finish, TERMINATION_SETTLE_MS)
+      }
+      spawned.once('close', finish)
+      if (terminate(spawned, 'SIGTERM')) {
+        escalationTimer = setTimeout(force, TERMINATION_GRACE_MS)
+      } else {
+        force()
+      }
+    }).finally(() => {
+      if (terminationPromises.get(spawned) === operation) terminationPromises.delete(spawned)
+    })
+    terminationPromises.set(spawned, operation)
+    return operation
   }
 
   function scheduleHealthCheck(): void {
@@ -277,7 +321,9 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
         logger.warn('serverLifecycle:health check failed, restarting server')
         const current = child
         if (current) {
-          if (!terminate(current, 'SIGTERM')) terminate(current, 'SIGKILL')
+          void terminateAndWait(current).then(() => {
+            handleUnexpectedExit(current, 'unhealthy')
+          })
         }
       })
     }, healthIntervalMs)
@@ -292,9 +338,9 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       connection = await buildConnection(port)
       await waitUntilHealthy(connection)
     } catch (error) {
-      if (!terminate(spawned, 'SIGTERM')) terminate(spawned, 'SIGKILL')
+      await terminateAndWait(spawned)
       connection = null
-      child = null
+      if (child === spawned) child = null
       throw error
     }
     attachCrashHandler(spawned)
@@ -341,26 +387,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       startPromise = null
       return
     }
-    const closed = new Promise<void>((resolve) => {
-      let settled = false
-      let killTimer: ReturnType<typeof setTimeout> | null = null
-      const finish = (): void => {
-        if (settled) return
-        settled = true
-        if (killTimer) clearTimeout(killTimer)
-        resolve()
-      }
-      current.once('close', finish)
-      killTimer = setTimeout(() => {
-        terminate(current, 'SIGKILL')
-        finish()
-      }, 5_000)
-      if (!terminate(current, 'SIGTERM')) {
-        terminate(current, 'SIGKILL')
-        finish()
-      }
-    })
-    await closed
+    await terminateAndWait(current)
     connection = null
     startPromise = null
   }

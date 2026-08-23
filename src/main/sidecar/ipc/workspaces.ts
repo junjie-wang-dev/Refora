@@ -14,6 +14,7 @@ import type { ServerClient } from '../client'
 
 export interface ServerWorkspaceHandlerDeps {
   consumeFile?: (path: string, extensions?: readonly string[]) => string
+  consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
 }
 
 function errorResult(error: unknown): Result<never> {
@@ -39,7 +40,7 @@ async function wrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
 
 export function createServerWorkspaceHandlers(
   serverClient: ServerClient,
-  { consumeFile }: ServerWorkspaceHandlerDeps = {}
+  { consumeFile, consumeFiles }: ServerWorkspaceHandlerDeps = {}
 ) {
   const { http } = serverClient
 
@@ -112,7 +113,11 @@ export function createServerWorkspaceHandlers(
       paths: string[],
       placement?: WorkspaceItemPlacement
     ) => wrap(() => http.workspaceAssetsAddFiles(workspaceId, {
-      paths: consumeFile ? paths.map((path) => consumeFile(path)) : paths,
+      paths: consumeFiles
+        ? consumeFiles(paths)
+        : consumeFile
+          ? paths.map((path) => consumeFile(path))
+          : paths,
       placement
     })),
     [IpcChannel.WorkspaceAssetsTextPreview]: (assetId: string) =>
@@ -135,7 +140,11 @@ export function createServerWorkspaceHandlers(
       paths: string[],
       placement?: WorkspaceItemPlacement
     ) => wrap(() => http.workspaceFilesAdd(workspaceId, {
-      paths: consumeFile ? paths.map((path) => consumeFile(path)) : paths,
+      paths: consumeFiles
+        ? consumeFiles(paths)
+        : consumeFile
+          ? paths.map((path) => consumeFile(path))
+          : paths,
       placement
     })),
 

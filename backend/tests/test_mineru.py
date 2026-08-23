@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import stat
+import sys
 
 import pytest
 
@@ -15,6 +16,50 @@ from refora_server.services.mineru import (
 )
 
 UV_RELEASE = mineru_mod.UV_RELEASES["arm64"]
+
+
+@pytest.mark.asyncio
+async def test_run_file_drains_output_after_capture_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(mineru_mod, "_MAX_STDIO_BYTES", 16 * 1024)
+    children = []
+
+    output = await asyncio.wait_for(
+        mineru_mod._run_file(
+            sys.executable,
+            [
+                "-c",
+                "import os; os.write(1, b'a' * 1000000); os.write(2, b'b' * 1000000)",
+            ],
+            cwd=str(tmp_path),
+            env=dict(os.environ),
+            cancel_event=asyncio.Event(),
+            on_child=children.append,
+            timeout_seconds=3,
+        ),
+        timeout=5,
+    )
+
+    assert len(output.encode()) <= 32 * 1024 + 1
+    assert children[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_run_file_times_out_and_releases_child(tmp_path):
+    children = []
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await mineru_mod._run_file(
+            sys.executable,
+            ["-c", "import time; time.sleep(60)"],
+            cwd=str(tmp_path),
+            env=dict(os.environ),
+            cancel_event=asyncio.Event(),
+            on_child=children.append,
+            timeout_seconds=0.05,
+        )
+
+    assert children[-1] is None
+    assert children[0].returncode is not None
 
 
 def _make_deps(tmp_path, *, trash_paths=None, download_calls=None):
@@ -75,7 +120,9 @@ def _make_executable(path):
 def manager(tmp_path, monkeypatch):
     deps = _make_deps(tmp_path, trash_paths=[], download_calls=[])
 
-    def fake_run_file(command, args, *, cwd, env, cancel_event, on_child):
+    def fake_run_file(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
         async def _impl():
             on_child(_FakeChild())
             if command.endswith("tar"):
@@ -262,7 +309,9 @@ async def test_cancel_install_aborts_in_progress_download(tmp_path, monkeypatch)
         architecture="arm64",
     )
 
-    def fake_run_file(command, args, *, cwd, env, cancel_event, on_child):
+    def fake_run_file(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
         async def _impl():
             on_child(_FakeChild())
             on_child(None)
@@ -304,7 +353,9 @@ async def test_uninstall_trashes_install_path(tmp_path, monkeypatch):
         architecture="arm64",
     )
 
-    def fake_run_file(command, args, *, cwd, env, cancel_event, on_child):
+    def fake_run_file(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
         async def _impl():
             on_child(_FakeChild())
             if command.endswith("tar"):
@@ -360,7 +411,9 @@ async def test_uninstall_rejects_while_installing(tmp_path, monkeypatch):
         architecture="arm64",
     )
 
-    def fake_run_file(command, args, *, cwd, env, cancel_event, on_child):
+    def fake_run_file(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
         async def _impl():
             on_child(_FakeChild())
             on_child(None)
@@ -433,7 +486,9 @@ async def test_install_checksum_failure_raises(tmp_path, monkeypatch):
     assert "checksum" in status.error
 
 
-async def _impl_noop(command, args, *, cwd, env, cancel_event, on_child):
+async def _impl_noop(
+    command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+):
     async def _i():
         on_child(_FakeChild())
         on_child(None)
@@ -461,7 +516,9 @@ async def test_install_health_check_wrong_version_raises(tmp_path, monkeypatch):
         architecture="arm64",
     )
 
-    def fake_run_file(command, args, *, cwd, env, cancel_event, on_child):
+    def fake_run_file(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
         async def _impl():
             on_child(_FakeChild())
             if command.endswith("tar"):

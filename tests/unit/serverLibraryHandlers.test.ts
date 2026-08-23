@@ -181,10 +181,12 @@ describe('createServerLibraryHandlers', () => {
   it('requires authorized renderer paths before forwarding file operations', async () => {
     const { client, methods } = createClient()
     const consumeFile = vi.fn((path: string) => `/approved${path}`)
+    const consumeFiles = vi.fn((paths: readonly string[]) => paths.map((path) => `/approved${path}`))
     const consumeDirectory = vi.fn((path: string) => `/approved${path}`)
     const handlers = createServerLibraryHandlers({
       serverClient: client,
       consumeFile,
+      consumeFiles,
       consumeDirectory
     })
 
@@ -192,7 +194,7 @@ describe('createServerLibraryHandlers', () => {
     await handlers[IpcChannel.ImportFromJson]('/tmp/data.json')
     await handlers[IpcChannel.LibrarySwitch]('/tmp/library')
 
-    expect(consumeFile).toHaveBeenCalledWith('/tmp/paper.pdf', ['.pdf'])
+    expect(consumeFiles).toHaveBeenCalledWith(['/tmp/paper.pdf'], ['.pdf'])
     expect(consumeFile).toHaveBeenCalledWith('/tmp/data.json', ['.json'])
     expect(consumeDirectory).toHaveBeenCalledWith('/tmp/library')
     expect(methods.get('importFiles')).toHaveBeenCalledWith({

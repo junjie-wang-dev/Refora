@@ -102,6 +102,9 @@ class OcrServiceDeps:
 def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
     document_ocr = repos["documentOcr"]
     documents = repos["documents"]
+    transaction = repos.get("transaction")
+    if not callable(transaction):
+        raise RuntimeError("OCR repository transaction is unavailable")
     cancelled: set[str] = set()
     state: dict[str, Any] = {
         "destroyed": False,
@@ -111,8 +114,14 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
     }
     rename_path = deps.renamePath or _default_rename
 
+    def _emit(callback: Callable[[dict[str, Any]], None], payload: dict[str, Any]) -> None:
+        try:
+            callback(payload)
+        except Exception:
+            pass
+
     def _emit_job(job: dict[str, Any]) -> None:
-        deps.emitProgress({"job": job})
+        _emit(deps.emitProgress, {"job": job})
 
     def _update_job(job_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         job = document_ocr["updateJob"](job_id, patch)
@@ -310,21 +319,29 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
                     "createdAt": created_at,
                     "stale": False,
                 }
-                stored = document_ocr["insertResult"](result)
-                _update_job(
-                    job["id"],
-                    {
-                        "status": "succeeded",
-                        "stage": "completed",
-                        "progress": 1.0,
-                        "finishedAt": now_ms(),
-                    },
-                )
+                def persist_success() -> tuple[dict[str, Any], dict[str, Any]]:
+                    stored_result = document_ocr["insertResult"](result)
+                    completed_job = document_ocr["updateJob"](
+                        job["id"],
+                        {
+                            "status": "succeeded",
+                            "stage": "completed",
+                            "progress": 1.0,
+                            "finishedAt": now_ms(),
+                        },
+                    )
+                    return stored_result, completed_job
+
+                stored, completed_job = transaction(persist_success)
+                _emit_job(completed_job)
             except Exception:
                 await rollback()
                 raise
             commit()
-            deps.emitCompleted({"jobId": job["id"], "documentId": job["documentId"], "result": stored})
+            _emit(
+                deps.emitCompleted,
+                {"jobId": job["id"], "documentId": job["documentId"], "result": stored},
+            )
         except Exception as error:
             try:
                 safe_staging = get_ocr_staging_root(library, job["documentId"], job["id"])
@@ -348,7 +365,8 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
                 },
             )
             if not was_cancelled:
-                deps.emitError(
+                _emit(
+                    deps.emitError,
                     {"jobId": job["id"], "documentId": job["documentId"], "code": code, "message": message}
                 )
         finally:

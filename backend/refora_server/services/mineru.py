@@ -33,6 +33,14 @@ UV_RELEASES: dict[str, dict[str, str]] = {
 }
 
 _MAX_STDIO_BYTES = 2_000_000
+_RUN_FILE_TIMEOUT_SECONDS = 2 * 60 * 60
+_PROCESS_TERMINATE_GRACE_SECONDS = 5
+_ARCHIVE_TIMEOUT_SECONDS = 2 * 60
+_PYTHON_INSTALL_TIMEOUT_SECONDS = 30 * 60
+_VENV_TIMEOUT_SECONDS = 5 * 60
+_PACKAGE_INSTALL_TIMEOUT_SECONDS = 60 * 60
+_MODEL_DOWNLOAD_TIMEOUT_SECONDS = 2 * 60 * 60
+_HEALTH_CHECK_TIMEOUT_SECONDS = 60
 
 
 def now_ms() -> int:
@@ -273,6 +281,7 @@ async def _run_file(
     env: dict[str, str],
     cancel_event: asyncio.Event,
     on_child: Callable[[asyncio.subprocess.Process | None], None],
+    timeout_seconds: float = _RUN_FILE_TIMEOUT_SECONDS,
 ) -> str:
     try:
         child = await asyncio.create_subprocess_exec(
@@ -296,50 +305,80 @@ async def _run_file(
             chunk = await stream.read(64 * 1024)
             if not chunk:
                 break
-            total += len(chunk)
-            chunks.append(chunk)
-            if total > _MAX_STDIO_BYTES:
-                break
+            remaining = _MAX_STDIO_BYTES - total
+            if remaining > 0:
+                kept = chunk[:remaining]
+                chunks.append(kept)
+                total += len(kept)
         return b"".join(chunks)
+
+    async def _terminate_child() -> None:
+        if child.returncode is not None:
+            return
+        try:
+            if child.pid:
+                os.killpg(os.getpgid(child.pid), signal_terminate())
+        except ProcessLookupError:
+            return
+        except OSError:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(child.wait()),
+                timeout=_PROCESS_TERMINATE_GRACE_SECONDS,
+            )
+        except TimeoutError:
+            try:
+                if child.pid:
+                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                try:
+                    child.kill()
+                except ProcessLookupError:
+                    pass
+            await child.wait()
 
     cancel_task = asyncio.ensure_future(cancel_event.wait())
     stdout_task = asyncio.ensure_future(_read_stream(child.stdout))
     stderr_task = asyncio.ensure_future(_read_stream(child.stderr))
     wait_task = asyncio.ensure_future(child.wait())
 
+    timed_out = False
     try:
-        await asyncio.wait(
+        done, _ = await asyncio.wait(
             {wait_task, cancel_task},
+            timeout=timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
+        timed_out = not done
+        if cancel_event.is_set() or timed_out:
+            await _terminate_child()
+        await wait_task
+        stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
+        if cancel_event.is_set():
+            raise RuntimeError("MinerU installation was cancelled")
+        if timed_out:
+            raise RuntimeError(
+                f"MinerU installation command timed out after {timeout_seconds:g} seconds"
+            )
+    except BaseException:
+        await _terminate_child()
+        await asyncio.gather(
+            stdout_task,
+            stderr_task,
+            wait_task,
+            return_exceptions=True,
+        )
+        raise
     finally:
-        if cancel_event.is_set() and child.returncode is None:
-            try:
-                if child.pid:
-                    os.killpg(os.getpgid(child.pid), signal_terminate())
-            except ProcessLookupError:
-                pass
-            except OSError:
-                try:
-                    child.terminate()
-                except ProcessLookupError:
-                    pass
-
-    if cancel_event.is_set():
-        for task in (stdout_task, stderr_task, wait_task, cancel_task):
-            task.cancel()
-        try:
-            await child.wait()
-        except Exception:
-            pass
+        cancel_task.cancel()
+        await asyncio.gather(cancel_task, return_exceptions=True)
         on_child(None)
-        raise RuntimeError("MinerU installation was cancelled")
-
-    await wait_task
-    stdout_bytes = await stdout_task
-    stderr_bytes = await stderr_task
-    cancel_task.cancel()
-    on_child(None)
 
     code = child.returncode
     stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -638,6 +677,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env={"PATH": "/usr/bin:/bin"},
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_ARCHIVE_TIMEOUT_SECONDS,
                 )
                 uv_path = os.path.join(path, "runtime", "uv")
                 safe_makedirs(os.path.join(path, "runtime"))
@@ -657,6 +697,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_PYTHON_INSTALL_TIMEOUT_SECONDS,
                 )
                 python_bin = await _managed_python(os.path.join(path, "runtime", "python"))
                 if not python_bin:
@@ -669,6 +710,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_VENV_TIMEOUT_SECONDS,
                 )
                 venv_python = os.path.join(venv, "bin", "python")
                 mineru_extra = "all" if architecture == "arm64" else "core"
@@ -693,6 +735,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_PACKAGE_INSTALL_TIMEOUT_SECONDS,
                 )
                 _emit(
                     install_id,
@@ -708,6 +751,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_MODEL_DOWNLOAD_TIMEOUT_SECONDS,
                 )
                 _emit(install_id, "healthCheck", "Checking the MinerU runtime", None)
                 output = await _run_file(
@@ -717,6 +761,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
+                    timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
                 )
                 if MINERU_VERSION not in output.split():
                     raise RuntimeError(f"Installed MinerU reported an unexpected version: {output}")

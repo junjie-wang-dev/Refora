@@ -159,7 +159,8 @@
     "year": "发表年份",
     "venue": "期刊/会议",
     "addedAt": "添加时间",
-    "filePath": "PDF位置"
+    "filePath": "PDF位置",
+    "resizeColumn": "调整{{column}}列宽"
   },
   "detail": {
     "title": "论文名称",
@@ -801,6 +802,8 @@
     "noteDeleteConfirm": "删除此笔记？此操作不可撤销。",
     "noteSave": "保存",
     "noteSaveFailed": "笔记保存失败，当前草稿仍然保留。",
+    "externalUpdateConflict": "此内容已在其他位置更新。请先载入最新版本，再继续编辑。",
+    "reloadExternalUpdate": "载入最新版本",
     "noteCancelEdit": "取消",
     "noteTitleLabel": "笔记标题",
     "noteContentLabel": "Markdown 内容",
@@ -892,8 +895,11 @@
       "stopFailed": "停止回复失败",
       "sendFailed": "发送消息失败",
       "resumeFailed": "恢复 Agent 失败",
+      "historyLoadFailed": "无法加载聊天记录",
+      "traceLoadFailed": "无法加载 Agent 活动",
       "attachSoon": "附件功能即将推出",
       "attachPapers": "引用论文",
+      "removeAttachment": "移除 {{title}}",
       "noWorkspaceDocs": "工作空间中没有论文，请先将论文添加到看板。",
       "attachMax": "最多引用 8 篇论文。",
       "threadUntitled": "对话",

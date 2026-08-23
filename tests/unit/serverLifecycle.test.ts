@@ -217,6 +217,29 @@ describe('serverLifecycle', () => {
     expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL')
   })
 
+  it('waits for startup cleanup and escalates when SIGTERM is ignored', async () => {
+    const spawn = makeSpawn((child) => {
+      announce(child, port)
+      child.kill = vi.fn((signal?: string) => {
+        if (signal === 'SIGKILL') child.emit('close', null, 'SIGKILL')
+        return true
+      })
+    })
+    mockReadFile.mockResolvedValue('{')
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
+    const started = lifecycle.start()
+    const rejection = expect(started).rejects.toThrow(/token file/)
+    await vi.advanceTimersByTimeAsync(0)
+    const child = spawn.mock.results[0].value as FakeChildProcess
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    await rejection
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
   it('sends SIGTERM on stop', async () => {
     const spawn = makeSpawn((child) => announce(child, 9000))
     mockReadFile.mockResolvedValue(JSON.stringify({ port: 9000, token }))
@@ -417,5 +440,37 @@ describe('serverLifecycle', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(mockFetchHealth).toHaveBeenCalledTimes(2)
     expect(mockFetchHealth).toHaveBeenLastCalledWith('http://127.0.0.1:5555/health', 100)
+  })
+
+  it('escalates an unhealthy child and restarts after it exits', async () => {
+    let spawnCount = 0
+    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+      spawnCount += 1
+      const child = createFakeChild()
+      child.kill = vi.fn((signal?: string) => {
+        if (signal === 'SIGKILL') child.emit('close', null, 'SIGKILL')
+        return true
+      })
+      queueMicrotask(() => announce(child, 5600 + spawnCount))
+      return child as unknown as ChildProcess
+    })
+    mockReadFile.mockImplementation(async () => JSON.stringify({ port: 5600 + spawnCount, token }))
+    mockFetchHealth.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValue(true)
+    const lifecycle = createServerLifecycle(makeDeps({
+      spawnChild: spawn,
+      healthIntervalMs: 100,
+      healthTimeoutMs: 50
+    }))
+    await lifecycle.start()
+    const firstChild = spawn.mock.results[0].value as FakeChildProcess
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(firstChild.kill).not.toHaveBeenCalledWith('SIGKILL')
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGKILL')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(spawnCount).toBe(2)
   })
 })

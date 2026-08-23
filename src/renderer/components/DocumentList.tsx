@@ -52,6 +52,7 @@ function highlightMatch(text: string, query: string): ReactNode {
 function ColumnHeader({
   id,
   label,
+  resizeLabel,
   width,
   displayWidth,
   sortField,
@@ -64,6 +65,7 @@ function ColumnHeader({
 }: {
   id: ColumnId
   label: string
+  resizeLabel: string
   width: number
   displayWidth: number
   sortField: SortField
@@ -109,22 +111,51 @@ function ColumnHeader({
     [id, width, onResize, onLiveResize, onLiveResizeEnd]
   )
 
+  const handleResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    event.stopPropagation()
+    const step = event.shiftKey ? 16 : 8
+    const nextWidth = Math.max(
+      MIN_COL_WIDTH,
+      displayWidth + (event.key === 'ArrowRight' ? step : -step)
+    )
+    onLiveResize(id, nextWidth)
+    onResize(id, nextWidth)
+    onLiveResizeEnd()
+  }, [displayWidth, id, onLiveResize, onLiveResizeEnd, onResize])
+
   return (
     <div
-      className="relative flex items-center px-1 font-semibold uppercase tracking-wide text-muted cursor-pointer select-none flex-shrink-0 text-label"
+      role="columnheader"
+      aria-label={label}
+      aria-sort={isSorted ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className="relative flex items-center font-semibold uppercase tracking-wide text-muted select-none flex-shrink-0 text-label"
       style={{ width: displayWidth, minWidth: displayWidth }}
-      onClick={onSort}
-      onContextMenu={onContextMenu}
     >
-      <span className="truncate">{label}</span>
-      {isSorted && (
-        <span className="ml-0.5">
-          {sortDir === 'asc' ? <CaretUp className="h-3 w-3" /> : <CaretDown className="h-3 w-3" />}
-        </span>
-      )}
+      <button
+        type="button"
+        className="flex h-full min-w-0 flex-1 cursor-pointer items-center px-1 text-left"
+        onClick={onSort}
+        onContextMenu={onContextMenu}
+      >
+        <span className="truncate">{label}</span>
+        {isSorted && (
+          <span className="ml-0.5" aria-hidden="true">
+            {sortDir === 'asc' ? <CaretUp className="h-3 w-3" /> : <CaretDown className="h-3 w-3" />}
+          </span>
+        )}
+      </button>
       <div
+        role="separator"
+        aria-label={resizeLabel}
+        aria-orientation="vertical"
+        aria-valuemin={MIN_COL_WIDTH}
+        aria-valuenow={Math.round(displayWidth)}
+        tabIndex={0}
         className="absolute right-0 top-0 h-full w-1 cursor-col-resize transition-colors duration-150 hover:bg-accent"
         onMouseDown={handleResizeStart}
+        onKeyDown={handleResizeKeyDown}
       />
     </div>
   )
@@ -484,6 +515,7 @@ export default function DocumentList({
             key={col.id}
             id={col.id}
             label={t(`list.${col.id}` as never)}
+            resizeLabel={t('list.resizeColumn', { column: t(`list.${col.id}` as never) })}
             width={col.width}
             displayWidth={liveWidths[col.id] ?? col.width}
             sortField={listColumnState.sort.field}

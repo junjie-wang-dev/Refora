@@ -29,6 +29,7 @@ export interface ServerLibraryHandlerDeps {
   onSettingUpdated?: (key: string, value: unknown) => void
   readPdfRange?: (filePath: string, begin: number, end: number) => Promise<PdfRangeChunk>
   consumeFile?: (path: string, extensions?: readonly string[]) => string
+  consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
   consumeDirectory?: (path: string) => string
 }
 
@@ -55,6 +56,7 @@ export function createServerLibraryHandlers({
   onSettingUpdated,
   readPdfRange = readPdfFileRange,
   consumeFile,
+  consumeFiles,
   consumeDirectory
 }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
@@ -117,7 +119,11 @@ export function createServerLibraryHandlers({
       forward(() => http.documentsRestoreFile(documentId)),
 
     [IpcChannel.ImportAddFiles]: (paths: string[]) => forward(() => http.importFiles({
-      paths: consumeFile ? paths.map((path) => consumeFile(path, ['.pdf'])) : paths
+      paths: consumeFiles
+        ? consumeFiles(paths, ['.pdf'])
+        : consumeFile
+          ? paths.map((path) => consumeFile(path, ['.pdf']))
+          : paths
     })),
     [IpcChannel.ImportAddFolder]: (path: string) => forward(() => http.importFolder({
       path: consumeDirectory ? consumeDirectory(path) : path

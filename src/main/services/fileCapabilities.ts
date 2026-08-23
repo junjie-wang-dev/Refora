@@ -12,6 +12,7 @@ export interface RendererPathCapabilities {
   authorizeFile(path: string): string
   authorizeDirectory(path: string): string
   consumeFile(path: string, extensions?: readonly string[]): string
+  consumeFiles(paths: readonly string[], extensions?: readonly string[]): string[]
   consumeDirectory(path: string): string
   clear(): void
 }
@@ -51,11 +52,13 @@ export function createRendererPathCapabilities(
     return resolved
   }
 
-  function consume(path: string, kind: RendererPathKind, extensions?: readonly string[]): string {
+  function validate(path: string, kind: RendererPathKind, extensions?: readonly string[]): string {
     const resolved = resolveExisting(path, kind)
     const capability = capabilities.get(resolved)
-    capabilities.delete(resolved)
     if (!capability || capability.kind !== kind || capability.expiresAt < now()) {
+      if (capability?.expiresAt !== undefined && capability.expiresAt < now()) {
+        capabilities.delete(resolved)
+      }
       throw pathError('path_not_authorized', 'Path was not selected by the user')
     }
     if (
@@ -68,10 +71,26 @@ export function createRendererPathCapabilities(
     return resolved
   }
 
+  function consume(path: string, kind: RendererPathKind, extensions?: readonly string[]): string {
+    const resolved = validate(path, kind, extensions)
+    capabilities.delete(resolved)
+    return resolved
+  }
+
+  function consumeFiles(paths: readonly string[], extensions?: readonly string[]): string[] {
+    const resolvedPaths = paths.map((path) => validate(path, 'file', extensions))
+    if (new Set(resolvedPaths).size !== resolvedPaths.length) {
+      throw pathError('path_not_authorized', 'A path authorization cannot be reused')
+    }
+    for (const resolved of resolvedPaths) capabilities.delete(resolved)
+    return resolvedPaths
+  }
+
   return {
     authorizeFile: (path) => authorize(path, 'file'),
     authorizeDirectory: (path) => authorize(path, 'directory'),
     consumeFile: (path, extensions) => consume(path, 'file', extensions),
+    consumeFiles,
     consumeDirectory: (path) => consume(path, 'directory'),
     clear: () => capabilities.clear()
   }

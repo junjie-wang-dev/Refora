@@ -5,6 +5,9 @@ interface BeforeQuitEvent {
 }
 
 interface ShutdownDeps {
+  beginShutdown?: () => void
+  cancelShutdown?: () => void
+  waitForTransitions?: () => Promise<void>
   flushWindowState: () => Promise<void>
   flushRendererState: () => Promise<void>
   unregisterHandlers: () => void
@@ -23,6 +26,7 @@ export function createShutdownHandler(deps: ShutdownDeps) {
     event.preventDefault()
     if (state === 'running') return
     state = 'running'
+    deps.beginShutdown?.()
     void (async () => {
       let persistenceResult: 'saved' | 'cancelled' | 'discarded'
       try {
@@ -38,11 +42,18 @@ export function createShutdownHandler(deps: ShutdownDeps) {
       } catch (error) {
         deps.reportError(error)
         state = 'idle'
+        deps.cancelShutdown?.()
         return
       }
       if (persistenceResult === 'cancelled') {
         state = 'idle'
+        deps.cancelShutdown?.()
         return
+      }
+      try {
+        await deps.waitForTransitions?.()
+      } catch (error) {
+        deps.reportError(error)
       }
       try {
         deps.unregisterHandlers()

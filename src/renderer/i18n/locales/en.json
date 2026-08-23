@@ -159,7 +159,8 @@
     "year": "Year",
     "venue": "Venue",
     "addedAt": "Added",
-    "filePath": "Path"
+    "filePath": "Path",
+    "resizeColumn": "Resize {{column}} column"
   },
   "detail": {
     "title": "Title",
@@ -802,6 +803,8 @@
     "noteDeleteConfirm": "Delete this note? This cannot be undone.",
     "noteSave": "Save",
     "noteSaveFailed": "Could not save the note. Your draft is still available.",
+    "externalUpdateConflict": "This item changed elsewhere. Reload the latest version before editing again.",
+    "reloadExternalUpdate": "Reload latest",
     "noteCancelEdit": "Cancel",
     "noteTitleLabel": "Note title",
     "noteContentLabel": "Markdown content",
@@ -893,8 +896,11 @@
       "stopFailed": "Failed to stop response",
       "sendFailed": "Failed to send message",
       "resumeFailed": "Failed to resume agent",
+      "historyLoadFailed": "Failed to load chat history",
+      "traceLoadFailed": "Failed to load agent activity",
       "attachSoon": "Attachments coming soon",
       "attachPapers": "Attach papers",
+      "removeAttachment": "Remove {{title}}",
       "noWorkspaceDocs": "No papers in workspace. Add papers to the board first.",
       "attachMax": "Maximum 8 attachments.",
       "threadUntitled": "Thread",

@@ -41,7 +41,9 @@ beforeEach(() => {
   vi.spyOn(useDocumentStore.getState(), 'setFocusedDoc').mockImplementation(() => {})
   documentList = document.createElement('div')
   documentList.className = 'document-list'
+  documentList.tabIndex = 0
   document.body.append(documentList)
+  documentList.focus()
 })
 
 afterEach(() => {
@@ -158,5 +160,31 @@ describe('useAppShortcuts', () => {
     expect(useDocumentStore.getState().requestDeleteConfirm).not.toHaveBeenCalled()
     expect(useDocumentStore.getState().setFocusedDoc).not.toHaveBeenCalled()
     modal.remove()
+  })
+
+  it('does not capture navigation or Space outside the document list', () => {
+    const article = document.createElement('article')
+    article.tabIndex = 0
+    document.body.append(article)
+    article.focus()
+    renderHook(() => useAppShortcuts())
+    const arrow = new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      bubbles: true,
+      cancelable: true
+    })
+    const space = new KeyboardEvent('keydown', {
+      key: ' ',
+      bubbles: true,
+      cancelable: true
+    })
+
+    article.dispatchEvent(arrow)
+    article.dispatchEvent(space)
+
+    expect(arrow.defaultPrevented).toBe(false)
+    expect(space.defaultPrevented).toBe(false)
+    expect(useDocumentStore.getState().setFocusedDoc).not.toHaveBeenCalled()
+    article.remove()
   })
 })

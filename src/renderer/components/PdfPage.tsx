@@ -884,7 +884,13 @@ export default function PdfPage({
                 { text: event.target.value }
               )}
               onBlur={() => {
-                if (!annotation.text.trim()) return
+                if (!annotation.text.trim()) {
+                  removeAnnotation(documentId, annotation.id)
+                  setEditingTextAnnotationId((current) =>
+                    current === annotation.id ? null : current
+                  )
+                  return
+                }
                 setEditingTextAnnotationId((current) =>
                   current === annotation.id ? null : current
                 )
