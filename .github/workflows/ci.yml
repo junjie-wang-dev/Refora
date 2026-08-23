@@ -15,138 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify
-    runs-on: macos-15
-    timeout-minutes: 40
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-        with:
-          version: '0.11.32'
-          enable-cache: true
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Audit Node.js dependencies
-        run: npm audit --audit-level=moderate
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Unit & Component Tests with coverage
-        run: npm run test:coverage
-
-      - name: Python Server Tests
-        run: npm run test:backend
-
-      - name: Python source validation
-        run: uv run --project backend --locked python -m compileall -q backend/refora_server backend/workers
-
-      - name: Audit Python dependencies
-        run: |
-          uv export --project backend --locked --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/refora-requirements.txt"
-          uvx --from pip-audit==2.10.1 pip-audit -r "$RUNNER_TEMP/refora-requirements.txt" --disable-pip --progress-spinner off
-
-      - name: Server Integration Tests
-        # Requires the backend virtualenv provisioned by the previous uv-based step;
-        # resolves backend/.venv/bin/python to spawn the real FastAPI sidecar.
-        run: npm run test:server-integration
-
-  e2e:
-    name: E2E
-    needs: verify
-    runs-on: macos-15
-    timeout-minutes: 45
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-        with:
-          version: '0.11.32'
-          enable-cache: true
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Provision backend Python environment
-        # The app under test starts its Python sidecar during bootstrap, so the
-        # backend dependencies must be installed before launching Electron.
-        run: uv run --project backend --locked python -c "import fastapi, uvicorn, websockets"
-
-      - name: Playwright E2E suite
-        run: npm run test:e2e -- --workers=1
-
-      - name: Upload E2E diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: Refora-e2e-${{ github.sha }}
-          path: test-results
-          if-no-files-found: warn
-          retention-days: 7
-
-  supabase:
-    name: Supabase PostgreSQL RPC and RLS
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17.6-bookworm
-        env:
-          POSTGRES_DB: refora_sync_test
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d refora_sync_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          version: '0.11.32'
-          enable-cache: true
-
-      - name: Apply migrations and test RPC and RLS
-        env:
-          REFORA_SUPABASE_TEST_DB_URL: postgresql://postgres@127.0.0.1:5432/refora_sync_test
-          REFORA_SUPABASE_TEST_DB_PASSWORD: postgres
-          REFORA_SUPABASE_TEST_SSL: 'false'
-        run: uv run --project backend --locked python scripts/test-supabase-local.py
+  quality:
+    uses: ./.github/workflows/quality.yml
+    with:
+      e2e-artifact-name: Refora-e2e-${{ github.sha }}
+      verify-timeout-minutes: 40
 
   package:
     name: Package ${{ matrix.arch }}
-    needs: [verify, e2e, supabase]
+    needs: quality
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:

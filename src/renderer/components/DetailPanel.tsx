@@ -412,44 +412,19 @@ function CategoryChips({
 }) {
   const { t } = useTranslation()
   const allCategories = useDocumentStore((s) => s.categories)
-  const fetchCategories = useDocumentStore((s) => s.fetchCategories)
-  const [assigned, setAssigned] = useState<Category[]>(docCategories ?? [])
-
-  useEffect(() => {
-    setAssigned(docCategories ?? [])
-  }, [docId, docCategories])
+  const assignDocumentsToCategory = useDocumentStore((s) => s.assignDocumentsToCategory)
+  const unassignDocumentFromCategory = useDocumentStore((s) => s.unassignDocumentFromCategory)
+  const assigned = docCategories ?? []
 
   const assignedIds = new Set(assigned.map((c) => c.id))
   const unassigned = allCategories.filter((c) => !assignedIds.has(c.id))
 
   const unassign = async (catId: string) => {
-    const removed = assigned.find((c) => c.id === catId)
-    setAssigned((prev) => prev.filter((c) => c.id !== catId))
-    try {
-      await api.categories.unassign(docId, catId)
-      void fetchCategories()
-    } catch (error) {
-      if (removed) setAssigned((prev) => { const s = [...prev, removed]; return s })
-      useDocumentStore.getState().showToast(
-        errorMessage(error, t('documentErrors.assignCategoryFailed'))
-      )
-      void fetchCategories()
-    }
+    await unassignDocumentFromCategory(docId, catId)
   }
 
   const assign = async (catId: string) => {
-    const cat = allCategories.find((c) => c.id === catId)
-    if (cat) setAssigned((prev) => [...prev, { ...cat, count: undefined }])
-    try {
-      await api.categories.assign(docId, catId)
-      void fetchCategories()
-    } catch (error) {
-      setAssigned((prev) => prev.filter((c) => c.id !== catId))
-      useDocumentStore.getState().showToast(
-        errorMessage(error, t('documentErrors.assignCategoryFailed'))
-      )
-      void fetchCategories()
-    }
+    await assignDocumentsToCategory([docId], catId)
   }
 
   const handleAddCategory = (e: React.MouseEvent) => {

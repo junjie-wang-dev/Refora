@@ -33,13 +33,17 @@ def _normalize_source_doc_ids(value: Any) -> list[str]:
     return []
 
 
-def _map_report(row: sqlite3.Row) -> dict[str, Any]:
+def _map_report(db, row: sqlite3.Row) -> dict[str, Any]:
+    source_rows = db.execute(
+        "SELECT docId FROM ai_report_sources WHERE reportId = ? ORDER BY ordinal ASC",
+        [row["id"]],
+    ).fetchall()
     return {
         "id": row["id"],
         "workspaceId": row["workspaceId"],
         "title": row["title"],
         "contentMd": row["contentMd"],
-        "sourceDocIds": _parse_source_doc_ids(row["sourceDocIds"]),
+        "sourceDocIds": [source["docId"] for source in source_rows],
         "model": row["model"] if row["model"] is not None else None,
         "createdAt": row["createdAt"],
     }
@@ -51,7 +55,7 @@ def createAiReportsRepository(db):
             "SELECT * FROM ai_reports WHERE workspaceId = ? ORDER BY createdAt DESC",
             [workspaceId],
         )
-        return [_map_report(r) for r in cur.fetchall()]
+        return [_map_report(db, r) for r in cur.fetchall()]
 
     def create(
         workspaceId: str,
@@ -66,26 +70,35 @@ def createAiReportsRepository(db):
         cur = db.execute("SELECT id FROM workspaces WHERE id = ?", [workspaceId])
         if cur.fetchone() is None:
             raise RepoError("not_found", f"workspace not found: {workspaceId}")
+        source_ids = [*dict.fromkeys(_normalize_source_doc_ids(sourceDocIds))]
+        for document_id in source_ids:
+            if db.execute("SELECT 1 FROM documents WHERE id = ?", [document_id]).fetchone() is None:
+                raise RepoError("not_found", f"document not found: {document_id}")
         id = str(uuid.uuid4())
         now = _now_ms()
-        ids_json = json.dumps(_normalize_source_doc_ids(sourceDocIds))
+        ids_json = json.dumps(source_ids)
         db.execute(
             "INSERT INTO ai_reports (id, workspaceId, title, contentMd, sourceDocIds, model, createdAt) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [id, workspaceId, trimmed, contentMd, ids_json, model, now],
         )
+        for ordinal, document_id in enumerate(source_ids):
+            db.execute(
+                "INSERT INTO ai_report_sources(reportId, docId, ordinal) VALUES (?, ?, ?)",
+                [id, document_id, ordinal],
+            )
         db.execute(
             "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
             [now, workspaceId],
         )
         row = db.execute("SELECT * FROM ai_reports WHERE id = ?", [id]).fetchone()
-        return _map_report(row)
+        return _map_report(db, row)
 
     def get(id: str) -> dict[str, Any] | None:
         row = db.execute("SELECT * FROM ai_reports WHERE id = ?", [id]).fetchone()
         if row is None:
             return None
-        return _map_report(row)
+        return _map_report(db, row)
 
     def update(id: str, patch: dict[str, Any]) -> dict[str, Any]:
         existing = db.execute("SELECT * FROM ai_reports WHERE id = ?", [id]).fetchone()
@@ -109,7 +122,7 @@ def createAiReportsRepository(db):
             [now, existing["workspaceId"]],
         )
         row = db.execute("SELECT * FROM ai_reports WHERE id = ?", [id]).fetchone()
-        return _map_report(row)
+        return _map_report(db, row)
 
     def remove(id: str) -> None:
         existing = db.execute(
@@ -126,29 +139,10 @@ def createAiReportsRepository(db):
             [now, existing["workspaceId"]],
         )
 
-    def remove_doc_from_sources(doc_id: str) -> None:
-        pattern = f'%"{doc_id}"%'
-        rows = db.execute(
-            "SELECT id, sourceDocIds FROM ai_reports WHERE sourceDocIds LIKE ?",
-            [pattern],
-        ).fetchall()
-        for row in rows:
-            ids = _parse_source_doc_ids(row["sourceDocIds"])
-            if doc_id not in ids:
-                continue
-            updated = [i for i in ids if i != doc_id]
-            if len(updated) == len(ids):
-                continue
-            db.execute(
-                "UPDATE ai_reports SET sourceDocIds = ? WHERE id = ?",
-                [json.dumps(updated), row["id"]],
-            )
-
     return {
         "list": list,
         "create": create,
         "get": get,
         "update": update,
         "delete": remove,
-        "removeDocFromSources": remove_doc_from_sources,
     }

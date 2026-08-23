@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { Document, GlobalSearchResult, LibrarySwitchResult, ReforaApi } from '@shared/ipc-types'
 
 const mocks = vi.hoisted(() => ({
-  documentSetState: vi.fn(),
+  setSearchResults: vi.fn(),
+  setFocusedDoc: vi.fn(),
   clearSearch: vi.fn(),
   openPdf: vi.fn(),
   showToast: vi.fn(),
@@ -29,15 +30,29 @@ vi.mock('react-i18next', () => ({
 }))
 
 vi.mock('@renderer/store/documentStore', () => ({
-  useDocumentStore: {
-    setState: mocks.documentSetState,
-    subscribe: mocks.documentStoreSubscribe,
-    getState: () => ({
+  useDocumentStore: Object.assign(
+    (selector: (state: {
+      setSearchResults: typeof mocks.setSearchResults
+      setFocusedDoc: typeof mocks.setFocusedDoc
+      clearSearch: typeof mocks.clearSearch
+    }) => unknown) => selector({
+      setSearchResults: mocks.setSearchResults,
+      setFocusedDoc: mocks.setFocusedDoc,
       clearSearch: mocks.clearSearch,
       openPdf: mocks.openPdf,
       showToast: mocks.showToast
-    })
-  }
+    }),
+    {
+      subscribe: mocks.documentStoreSubscribe,
+      getState: () => ({
+        setSearchResults: mocks.setSearchResults,
+        setFocusedDoc: mocks.setFocusedDoc,
+        clearSearch: mocks.clearSearch,
+        openPdf: mocks.openPdf,
+        showToast: mocks.showToast
+      })
+    }
+  )
 }))
 
 vi.mock('@renderer/store/workspaceStore', () => {
@@ -189,12 +204,8 @@ describe('GlobalSearch', () => {
 
     fireEvent.click(option)
 
-    expect(mocks.documentSetState).toHaveBeenCalledWith({
-      focusedDocId: 'paper-1',
-      isSearching: true,
-      searchQuery: 'transformer',
-      searchResults: [paper]
-    })
+    expect(mocks.setSearchResults).toHaveBeenCalledWith('transformer', [paper])
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
     expect(mocks.openPdf).not.toHaveBeenCalled()
   })
 
@@ -204,11 +215,7 @@ describe('GlobalSearch', () => {
 
     fireEvent.change(input, { target: { value: 'Junjie' } })
 
-    await waitFor(() => expect(mocks.documentSetState).toHaveBeenCalledWith({
-      isSearching: true,
-      searchQuery: 'Junjie',
-      searchResults: [paper]
-    }))
+    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie', [paper]))
     expect(mocks.openPdf).not.toHaveBeenCalled()
   })
 
@@ -219,18 +226,14 @@ describe('GlobalSearch', () => {
     fireEvent.change(input, { target: { value: 'Junjie' } })
 
     await screen.findByText('globalSearch.papers · 1')
-    expect(mocks.documentSetState).not.toHaveBeenCalled()
+    expect(mocks.setSearchResults).not.toHaveBeenCalled()
   })
 
   it('clears the global query when the synchronized document list clears its search', async () => {
     render(<GlobalSearch documentListOpen />)
     const input = screen.getByRole('combobox', { name: 'globalSearch.label' })
     fireEvent.change(input, { target: { value: 'Junjie' } })
-    await waitFor(() => expect(mocks.documentSetState).toHaveBeenCalledWith({
-      isSearching: true,
-      searchQuery: 'Junjie',
-      searchResults: [paper]
-    }))
+    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie', [paper]))
 
     act(() => {
       mocks.documentStoreSubscriber?.(
@@ -316,9 +319,7 @@ describe('GlobalSearch', () => {
     await screen.findByRole('option', { name: 'globalSearch.openPaper: Transformer Research' })
 
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(mocks.documentSetState).toHaveBeenCalledWith(expect.objectContaining({
-      focusedDocId: 'paper-1'
-    }))
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
     expect(mocks.openPdf).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'globalSearch.clear' }))
@@ -406,7 +407,7 @@ describe('GlobalSearch', () => {
 
     fireEvent.click(option)
 
-    expect(mocks.documentSetState).toHaveBeenCalled()
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
     expect(mocks.openPdf).not.toHaveBeenCalled()
     expect(mocks.showToast).not.toHaveBeenCalled()
   })

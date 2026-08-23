@@ -24,7 +24,7 @@ def test_author_migration_normalizes_existing_rows_and_search_index() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert db.execute(
         "SELECT authors FROM documents WHERE id = 'paper'"
     ).fetchone()["authors"] == (
@@ -64,7 +64,7 @@ def test_forward_migration_restores_recognizable_institution_authors() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert db.execute(
         "SELECT authors FROM documents WHERE id = 'institutions'"
     ).fetchone()["authors"] == (
@@ -96,7 +96,7 @@ def test_forward_migration_preserves_already_correct_institution_authors() -> No
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert db.execute(
         "SELECT authors FROM documents WHERE id = 'correct'"
     ).fetchone()["authors"] == authors
@@ -125,7 +125,7 @@ def test_forward_migration_repairs_only_provable_corrupted_institutions() -> Non
         "California Institute of Technology, CSAIL; "
         "MIT Computer Science Department; WHO Research Institute"
     )
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert db.execute(
         "SELECT authors FROM documents WHERE id = 'legacy'"
     ).fetchone()["authors"] == expected

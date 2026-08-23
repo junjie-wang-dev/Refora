@@ -2,13 +2,23 @@ import { describe, expect, it, vi } from 'vitest'
 import { createLibrarySwitcher } from '../../src/main/services/librarySwitcher'
 import type { ServerAssembly } from '../../src/main/sidecar/assembly'
 
-function assembly(options: { start?: () => Promise<void>; stop?: () => Promise<void> } = {}) {
+function assembly(options: {
+  start?: () => Promise<void>
+  stop?: () => Promise<void>
+  initialImportCompleted?: boolean
+} = {}) {
+  const importFolder = vi.fn(async () => ({ added: [], skipped: [], errors: [] }))
+  const settingsUpdate = vi.fn(async () => ({}))
   return {
     start: vi.fn(options.start ?? (async () => undefined)),
     stop: vi.fn(options.stop ?? (async () => undefined)),
     getClient: vi.fn(() => ({
       http: {
-        importFolder: vi.fn(async () => ({ added: [], skipped: [], errors: [] }))
+        importFolder,
+        settingsGet: vi.fn(async () => ({
+          libraryInitialImportCompleted: options.initialImportCompleted ?? false
+        })),
+        settingsUpdate
       }
     })),
     fetchResource: vi.fn()
@@ -163,5 +173,52 @@ describe('library switcher', () => {
     expect(restored.start).toHaveBeenCalledOnce()
     expect(state).toEqual({ assembly: restored, dbPath: '/old/db', libraryFolder: '/old' })
     expect(emitSwitched).not.toHaveBeenCalled()
+  })
+
+  it('retries the first scan when a database exists without an initialization marker', async () => {
+    const previous = assembly({ initialImportCompleted: true })
+    const target = assembly({ initialImportCompleted: false })
+    let state = { assembly: previous as ServerAssembly | null, dbPath: '/old/db', libraryFolder: '/old' }
+    const switchLibrary = createLibrarySwitcher({
+      resolveFolder: (folder) => folder,
+      isDirectory: () => true,
+      dbPathForFolder: () => '/new/db',
+      dbExistsInFolder: () => true,
+      createAssembly: vi.fn().mockResolvedValue(target),
+      getState: () => state,
+      setState: (next) => { state = next },
+      persistLibraryFolder: vi.fn(),
+      emitSwitched: vi.fn(),
+      onRecoveryFailed: vi.fn()
+    })
+
+    await switchLibrary('/new')
+
+    const http = target.getClient().http
+    expect(http.importFolder).toHaveBeenCalledWith({ path: '/new', recursive: true })
+    expect(http.settingsUpdate).toHaveBeenCalledWith({ libraryInitialImportCompleted: true })
+  })
+
+  it('does not restart the active library when switching to the same folder', async () => {
+    const previous = assembly({ initialImportCompleted: true })
+    let state = { assembly: previous as ServerAssembly | null, dbPath: '/same/db', libraryFolder: '/same' }
+    const createAssembly = vi.fn()
+    const switchLibrary = createLibrarySwitcher({
+      resolveFolder: (folder) => folder,
+      isDirectory: () => true,
+      dbPathForFolder: () => '/same/db',
+      dbExistsInFolder: () => true,
+      createAssembly,
+      getState: () => state,
+      setState: (next) => { state = next },
+      persistLibraryFolder: vi.fn(),
+      emitSwitched: vi.fn(),
+      onRecoveryFailed: vi.fn()
+    })
+
+    await expect(switchLibrary('/same')).resolves.toMatchObject({ scanned: 0 })
+
+    expect(previous.stop).not.toHaveBeenCalled()
+    expect(createAssembly).not.toHaveBeenCalled()
   })
 })

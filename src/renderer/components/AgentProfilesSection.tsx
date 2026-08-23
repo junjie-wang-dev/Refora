@@ -19,9 +19,9 @@ import type {
 } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
-import { notifyAiProvidersChanged } from '../utils/aiProviderEvents'
 import { Badge, Button, Input } from './ui'
 import { useModalDialog } from '../hooks/useModalDialog'
+import { useAgentCatalogStore } from '../store/agentCatalogStore'
 
 interface AgentProfilesSectionProps {
   mode?: 'cli' | 'api'
@@ -122,7 +122,9 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
   const { t } = useTranslation()
   const translationRef = useRef(t)
   translationRef.current = t
-  const [profiles, setProfiles] = useState<AgentProfile[]>([])
+  const profiles = useAgentCatalogStore((state) => state.profiles)
+  const refreshAgentCatalog = useAgentCatalogStore((state) => state.refresh)
+  const removeCatalogProfile = useAgentCatalogStore((state) => state.removeProfile)
   const [runtimes, setRuntimes] = useState<CliRuntimeInfo[]>([])
   const [form, setForm] = useState<CliForm | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
@@ -137,7 +139,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
 
   const load = useCallback(async (surfaceError = true): Promise<unknown | null> => {
     try {
-      setProfiles(await api.agentProfiles.list())
+      await refreshAgentCatalog()
       return null
     } catch (cause) {
       if (surfaceError) {
@@ -145,7 +147,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
       }
       return cause
     }
-  }, [])
+  }, [refreshAgentCatalog])
 
   const scan = useCallback(async () => {
     setScanning(true)
@@ -173,7 +175,6 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
       await api.agentProfiles.update(profile.id, patch)
       const loadFailure = await load(false)
       if (loadFailure) throw loadFailure
-      notifyAiProvidersChanged()
     } catch (cause) {
       setError(errorMessage(cause, t('settings.agentProfiles.saveFail')))
     }
@@ -206,7 +207,6 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
       }
       setForm(null)
       await load()
-      notifyAiProvidersChanged()
     } catch (cause) {
       setError(errorMessage(cause, t('settings.agentProfiles.saveFail')))
     } finally {
@@ -237,9 +237,8 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
       setError(errorMessage(cause, t('settings.agentProfiles.deleteFail')))
       return
     }
-    setProfiles((current) => current.filter((item) => item.id !== profile.id))
+    removeCatalogProfile(profile.id)
     setForm((current) => current?.id === profile.id ? null : current)
-    notifyAiProvidersChanged()
     try {
       const [active, selected] = await Promise.all([
         api.settings.get<string>('activeAgentProfileId', ''),

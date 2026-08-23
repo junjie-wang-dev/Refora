@@ -347,7 +347,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       void document?.cleanup()?.catch(() => undefined)
       void loadingTask?.destroy()?.catch(() => undefined)
     }
-  }, [activeDocument?.id, activeDocument?.updatedAt, t])
+  }, [activeDocument?.id, activeDocument?.fileHash, activeDocument?.fileMtimeNs, t])
 
   const navigateToPage = useCallback((page: number, annotationId?: string) => {
     const safePage = Math.max(1, Math.min(pdf?.numPages ?? 1, page))
@@ -446,13 +446,11 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     const current = selectedTextAnnotations[0]?.fontSize ?? fontSize
     const next = Math.max(8, Math.min(72, current + delta))
     usePdfReaderStore.getState().setFontSize(next)
-    selectedTextAnnotations.forEach((annotation) => {
-      usePdfReaderStore.getState().updateAnnotation(
-        activeDocumentId,
-        annotation.id,
-        { fontSize: next }
-      )
-    })
+    usePdfReaderStore.getState().updateAnnotations(
+      activeDocumentId,
+      selectedTextAnnotations.map((annotation) => annotation.id),
+      { fontSize: next }
+    )
   }
 
   const changeStrokeWidth = (delta: number) => {
@@ -460,26 +458,22 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     const current = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
     const next = Math.max(1, Math.min(12, current + delta))
     usePdfReaderStore.getState().setStrokeWidth(next)
-    selectedInkAnnotations.forEach((annotation) => {
-      usePdfReaderStore.getState().updateAnnotation(
-        activeDocumentId,
-        annotation.id,
-        { strokeWidth: next }
-      )
-    })
+    usePdfReaderStore.getState().updateAnnotations(
+      activeDocumentId,
+      selectedInkAnnotations.map((annotation) => annotation.id),
+      { strokeWidth: next }
+    )
   }
 
   const changeColor = (nextColor: string) => {
     if (!annotationsLoaded) return
     usePdfReaderStore.getState().setColor(nextColor)
     if (!activeDocumentId) return
-    selectedAnnotations.forEach((annotation) => {
-      usePdfReaderStore.getState().updateAnnotation(
-        activeDocumentId,
-        annotation.id,
-        { color: nextColor }
-      )
-    })
+    usePdfReaderStore.getState().updateAnnotations(
+      activeDocumentId,
+      selectedAnnotations.map((annotation) => annotation.id),
+      { color: nextColor }
+    )
   }
 
   const removeSelectedAnnotations = () => {

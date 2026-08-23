@@ -4,11 +4,35 @@ import { randomUUID } from 'node:crypto'
 import { logger } from './logger'
 
 interface UserPrefs {
+  [key: string]: unknown
   libraryFolderPath?: string
   pendingAuthConfirmation?: {
     nonce: string
     createdAt: number
   } | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizePrefs(value: unknown): UserPrefs {
+  if (!isRecord(value)) return {}
+  const prefs: UserPrefs = { ...value }
+  if (typeof prefs.libraryFolderPath !== 'string') delete prefs.libraryFolderPath
+  const pending = prefs.pendingAuthConfirmation
+  if (pending !== null && pending !== undefined) {
+    if (
+      !isRecord(pending)
+      || typeof pending.nonce !== 'string'
+      || !pending.nonce
+      || typeof pending.createdAt !== 'number'
+      || !Number.isFinite(pending.createdAt)
+    ) {
+      delete prefs.pendingAuthConfirmation
+    }
+  }
+  return prefs
 }
 
 function prefsPath(userDataDir: string): string {
@@ -20,7 +44,7 @@ function readPrefs(userDataDir: string): UserPrefs {
     const p = prefsPath(userDataDir)
     if (!existsSync(p)) return {}
     const raw = readFileSync(p, 'utf-8')
-    return JSON.parse(raw) as UserPrefs
+    return normalizePrefs(JSON.parse(raw))
   } catch (e) {
     logger.warn(`prefs:read failed: ${e instanceof Error ? e.message : String(e)}`)
     return {}

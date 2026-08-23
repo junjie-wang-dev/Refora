@@ -12,6 +12,7 @@ import WorkspacePanel from './components/workspace/WorkspacePanel'
 import ChatPanel from './components/workspace/ChatPanel'
 import ResizeDivider from './components/ResizeDivider'
 import ConfirmDialog from './components/ConfirmDialog'
+import SettingsModalHost from './components/SettingsModalHost'
 import StructuredDocumentPanel from './components/StructuredDocumentPanel'
 import FirstRunWizard from './components/FirstRunWizard'
 import { Toast } from './components/ui'
@@ -27,7 +28,11 @@ import { api } from './ipc'
 import i18n from './i18n'
 import { normalizeBootstrapData } from '../shared/bootstrap'
 import type { ListColumnState } from '../shared/ipc-types'
-import { registerRendererFlushTask, trackRendererPersistence } from './persistence'
+import {
+  cancelRendererSetting,
+  invalidateRendererSettingWrites,
+  scheduleRendererSetting
+} from './persistence'
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 400
@@ -127,9 +132,6 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const panelResizingRef = useRef(false)
   const settingsHydrationVersionRef = useRef(0)
   const writableSettingKeysRef = useRef(new Set<string>())
-  const pendingSettingWritesRef = useRef(new Map<string, unknown>())
-  const settingWriteTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
-  const settingWriteTasksRef = useRef(new Map<string, Promise<void>>())
   const documentListPanelRef = useRef<HTMLDivElement>(null)
   const detailPanelRef = useRef<HTMLDivElement>(null)
   const workspacePanelRef = useRef<HTMLDivElement>(null)
@@ -303,6 +305,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   useEffect(() => {
     void hydrateLibrarySettings(false)
     const handleLibrarySwitched = () => {
+      invalidateRendererSettingWrites()
       void hydrateLibrarySettings(true)
     }
     api.events.onLibrarySwitched(handleLibrarySwitched)
@@ -312,69 +315,16 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     }
   }, [hydrateLibrarySettings])
 
-  const persistSetting = useCallback(async (key: string) => {
-    const timer = settingWriteTimersRef.current.get(key)
-    if (timer) clearTimeout(timer)
-    settingWriteTimersRef.current.delete(key)
-    const existing = settingWriteTasksRef.current.get(key)
-    if (existing) await existing.catch(() => undefined)
-    while (pendingSettingWritesRef.current.has(key)) {
-      const value = pendingSettingWritesRef.current.get(key)
-      pendingSettingWritesRef.current.delete(key)
-      const task = trackRendererPersistence(api.settings.set(key, value))
-      settingWriteTasksRef.current.set(key, task)
-      try {
-        await task
-      } catch (error) {
-        if (!pendingSettingWritesRef.current.has(key)) {
-          pendingSettingWritesRef.current.set(key, value)
-        }
-        useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
-        throw error
-      } finally {
-        if (settingWriteTasksRef.current.get(key) === task) {
-          settingWriteTasksRef.current.delete(key)
-        }
-      }
-    }
-  }, [])
-
   const scheduleSettingWrite = useCallback((key: string, value: unknown, delay = 500) => {
-    pendingSettingWritesRef.current.set(key, value)
-    const existing = settingWriteTimersRef.current.get(key)
-    if (existing) clearTimeout(existing)
-    if (delay === 0) {
-      settingWriteTimersRef.current.delete(key)
-      void persistSetting(key).catch(() => undefined)
-      return
-    }
-    settingWriteTimersRef.current.set(key, setTimeout(() => {
-      settingWriteTimersRef.current.delete(key)
-      void persistSetting(key).catch(() => undefined)
-    }, delay))
-  }, [persistSetting])
+    scheduleRendererSetting(key, value, {
+      delay,
+      onError: () => useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+    })
+  }, [])
 
   const cancelScheduledSettingWrite = useCallback((key: string) => {
-    const timer = settingWriteTimersRef.current.get(key)
-    if (timer) clearTimeout(timer)
-    settingWriteTimersRef.current.delete(key)
+    cancelRendererSetting(key)
   }, [])
-
-  const flushSettingWrites = useCallback(async () => {
-    for (const timer of settingWriteTimersRef.current.values()) clearTimeout(timer)
-    settingWriteTimersRef.current.clear()
-    const keys = new Set([
-      ...pendingSettingWritesRef.current.keys(),
-      ...settingWriteTasksRef.current.keys()
-    ])
-    const results = await Promise.allSettled([...keys].map(persistSetting))
-    const failure = results.find((result): result is PromiseRejectedResult =>
-      result.status === 'rejected'
-    )
-    if (failure) throw failure.reason
-  }, [persistSetting])
-
-  useEffect(() => registerRendererFlushTask(flushSettingWrites), [flushSettingWrites])
 
   useEffect(() => {
     if (!settingsHydrated || !writableSettingKeysRef.current.has('sidebarWidth')) return
@@ -656,6 +606,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
       enableCustomFonts={false}
     >
       <ContextMenuHost />
+      <SettingsModalHost />
       <div className="app-root relative isolate flex h-screen w-screen overflow-hidden bg-background text-foreground">
         {showWizard && <FirstRunWizard onDone={() => setShowWizard(false)} />}
         {!workspaceFullscreen && !sidebarCollapsed && (

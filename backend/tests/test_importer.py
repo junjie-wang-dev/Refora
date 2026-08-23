@@ -99,6 +99,39 @@ async def test_import_folder_honors_recursive_flag(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_import_folder_skips_hidden_managed_and_symlinked_pdfs(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    folder = tmp_path / "source"
+    folder.mkdir()
+    visible = folder / "visible.pdf"
+    _pdf(visible, b"visible")
+    hidden = folder / ".hidden" / "hidden.pdf"
+    hidden.parent.mkdir()
+    _pdf(hidden, b"hidden")
+    managed = folder / "refora-assets" / "derived.pdf"
+    managed.parent.mkdir()
+    _pdf(managed, b"managed")
+    outside = tmp_path / "outside.pdf"
+    _pdf(outside, b"outside")
+    symlink = folder / "linked.pdf"
+    symlink.symlink_to(outside)
+    documents = make_docs_repo(open_migrated_db(), str(library))
+    importer = createImporter(
+        {"documents": documents},
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["importFolder"](str(folder), True)
+
+    assert len(result["imported"]) == 1
+    assert result["skipped"] == []
+    assert result["errors"] == []
+
+
+@pytest.mark.asyncio
 async def test_import_files_rejects_corrupted_pdf(tmp_path: Path) -> None:
     library = tmp_path / "library"
     source = tmp_path / "broken.pdf"

@@ -166,12 +166,16 @@ def test_insert_outside_library_keeps_absolute(db):
     assert cur.fetchone()["filePath"] == "/other/a.pdf"
 
 
-def test_update_changes_field_and_records_edited(db):
+def test_update_changes_field_records_edited_and_bumps_record_timestamp(db, monkeypatch):
+    monkeypatch.setattr("refora_server.repositories.documents.now_ms", lambda: 2_000_000)
     repo = make_docs_repo(db, library_folder="/lib")
-    repo["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf"))
+    repo["insert"](
+        make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf", updated_at=1_000_000)
+    )
     doc = repo["update"]("a", {"title": "New Title"})
     assert doc["title"] == "New Title"
     assert "title" in doc["editedFields"]
+    assert doc["updatedAt"] == 2_000_000
     doc2 = repo["get"]("a")
     assert doc2["title"] == "New Title"
     assert "title" in doc2["editedFields"]
@@ -248,11 +252,21 @@ def test_deleteAll_clears_table(db):
     assert repo["counts"]()["all"] == 0
 
 
-def test_setStarred(db):
+def test_setStarred_updates_record_timestamp(db, monkeypatch):
+    monkeypatch.setattr("refora_server.repositories.documents.now_ms", lambda: 2_000_000)
     repo = make_docs_repo(db, library_folder="/lib")
-    repo["insert"](make_doc(id="a", file_path="/lib/a.pdf", file_name="a.pdf", starred=0))
+    repo["insert"](
+        make_doc(
+            id="a",
+            file_path="/lib/a.pdf",
+            file_name="a.pdf",
+            starred=0,
+            updated_at=1_000_000,
+        )
+    )
     repo["setStarred"]("a", True)
     assert repo["get"]("a")["starred"] == 1
+    assert repo["get"]("a")["updatedAt"] == 2_000_000
     repo["setStarred"]("a", False)
     assert repo["get"]("a")["starred"] == 0
 

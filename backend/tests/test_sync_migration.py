@@ -51,7 +51,7 @@ def test_sync_library_identity_survives_device_state_removal() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 38
+    assert result.to_version == 40
     state = db.execute("SELECT * FROM sync_state WHERE id = 1").fetchone()
     assert state["remoteLibraryId"] == "remote-library"
     assert state["enabled"] == 1

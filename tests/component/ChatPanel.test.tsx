@@ -43,7 +43,8 @@ import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
-import { AI_PROVIDERS_CHANGED_EVENT } from '../../src/renderer/utils/aiProviderEvents'
+import { useSettingsModalStore } from '../../src/renderer/store/settingsModalStore'
+import { useAgentCatalogStore } from '../../src/renderer/store/agentCatalogStore'
 
 const ChatPanelModule = await import('../../src/renderer/components/workspace/ChatPanel')
 const ChatPanel = ChatPanelModule.default
@@ -244,6 +245,12 @@ function setupStore(): void {
   useDocumentStore.setState({ showToast: vi.fn() })
   usePdfReaderStore.setState({ activeDocumentId: null })
   useChatDraftStore.setState({ pending: null })
+  useSettingsModalStore.setState({
+    settingsOpen: false,
+    settingsPage: 'general',
+    accountOpen: false
+  })
+  useAgentCatalogStore.getState().reset()
 }
 
 beforeEach(() => {
@@ -874,7 +881,7 @@ describe('ChatPanel provider restoration', () => {
     expect(selector).toHaveAttribute('title', 'Test Provider · gpt-4o')
 
     activeProviderId = ollamaProvider.id
-    window.dispatchEvent(new Event(AI_PROVIDERS_CHANGED_EVENT))
+    await useAgentCatalogStore.getState().refresh()
 
     await waitFor(() => expect(selector).toHaveTextContent('Kimi2.6'))
     expect(selector).toHaveAttribute('title', 'Ollama · Kimi2.6')
@@ -999,6 +1006,17 @@ describe('ChatMessages presentation', () => {
       'run-1',
       'run-2'
     ])
+  })
+
+  it('opens the AI provider settings from the empty-provider state', () => {
+    renderMessages({ streaming: false })
+
+    fireEvent.click(screen.getByRole('button', { name: 'topbar.settings' }))
+
+    expect(useSettingsModalStore.getState()).toMatchObject({
+      settingsOpen: true,
+      settingsPage: 'aiProviders'
+    })
   })
 
   it('prefers persisted run ids when overlapping runs produce identical text', () => {

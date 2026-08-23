@@ -256,7 +256,7 @@ def test_route_errors_use_result_envelopes(client: TestClient, services: FakeSer
     unavailable = client.get("/mineru/status", headers=HEADERS)
 
     assert (missing.status_code, missing.json()["error"]["code"]) == (404, "not_found")
-    assert (conflict.status_code, conflict.json()["error"]["code"]) == (409, "duplicate")
+    assert (conflict.status_code, conflict.json()["error"]["code"]) == (409, "conflict")
     assert (unavailable.status_code, unavailable.json()["error"]["code"]) == (503, "unavailable")
 
 

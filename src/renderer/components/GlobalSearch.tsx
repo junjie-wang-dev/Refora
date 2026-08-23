@@ -23,6 +23,7 @@ import type {
 } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
 import { formatAuthors } from '../utils/format'
+import { highlightMatch } from '../utils/highlightMatch'
 
 const EMPTY_RESULTS: GlobalSearchResult = {
   documents: [],
@@ -40,22 +41,6 @@ type SearchSelection =
 function searchSelectionId(selection: SearchSelection): string {
   const id = selection.kind === 'chat' ? selection.value.threadId : selection.value.id
   return `global-search-option-${selection.kind}-${encodeURIComponent(id)}`
-}
-
-function highlightMatch(text: string, query: string): ReactNode {
-  const tokens = query.trim().split(/\s+/).filter(Boolean)
-  if (tokens.length === 0) return text
-  const pattern = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
-  const parts = text.split(new RegExp(`(${pattern})`, 'gi'))
-  return parts.map((part, index) =>
-    index % 2 === 1 ? (
-      <mark key={index} className="rounded-[3px] bg-warning/30 px-0.5 text-inherit">
-        {part}
-      </mark>
-    ) : (
-      <span key={index}>{part}</span>
-    )
-  )
 }
 
 interface GlobalSearchProps {
@@ -81,6 +66,9 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   translationRef.current = t
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId)
   const chatStreaming = useWorkspaceStore((state) => state.chatStreaming)
+  const setSearchResults = useDocumentStore((state) => state.setSearchResults)
+  const setFocusedDoc = useDocumentStore((state) => state.setFocusedDoc)
+  const clearSearch = useDocumentStore((state) => state.clearSearch)
 
   const selections = useMemo<SearchSelection[]>(() => [
     ...results.documents.map((value) => ({ kind: 'document' as const, value })),
@@ -180,22 +168,14 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       return
     }
     if (resolvedQuery !== trimmed) return
-    useDocumentStore.setState({
-      isSearching: true,
-      searchQuery: query,
-      searchResults: results.documents
-    })
+    setSearchResults(query, results.documents)
     documentSearchSyncedRef.current = true
-  }, [documentListOpen, query, resolvedQuery, results.documents])
+  }, [documentListOpen, query, resolvedQuery, results.documents, setSearchResults])
 
   const selectResult = useCallback(async (selection: SearchSelection) => {
     if (selection.kind === 'document') {
-      useDocumentStore.setState({
-        focusedDocId: selection.value.id,
-        isSearching: true,
-        searchQuery: query,
-        searchResults: results.documents
-      })
+      setSearchResults(query, results.documents)
+      setFocusedDoc(selection.value.id)
     } else if (selection.kind === 'workspaceFile') {
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
@@ -230,13 +210,13 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       onOpenChat?.()
     }
     setExpanded(false)
-  }, [onOpenChat, query, results.documents, t])
+  }, [onOpenChat, query, results.documents, setFocusedDoc, setSearchResults, t])
 
   const clear = useCallback(() => {
     documentSearchSyncedRef.current = false
     resetLocalSearch()
-    useDocumentStore.getState().clearSearch()
-  }, [resetLocalSearch])
+    clearSearch()
+  }, [clearSearch, resetLocalSearch])
 
   const total = selections.length
   const showResults = expanded && query.trim().length > 0

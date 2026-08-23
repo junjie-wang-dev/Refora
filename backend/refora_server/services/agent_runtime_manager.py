@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -14,9 +13,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from refora_server.services.uv_artifact import (
+    UV_RELEASES,
+    UV_VERSION,
+    normalize_macos_architecture,
+    uv_download_url,
+)
+
 NODE_VERSION = "24.18.0"
 PNPM_VERSION = "11.9.0"
-UV_VERSION = "0.11.16"
 NODE_RELEASES = {
     "arm64": {
         "archive": f"node-v{NODE_VERSION}-darwin-arm64.tar.gz",
@@ -25,16 +30,6 @@ NODE_RELEASES = {
     "x64": {
         "archive": f"node-v{NODE_VERSION}-darwin-x64.tar.gz",
         "sha256": "dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080",
-    },
-}
-UV_RELEASES = {
-    "arm64": {
-        "archive": "uv-aarch64-apple-darwin.tar.gz",
-        "sha256": "2b25be1af546be330b340b0a76b99f989daa6d92678fdffb87438e661e9d88fb",
-    },
-    "x64": {
-        "archive": "uv-x86_64-apple-darwin.tar.gz",
-        "sha256": "6b91ae3de155f51bd1f5b74814821c79f016a176561f252cd9ddfb976939af2e",
     },
 }
 
@@ -80,12 +75,7 @@ class RuntimeEnvironment:
 
 
 def detect_architecture(machine: str | None = None) -> str:
-    value = (machine or platform.machine()).lower()
-    if value in {"arm64", "aarch64"}:
-        return "arm64"
-    if value in {"x64", "x86_64", "amd64"}:
-        return "x64"
-    raise ValueError(f"Unsupported macOS architecture: {value}")
+    return normalize_macos_architecture(machine)
 
 
 def package_specs(requests: Any, *, kind: str) -> list[str]:
@@ -392,7 +382,7 @@ class ManagedRuntimeManager:
             archive = temporary / release["archive"]
             extracted = temporary / "extracted"
             self._download_verified(
-                f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{release['archive']}",
+                uv_download_url(release),
                 archive,
                 release["sha256"],
                 cancel_event,

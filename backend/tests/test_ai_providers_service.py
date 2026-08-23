@@ -105,7 +105,7 @@ def _service(db, responder=None):
     return createAiProvidersService(repos, deps)
 
 
-def test_test_provider_ok_returns_model(db):
+def test_test_provider_ok_returns_models(db):
     provider = _make_provider(db)
     responder = _FakeClient()
     responder._respond = lambda url, headers: _FakeResponse(
@@ -113,7 +113,7 @@ def test_test_provider_ok_returns_model(db):
     )
     svc = _service(db, responder)
     result = svc["testProvider"](provider["id"], "sk-test")
-    assert result == {"ok": True, "model": "gpt-5.6-terra"}
+    assert result == {"ok": True, "models": ["gpt-5.6-terra", "gpt-5.4-mini"]}
 
 
 def test_test_provider_applies_current_proxy_and_closes_client(db):
@@ -182,7 +182,7 @@ def test_test_provider_ollama_no_key_ok(db):
     repos = {"aiProviders": _make_provider_repo(db)}
     svc = createAiProvidersService(repos, deps)
     result = svc["testProvider"](provider["id"], "")
-    assert result == {"ok": True, "model": "gpt-oss:20b"}
+    assert result == {"ok": True, "models": ["gpt-oss:20b"]}
 
 
 def test_test_provider_rejects_unsafe_base_url_before_request(db):

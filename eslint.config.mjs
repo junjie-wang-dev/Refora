@@ -35,5 +35,24 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
       ]
     }
+  },
+  {
+    files: ['src/renderer/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: globals.browser
+    },
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['electron', 'electron/*', 'node:*'],
+              message: 'Renderer code must use the preload API instead of privileged modules.'
+            }
+          ]
+        }
+      ]
+    }
   }
 )

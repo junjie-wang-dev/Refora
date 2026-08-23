@@ -4,19 +4,17 @@ import { Plus, X, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { api } from '../../ipc'
 import { errorMessage } from '../../../shared/ipc-types'
 import type {
-  AgentProfile,
   AiProvider,
-  AiReasoningEffort,
-  ProviderModelInfo
+  AiReasoningEffort
 } from '../../../shared/ipc-types'
 import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
 import { useChatDraftStore } from '../../store/chatDraftStore'
 import { useDocumentStore } from '../../store/documentStore'
+import { useAgentCatalogStore } from '../../store/agentCatalogStore'
 import { Button as UiButton, PanelTabHeader } from '../ui'
 import { useChatStream } from '../../hooks/useChatStream'
-import { AI_PROVIDERS_CHANGED_EVENT } from '../../utils/aiProviderEvents'
 import { MAX_INPUT_LENGTH } from '../../utils/chatUtils'
 import ChatMessages from './ChatMessages'
 import ChatInput from './ChatInput'
@@ -25,7 +23,7 @@ import ThreadHistory from './ThreadHistory'
 import AgentOcrProgress from './AgentOcrProgress'
 import AgentApprovalCard from './AgentApprovalCard'
 import i18n from '../../i18n'
-import { trackRendererPersistence } from '../../persistence'
+import { scheduleRendererSetting } from '../../persistence'
 
 export { parseReforaDocLink } from '../../utils/markdown'
 
@@ -41,8 +39,10 @@ const AI_REASONING_EFFORTS = new Set<AiReasoningEffort>([
 ])
 
 function persistChatSetting(key: string, value: unknown): void {
-  void trackRendererPersistence(api.settings.set(key, value)).catch(() => {
-    useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+  scheduleRendererSetting(key, value, {
+    onError: () => {
+      useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+    }
   })
 }
 
@@ -80,38 +80,6 @@ function providerAllowsModel(provider: AiProvider, model: string): boolean {
   })
 }
 
-function agentOption(profile: AgentProfile, provider?: AiProvider): AiProvider {
-  if (provider) {
-    return {
-      ...provider,
-      id: profile.id,
-      name: profile.name,
-      model: profile.model || provider.model,
-      baseModel: profile.model || provider.baseModel,
-      reasoningEffort: profile.reasoningEffort
-    }
-  }
-  const model = profile.model || 'default'
-  return {
-    id: profile.id,
-    presetId: `${profile.cliRuntimeId ?? 'cli'}-cli`,
-    name: profile.name,
-    baseUrl: '',
-    apiProtocol: 'openai-responses',
-    reasoningControl: profile.reasoningEffort === 'none' ? 'none' : 'openai',
-    reasoningEffort: profile.reasoningEffort,
-    model,
-    models: null,
-    baseModel: model,
-    variant: '',
-    variantFormat: 'none',
-    hasKey: true,
-    temperature: null,
-    maxTokens: null,
-    createdAt: profile.createdAt
-  }
-}
-
 interface ChatPanelProps {
   onClose?: () => void
 }
@@ -130,16 +98,19 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const pendingChatDraft = useChatDraftStore((s) => s.pending)
   const consumeChatDraft = useChatDraftStore((s) => s.consume)
 
-  const [providers, setProviders] = useState<AiProvider[]>([])
-  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
+  const providers = useAgentCatalogStore((state) => state.agents)
+  const agentProfiles = useAgentCatalogStore((state) => state.chatProfiles)
+  const providerModels = useAgentCatalogStore((state) => state.modelsByAgentId)
+  const loadingModels = useAgentCatalogStore((state) => state.loadingModels)
+  const catalogRevision = useAgentCatalogStore((state) => state.revision)
+  const refreshAgentCatalog = useAgentCatalogStore((state) => state.refresh)
+  const resetAgentCatalog = useAgentCatalogStore((state) => state.reset)
   const [activeProviderId, setActiveProviderId] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedVariant, setSelectedVariant] = useState('')
   const [selectedReasoningEffort, setSelectedReasoningEffort] =
     useState<AiReasoningEffort>('none')
-  const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
   const [modelSwitchHint, setModelSwitchHint] = useState<'model' | 'provider' | null>(null)
-  const [loadingModels, setLoadingModels] = useState(false)
 
   const [input, setInput] = useState('')
   const [selectedAttachments, setSelectedAttachments] = useState<string[]>([])
@@ -154,6 +125,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const inputAreaRef = useRef<HTMLDivElement | null>(null)
   const handledChatDraftIdsRef = useRef(new Set<number>())
   const providerLoadVersionRef = useRef(0)
+  const translationRef = useRef(t)
+  const refreshAgentCatalogRef = useRef(refreshAgentCatalog)
+  const resetAgentCatalogRef = useRef(resetAgentCatalog)
+  translationRef.current = t
+  refreshAgentCatalogRef.current = refreshAgentCatalog
+  resetAgentCatalogRef.current = resetAgentCatalog
 
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null
   const deepThinking =
@@ -184,6 +161,8 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     setChatStreaming,
     fetchThreads
   })
+  const chatErrorRef = useRef(chat.setError)
+  chatErrorRef.current = chat.setError
 
   const canSend = !!activeProviderId &&
     !!input.trim() &&
@@ -211,12 +190,10 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     return () => window.cancelAnimationFrame(frame)
   }, [consumeChatDraft, pendingChatDraft])
 
-  const loadProviders = useCallback(async () => {
+  const hydrateProviderSelection = useCallback(async () => {
     const loadVersion = ++providerLoadVersionRef.current
     try {
       const [
-        profiles,
-        apiProviders,
         activeProfileId,
         savedProfileId,
         legacyActiveProviderId,
@@ -225,8 +202,6 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         savedVariant,
         savedReasoningEffort
       ] = await Promise.all([
-        api.agentProfiles.list(),
-        api.aiProviders.list(),
         api.settings.get<string>('activeAgentProfileId', ''),
         api.settings.get<string>('chatSelectedAgentProfileId', ''),
         api.settings.get<string>('activeProviderId', ''),
@@ -236,34 +211,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         api.settings.get<AiReasoningEffort | ''>('chatReasoningEffort', '')
       ])
       if (loadVersion !== providerLoadVersionRef.current) return
-      const apiProvidersById = new Map(
-        apiProviders.map((provider) => [provider.id, provider])
-      )
-      const resolvedProfiles = profiles.length > 0
-        ? profiles
-        : apiProviders.map((provider): AgentProfile => ({
-            id: provider.id,
-            name: provider.name,
-            kind: 'api',
-            apiProviderId: provider.id,
-            cliRuntimeId: null,
-            executablePath: null,
-            model: provider.model,
-            reasoningEffort: provider.reasoningEffort,
-            nativeWebSearch: false,
-            webSearchPolicy: 'auto',
-            createdAt: provider.createdAt,
-            updatedAt: provider.createdAt
-          }))
-      const list = resolvedProfiles.flatMap((profile) => {
-        if (profile.kind === 'cli') return [agentOption(profile)]
-        const provider = profile.apiProviderId
-          ? apiProvidersById.get(profile.apiProviderId)
-          : undefined
-        return provider ? [agentOption(profile, provider)] : []
-      })
-      setAgentProfiles(resolvedProfiles)
-      setProviders(list)
+      const { agents: list, chatProfiles: resolvedProfiles } = useAgentCatalogStore.getState()
       const providerIds = new Set(list.map((provider) => provider.id))
       const legacySavedProfileId = resolvedProfiles.find(
         (profile) => profile.apiProviderId === legacySavedProviderId
@@ -316,79 +264,55 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
           persistChatSetting('chatSelectedVariant', useSavedModel ? savedVariant : fallback.variant)
           persistChatSetting('chatReasoningEffort', nextReasoningEffort)
         }
+      } else {
+        setActiveProviderId('')
+        setSelectedModel('')
+        setSelectedVariant('')
+        setSelectedReasoningEffort('none')
       }
     } catch (e) {
       if (loadVersion === providerLoadVersionRef.current) {
-        chat.setError(errorMessage(e, t('workspace.chat.providersLoadFailed')))
+        chatErrorRef.current(errorMessage(
+          e,
+          translationRef.current('workspace.chat.providersLoadFailed')
+        ))
       }
     }
   }, [])
 
   useEffect(() => {
-    void loadProviders()
-  }, [loadProviders])
+    void refreshAgentCatalogRef.current().catch((error) => {
+      chatErrorRef.current(errorMessage(error, translationRef.current('workspace.chat.providersLoadFailed')))
+    })
+  }, [])
+
+  useEffect(() => {
+    if (catalogRevision === 0) return
+    void hydrateProviderSelection()
+  }, [catalogRevision, hydrateProviderSelection])
 
   useEffect(() => {
     void fetchThreads({ selectLatestIfNone: true })
   }, [activeWorkspaceId, fetchThreads])
 
   useEffect(() => {
-    const reloadProviders = () => void loadProviders()
-    window.addEventListener(AI_PROVIDERS_CHANGED_EVENT, reloadProviders)
-    return () => window.removeEventListener(AI_PROVIDERS_CHANGED_EVENT, reloadProviders)
-  }, [loadProviders])
-
-  useEffect(() => {
     const reloadProviders = () => {
       providerLoadVersionRef.current += 1
-      setProviders([])
-      setAgentProfiles([])
+      resetAgentCatalogRef.current()
       setActiveProviderId('')
       setSelectedModel('')
       setSelectedVariant('')
       setSelectedReasoningEffort('none')
-      void loadProviders()
+      void refreshAgentCatalogRef.current().catch((error) => {
+        chatErrorRef.current(errorMessage(error, translationRef.current('workspace.chat.providersLoadFailed')))
+      })
     }
     api.events.onLibrarySwitched(reloadProviders)
     return () => {
       providerLoadVersionRef.current += 1
       api.events.off('library:switched', reloadProviders)
     }
-  }, [loadProviders])
-
-  useEffect(() => {
-    if (providers.length === 0) {
-      setProviderModels({})
-      return
-    }
-    let cancelled = false
-    setLoadingModels(true)
-    void Promise.all(
-      providers.map(async (provider) => {
-        try {
-          const profile = agentProfiles.find((candidate) => candidate.id === provider.id)
-          const result = profile?.kind === 'cli'
-            ? await api.agentProfiles.listModels(profile.id)
-            : await api.aiProviders.listModels({
-                providerId: profile?.apiProviderId ?? provider.id
-              })
-          return [provider.id, result.ok ? result.models : []] as const
-        } catch {
-          return [provider.id, []] as const
-        }
-      })
-    )
-      .then((entries) => {
-        if (cancelled) return
-        setProviderModels(Object.fromEntries(entries))
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingModels(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [agentProfiles, providers])
+  }, [])
 
   useEffect(() => {
     setSelectedAttachments([])

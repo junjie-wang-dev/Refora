@@ -44,8 +44,8 @@ import {
 import { api } from '../ipc'
 import { errorMessage } from '../../shared/ipc-types'
 import { Badge, Button, Input } from './ui'
-import { notifyAiProvidersChanged } from '../utils/aiProviderEvents'
 import { useModalDialog } from '../hooks/useModalDialog'
+import { useAgentCatalogStore } from '../store/agentCatalogStore'
 
 interface ProviderForm {
   id: string | null
@@ -169,7 +169,9 @@ function CapabilityBadges({ model }: { model: ProviderModelInfo }) {
 
 export function AiProvidersSection() {
   const { t } = useTranslation()
-  const [providers, setProviders] = useState<AiProvider[]>([])
+  const providers = useAgentCatalogStore((state) => state.apiProviders)
+  const refreshAgentCatalog = useAgentCatalogStore((state) => state.refresh)
+  const removeCatalogProvider = useAgentCatalogStore((state) => state.removeProvider)
   const [form, setForm] = useState<ProviderForm | null>(null)
   const [models, setModels] = useState<ProviderModelInfo[]>([])
   const [modelFilter, setModelFilter] = useState('')
@@ -184,11 +186,11 @@ export function AiProvidersSection() {
 
   const load = useCallback(async () => {
     try {
-      setProviders(await api.aiProviders.list())
+      await refreshAgentCatalog()
     } catch (cause) {
       setError(errorMessage(cause, t('settings.aiProviders.loadFail')))
     }
-  }, [t])
+  }, [refreshAgentCatalog, t])
 
   useEffect(() => {
     void load()
@@ -401,7 +403,6 @@ export function AiProvidersSection() {
       }
       closeForm()
       await load()
-      notifyAiProvidersChanged()
     } catch (cause) {
       const code = (cause as { code?: string }).code
       setError(
@@ -430,14 +431,13 @@ export function AiProvidersSection() {
   const removeProvider = async (provider: AiProvider) => {
     let deleted = false
     try {
-      const profile = (await api.agentProfiles.list()).find(
+      const profile = useAgentCatalogStore.getState().profiles.find(
         (candidate) => candidate.apiProviderId === provider.id
       )
       await api.aiProviders.delete(provider.id)
       deleted = true
-      setProviders((current) => current.filter((candidate) => candidate.id !== provider.id))
+      removeCatalogProvider(provider.id)
       if (formRef.current?.id === provider.id) closeForm()
-      notifyAiProvidersChanged()
       const [
         activeProviderId,
         chatSelectedProviderId,
@@ -466,15 +466,9 @@ export function AiProvidersSection() {
         await api.settings.set('chatSelectedVariant', '')
       }
       await load()
-      notifyAiProvidersChanged()
     } catch (cause) {
       if (deleted) {
-        try {
-          setProviders(await api.aiProviders.list())
-        } catch {
-          setProviders((current) => current.filter((candidate) => candidate.id !== provider.id))
-        }
-        notifyAiProvidersChanged()
+        await load().catch(() => undefined)
         setError(t('settings.aiProviders.deleteCleanupFail'))
       } else {
         setError(errorMessage(cause, t('settings.aiProviders.deleteFail')))

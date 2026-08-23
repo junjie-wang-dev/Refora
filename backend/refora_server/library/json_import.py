@@ -237,13 +237,7 @@ def importFromJson(
         for document in sanitized_documents:
             if mode == "merge" and documents["get"](document["id"]) is not None:
                 continue
-            if mode == "merge":
-                try:
-                    documents["insert"](document)
-                except Exception:
-                    continue
-            else:
-                documents["insert"](document)
+            documents["insert"](document)
             inserted.add(document["id"])
             count += 1
         for link in sanitized_links:
@@ -251,13 +245,7 @@ def importFromJson(
             category_id = link["categoryId"]
             new_category_id = category_ids.get(category_id)
             if document_id in inserted and new_category_id:
-                if mode == "merge":
-                    try:
-                        categories["assign"](document_id, new_category_id)
-                    except Exception:
-                        continue
-                else:
-                    categories["assign"](document_id, new_category_id)
+                categories["assign"](document_id, new_category_id)
         return {"imported": count}
 
     transaction = repos.get("transaction")

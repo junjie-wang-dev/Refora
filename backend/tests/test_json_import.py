@@ -85,6 +85,65 @@ def test_replace_import_rolls_back_all_changes_on_insert_failure(tmp_path: Path)
     assert repos["categories"]["list"]() == [category]
 
 
+def test_replace_import_cleans_ai_data_for_removed_documents(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    repos["documents"]["insert"](
+        make_doc(id="existing", file_path=str(library / "existing.pdf"))
+    )
+    workspace = repos["workspaces"]["create"]("Research")
+    repos["aiSummaries"]["setSummary"]("existing", "model", {"text": "old"})
+    report = repos["aiReports"]["create"](
+        workspace["id"],
+        "Report",
+        "# Report",
+        ["existing"],
+    )
+
+    result = importFromJson(
+        repos,
+        {"documents": [], "categories": [], "documentCategories": []},
+        "replace",
+        {"getLibraryFolder": lambda: str(library)},
+    )
+
+    assert result == {"imported": 0}
+    assert repos["documents"]["get"]("existing") is None
+    assert repos["aiSummaries"]["getSummary"]("existing") is None
+    assert repos["aiReports"]["get"](report["id"])["sourceDocIds"] == []
+
+
+def test_merge_import_surfaces_insert_errors(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    repos["documents"]["insert"] = lambda _doc: (_ for _ in ()).throw(
+        RuntimeError("database is locked")
+    )
+    payload = {
+        "documents": [{"id": "new", "filePath": str(library / "new.pdf")}],
+        "categories": [],
+        "documentCategories": [],
+    }
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        importFromJson(
+            repos,
+            payload,
+            "merge",
+            {"getLibraryFolder": lambda: str(library)},
+        )
+
+
 @pytest.mark.parametrize("document_id", ["bad?query", "bad#fragment", "bad/path", "bad%20id", "bad id"])
 def test_json_import_rejects_unsafe_document_ids(
     tmp_path: Path, document_id: str

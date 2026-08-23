@@ -109,7 +109,7 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).then((r) => unwrap<T>(r as Envelope<T>))
 }
 
-const subscriptions = new Map<unknown, { channel: string; ipcListener: (...args: unknown[]) => void }>()
+const subscriptions = new Map<string, Map<unknown, (...args: unknown[]) => void>>()
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let authConfirmationSubscriber: ((payload: SyncAuthConfirmation) => void) | null = null
 let rendererFlushSubscriber: (() => Promise<void>) | null = null
@@ -137,32 +137,18 @@ ipcRenderer.on(IpcChannel.EventRendererFlushRequested, (...args: unknown[]) => {
   ).catch(() => undefined)
 })
 
-const SINGLE_SUBSCRIBER_CHANNELS = new Set([
-  IpcChannel.EventWindowFocusChanged,
-  'ai:chat:token',
-  'ai:chat:reasoning',
-  'ai:chat:done',
-  'ai:chat:error',
-  'ai:chat:trace',
-  'ai:chat:interrupted',
-  'ai:chat:runStatus',
-  'ai:chat:titleUpdated'
-])
-
 function subscribe<T>(channel: string, cb: (payload: T) => void): void {
-  const existing = subscriptions.get(cb)
+  let listeners = subscriptions.get(channel)
+  if (!listeners) {
+    listeners = new Map()
+    subscriptions.set(channel, listeners)
+  }
+  const existing = listeners.get(cb)
   if (existing) {
-    ipcRenderer.removeListener(existing.channel, existing.ipcListener)
-  } else if (SINGLE_SUBSCRIBER_CHANNELS.has(channel)) {
-    for (const [key, sub] of subscriptions) {
-      if (sub.channel === channel) {
-        ipcRenderer.removeListener(channel, sub.ipcListener)
-        subscriptions.delete(key)
-      }
-    }
+    ipcRenderer.removeListener(channel, existing)
   }
   const ipcListener = (...args: unknown[]): void => cb(args[1] as T)
-  subscriptions.set(cb, { channel, ipcListener })
+  listeners.set(cb, ipcListener)
   ipcRenderer.on(channel, ipcListener)
 }
 
@@ -175,10 +161,12 @@ function unsubscribe(channel: string, cb: unknown): void {
     authConfirmationSubscriber = null
     return
   }
-  const sub = subscriptions.get(cb)
-  if (sub) {
-    ipcRenderer.removeListener(channel, sub.ipcListener)
-    subscriptions.delete(cb)
+  const listeners = subscriptions.get(channel)
+  const listener = listeners?.get(cb)
+  if (listener) {
+    ipcRenderer.removeListener(channel, listener)
+    listeners?.delete(cb)
+    if (listeners?.size === 0) subscriptions.delete(channel)
   }
 }
 
@@ -191,7 +179,7 @@ const api: ReforaApi = {
     search: (q: string, page?: PageRequest) => page
       ? invoke<SearchResult>(IpcChannel.DocumentsSearch, q, page)
       : invoke<SearchResult>(IpcChannel.DocumentsSearch, q),
-    get: (id: string) => invoke<Document | null>(IpcChannel.DocumentsGet, id),
+    get: (id: string) => invoke<Document>(IpcChannel.DocumentsGet, id),
     update: (id: string, patch: DocumentPatch) =>
       invoke<Document>(IpcChannel.DocumentsUpdate, id, patch),
     setStarred: (id: string, value: boolean) =>

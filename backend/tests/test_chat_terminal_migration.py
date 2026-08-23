@@ -40,7 +40,7 @@ def test_terminal_message_migration_removes_legacy_protocol_copy() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 38
+    assert result.to_version == 40
     messages = {message["id"]: message for message in chat["listMessages"](thread["id"])}
     assert cancelled_exact["id"] not in messages
     assert messages[cancelled_partial["id"]]["content"] == "Partial cancelled"

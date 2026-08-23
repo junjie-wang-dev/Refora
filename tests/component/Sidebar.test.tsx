@@ -74,9 +74,8 @@ vi.mock('../../src/renderer/components/ImportByIdentifierDialog', () => ({
 }))
 
 import Sidebar from '../../src/renderer/components/Sidebar'
-import AccountModal from '../../src/renderer/components/AccountModal'
-import SettingsModal from '../../src/renderer/components/SettingsModal'
 import { useSyncAccountStore } from '../../src/renderer/store/syncAccountStore'
+import { useSettingsModalStore } from '../../src/renderer/store/settingsModalStore'
 
 const renderSidebar = () => render(<Sidebar collapsed={false} onToggleCollapse={vi.fn()} />)
 const api = (window as unknown as { api: ReforaApi }).api
@@ -101,6 +100,11 @@ describe('Sidebar', () => {
       loading: false,
       loadFailed: false,
       confirmation: null
+    })
+    useSettingsModalStore.setState({
+      settingsOpen: false,
+      settingsPage: 'general',
+      accountOpen: false
     })
     api.events.onSyncAuthConfirmation = vi.fn((cb) => {
       authConfirmationCallback = cb
@@ -127,16 +131,16 @@ describe('Sidebar', () => {
     expect(screen.getByText('sidebar.starred')).toBeInTheDocument()
   })
 
-  it('opens the dedicated account window from the sidebar account entry', async () => {
+  it('opens the shared account modal from the sidebar account entry', async () => {
     const user = userEvent.setup()
     renderSidebar()
 
     await user.click(screen.getByRole('button', { name: 'sidebar.account.open' }))
 
-    expect(vi.mocked(AccountModal).mock.calls.some(([props]) => (
-      props.open
-    ))).toBe(true)
-    expect(vi.mocked(SettingsModal).mock.calls.some(([props]) => props.open)).toBe(false)
+    expect(useSettingsModalStore.getState()).toMatchObject({
+      accountOpen: true,
+      settingsOpen: false
+    })
   })
 
   it('shows the signed-in email and sync state in the sidebar footer', async () => {
@@ -166,7 +170,7 @@ describe('Sidebar', () => {
       status: 'confirmed',
       message: null
     })
-    expect(vi.mocked(AccountModal).mock.calls.some(([props]) => props.open)).toBe(true)
+    expect(useSettingsModalStore.getState().accountOpen).toBe(true)
   })
 
   it('shows the per-mode document count on every smart list item', () => {

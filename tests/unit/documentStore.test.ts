@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
+import { useConfirmStore } from '../../src/renderer/store/confirmStore'
 import { initI18n } from '../../src/renderer/i18n'
 import type { Category, Document, ListColumnState } from '../../src/shared/ipc-types'
 
@@ -40,7 +41,6 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
 
 const mockList = vi.fn()
 const mockCounts = vi.fn()
-const mockSearch = vi.fn()
 const mockSetStarred = vi.fn()
 const mockSettingsSet = vi.fn()
 const mockGetBootstrap = vi.fn()
@@ -60,6 +60,8 @@ const mockCategoriesList = vi.fn()
 const mockCategoriesCreate = vi.fn()
 const mockCategoriesRename = vi.fn()
 const mockCategoriesDelete = vi.fn()
+const mockCategoriesAssign = vi.fn()
+const mockCategoriesUnassign = vi.fn()
 const mockOnDocUpdated = vi.fn()
 const mockOnImportProgress = vi.fn()
 const mockOnImportToast = vi.fn()
@@ -94,15 +96,12 @@ function resetStoreState(): void {
     isLoading: false,
     isLoadingMoreDocuments: false,
     hasMoreDocuments: false,
-    isLoadingMoreSearchResults: false,
-    hasMoreSearchResults: false,
     listMode: { mode: 'all' },
     listColumnState: defaultListColumnState,
     isImporting: false,
     importProgress: null,
     identifierImporting: 0,
     toastMessage: null,
-    confirmDelete: null,
     categories: []
   })
 }
@@ -111,7 +110,6 @@ beforeEach(() => {
   initI18n('en')
   mockList.mockReset()
   mockCounts.mockReset()
-  mockSearch.mockReset()
   mockSetStarred.mockReset()
   mockSettingsSet.mockReset()
   mockGetBootstrap.mockReset()
@@ -142,7 +140,6 @@ beforeEach(() => {
 
   mockList.mockResolvedValue([])
   mockCounts.mockResolvedValue({ all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 })
-  mockSearch.mockResolvedValue([])
   mockSetStarred.mockResolvedValue(undefined)
   mockSettingsSet.mockResolvedValue(undefined)
   mockGetBootstrap.mockResolvedValue({
@@ -175,13 +172,14 @@ beforeEach(() => {
   }))
   mockCategoriesRename.mockResolvedValue(undefined)
   mockCategoriesDelete.mockResolvedValue(undefined)
+  mockCategoriesAssign.mockReset().mockResolvedValue(undefined)
+  mockCategoriesUnassign.mockReset().mockResolvedValue(undefined)
 
   const api = window.api as unknown as Record<string, unknown>
   api.getBootstrap = mockGetBootstrap
   const docs = api.documents as Record<string, unknown>
   docs.list = mockList
   docs.counts = mockCounts
-  docs.search = mockSearch
   docs.setStarred = mockSetStarred
   docs.openPdf = mockOpenPdf
   docs.openInFinder = mockOpenInFinder
@@ -208,6 +206,8 @@ beforeEach(() => {
   categories.create = mockCategoriesCreate
   categories.rename = mockCategoriesRename
   categories.delete = mockCategoriesDelete
+  categories.assign = mockCategoriesAssign
+  categories.unassign = mockCategoriesUnassign
 
   const events = api.events as Record<string, unknown>
   events.onDocumentUpdated = mockOnDocUpdated
@@ -220,6 +220,7 @@ beforeEach(() => {
   events.off = mockEventsOff
 
   resetStoreState()
+  useConfirmStore.setState({ request: null })
 })
 
 afterEach(() => {
@@ -309,99 +310,30 @@ describe('DocumentStore', () => {
     })
   })
 
-  describe('performSearch', () => {
-    beforeEach(() => {
-      vi.useFakeTimers()
-    })
-
-    afterEach(() => {
-      vi.useRealTimers()
-    })
-
-    it('calls api.documents.search with trimmed query after debounce', async () => {
+  describe('global search state', () => {
+    it('accepts resolved global-search documents through the store action', () => {
       const results = [makeDoc({ title: 'Found' })]
-      mockSearch.mockResolvedValue(results)
+      useDocumentStore.getState().setSearchResults('  hello  ', results)
 
-      useDocumentStore.getState().performSearch('  hello  ')
-
-      expect(useDocumentStore.getState().isSearching).toBe(true)
-      expect(useDocumentStore.getState().searchQuery).toBe('  hello  ')
-
-      await vi.advanceTimersByTimeAsync(200)
-
-      expect(mockSearch).toHaveBeenCalledTimes(1)
-      expect(mockSearch).toHaveBeenCalledWith('hello', { limit: 100, offset: 0 })
-      expect(useDocumentStore.getState().searchResults).toEqual(results)
+      expect(useDocumentStore.getState()).toMatchObject({
+        isSearching: true,
+        searchQuery: '  hello  ',
+        searchResults: results
+      })
     })
 
-    it('debounces multiple rapid calls and only dispatches the last query', async () => {
-      useDocumentStore.getState().performSearch('a')
-      useDocumentStore.getState().performSearch('ab')
-      useDocumentStore.getState().performSearch('abc')
-
-      await vi.advanceTimersByTimeAsync(200)
-
-      expect(mockSearch).toHaveBeenCalledTimes(1)
-      expect(mockSearch).toHaveBeenCalledWith('abc', { limit: 100, offset: 0 })
-    })
-
-    it('clears search and falls back to list mode on empty query', () => {
+    it('clears global-search state and returns to the document list', () => {
       mockList.mockResolvedValue([makeDoc()])
+      useDocumentStore.getState().setSearchResults('hello', [makeDoc()])
 
-      useDocumentStore.getState().performSearch('')
+      useDocumentStore.getState().clearSearch()
 
-      expect(useDocumentStore.getState().isSearching).toBe(false)
-      expect(useDocumentStore.getState().searchQuery).toBe('')
-      expect(useDocumentStore.getState().searchResults).toEqual([])
+      expect(useDocumentStore.getState()).toMatchObject({
+        isSearching: false,
+        searchQuery: '',
+        searchResults: []
+      })
       expect(mockList).toHaveBeenCalled()
-    })
-
-    it('sets searchResults to empty array on api error', async () => {
-      mockSearch.mockRejectedValue(new Error('search failed'))
-
-      useDocumentStore.getState().performSearch('error')
-      await vi.advanceTimersByTimeAsync(200)
-
-      expect(useDocumentStore.getState().searchResults).toEqual([])
-      expect(useDocumentStore.getState().toastMessage).toBe('search failed')
-    })
-
-    it('ignores an older in-flight search response', async () => {
-      let resolveFirst!: (docs: Document[]) => void
-      let resolveSecond!: (docs: Document[]) => void
-      mockSearch
-        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
-        .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
-
-      useDocumentStore.getState().performSearch('first')
-      await vi.advanceTimersByTimeAsync(200)
-      useDocumentStore.getState().performSearch('second')
-      await vi.advanceTimersByTimeAsync(200)
-
-      const latest = [makeDoc({ id: 'latest' })]
-      resolveSecond(latest)
-      await Promise.resolve()
-      resolveFirst([makeDoc({ id: 'stale' })])
-      await Promise.resolve()
-
-      expect(useDocumentStore.getState().searchResults).toEqual(latest)
-    })
-
-    it('loads additional search results from the current offset', async () => {
-      const firstPage = Array.from({ length: 100 }, (_, index) => (
-        makeDoc({ id: `search-${index}` })
-      ))
-      mockSearch
-        .mockResolvedValueOnce(firstPage)
-        .mockResolvedValueOnce([makeDoc({ id: 'search-100' })])
-
-      useDocumentStore.getState().performSearch('paper')
-      await vi.advanceTimersByTimeAsync(200)
-      await useDocumentStore.getState().loadMoreSearchResults()
-
-      expect(mockSearch).toHaveBeenLastCalledWith('paper', { limit: 100, offset: 100 })
-      expect(useDocumentStore.getState().searchResults).toHaveLength(101)
-      expect(useDocumentStore.getState().hasMoreSearchResults).toBe(false)
     })
   })
 
@@ -527,7 +459,6 @@ describe('DocumentStore', () => {
         listMode: { mode: 'category', categoryId: 'old-category' },
         selectedIds: ['old'],
         focusedDocId: 'old',
-        confirmDelete: { ids: ['old'], message: 'delete' },
         isImporting: true,
         importProgress: { current: 1, total: 2 },
         identifierImporting: 1,
@@ -548,7 +479,6 @@ describe('DocumentStore', () => {
         listMode: { mode: 'all' },
         selectedIds: [],
         focusedDocId: null,
-        confirmDelete: null,
         isImporting: false,
         importProgress: null,
         identifierImporting: 0,
@@ -991,28 +921,27 @@ describe('DocumentStore', () => {
   })
 
   describe('confirmation, toast, and import actions', () => {
-    it('manages toast and confirmation state', async () => {
+    it('routes deletion confirmations through the shared confirm store', async () => {
       useDocumentStore.getState().showToast('Saved')
       expect(useDocumentStore.getState().toastMessage).toBe('Saved')
       useDocumentStore.getState().clearToast()
       expect(useDocumentStore.getState().toastMessage).toBeNull()
 
       useDocumentStore.getState().requestDeleteConfirm(['doc-1'], 'Delete it?')
-      expect(useDocumentStore.getState().confirmDelete).toEqual({
-        ids: ['doc-1'],
-        message: 'Delete it?'
+      expect(useConfirmStore.getState().request).toMatchObject({
+        title: 'Delete Document',
+        message: 'Delete it?',
+        danger: true
       })
-      useDocumentStore.getState().cancelDelete()
-      expect(useDocumentStore.getState().confirmDelete).toBeNull()
 
       useDocumentStore.setState({ documents: [makeDoc()] })
       useDocumentStore.getState().requestDeleteConfirm(['doc-1'], '')
-      await useDocumentStore.getState().confirmDeleteAction()
+      await useConfirmStore.getState().request?.onConfirm()
       expect(mockDelete).toHaveBeenCalledWith('doc-1')
 
       useDocumentStore.setState({ documents: [makeDoc(), makeDoc({ id: 'doc-2' })] })
       useDocumentStore.getState().requestDeleteConfirm(['doc-1', 'doc-2'], '')
-      await useDocumentStore.getState().confirmDeleteAction()
+      await useConfirmStore.getState().request?.onConfirm()
       expect(mockBulkDelete).toHaveBeenCalledWith(['doc-1', 'doc-2'])
     })
 
@@ -1189,6 +1118,39 @@ describe('DocumentStore', () => {
       await useDocumentStore.getState().renameCategory('cat-1', 'Bad')
       await useDocumentStore.getState().deleteCategory('cat-1')
       expect(useDocumentStore.getState().toastMessage).toBeTruthy()
+    })
+
+    it('updates document categories through shared store actions', async () => {
+      const category: Category = {
+        id: 'cat-1',
+        name: 'Reading',
+        sortOrder: 0,
+        createdAt: 0,
+        count: 2
+      }
+      const document = makeDoc({ categories: [] })
+      useDocumentStore.setState({
+        categories: [category],
+        documents: [document],
+        searchResults: [document],
+        isSearching: true
+      })
+
+      await useDocumentStore.getState().assignDocumentsToCategory(['doc-1'], category.id)
+
+      expect(mockCategoriesAssign).toHaveBeenCalledWith('doc-1', category.id)
+      expect(useDocumentStore.getState().documents[0].categories).toEqual([
+        expect.objectContaining({ id: category.id, name: category.name })
+      ])
+      expect(useDocumentStore.getState().searchResults[0].categories).toEqual([
+        expect.objectContaining({ id: category.id, name: category.name })
+      ])
+
+      await useDocumentStore.getState().unassignDocumentFromCategory('doc-1', category.id)
+
+      expect(mockCategoriesUnassign).toHaveBeenCalledWith('doc-1', category.id)
+      expect(useDocumentStore.getState().documents[0].categories).toEqual([])
+      expect(useDocumentStore.getState().searchResults[0].categories).toEqual([])
     })
   })
 })

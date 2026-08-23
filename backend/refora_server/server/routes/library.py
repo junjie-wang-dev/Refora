@@ -79,8 +79,6 @@ def create_library_router(deps: Any) -> APIRouter:
     connector = _dependency(deps, "connector")
     metadata = _dependency(deps, "metadata")
     emit = _dependency(deps, "emit")
-    ai_summaries = _value(repos, "aiSummaries")
-    ai_reports = _value(repos, "aiReports")
     pdf_annotations = _value(repos, "pdfAnnotations")
     transaction = _value(repos, "transaction")
 
@@ -353,11 +351,6 @@ def create_library_router(deps: Any) -> APIRouter:
             else:
                 for document_id in ids:
                     _method(documents, "delete")(document_id)
-            for document_id in ids:
-                if callable(_value(ai_summaries, "delete")):
-                    _value(ai_summaries, "delete")(document_id)
-                if callable(_value(ai_reports, "removeDocFromSources")):
-                    _value(ai_reports, "removeDocFromSources")(document_id)
 
         if callable(transaction):
             transaction(_cleanup)
@@ -639,8 +632,12 @@ def create_library_router(deps: Any) -> APIRouter:
                 mode = "replace" if choice.get("response") == 1 else "merge"
             if mode not in {"merge", "replace"}:
                 raise ValueError("mode must be merge or replace")
-            with open(file_path, encoding="utf-8") as source:
-                return importFromJson(repos, source.read(), mode)
+
+            def load_and_import() -> dict[str, int]:
+                with open(file_path, encoding="utf-8") as source:
+                    return importFromJson(repos, source.read(), mode)
+
+            return await asyncio.to_thread(load_and_import)
         return await run(action)
 
     async def import_bibliography(body: dict[str, Any], name: str):

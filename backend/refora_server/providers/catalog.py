@@ -269,9 +269,14 @@ def inferModelCapabilities(
         hints = {}
     supported_parameters = sorted(set(hints.get("supportedParameters") or []))
     reasoning_efforts = reasoningEffortsForModel(preset_id, model_id)
+    supports_reasoning = hints.get("supportsReasoning")
     id_ = model_id.lower()
     return {
-        "supportsReasoning": True,
+        "supportsReasoning": (
+            supports_reasoning
+            if isinstance(supports_reasoning, bool)
+            else len(reasoning_efforts) > 0
+        ),
         "reasoningEfforts": reasoning_efforts,
         "supportsVision": hints.get("supportsVision") is True
         or bool(_VISION_RE.search(id_)),

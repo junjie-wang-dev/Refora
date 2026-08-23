@@ -109,6 +109,7 @@ export interface Document {
   fileName: string
   fileSize: number | null
   fileHash: string | null
+  fileMtimeNs?: number | null
   title: string | null
   authors: string | null
   year: string | null
@@ -912,7 +913,7 @@ export interface ReforaApi {
     list(filter: ListFilter): Promise<Document[]>
     counts(): Promise<DocumentCounts>
     search(q: string, page?: PageRequest): Promise<SearchResult>
-    get(id: string): Promise<Document | null>
+    get(id: string): Promise<Document>
     update(id: string, patch: DocumentPatch): Promise<Document>
     setStarred(id: string, value: boolean): Promise<void>
     delete(id: string): Promise<void>

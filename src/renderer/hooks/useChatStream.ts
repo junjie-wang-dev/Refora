@@ -161,39 +161,49 @@ export function useChatStream({
   tRef.current = t
   fetchThreadsRef.current = fetchThreads
 
+  const resetRunState = useCallback((resetElapsed = false) => {
+    traceSnapshotGenerationRef.current += 1
+    reconcileGenerationRef.current += 1
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
+    }
+    for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
+    deferredTraceTimersRef.current.clear()
+    liveActivityStartedAtRef.current.clear()
+    retrySendRef.current = null
+    latestSendRef.current = null
+    cancelledRef.current = false
+    cancelledRunRef.current = null
+    isSendingRef.current = false
+    activeRunIdRef.current = null
+    streamingTextRef.current = ''
+    streamingReasoningRef.current = ''
+    streamingStepOutputRef.current.clear()
+    streamingStartTimeRef.current = null
+    if (elapsedTimerRef.current != null) {
+      clearInterval(elapsedTimerRef.current)
+      elapsedTimerRef.current = null
+    }
+    pendingInterruptRef.current = null
+    resumeRetryRef.current = null
+    setCanRetry(false)
+    setStreamingText('')
+    setStreamingReasoning('')
+    setStreaming(false)
+    setActiveRunId(null)
+    setError(null)
+    setPendingInterrupt(null)
+    setActiveOcrDocumentId(null)
+    if (resetElapsed) setElapsedSeconds(0)
+  }, [])
+
   const displayMessages = useMemo(() => messages.filter((m) => m.role !== 'tool'), [messages])
 
   useEffect(() => {
     threadIdRef.current = activeThreadId
     if (!isSendingRef.current) {
-      traceSnapshotGenerationRef.current += 1
-      reconcileGenerationRef.current += 1
-      for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
-      deferredTraceTimersRef.current.clear()
-      liveActivityStartedAtRef.current.clear()
-      retrySendRef.current = null
-      latestSendRef.current = null
-      cancelledRef.current = false
-      cancelledRunRef.current = null
-      setCanRetry(false)
-      streamingTextRef.current = ''
-      streamingReasoningRef.current = ''
-      streamingStepOutputRef.current.clear()
-      setStreamingText('')
-      setStreamingReasoning('')
-      setStreaming(false)
-      activeRunIdRef.current = null
-      streamingStartTimeRef.current = null
-      if (elapsedTimerRef.current != null) {
-        clearInterval(elapsedTimerRef.current)
-        elapsedTimerRef.current = null
-      }
-      setActiveRunId(null)
-      setError(null)
-      pendingInterruptRef.current = null
-      setPendingInterrupt(null)
-      resumeRetryRef.current = null
-      setActiveOcrDocumentId(null)
+      resetRunState()
     }
     stickToBottomRef.current = true
     if (!activeThreadId) {
@@ -253,7 +263,7 @@ export function useChatStream({
     return () => {
       cancelled = true
     }
-  }, [activeThreadId])
+  }, [activeThreadId, resetRunState])
 
   const scheduleStreamingFlush = useCallback(() => {
     if (rafIdRef.current != null) return
@@ -648,52 +658,19 @@ export function useChatStream({
 
   useEffect(() => {
     const resetForLibrarySwitch = () => {
-      traceSnapshotGenerationRef.current += 1
       historyRequestGenerationRef.current += 1
-      reconcileGenerationRef.current += 1
-      if (rafIdRef.current != null) {
-        cancelAnimationFrame(rafIdRef.current)
-        rafIdRef.current = null
-      }
-      for (const timer of deferredTraceTimersRef.current.values()) clearTimeout(timer)
-      deferredTraceTimersRef.current.clear()
-      liveActivityStartedAtRef.current.clear()
+      resetRunState(true)
       threadIdRef.current = null
-      activeRunIdRef.current = null
-      streamingStartTimeRef.current = null
-      if (elapsedTimerRef.current != null) {
-        clearInterval(elapsedTimerRef.current)
-        elapsedTimerRef.current = null
-      }
-      retrySendRef.current = null
-      latestSendRef.current = null
-      cancelledRef.current = false
-      cancelledRunRef.current = null
-      isSendingRef.current = false
-      streamingTextRef.current = ''
-      streamingReasoningRef.current = ''
-      streamingStepOutputRef.current.clear()
-      pendingInterruptRef.current = null
-      resumeRetryRef.current = null
       hadMessagesRef.current = false
       stickToBottomRef.current = true
       setMessages([])
       setTraceSteps([])
-      setStreaming(false)
-      setStreamingText('')
-      setStreamingReasoning('')
-      setActiveRunId(null)
-      setElapsedSeconds(0)
-      setPendingInterrupt(null)
-      setActiveOcrDocumentId(null)
-      setCanRetry(false)
       setLoadingHistory(false)
-      setError(null)
       setChatStreaming(false)
     }
     api.events.onLibrarySwitched(resetForLibrarySwitch)
     return () => api.events.off('library:switched', resetForLibrarySwitch)
-  }, [setChatStreaming])
+  }, [resetRunState, setChatStreaming])
 
   useEffect(() => {
     disposedRef.current = false

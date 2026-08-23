@@ -85,6 +85,8 @@ const mockStoreState = vi.hoisted(() => ({
   fetchCategories: vi.fn().mockResolvedValue(undefined),
   bulkRefreshMetadata: vi.fn().mockResolvedValue(undefined),
   bulkCategorize: vi.fn().mockResolvedValue(undefined),
+  assignDocumentsToCategory: vi.fn().mockResolvedValue(true),
+  unassignDocumentFromCategory: vi.fn().mockResolvedValue(true),
   deleteDoc: vi.fn().mockResolvedValue(undefined),
   openInFinder: vi.fn().mockResolvedValue(undefined),
   refreshMetadata: vi.fn().mockResolvedValue(undefined),
@@ -119,6 +121,8 @@ function resetStore(): void {
   mockStoreState.fetchCategories.mockReset().mockResolvedValue(undefined)
   mockStoreState.bulkRefreshMetadata.mockReset().mockResolvedValue(undefined)
   mockStoreState.bulkCategorize.mockReset().mockResolvedValue(undefined)
+  mockStoreState.assignDocumentsToCategory.mockReset().mockResolvedValue(true)
+  mockStoreState.unassignDocumentFromCategory.mockReset().mockResolvedValue(true)
   mockStoreState.requestDeleteConfirm.mockReset()
   mockStoreState.showToast.mockReset()
   mockStoreState.patchDocument.mockReset()

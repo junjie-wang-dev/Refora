@@ -6,7 +6,7 @@ export interface ConfirmRequest {
   confirmText: string
   cancelText: string
   danger: boolean
-  onConfirm: () => void
+  onConfirm: () => void | Promise<void>
 }
 
 interface ConfirmState {
@@ -17,7 +17,7 @@ interface ConfirmState {
     confirmText?: string
     cancelText?: string
     danger?: boolean
-    onConfirm: () => void
+    onConfirm: () => void | Promise<void>
   }) => void
   dismiss: () => void
 }

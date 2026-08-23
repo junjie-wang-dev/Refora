@@ -132,7 +132,14 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             )
             if not result["ok"]:
                 return {"ok": False}
-            return {"ok": True, "model": provider["model"]}
+            return {
+                "ok": True,
+                "models": [
+                    model["id"]
+                    for model in result["models"]
+                    if isinstance(model.get("id"), str)
+                ],
+            }
         except Exception as e:
             _warn(f"aiProviders:testProvider failed: {e}")
             return {"ok": False}

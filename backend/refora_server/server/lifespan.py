@@ -464,9 +464,6 @@ def create_lifespan(
                 "destroy": destroy_metadata,
             }
         metadata_service["resumeOnStartup"]()
-        start_watcher = watcher.get("startScanning")
-        if callable(start_watcher):
-            start_watcher()
         if isinstance(repos.get("documents"), dict):
             document_presence = create_document_presence_service(
                 repos,
@@ -480,7 +477,12 @@ def create_lifespan(
                 "start": lambda: None,
                 "destroy": destroy_document_presence,
             }
-        document_presence["start"]()
+        set_library_health_check = watcher.get("setLibraryHealthCheck")
+        if callable(set_library_health_check):
+            set_library_health_check(document_presence.get("checkNow"))
+        start_watcher = watcher.get("startScanning")
+        if callable(start_watcher):
+            start_watcher()
         services = {
             "repos": repos,
             "library": library,

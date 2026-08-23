@@ -1,6 +1,6 @@
 import pytest
 
-from conftest import make_workspaces_repo, open_migrated_db
+from conftest import make_doc, make_docs_repo, make_workspaces_repo, open_migrated_db
 from refora_server.repositories.ai_reports import createAiReportsRepository
 from refora_server.repositories.errors import RepoError
 
@@ -8,6 +8,22 @@ from refora_server.repositories.errors import RepoError
 @pytest.fixture
 def db():
     db = open_migrated_db()
+    documents = make_docs_repo(db)
+    for document_id in (
+        "doc-1",
+        "doc-2",
+        "doc-3",
+        "doc-4",
+        "doc-9",
+        "doc-10",
+        "doc-11",
+        "doc-a",
+        "doc-b",
+        "doc-c",
+        "doc-x",
+        "doc-y",
+    ):
+        documents["insert"](make_doc(id=document_id))
     yield db
     db.close()
 
@@ -21,7 +37,7 @@ def make_workspace(db, name="Research"):
     return ws["create"](name)
 
 
-def test_create_returns_report_with_json_roundtrip(db):
+def test_create_returns_report_with_source_relation(db):
     wid = make_workspace(db)["id"]
     reports = make_reports_repo(db)
     created = reports["create"](
@@ -39,10 +55,11 @@ def test_create_returns_report_with_json_roundtrip(db):
     assert created["createdAt"] > 0
     assert created["id"]
 
-    raw = db.execute(
-        "SELECT sourceDocIds FROM ai_reports WHERE id = ?", [created["id"]]
-    ).fetchone()
-    assert raw["sourceDocIds"] == '["doc-1", "doc-2"]'
+    sources = db.execute(
+        "SELECT docId FROM ai_report_sources WHERE reportId = ? ORDER BY ordinal",
+        [created["id"]],
+    ).fetchall()
+    assert [source["docId"] for source in sources] == ["doc-1", "doc-2"]
 
 
 def test_create_accepts_json_string_source_doc_ids(db):
@@ -72,6 +89,14 @@ def test_create_unknown_workspace_raises(db):
     reports = make_reports_repo(db)
     with pytest.raises(RepoError) as exc:
         reports["create"]("no-such-ws", "R", "# b", [])
+    assert exc.value.code == "not_found"
+
+
+def test_create_unknown_source_document_raises(db):
+    wid = make_workspace(db)["id"]
+    reports = make_reports_repo(db)
+    with pytest.raises(RepoError) as exc:
+        reports["create"](wid, "R", "# b", ["missing"])
     assert exc.value.code == "not_found"
 
 
@@ -216,89 +241,11 @@ def test_field_contract_matches_ai_report_type(db):
     }
 
 
-def test_remove_doc_from_sources_filters_matching_doc_id(db):
+def test_delete_document_cascades_report_sources(db):
     wid = make_workspace(db)["id"]
     reports = make_reports_repo(db)
-    reports["create"](wid, "R1", "# 1", ["doc-1", "doc-2", "doc-3"])
-    reports["create"](wid, "R2", "# 2", ["doc-2"])
-    reports["create"](wid, "R3", "# 3", ["doc-9"])
-    reports["create"](wid, "R4", "# 4", [])
+    created = reports["create"](wid, "R", "# 1", ["doc-1", "doc-10", "doc-11"])
 
-    reports["removeDocFromSources"]("doc-2")
+    make_docs_repo(db)["delete"]("doc-1")
 
-    listed = {r["title"]: r for r in reports["list"](wid)}
-    assert listed["R1"]["sourceDocIds"] == ["doc-1", "doc-3"]
-    assert listed["R2"]["sourceDocIds"] == []
-    assert listed["R3"]["sourceDocIds"] == ["doc-9"]
-    assert listed["R4"]["sourceDocIds"] == []
-
-
-def test_remove_doc_from_sources_handles_doc_at_first_middle_last(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    reports["create"](wid, "first", "# 1", ["doc-1", "doc-2", "doc-3"])
-    reports["create"](wid, "middle", "# 2", ["doc-a", "doc-1", "doc-c"])
-    reports["create"](wid, "last", "# 3", ["doc-x", "doc-y", "doc-1"])
-
-    reports["removeDocFromSources"]("doc-1")
-
-    listed = {r["title"]: r for r in reports["list"](wid)}
-    assert listed["first"]["sourceDocIds"] == ["doc-2", "doc-3"]
-    assert listed["middle"]["sourceDocIds"] == ["doc-a", "doc-c"]
-    assert listed["last"]["sourceDocIds"] == ["doc-x", "doc-y"]
-
-
-def test_remove_doc_from_sources_noop_when_doc_id_absent(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    created = reports["create"](wid, "R", "# 1", ["doc-1", "doc-2"])
-    original = reports["get"](created["id"])["sourceDocIds"]
-
-    reports["removeDocFromSources"]("doc-absent")
-
-    assert reports["get"](created["id"])["sourceDocIds"] == original
-
-
-def test_remove_doc_from_sources_writes_empty_array_when_only_doc(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    created = reports["create"](wid, "R", "# 1", ["doc-1"])
-
-    reports["removeDocFromSources"]("doc-1")
-
-    assert reports["get"](created["id"])["sourceDocIds"] == []
-    raw = db.execute(
-        "SELECT sourceDocIds FROM ai_reports WHERE id = ?", [created["id"]]
-    ).fetchone()
-    assert raw["sourceDocIds"] == "[]"
-
-
-def test_remove_doc_from_sources_does_not_touch_unrelated_reports(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    reports["create"](wid, "R", "# 1", ["doc-1", "doc-2"])
-    unrelated = reports["create"](wid, "U", "# 2", ["doc-3", "doc-4"])
-
-    reports["removeDocFromSources"]("doc-1")
-
-    assert reports["get"](unrelated["id"])["sourceDocIds"] == ["doc-3", "doc-4"]
-
-
-def test_remove_doc_from_sources_handles_doc_id_substring_safely(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    reports["create"](wid, "R", "# 1", ["doc-1", "doc-10", "doc-11"])
-
-    reports["removeDocFromSources"]("doc-1")
-
-    assert reports["list"](wid)[0]["sourceDocIds"] == ["doc-10", "doc-11"]
-
-
-def test_delete_document_triggers_report_cleanup_via_remove_doc_from_sources(db):
-    wid = make_workspace(db)["id"]
-    reports = make_reports_repo(db)
-    reports["create"](wid, "R1", "# 1", ["doc-1", "doc-2"])
-
-    reports["removeDocFromSources"]("doc-1")
-
-    assert reports["list"](wid)[0]["sourceDocIds"] == ["doc-2"]
+    assert reports["get"](created["id"])["sourceDocIds"] == ["doc-10", "doc-11"]

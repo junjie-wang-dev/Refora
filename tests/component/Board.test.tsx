@@ -44,6 +44,8 @@ let mockItems: WorkspaceItem[] = []
 let mockReports: unknown[] = []
 let mockNotes: unknown[] = []
 let mockAssets: WorkspaceAsset[] = []
+let mockDocuments: Document[] = []
+let mockSearchResults: Document[] = []
 let mockActiveWorkspaceId: string | null = 'ws-1'
 let mockPanelView: 'workspace' | 'markdown' | 'pdf' = 'workspace'
 let mockWorkspaceItemsChangedHandler: ((payload: WorkspaceItemsChangedEvent) => void) | null = null
@@ -80,9 +82,17 @@ vi.mock('react-i18next', () => ({
 }))
 
 vi.mock('@renderer/store/documentStore', () => ({
-  useDocumentStore: {
-    getState: () => ({ showToast: mockShowToast })
-  }
+  useDocumentStore: Object.assign(
+    (selector: (state: { documents: Document[]; searchResults: Document[] }) => unknown) =>
+      selector({ documents: mockDocuments, searchResults: mockSearchResults }),
+    {
+      getState: () => ({
+        documents: mockDocuments,
+        searchResults: mockSearchResults,
+        showToast: mockShowToast
+      })
+    }
+  )
 }))
 
 vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
@@ -113,6 +123,8 @@ beforeEach(() => {
   mockReports = []
   mockNotes = []
   mockAssets = []
+  mockDocuments = []
+  mockSearchResults = []
   mockActiveWorkspaceId = 'ws-1'
   mockPanelView = 'workspace'
   mockWorkspaceItemsChangedHandler = null
@@ -341,6 +353,27 @@ describe('Board card clipboard actions', () => {
       doc: document,
       summary
     })
+  })
+
+  it('refreshes an already-loaded card when the document store receives metadata', async () => {
+    const document = {
+      id: 'doc-1',
+      fileName: 'paper.pdf',
+      title: 'Original title'
+    } as Document
+    mockItems = [makeItem('item-paper', document.id, 0)]
+    mockDocuments = [document]
+    const api = window.api as unknown as Record<string, unknown>
+    const ai = api.ai as Record<string, unknown>
+    ai.summaryGet = vi.fn().mockResolvedValue(null)
+
+    const view = render(<Board />)
+    expect(await screen.findByText('Original title')).toBeInTheDocument()
+
+    mockDocuments = [{ ...document, title: 'Updated title' }]
+    view.rerender(<Board />)
+
+    expect(await screen.findByText('Updated title')).toBeInTheDocument()
   })
 
   it('waits for the stored summary lookup before allowing summary generation', async () => {

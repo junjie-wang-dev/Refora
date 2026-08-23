@@ -123,6 +123,8 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const updateNote = useWorkspaceStore((s) => s.updateNote)
   const deleteReport = useWorkspaceStore((s) => s.deleteReport)
   const updateReport = useWorkspaceStore((s) => s.updateReport)
+  const documents = useDocumentStore((s) => s.documents)
+  const searchResults = useDocumentStore((s) => s.searchResults)
 
   const [docs, setDocs] = useState<Map<string, Document>>(new Map())
   const [summaries, setSummaries] = useState<Map<string, AiSummary>>(new Map())
@@ -188,6 +190,12 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   )
   const allDocIdsKey = allDocIds.join('|')
   const workspaceDocIdsKey = workspaceDocIds.join('|')
+  const knownDocuments = useMemo(
+    () => new Map(
+      [...documents, ...searchResults].map((document) => [document.id, document])
+    ),
+    [documents, searchResults]
+  )
   const maxZIndex = useMemo(
     () => sortedItems.reduce((maximum, item) => Math.max(maximum, item.zIndex), -1),
     [sortedItems]
@@ -302,6 +310,20 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [activeWorkspaceId])
 
   useEffect(() => {
+    const relevantIds = new Set(allDocIds)
+    setDocs((previous) => {
+      let changed = false
+      const next = new Map(previous)
+      for (const [docId, document] of knownDocuments) {
+        if (!relevantIds.has(docId) || !next.has(docId) || next.get(docId) === document) continue
+        next.set(docId, document)
+        changed = true
+      }
+      return changed ? next : previous
+    })
+  }, [allDocIdsKey, knownDocuments])
+
+  useEffect(() => {
     setSelectedItemIds((current) => {
       const availableIds = new Set(items.map((item) => item.id))
       const next = new Set([...current].filter((id) => availableIds.has(id)))
@@ -393,14 +415,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     let cancelled = false
     setLoadedSummaryDocIds((previous) => previous.size === 0 ? previous : new Set())
     void (async () => {
-      const documentState = useDocumentStore.getState() as ReturnType<typeof useDocumentStore.getState> & {
-        documents?: Document[]
-        searchResults?: Document[]
-      }
-      const knownDocuments = new Map(
-        [...(documentState.documents ?? []), ...(documentState.searchResults ?? [])]
-          .map((document) => [document.id, document])
-      )
       const cachedDocuments = new Map(
         allDocIds
           .map((docId) => [docId, knownDocuments.get(docId)] as const)
@@ -427,6 +441,16 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         } else if (result.value.document) {
           nextDocuments.set(result.value.docId, result.value.document)
         }
+      }
+      const latestDocuments = new Map(
+        [
+          ...useDocumentStore.getState().documents,
+          ...useDocumentStore.getState().searchResults
+        ].map((document) => [document.id, document])
+      )
+      for (const docId of allDocIds) {
+        const document = latestDocuments.get(docId)
+        if (document) nextDocuments.set(docId, document)
       }
       const nextSummaries = new Map<string, AiSummary>()
       const loadedIds = new Set<string>()

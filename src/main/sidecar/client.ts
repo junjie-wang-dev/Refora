@@ -1,6 +1,5 @@
 import type { ServerLifecycle } from './lifecycle'
 import type { NativeRpc } from './nativeRpc'
-import type { NativeRpcInfo } from './nativeRpc'
 import type { IpcError, Result } from '../../shared/ipc-types'
 import type {
   AgentProfile,
@@ -406,7 +405,7 @@ export interface ServerHttp {
   aiProvidersCreate(input: AiProviderInput): Promise<AiProvider>
   aiProvidersUpdate(providerId: string, input: AiProviderInput): Promise<AiProvider>
   aiProvidersDelete(providerId: string): Promise<{ ack: boolean }>
-  aiProvidersTest(providerId: string): Promise<{ ok: boolean; model?: string }>
+  aiProvidersTest(providerId: string): Promise<{ ok: boolean; models?: string[] }>
   aiProvidersModels(request: ListModelsRequest): Promise<{ ok: boolean; models: string[]; error?: string }>
 
   agentProfilesList(): Promise<AgentProfile[]>
@@ -523,6 +522,16 @@ function makeError(code: string, message: string): Error {
   return err
 }
 
+function isResultEnvelope(value: unknown): value is Result<unknown> {
+  if (!value || typeof value !== 'object' || !('ok' in value)) return false
+  if (value.ok === true) return 'data' in value
+  if (value.ok !== false || !('error' in value)) return false
+  const error = value.error
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; message?: unknown }
+  return typeof candidate.code === 'string' && typeof candidate.message === 'string'
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
   const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
   if (entries.length === 0) return ''
@@ -592,10 +601,10 @@ export function createServerClient(
       throw makeError('network_error', e instanceof Error ? e.message : String(e))
     }
 
-    let payload: Result<T>
+    let payload: unknown
     try {
       payload = await Promise.race([
-        response.json() as Promise<Result<T>>,
+        response.json(),
         timeout
       ])
     } catch (e) {
@@ -608,7 +617,10 @@ export function createServerClient(
       clearTimeout(timer!)
     }
 
-    if (payload.ok) return payload.data
+    if (!isResultEnvelope(payload)) {
+      throw makeError('bad_response', `Invalid response envelope: ${method} ${path}`)
+    }
+    if (payload.ok) return payload.data as T
     throw makeError(payload.error.code, payload.error.message)
   }
 
@@ -699,7 +711,7 @@ export function createServerClient(
     aiProvidersCreate: (input) => post<AiProvider>('/ai/providers', input),
     aiProvidersUpdate: (id, input) => patch<AiProvider>(`/ai/providers/${pathSegment(id)}`, input),
     aiProvidersDelete: (id) => del<{ ack: boolean }>(`/ai/providers/${pathSegment(id)}`),
-    aiProvidersTest: (id) => post<{ ok: boolean; model?: string }>(`/ai/providers/${pathSegment(id)}/test`),
+    aiProvidersTest: (id) => post<{ ok: boolean; models?: string[] }>(`/ai/providers/${pathSegment(id)}/test`),
     aiProvidersModels: (provider) => post<{ ok: boolean; models: string[]; error?: string }>('/ai/providers/models', provider),
 
     agentProfilesList: () => get<AgentProfile[]>('/ai/agent-profiles'),
@@ -841,15 +853,6 @@ export function createServerClient(
     body: unknown
   ): Promise<Result<unknown>> {
     const generation = connectorGeneration
-    let info: NativeRpcInfo
-    try {
-      info = await nativeRpc.start()
-    } catch (e) {
-      return {
-        ok: false,
-        error: { code: 'native_unavailable', message: e instanceof Error ? e.message : String(e) }
-      }
-    }
     if (generation !== connectorGeneration) {
       return {
         ok: false,
@@ -864,16 +867,25 @@ export function createServerClient(
       controller.abort()
     }, connectorTimeoutMs)
     try {
-      const res = await fetchImpl(`${info.baseUrl}${route}`, {
-        method: 'POST',
-        headers: {
-          'x-refora-token': info.token,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body ?? {}),
-        signal: controller.signal
+      const cancelled = new Promise<Result<unknown>>((resolve) => {
+        controller.signal.addEventListener('abort', () => {
+          resolve(
+            timedOut
+              ? { ok: false, error: { code: 'connector_timeout', message: `Native RPC timed out: ${route}` } }
+              : { ok: false, error: { code: 'connector_cancelled', message: `Native RPC was cancelled: ${route}` } }
+          )
+        }, { once: true })
       })
-      return (await res.json()) as Result<unknown>
+      const result = await Promise.race([
+        nativeRpc.invoke(route, body ?? {}, controller.signal),
+        cancelled
+      ])
+      if (controller.signal.aborted) {
+        return timedOut
+          ? { ok: false, error: { code: 'connector_timeout', message: `Native RPC timed out: ${route}` } }
+          : { ok: false, error: { code: 'connector_cancelled', message: `Native RPC was cancelled: ${route}` } }
+      }
+      return result
     } catch (e) {
       if (controller.signal.aborted) {
         return timedOut

@@ -83,7 +83,9 @@ export default function PaperCard({
   const authors = formatAuthors(doc?.authors)
   const content = summary?.content ?? null
   const keyPoints = content?.keyPoints ?? []
-  const previewVersion = doc ? `${doc.fileHash ?? 'unhashed'}-${doc.updatedAt}` : ''
+  const previewVersion = doc
+    ? `${doc.fileHash ?? 'unhashed'}-${doc.fileMtimeNs ?? doc.updatedAt}`
+    : ''
   const detailsClickable = content
     ? Boolean(onOpenSummary)
     : !summaryLoading && !summarizing

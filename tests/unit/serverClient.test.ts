@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServerClient } from '../../src/main/sidecar/client'
 import type { ServerLifecycle, ServerConnection } from '../../src/main/sidecar/lifecycle'
-import type { NativeRpc, NativeRpcInfo } from '../../src/main/sidecar/nativeRpc'
+import type { NativeRpc } from '../../src/main/sidecar/nativeRpc'
 import type { Result } from '../../shared/ipc-types'
 
 vi.mock('../../src/main/services/logger', () => ({
@@ -14,16 +14,10 @@ vi.mock('../../src/main/services/logger', () => ({
 }))
 
 const TOKEN = 'server-secret-token'
-const NATIVE_TOKEN = 'native-secret-token'
 const PORT = 9876
-const NATIVE_PORT = 9877
 
 function makeConnection(): ServerConnection {
   return { baseUrl: `http://127.0.0.1:${PORT}`, token: TOKEN, port: PORT }
-}
-
-function makeNativeInfo(): NativeRpcInfo {
-  return { port: NATIVE_PORT, baseUrl: `http://127.0.0.1:${NATIVE_PORT}`, token: NATIVE_TOKEN }
 }
 
 function makeLifecycle(conn: ServerConnection = makeConnection()): ServerLifecycle {
@@ -34,10 +28,10 @@ function makeLifecycle(conn: ServerConnection = makeConnection()): ServerLifecyc
   }
 }
 
-function makeNativeRpc(info: NativeRpcInfo = makeNativeInfo()): NativeRpc {
+function makeNativeRpc(): NativeRpc {
   return {
-    start: vi.fn().mockResolvedValue(info),
-    stop: vi.fn().mockResolvedValue(undefined)
+    invoke: vi.fn().mockResolvedValue({ ok: true, data: {} }),
+    addManagedRoot: vi.fn().mockReturnValue(true)
   }
 }
 
@@ -300,6 +294,17 @@ describe('serverClient', () => {
         json: vi.fn().mockRejectedValue(new Error('Unexpected token'))
       }) as unknown as typeof fetch
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetchFn })
+      await expect(client.http.documentsList()).rejects.toMatchObject({ code: 'bad_response' })
+    })
+
+    it('throws bad_response when the server omits the Result envelope', async () => {
+      const fetchFn = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ documents: [] })
+      }) as unknown as typeof fetch
+      const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetchFn })
+
       await expect(client.http.documentsList()).rejects.toMatchObject({ code: 'bad_response' })
     })
   })
@@ -584,30 +589,19 @@ describe('serverClient', () => {
   })
 
   describe('connector callbacks', () => {
-    async function connectWithClient(nativeResponder: (url: string) => Response): Promise<{
+    async function connectWithClient(
+      nativeResponder: (route: string, body: unknown, signal?: AbortSignal) => Result<unknown> | Promise<Result<unknown>>
+    ): Promise<{
       client: ReturnType<typeof createServerClient>
       ws: FakeWebSocket
-      nativeCalls: CapturedRequest[]
+      nativeCalls: Array<{ route: string; body: unknown; signal?: AbortSignal }>
     }> {
-      const nativeCalls: CapturedRequest[] = []
-      const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-        const urlStr = typeof url === 'string' ? url : url.toString()
-        const headers: Record<string, string> = {}
-        if (init?.headers) {
-          const h = init.headers as Record<string, string>
-          for (const [k, v] of Object.entries(h)) headers[k] = v
-        }
-        const req: CapturedRequest = {
-          url: urlStr,
-          method: init?.method ?? 'GET',
-          headers,
-          body: init?.body ? String(init.body) : undefined
-        }
-        nativeCalls.push(req)
-        return nativeResponder(urlStr)
-      }) as unknown as typeof fetch
+      const nativeCalls: Array<{ route: string; body: unknown; signal?: AbortSignal }> = []
+      nativeRpc.invoke = vi.fn((route, body, signal) => {
+        nativeCalls.push({ route, body, signal })
+        return Promise.resolve(nativeResponder(route, body, signal))
+      })
       const client = createServerClient(lifecycle, nativeRpc, {
-        fetchImpl: fetchFn,
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
@@ -615,7 +609,7 @@ describe('serverClient', () => {
     }
 
     it('forwards connector.trash-item to nativeRpc and replies connector.result', async () => {
-      const { ws, nativeCalls } = await connectWithClient(() => makeResponse({ trashed: true }))
+      const { ws, nativeCalls } = await connectWithClient(() => ({ ok: true, data: { trashed: true } }))
 
       ws.message({
         event: 'connector.trash-item',
@@ -626,9 +620,7 @@ describe('serverClient', () => {
       })
 
       expect(nativeCalls).toHaveLength(1)
-      expect(nativeCalls[0].url).toBe(`http://127.0.0.1:${NATIVE_PORT}/native/trash-item`)
-      expect(nativeCalls[0].headers['x-refora-token']).toBe(NATIVE_TOKEN)
-      expect(JSON.parse(nativeCalls[0].body as string)).toEqual({ path: '/some/file.pdf' })
+      expect(nativeCalls[0]).toMatchObject({ route: '/native/trash-item', body: { path: '/some/file.pdf' } })
 
       const reply = JSON.parse(ws.sent[ws.sent.length - 1])
       expect(reply.event).toBe('connector.result')
@@ -636,7 +628,10 @@ describe('serverClient', () => {
     })
 
     it('replies connector.error when nativeRpc returns ok:false', async () => {
-      const { ws, nativeCalls } = await connectWithClient(() => makeErrorResponse('trash_failed', 'busy', 400))
+      const { ws, nativeCalls } = await connectWithClient(() => ({
+        ok: false,
+        error: { code: 'trash_failed', message: 'busy' }
+      }))
 
       ws.message({
         event: 'connector.trash-item',
@@ -657,7 +652,7 @@ describe('serverClient', () => {
     })
 
     it('forwards connector.decrypt-api-key to native decrypt-api-key route', async () => {
-      const { ws, nativeCalls } = await connectWithClient(() => makeResponse({ apiKey: 'search-secret' }))
+      const { ws, nativeCalls } = await connectWithClient(() => ({ ok: true, data: { apiKey: 'search-secret' } }))
 
       ws.message({
         event: 'connector.decrypt-api-key',
@@ -667,8 +662,10 @@ describe('serverClient', () => {
         expect(nativeCalls).toHaveLength(1)
       })
 
-      expect(nativeCalls[0].url).toBe(`http://127.0.0.1:${NATIVE_PORT}/native/decrypt-api-key`)
-      expect(JSON.parse(nativeCalls[0].body as string)).toEqual({ apiKeyEnc: 'ZW5jcnlwdGVk' })
+      expect(nativeCalls[0]).toMatchObject({
+        route: '/native/decrypt-api-key',
+        body: { apiKeyEnc: 'ZW5jcnlwdGVk' }
+      })
       await vi.waitFor(() => {
         const reply = JSON.parse(ws.sent[ws.sent.length - 1])
         expect(reply.event).toBe('connector.result')
@@ -676,14 +673,12 @@ describe('serverClient', () => {
       })
     })
 
-    it('replies connector.error when nativeRpc start fails', async () => {
+    it('replies connector.error when nativeRpc invoke fails', async () => {
       const failingNative: NativeRpc = {
-        start: vi.fn().mockRejectedValue(new Error('not started')),
-        stop: vi.fn().mockResolvedValue(undefined)
+        invoke: vi.fn().mockRejectedValue(new Error('not available')),
+        addManagedRoot: vi.fn()
       }
-      const fetchFn = vi.fn() as unknown as typeof fetch
       const client = createServerClient(lifecycle, failingNative, {
-        fetchImpl: fetchFn,
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
@@ -697,13 +692,12 @@ describe('serverClient', () => {
       })
       const reply = JSON.parse(ws.sent[ws.sent.length - 1])
       expect(reply.event).toBe('connector.error')
-      expect(reply.data.error.code).toBe('native_unavailable')
+      expect(reply.data.error.code).toBe('native_error')
     })
 
-    it('replies connector.error on native fetch network failure', async () => {
-      const failingFetch = vi.fn().mockRejectedValue(new Error('connection refused')) as unknown as typeof fetch
+    it('replies connector.error when a native invoke rejects', async () => {
+      nativeRpc.invoke = vi.fn().mockRejectedValue(new Error('connection refused'))
       const client = createServerClient(lifecycle, nativeRpc, {
-        fetchImpl: failingFetch,
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
@@ -721,15 +715,11 @@ describe('serverClient', () => {
 
     it('aborts active native connector requests when the client disconnects', async () => {
       let requestSignal: AbortSignal | null = null
-      const fetchFn = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          requestSignal = init?.signal ?? null
-          requestSignal?.addEventListener('abort', () => {
-            reject(new DOMException('Cancelled', 'AbortError'))
-          }, { once: true })
-        })) as unknown as typeof fetch
+      nativeRpc.invoke = vi.fn((_route, _body, signal?: AbortSignal) =>
+        new Promise<Result<unknown>>((_resolve) => {
+          requestSignal = signal ?? null
+        }))
       const client = createServerClient(lifecycle, nativeRpc, {
-        fetchImpl: fetchFn,
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
@@ -742,7 +732,7 @@ describe('serverClient', () => {
       client.ws.disconnect()
 
       expect(requestSignal?.aborted).toBe(true)
-      await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(nativeRpc.invoke).toHaveBeenCalledOnce())
     })
   })
 

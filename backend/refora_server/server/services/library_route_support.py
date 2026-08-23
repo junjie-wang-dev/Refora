@@ -14,6 +14,10 @@ from typing import Any
 from fastapi.responses import JSONResponse
 
 from refora_server.services.proxy import normalize_proxy_rules
+from refora_server.server.services.result import (
+    error_response as _error_response,
+    success,
+)
 
 
 class UnavailableError(RuntimeError):
@@ -74,25 +78,8 @@ async def call_in_thread(
     return result
 
 
-def success(data: Any, status_code: int = 200) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"ok": True, "data": data})
-
-
 def error_response(exc: Exception) -> JSONResponse:
-    code = getattr(exc, "code", "")
-    message = getattr(exc, "message", "") or str(exc) or "Internal server error"
-    if code in {"not_found", "file_missing"}:
-        return JSONResponse(status_code=404, content={"ok": False, "error": {"code": "not_found", "message": message}})
-    if code in {"duplicate", "conflict", "state_error"}:
-        return JSONResponse(status_code=409, content={"ok": False, "error": {"code": "conflict", "message": message}})
-    if code in {"unavailable", "dependency_unavailable", "connector_timeout"}:
-        return JSONResponse(status_code=503, content={"ok": False, "error": {"code": "unavailable", "message": message}})
-    if code == "identifier_network_error":
-        return JSONResponse(status_code=503, content={"ok": False, "error": {"code": code, "message": message}})
-    if isinstance(exc, (ValueError, TypeError)) or code:
-        return JSONResponse(status_code=400, content={"ok": False, "error": {"code": code or "validation", "message": message}})
-    print(f"ERROR library route: {type(exc).__name__}: {exc}", flush=True)
-    return JSONResponse(status_code=500, content={"ok": False, "error": {"code": "internal", "message": "Internal server error"}})
+    return _error_response(exc)
 
 
 def body_dict(body: Any) -> dict[str, Any]:

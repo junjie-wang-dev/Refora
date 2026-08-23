@@ -181,6 +181,29 @@ def test_scan_once_reconciles_untracked_library_pdfs(tmp_path):
         db.close()
 
 
+def test_scan_once_skips_hidden_managed_and_symlinked_pdfs(tmp_path):
+    db = open_migrated_db()
+    try:
+        wf_repo = make_watch_folders_repo(db)
+        visible = tmp_path / "visible.pdf"
+        visible.write_bytes(b"%PDF")
+        hidden = tmp_path / ".hidden" / "hidden.pdf"
+        hidden.parent.mkdir()
+        hidden.write_bytes(b"%PDF")
+        managed = tmp_path / "refora-assets" / "derived.pdf"
+        managed.parent.mkdir()
+        managed.write_bytes(b"%PDF")
+        outside = tmp_path.parent / "outside.pdf"
+        outside.write_bytes(b"%PDF")
+        (tmp_path / "linked.pdf").symlink_to(outside)
+        svc = _make_watcher({"watchFolders": wf_repo})
+        svc["add"](str(tmp_path))
+
+        assert svc["scanOnce"]() == [str(visible)]
+    finally:
+        db.close()
+
+
 def test_library_scan_detects_recreated_pdf(tmp_path):
     db = open_migrated_db()
     try:
@@ -340,6 +363,35 @@ def test_startScanning_idempotent():
             svc["stopScanning"]()
 
         asyncio.run(run())
+    finally:
+        db.close()
+
+
+def test_fallback_scan_loop_runs_library_health_check(monkeypatch):
+    monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", False)
+    db = open_migrated_db()
+    checks: list[None] = []
+    try:
+        svc = watcher_module.createWatcherService(
+            {"watchFolders": make_watch_folders_repo(db)},
+            {
+                "onNewPdf": lambda _paths: None,
+                "getLibraryFolder": lambda: "",
+                "pollInterval": 0.01,
+                "onLibraryHealthCheck": lambda: checks.append(None),
+                "libraryHealthInterval": 600,
+            },
+        )
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                await asyncio.sleep(0.05)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert checks == [None]
     finally:
         db.close()
 

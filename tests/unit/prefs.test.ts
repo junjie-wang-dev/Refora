@@ -56,6 +56,32 @@ describe('prefs helpers', () => {
     expect(readLibraryFolderPath('/ud')).toBe('')
   })
 
+  it.each(['null', '[]', '{"libraryFolderPath":42}'])(
+    'readLibraryFolderPath returns empty for valid JSON with an invalid shape: %s',
+    (content) => {
+      mockExistsSync.mockReturnValue(true)
+      mockReadFileSync.mockReturnValue(content)
+
+      expect(readLibraryFolderPath('/ud')).toBe('')
+    }
+  )
+
+  it('preserves unknown preferences while normalizing known fields', () => {
+    mockExistsSync.mockReturnValue(true)
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      mineruInstallRoot: '/mineru',
+      libraryFolderPath: 42
+    }))
+
+    writeLibraryFolderPath('/ud', '/my/lib')
+
+    const [, content] = mockWriteFileSync.mock.calls[0]
+    expect(JSON.parse(content as string)).toEqual({
+      mineruInstallRoot: '/mineru',
+      libraryFolderPath: '/my/lib'
+    })
+  })
+
   it('writeLibraryFolderPath writes json with the folder', () => {
     mockExistsSync.mockReturnValue(true)
     mockReadFileSync.mockReturnValue('{}')

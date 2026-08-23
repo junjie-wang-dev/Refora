@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -431,6 +432,10 @@ def _apply_metadata_to_existing(
         documents["setRemoteValues"](document_id, remote_values)
 
 
+def _read_bibtex_entries(path: Path) -> list[dict[str, Any]]:
+    return parseBibtex(path.read_text(encoding="utf-8"))
+
+
 async def importFromBibtex(
     repos: dict[str, Any],
     file_path: str,
@@ -444,7 +449,7 @@ async def importFromBibtex(
         raise ValueError("BibTeX path is not a file")
     if path.stat().st_size > MAX_BIBTEX_BYTES:
         raise ValueError("BibTeX file exceeds the 50 MB limit")
-    entries = parseBibtex(path.read_text(encoding="utf-8"))
+    entries = await asyncio.to_thread(_read_bibtex_entries, path)
     documents = repos["documents"]
     now_ms = options.get("nowMs", _now_ms)
     make_id = options.get("newId", _new_id)
@@ -479,7 +484,7 @@ async def importFromBibtex(
                 existing = documents["findByPath"](pdf_path)
                 file_hash: str | None = None
                 if existing is None:
-                    file_hash = hash_pdf(pdf_path)
+                    file_hash = await asyncio.to_thread(hash_pdf, pdf_path)
                     if not file_hash:
                         raise RuntimeError("Unable to hash attached PDF")
                     existing = documents["findByHash"](file_hash)
@@ -492,7 +497,11 @@ async def importFromBibtex(
                     raise ValueError("Library folder is not configured")
                 stored_path = pdf_path
                 if not isInsideLibrary(pdf_path, library_folder):
-                    copied = copy_to_library(pdf_path, library_folder)
+                    copied = await asyncio.to_thread(
+                        copy_to_library,
+                        pdf_path,
+                        library_folder,
+                    )
                     validated_copy = _validate_pdf_path(copied, library_folder)
                     if validated_copy is None or not isInsideLibrary(
                         validated_copy, library_folder
@@ -500,11 +509,15 @@ async def importFromBibtex(
                         raise ValueError("Copied PDF path is outside the library folder")
                     copied_path = validated_copy
                     stored_path = validated_copy
-                    copied_hash = hash_pdf(stored_path)
+                    copied_hash = await asyncio.to_thread(hash_pdf, stored_path)
                     if not copied_hash or copied_hash != file_hash:
                         raise RuntimeError("Copied PDF failed integrity verification")
                     file_hash = copied_hash
-                stat = os.stat(stored_path, follow_symlinks=False)
+                stat = await asyncio.to_thread(
+                    os.stat,
+                    stored_path,
+                    follow_symlinks=False,
+                )
                 base = _base_document(metadata, entry["citekey"], now_ms, make_id)
                 document = documents["insert"](
                     {

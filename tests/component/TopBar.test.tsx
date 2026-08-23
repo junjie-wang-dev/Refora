@@ -56,12 +56,19 @@ vi.mock('@renderer/components/ImportByIdentifierDialog', () => ({
 }))
 
 import Sidebar from '@renderer/components/Sidebar'
+import SettingsModalHost from '@renderer/components/SettingsModalHost'
+import { useSettingsModalStore } from '@renderer/store/settingsModalStore'
 
 const api = window.api as ReforaApi
 const originalAddFiles = api.import.addFiles
 
 const renderSidebar = (collapsed = false, onToggleCollapse = vi.fn()) =>
-  render(<Sidebar collapsed={collapsed} onToggleCollapse={onToggleCollapse} />)
+  render(
+    <>
+      <Sidebar collapsed={collapsed} onToggleCollapse={onToggleCollapse} />
+      <SettingsModalHost />
+    </>
+  )
 
 describe('Sidebar actions', () => {
   beforeEach(() => {
@@ -70,6 +77,11 @@ describe('Sidebar actions', () => {
     mocks.state.categories = []
     mocks.state.documents = []
     mocks.state.documentCounts = { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 }
+    useSettingsModalStore.setState({
+      settingsOpen: false,
+      settingsPage: 'general',
+      accountOpen: false
+    })
   })
 
   afterEach(() => {

@@ -52,11 +52,15 @@ vi.mock('../../src/renderer/components/AiProvidersSection', () => ({
 const { ModelSettingsSection } = await import(
   '../../src/renderer/components/ModelSettingsSection'
 )
+const { useAgentCatalogStore } = await import(
+  '../../src/renderer/store/agentCatalogStore'
+)
 
 const api = (window as unknown as { api: ReforaApi }).api
 
 describe('ModelSettingsSection', () => {
   beforeEach(() => {
+    useAgentCatalogStore.getState().reset()
     api.agentProfiles.list = vi.fn().mockResolvedValue([])
     api.agentProfiles.scanRuntimes = vi.fn().mockResolvedValue([
       {

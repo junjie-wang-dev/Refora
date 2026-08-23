@@ -34,6 +34,12 @@ def test_infer_reasoning_for_plain_chat_model():
     ]
 
 
+def test_infer_no_reasoning_when_preset_has_no_reasoning_levels():
+    caps = inferModelCapabilities("mistral", "mistral-large-latest")
+    assert caps["supportsReasoning"] is False
+    assert caps["reasoningEfforts"] == []
+
+
 def test_infer_vision_from_model_id():
     caps = inferModelCapabilities("custom", "some-model-vl")
     assert caps["supportsVision"] is True

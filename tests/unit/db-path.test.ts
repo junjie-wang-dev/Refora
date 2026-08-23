@@ -13,8 +13,7 @@ vi.mock('node:fs', () => ({
 import {
   DB_FILE_NAME,
   dbPathForLibraryFolder,
-  dbExistsInLibraryFolder,
-  dbRelatedFiles
+  dbExistsInLibraryFolder
 } from '../../src/main/services/dbPath'
 
 describe('dbPath helpers', () => {
@@ -35,19 +34,5 @@ describe('dbPath helpers', () => {
   it('dbExistsInLibraryFolder returns false when db file missing', () => {
     mockExistsSync.mockReturnValue(false)
     expect(dbExistsInLibraryFolder('/lib')).toBe(false)
-  })
-
-  it('dbRelatedFiles includes db, wal, shm when they exist', () => {
-    const db = join('/lib', DB_FILE_NAME)
-    mockExistsSync.mockImplementation((p: string) =>
-      p === db || p === db + '-wal' || p === db + '-shm'
-    )
-    expect(dbRelatedFiles(db)).toEqual([db, db + '-wal', db + '-shm'])
-  })
-
-  it('dbRelatedFiles filters out missing sidecar files', () => {
-    const db = join('/lib', DB_FILE_NAME)
-    mockExistsSync.mockImplementation((p: string) => p === db || p === db + '-wal')
-    expect(dbRelatedFiles(db)).toEqual([db, db + '-wal'])
   })
 })

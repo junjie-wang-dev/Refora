@@ -26,7 +26,7 @@ def test_unsafe_document_id_migration_rewrites_all_reserved_characters(
     migrated = db.execute(
         "SELECT id FROM documents WHERE title = ?", [unsafe_id]
     ).fetchone()["id"]
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert migrated != unsafe_id
     assert is_safe_document_id(migrated)
     assert db.execute(
@@ -107,7 +107,7 @@ def test_unsafe_document_id_migration_preserves_all_document_associations() -> N
     migrated_id = db.execute(
         "SELECT id FROM documents WHERE title = 'Unsafe legacy document'"
     ).fetchone()["id"]
-    assert result.to_version == 38
+    assert result.to_version == 40
     assert is_safe_document_id(migrated_id)
     assert db.execute(
         "SELECT id FROM documents WHERE id = 'safe-document'"
@@ -130,11 +130,12 @@ def test_unsafe_document_id_migration_preserves_all_document_associations() -> N
             f'SELECT COUNT(*) FROM "{table}" WHERE "{column}" = ?',
             [unsafe_id],
         ).fetchone()[0] == 0
-    assert json.loads(
-        db.execute("SELECT sourceDocIds FROM ai_reports WHERE id = 'report'").fetchone()[
-            "sourceDocIds"
-        ]
-    ) == [migrated_id, "safe-document"]
+    assert [
+        row["docId"]
+        for row in db.execute(
+            "SELECT docId FROM ai_report_sources WHERE reportId = 'report' ORDER BY ordinal"
+        ).fetchall()
+    ] == [migrated_id, "safe-document"]
     assert db.execute(
         "SELECT COUNT(*) FROM legacy_document_id_repair_candidates"
     ).fetchone()[0] == 0

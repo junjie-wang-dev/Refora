@@ -1,6 +1,5 @@
 import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
-  Result,
   WorkspaceCanvasViewport,
   WorkspaceConnection,
   WorkspaceItemKind,
@@ -11,31 +10,11 @@ import type {
 } from '../../../shared/ipc-types'
 import type { OcrJob, OcrProfile } from '../../../shared/mineru-types'
 import type { ServerClient } from '../client'
+import { resultify as wrap } from './result'
 
 export interface ServerWorkspaceHandlerDeps {
   consumeFile?: (path: string, extensions?: readonly string[]) => string
   consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
-}
-
-function errorResult(error: unknown): Result<never> {
-  if (error && typeof error === 'object' && 'code' in error && 'message' in error) {
-    const { code, message } = error as { code: unknown; message: unknown }
-    if (typeof code === 'string' && typeof message === 'string') {
-      return { ok: false, error: { code, message } }
-    }
-  }
-  return {
-    ok: false,
-    error: { code: 'internal_error', message: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-async function wrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
-  try {
-    return { ok: true, data: await fn() }
-  } catch (error) {
-    return errorResult(error)
-  }
 }
 
 export function createServerWorkspaceHandlers(

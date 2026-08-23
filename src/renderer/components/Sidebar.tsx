@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { FilePlus, FileArrowDown, ArrowLineLeft, ArrowLineRight, CircleNotch } from '@phosphor-icons/react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
-import type { SettingsPage } from './SettingsModal'
 import { Button as UiButton, IconTooltip } from './ui'
 import { api } from '../ipc'
 import { IpcChannel } from '../../shared/ipc-channels'
@@ -12,9 +11,8 @@ import SidebarWorkspaces from './SidebarWorkspaces'
 import SidebarCategories from './SidebarCategories'
 import SidebarFooter from './SidebarFooter'
 import { useSyncAccountStore } from '../store/syncAccountStore'
+import { useSettingsModalStore } from '../store/settingsModalStore'
 
-const SettingsModal = lazy(() => import('./SettingsModal'))
-const AccountModal = lazy(() => import('./AccountModal'))
 const ImportByIdentifierDialog = lazy(() => import('./ImportByIdentifierDialog'))
 
 interface SidebarProps {
@@ -30,22 +28,10 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const importProgress = useDocumentStore((s) => s.importProgress)
   const identifierImporting = useDocumentStore((s) => s.identifierImporting)
   const setAuthConfirmation = useSyncAccountStore((state) => state.setConfirmation)
-  const [showSettings, setShowSettings] = useState(false)
-  const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
-  const [showAccount, setShowAccount] = useState(false)
   const [showIdentifierImport, setShowIdentifierImport] = useState(false)
+  const openSettings = useSettingsModalStore((state) => state.openSettings)
+  const openAccount = useSettingsModalStore((state) => state.openAccount)
   const isMac = document.documentElement.dataset.platform === 'mac'
-
-  const openSettings = useCallback((page: SettingsPage) => {
-    setShowAccount(false)
-    setSettingsPage(page)
-    setShowSettings(true)
-  }, [])
-
-  const openAccount = useCallback(() => {
-    setShowSettings(false)
-    setShowAccount(true)
-  }, [])
 
   const handleAddFiles = useCallback(async () => {
     try {
@@ -126,21 +112,6 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       <>
         {toolbar}
         <Suspense fallback={null}>
-          {showSettings ? (
-            <SettingsModal
-              open
-              onClose={() => setShowSettings(false)}
-              initialPage={settingsPage}
-              onOpenAccount={openAccount}
-            />
-          ) : null}
-          {showAccount ? (
-            <AccountModal
-              open
-              onClose={() => setShowAccount(false)}
-              onOpenSyncSettings={() => openSettings('sync')}
-            />
-          ) : null}
           {showIdentifierImport ? (
             <ImportByIdentifierDialog open onClose={() => setShowIdentifierImport(false)} />
           ) : null}
@@ -227,21 +198,6 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
 
       <Suspense fallback={null}>
-        {showSettings ? (
-          <SettingsModal
-            open
-            onClose={() => setShowSettings(false)}
-            initialPage={settingsPage}
-            onOpenAccount={openAccount}
-          />
-        ) : null}
-        {showAccount ? (
-          <AccountModal
-            open
-            onClose={() => setShowAccount(false)}
-            onOpenSyncSettings={() => openSettings('sync')}
-          />
-        ) : null}
         {showIdentifierImport ? (
           <ImportByIdentifierDialog open onClose={() => setShowIdentifierImport(false)} />
         ) : null}

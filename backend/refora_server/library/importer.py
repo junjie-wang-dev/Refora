@@ -16,6 +16,7 @@ from typing import Any, Callable
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from refora_server.library.pdf_discovery import find_pdf_files
 from refora_server.library.paths import isInsideLibrary
 from refora_server.services.document_identity import (
     file_signature,
@@ -329,9 +330,12 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
         folder = Path(path)
         if not folder.is_absolute() or not folder.exists() or folder.is_symlink() or not folder.is_dir():
             return complete({"imported": [], "skipped": [path], "errors": []})
-        iterator = folder.rglob("*") if recursive else folder.glob("*")
-        paths = [str(item.resolve()) for item in iterator if item.suffix.lower() == ".pdf"]
-        return await importFiles(sorted(paths))
+        paths = await asyncio.to_thread(
+            find_pdf_files,
+            str(folder),
+            recursive=recursive,
+        )
+        return await importFiles(paths)
 
     def onComplete(callback: Callable[[dict[str, Any]], None]) -> None:
         complete_callbacks.append(callback)

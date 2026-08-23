@@ -404,9 +404,10 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
                 edited.append(key)
         sets = ", ".join(f"{COLUMN_FOR[k]} = ?" for k in keys)
         params: list[Any] = [patch[k] for k in keys]
-        params.append(json.dumps(edited))
-        params.append(id)
-        db.execute(f"UPDATE documents SET {sets}, editedFields = ? WHERE id = ?", params)
+        db.execute(
+            f"UPDATE documents SET {sets}, editedFields = ?, updatedAt = ? WHERE id = ?",
+            [*params, json.dumps(edited), now_ms(), id],
+        )
         result = get(id)
         assert result is not None
         return result
@@ -425,8 +426,8 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
 
     def setStarred(id: str, value: bool) -> None:
         db.execute(
-            "UPDATE documents SET starred = ? WHERE id = ?",
-            [1 if value else 0, id],
+            "UPDATE documents SET starred = ?, updatedAt = ? WHERE id = ?",
+            [1 if value else 0, now_ms(), id],
         )
 
     def findByPath(filePath: str) -> dict[str, Any] | None:

@@ -5,8 +5,13 @@ import inspect
 import os
 import sys
 import threading
+import time
 from typing import Any, Awaitable, Callable, TypedDict
 
+from refora_server.library.pdf_discovery import (
+    MANAGED_PDF_DIRECTORIES,
+    find_pdf_files,
+)
 from refora_server.library.paths import isInsideLibrary
 from refora_server.repositories.errors import RepoError
 
@@ -29,7 +34,7 @@ def _isPdf(path: str) -> bool:
     return path.lower().endswith(".pdf")
 
 
-_MANAGED_DIRECTORIES = {"refora-assets", ".refora-agent", ".refora"}
+_MANAGED_DIRECTORIES = MANAGED_PDF_DIRECTORIES
 _HIDDEN_PREFIXES = (".",)
 
 _AWAIT_WRITE_FINISH_MS = 2000
@@ -39,29 +44,8 @@ _LIBRARY_RECONCILE_INTERVAL_S = 30.0
 _OBSERVER_LIFECYCLE_LOCK = threading.RLock()
 
 
-def _listPdfsRecursive(folder: str, skip_managed: bool = False) -> list[str]:
-    found: list[str] = []
-    try:
-        with os.scandir(folder) as entries:
-            for entry in entries:
-                try:
-                    if (
-                        skip_managed
-                        and (
-                            entry.name in _MANAGED_DIRECTORIES
-                            or entry.name.startswith(".")
-                        )
-                    ):
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
-                        found.extend(_listPdfsRecursive(entry.path, skip_managed))
-                    elif entry.is_file(follow_symlinks=False) and _isPdf(entry.name):
-                        found.append(os.path.normpath(os.path.abspath(entry.path)))
-                except OSError:
-                    continue
-    except OSError:
-        return found
-    return found
+def _listPdfsRecursive(folder: str) -> list[str]:
+    return find_pdf_files(folder, skip_hidden=True)
 
 
 def _shouldIgnorePath(testPath: str, root: str, libraryFolder: str) -> bool:
@@ -89,6 +73,7 @@ OnNewPdf = Callable[
     [list[str]],
     Awaitable[dict[str, Any] | None] | dict[str, Any] | None,
 ]
+OnLibraryHealthCheck = Callable[[], Awaitable[Any] | Any]
 
 
 class WatcherServiceDeps(TypedDict, total=False):
@@ -98,6 +83,8 @@ class WatcherServiceDeps(TypedDict, total=False):
     observerPollInterval: float
     stabilityThresholdMs: int
     debounceMs: int
+    onLibraryHealthCheck: OnLibraryHealthCheck
+    libraryHealthInterval: float
 
 
 def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = None):
@@ -108,6 +95,8 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     observer_poll_interval = float(deps.get("observerPollInterval", 1.0))
     stability_threshold_ms = int(deps.get("stabilityThresholdMs", _AWAIT_WRITE_FINISH_MS))
     debounce_ms = int(deps.get("debounceMs", _DEBOUNCE_MS))
+    on_library_health_check: OnLibraryHealthCheck | None = deps.get("onLibraryHealthCheck")
+    library_health_interval = float(deps.get("libraryHealthInterval", 600.0))
 
     state: dict[str, Any] = {
         "task": None,
@@ -122,7 +111,10 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "debounceTimer": None,
         "pending": set(),
         "reconcileTask": None,
+        "startupTask": None,
         "skippedLibraryFiles": {},
+        "libraryHealthCheck": on_library_health_check,
+        "lastLibraryHealthCheckAt": 0.0,
     }
 
     def _fileSignature(path: str) -> tuple[int, int, int, int] | None:
@@ -424,7 +416,6 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         if not library_folder or not os.path.isdir(library_folder):
             return
         _startObserverForFolder("__library__", library_folder, isLibrary=True)
-        _reconcileLibrary()
 
     def _stopLibraryObserver() -> None:
         _stopObserver("__library__")
@@ -444,12 +435,18 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             and document["filePath"]
         }
 
-    def _reconcileLibrary() -> None:
+    async def _reconcileLibraryAsync() -> None:
         library_folder = get_library_folder()
         if not library_folder or not os.path.isdir(library_folder):
             return
         known = _knownLibraryFiles()
-        current = set(_listPdfsRecursive(library_folder, skip_managed=True))
+        current = set(
+            await asyncio.to_thread(
+                find_pdf_files,
+                library_folder,
+                skip_hidden=True,
+            )
+        )
         untracked = current - known
         skipped: dict[str, tuple[int, int, int, int]] = state[
             "skippedLibraryFiles"
@@ -459,13 +456,20 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         for path in sorted(untracked):
             _scheduleImport(path, allow_library=True)
 
-    def _reconcileWatchFolders() -> None:
+    async def _reconcileWatchFoldersAsync() -> None:
         seen = state["seen"]
-        for wf in repos["watchFolders"]["getEnabled"]():
+        folders = repos["watchFolders"]["getEnabled"]()
+        for wf in folders:
             root = os.path.normpath(os.path.abspath(wf["path"]))
             if not os.path.isdir(root):
                 continue
-            current = set(_listPdfsRecursive(root))
+            current = set(
+                await asyncio.to_thread(
+                    find_pdf_files,
+                    root,
+                    skip_hidden=True,
+                )
+            )
             previous = seen.get(root)
             if previous is None:
                 previous = set()
@@ -473,13 +477,34 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             for path in sorted(current - previous):
                 _scheduleImport(path)
 
+    async def _startupReconcile() -> None:
+        try:
+            await _reconcileWatchFoldersAsync()
+            await _reconcileLibraryAsync()
+            await _maybeRunLibraryHealthCheck(force=True)
+        except Exception:
+            pass
+
+    async def _maybeRunLibraryHealthCheck(*, force: bool = False) -> None:
+        callback = state["libraryHealthCheck"]
+        if not callable(callback):
+            return
+        now = time.monotonic()
+        if not force and now - state["lastLibraryHealthCheckAt"] < library_health_interval:
+            return
+        state["lastLibraryHealthCheckAt"] = now
+        result = callback()
+        if inspect.isawaitable(result):
+            await result
+
     async def _reconcileLoop() -> None:
         while state["running"]:
             await asyncio.sleep(_LIBRARY_RECONCILE_INTERVAL_S)
             if not state["running"]:
                 break
             try:
-                _reconcileLibrary()
+                await _reconcileLibraryAsync()
+                await _maybeRunLibraryHealthCheck()
             except Exception:
                 pass
 
@@ -489,12 +514,11 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         path: str,
         *,
         known: set[str] | None = None,
-        skip_managed: bool = False,
     ) -> list[str]:
         if not os.path.isdir(path):
             return []
         root = os.path.normpath(os.path.abspath(path))
-        current = set(_listPdfsRecursive(root, skip_managed))
+        current = set(_listPdfsRecursive(root))
         previous = state["seen"].get(root)
         if previous is None:
             previous = known or set()
@@ -511,7 +535,42 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 _scanFolderOnce(
                     library_folder,
                     known=_knownLibraryFiles(),
-                    skip_managed=True,
+                )
+            )
+        return batch
+
+    async def _scanFolderOnceAsync(
+        path: str,
+        *,
+        known: set[str] | None = None,
+    ) -> list[str]:
+        if not os.path.isdir(path):
+            return []
+        root = os.path.normpath(os.path.abspath(path))
+        current = set(
+            await asyncio.to_thread(
+                find_pdf_files,
+                root,
+                skip_hidden=True,
+            )
+        )
+        previous = state["seen"].get(root)
+        if previous is None:
+            previous = known or set()
+        state["seen"][root] = current
+        return sorted(current - previous)
+
+    async def _scanAllAsync() -> list[str]:
+        batch: list[str] = []
+        folders = repos["watchFolders"]["getEnabled"]()
+        for wf in folders:
+            batch.extend(await _scanFolderOnceAsync(wf["path"]))
+        library_folder = get_library_folder()
+        if library_folder:
+            batch.extend(
+                await _scanFolderOnceAsync(
+                    library_folder,
+                    known=_knownLibraryFiles(),
                 )
             )
         return batch
@@ -519,12 +578,13 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     async def _scanLoop() -> None:
         while state["running"]:
             try:
-                batch = _scanAll()
+                batch = await _scanAllAsync()
                 if batch:
                     result = on_new_pdf(batch)
                     if inspect.isawaitable(result):
                         result = await result
                     _recordSkippedLibraryFiles(result)
+                await _maybeRunLibraryHealthCheck()
             except Exception:
                 pass
             await asyncio.sleep(poll_interval)
@@ -546,7 +606,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             for wf in repos["watchFolders"]["getEnabled"]():
                 _startObserverForFolder(wf["id"], wf["path"])
             _startLibraryObserver()
-            _reconcileWatchFolders()
+            state["startupTask"] = loop.create_task(_startupReconcile())
             state["reconcileTask"] = loop.create_task(_reconcileLoop())
             return
         state["task"] = loop.create_task(_scanLoop())
@@ -561,6 +621,10 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         state["reconcileTask"] = None
         if reconcile_task is not None and not reconcile_task.done():
             reconcile_task.cancel()
+        startup_task = state["startupTask"]
+        state["startupTask"] = None
+        if startup_task is not None and not startup_task.done():
+            startup_task.cancel()
         for folderId in list(state["observers"].keys()):
             _stopObserver(folderId)
         lock = state["lock"]
@@ -579,6 +643,10 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                         pass
                 stabilizers.clear()
 
+    def setLibraryHealthCheck(callback: OnLibraryHealthCheck | None) -> None:
+        state["libraryHealthCheck"] = callback
+        state["lastLibraryHealthCheckAt"] = 0.0
+
     def scanOnce() -> list[str]:
         return _scanAll()
 
@@ -590,6 +658,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "startScanning": startScanning,
         "stopScanning": stopScanning,
         "scanOnce": scanOnce,
+        "setLibraryHealthCheck": setLibraryHealthCheck,
         "_markStabilizing": _markStabilizing,
         "_state": state,
     }

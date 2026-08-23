@@ -314,32 +314,37 @@ describe('preload IPC bridge', () => {
     api.events.off(IpcChannel.EventRendererFlushRequested, callback)
   })
 
-  it('replaces duplicate callbacks and single-subscriber chat listeners', () => {
+  it('keeps callbacks isolated by channel and replaces only duplicate registrations', () => {
     const shared = vi.fn()
     api.events.onImportProgress(shared)
     const progressListener = electronMocks.on.mock.calls.at(-1)?.[1]
     api.events.onImportToast(shared)
+    expect(electronMocks.removeListener).not.toHaveBeenCalledWith(
+      IpcChannel.EventImportProgress,
+      progressListener
+    )
+
+    api.events.onImportProgress(shared)
     expect(electronMocks.removeListener).toHaveBeenCalledWith(
       IpcChannel.EventImportProgress,
       progressListener
     )
 
-    const singleSubscriberCases: Array<[string, (cb: () => void) => void]> = [
-      [IpcChannel.EventAiChatToken, (cb) => api.events.onAiChatToken(cb)],
-      [IpcChannel.EventAiChatReasoning, (cb) => api.events.onAiChatReasoning(cb)],
-      [IpcChannel.EventAiChatDone, (cb) => api.events.onAiChatDone(cb)],
-      [IpcChannel.EventAiChatError, (cb) => api.events.onAiChatError(cb)],
-      [IpcChannel.EventAiChatTrace, (cb) => api.events.onAiChatTrace(cb)],
-      [IpcChannel.EventAiChatInterrupted, (cb) => api.events.onAiChatInterrupted(cb)],
-      [IpcChannel.EventAiChatRunStatus, (cb) => api.events.onAiChatRunStatus(cb)]
-    ]
-    for (const [channel, subscribe] of singleSubscriberCases) {
-      const first = vi.fn()
-      const second = vi.fn()
-      subscribe(first)
-      const firstListener = electronMocks.on.mock.calls.at(-1)?.[1]
-      subscribe(second)
-      expect(electronMocks.removeListener).toHaveBeenCalledWith(channel, firstListener)
-    }
+    api.events.off(IpcChannel.EventImportToast, shared)
+    api.events.off(IpcChannel.EventImportProgress, shared)
+  })
+
+  it('does not leak a listener when off receives the wrong channel', () => {
+    const callback = vi.fn()
+    api.events.onImportProgress(callback)
+    const listener = electronMocks.on.mock.calls.at(-1)?.[1]
+
+    api.events.off(IpcChannel.EventImportToast, callback)
+    api.events.off(IpcChannel.EventImportProgress, callback)
+
+    expect(electronMocks.removeListener).toHaveBeenCalledWith(
+      IpcChannel.EventImportProgress,
+      listener
+    )
   })
 })

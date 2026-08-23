@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-import platform
 import shutil
 import signal
 import stat
@@ -21,19 +20,14 @@ from refora_server.ocr.types import (
     MineruEngineState,
     MineruInstallStage,
 )
+from refora_server.services.uv_artifact import (
+    UV_RELEASES,
+    UV_VERSION,
+    normalize_macos_architecture,
+    uv_download_url,
+)
 
-UV_VERSION = "0.11.16"
 MINERU_PYTHON_VERSION = "3.12.13"
-UV_RELEASES: dict[str, dict[str, str]] = {
-    "arm64": {
-        "archive": "uv-aarch64-apple-darwin.tar.gz",
-        "sha256": "2b25be1af546be330b340b0a76b99f989daa6d92678fdffb87438e661e9d88fb",
-    },
-    "x64": {
-        "archive": "uv-x86_64-apple-darwin.tar.gz",
-        "sha256": "6b91ae3de155f51bd1f5b74814821c79f016a176561f252cd9ddfb976939af2e",
-    },
-}
 
 _MAX_STDIO_BYTES = 2_000_000
 _RUN_FILE_TIMEOUT_SECONDS = 2 * 60 * 60
@@ -66,10 +60,7 @@ def now_ms() -> int:
 
 
 def _detect_architecture() -> str:
-    machine = platform.machine().lower()
-    if machine in ("arm64", "aarch64"):
-        return "arm64"
-    return "x64"
+    return normalize_macos_architecture()
 
 
 def _is_within(parent: str, candidate: str) -> bool:
@@ -236,18 +227,24 @@ class MineruRuntime:
 
 
 def _prefs_path(user_data_dir: str) -> str:
+    return os.path.join(user_data_dir, "mineru-prefs.json")
+
+
+def _legacy_prefs_path(user_data_dir: str) -> str:
     return os.path.join(user_data_dir, "refora-prefs.json")
 
 
 def read_mineru_install_root(user_data_dir: str) -> str:
-    p = _prefs_path(user_data_dir)
-    try:
-        with open(p, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        value = data.get("mineruInstallRoot") if isinstance(data, dict) else None
-        return value if isinstance(value, str) else ""
-    except (OSError, ValueError):
-        return ""
+    for p in (_prefs_path(user_data_dir), _legacy_prefs_path(user_data_dir)):
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            value = data.get("mineruInstallRoot") if isinstance(data, dict) else None
+            if isinstance(value, str):
+                return value
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def write_mineru_install_root(user_data_dir: str, folder: str) -> None:
@@ -693,7 +690,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     )
 
                 await deps.downloadFile(
-                    f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{release['archive']}",
+                    uv_download_url(release),
                     archive,
                     cancel_event,
                     _on_download,

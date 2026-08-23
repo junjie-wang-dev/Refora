@@ -3,10 +3,11 @@ import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import i18n from '../i18n'
+import { DOCUMENT_IDS_MIME } from '../utils/documentDrag'
 
-const DOC_MIME = 'application/x-refora-docids'
+const DOC_MIME = DOCUMENT_IDS_MIME
 
-export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () => void) {
+export function useCategoryDrop(fetchDocuments: () => void) {
   const [pendingCatImports, setPendingCatImports] = useState<Set<string>>(new Set())
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -25,27 +26,16 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
       const raw = e.dataTransfer.getData(DOC_MIME) || e.dataTransfer.getData('text/plain')
       if (raw) {
         e.preventDefault()
+        let ids: string[] = []
         try {
-          let ids: string[] = []
-          try {
-            const parsed: unknown = JSON.parse(raw)
-            if (Array.isArray(parsed)) {
-              ids = parsed.filter((v): v is string => typeof v === 'string')
-            }
-          } catch {
-            ids = raw.split(',').map((s) => s.trim()).filter(Boolean)
+          const parsed: unknown = JSON.parse(raw)
+          if (Array.isArray(parsed)) {
+            ids = parsed.filter((v): v is string => typeof v === 'string')
           }
-          if (ids.length === 1) {
-            await api.categories.assign(ids[0], catId)
-          } else if (ids.length > 1) {
-            await api.documents.bulkCategorize(ids, catId)
-          }
-          void fetchCategories()
-        } catch (e) {
-          useDocumentStore.getState().showToast(
-            errorMessage(e, i18n.t('documentErrors.assignCategoryFailed'))
-          )
+        } catch {
+          ids = raw.split(',').map((s) => s.trim()).filter(Boolean)
         }
+        await useDocumentStore.getState().assignDocumentsToCategory(ids, catId)
         return
       }
 
@@ -68,19 +58,9 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
         if (paths.length === 0) return
 
         setPendingCatImports((prev) => new Set(prev).add(catId))
-        useDocumentStore.setState((s) => ({
-          categories: s.categories.map((c) =>
-            c.id === catId ? { ...c, count: (c.count ?? 0) + paths.length } : c
-          )
-        }))
-
         try {
           const result = await api.import.addFiles(paths)
-          if (result.added.length === 1) {
-            await api.categories.assign(result.added[0], catId)
-          } else if (result.added.length > 1) {
-            await api.documents.bulkCategorize(result.added, catId)
-          }
+          await useDocumentStore.getState().assignDocumentsToCategory(result.added, catId)
         } catch (e) {
           useDocumentStore.getState().showToast(
             errorMessage(e, i18n.t('documentErrors.importToCategoryFailed'))
@@ -91,11 +71,10 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
           next.delete(catId)
           return next
         })
-        void fetchCategories()
         void fetchDocuments()
       }
     },
-    [fetchCategories, fetchDocuments]
+    [fetchDocuments]
   )
 
   return { pendingCatImports, handleDragOver, handleDrop }

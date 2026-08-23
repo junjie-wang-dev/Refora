@@ -13,6 +13,10 @@ export type PdfRect = PdfAnnotationRect
 export type PdfPoint = PdfAnnotationPoint
 
 export type PdfAnnotationDraft = Omit<PdfAnnotation, 'id' | 'createdAt'>
+type PdfAnnotationPatch = Partial<Pick<
+  PdfAnnotation,
+  'comment' | 'color' | 'text' | 'fontSize' | 'strokeWidth'
+>>
 
 export type PdfTool =
   | 'highlight'
@@ -64,10 +68,12 @@ interface PdfReaderState {
   updateAnnotation: (
     documentId: string,
     annotationId: string,
-    patch: Partial<Pick<
-      PdfAnnotation,
-      'comment' | 'color' | 'text' | 'fontSize' | 'strokeWidth'
-    >>
+    patch: PdfAnnotationPatch
+  ) => void
+  updateAnnotations: (
+    documentId: string,
+    annotationIds: string[],
+    patch: PdfAnnotationPatch
   ) => void
   removeAnnotation: (documentId: string, annotationId: string) => void
   removeAnnotations: (documentId: string, annotationIds: string[]) => void
@@ -469,9 +475,15 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   updateAnnotation: (documentId, annotationId, patch) => {
-    if (!Object.hasOwn(get().annotations, documentId)) return
-    const annotations = (get().annotations[documentId] ?? []).map((annotation) =>
-      annotation.id === annotationId ? { ...annotation, ...patch } : annotation
+    get().updateAnnotations(documentId, [annotationId], patch)
+  },
+
+  updateAnnotations: (documentId, annotationIds, patch) => {
+    if (!Object.hasOwn(get().annotations, documentId) || annotationIds.length === 0) return
+    const ids = new Set(annotationIds)
+    const current = get().annotations[documentId] ?? []
+    const annotations = current.map((annotation) =>
+      ids.has(annotation.id) ? { ...annotation, ...patch } : annotation
     )
     set((state) => ({
       annotations: { ...state.annotations, [documentId]: annotations }

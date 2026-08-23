@@ -9,6 +9,7 @@ Language = Literal["zh", "en"]
 
 SETTING_KEYS: tuple[str, ...] = (
     "libraryFolderPath",
+    "libraryInitialImportCompleted",
     "crossrefMailto",
     "theme",
     "sidebarCollapsed",
@@ -39,6 +40,7 @@ SETTING_KEYS: tuple[str, ...] = (
 def default_settings(language: Language) -> list[tuple[str, Any]]:
     return [
         ("libraryFolderPath", ""),
+        ("libraryInitialImportCompleted", False),
         ("crossrefMailto", ""),
         ("theme", "dark"),
         ("sidebarCollapsed", "0"),

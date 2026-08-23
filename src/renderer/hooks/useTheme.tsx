@@ -13,7 +13,7 @@ import i18n from '../i18n'
 import { useDocumentStore } from '../store/documentStore'
 import { injectThemeCssVars } from '../theme/tokens'
 import type { ThemeMode } from '../../shared/ipc-types'
-import { trackRendererPersistence } from '../persistence'
+import { invalidateRendererSettingWrites, scheduleRendererSetting } from '../persistence'
 
 export type { ThemeMode } from '../../shared/ipc-types'
 export type ResolvedTheme = 'dark' | 'light'
@@ -78,6 +78,7 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void loadTheme(true)
     const handleLibrarySwitched = () => {
+      invalidateRendererSettingWrites()
       void loadTheme(true)
     }
     api.events.onLibrarySwitched(handleLibrarySwitched)
@@ -100,12 +101,18 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   const setMode = useCallback((newMode: ThemeMode) => {
     loadVersionRef.current += 1
     setModeState(newMode)
-    void trackRendererPersistence(api.settings.set(STORAGE_KEY, newMode))
-      .then(() => api.appearance.setThemeSource(newMode))
-      .catch(() => {
+    scheduleRendererSetting(STORAGE_KEY, newMode, {
+      onSuccess: () => {
+        void api.appearance.setThemeSource(newMode).catch(() => {
+          useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+          void loadTheme(false)
+        })
+      },
+      onError: () => {
         useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
         void loadTheme(false)
-      })
+      }
+    })
   }, [loadTheme])
 
   const value = useMemo<ThemeContextValue>(

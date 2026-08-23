@@ -16,9 +16,32 @@ from refora_server.services.mineru import (
     MineruWorkerProcessDeps,
     create_mineru_engine_manager,
     create_mineru_worker_process,
+    read_mineru_install_root,
+    write_mineru_install_root,
 )
 
 UV_RELEASE = mineru_mod.UV_RELEASES["arm64"]
+
+
+def test_mineru_install_root_uses_its_own_preferences_file(tmp_path):
+    user_data = tmp_path / "user-data"
+    write_mineru_install_root(str(user_data), "/managed/mineru")
+
+    assert read_mineru_install_root(str(user_data)) == "/managed/mineru"
+    assert json.loads((user_data / "mineru-prefs.json").read_text()) == {
+        "mineruInstallRoot": "/managed/mineru"
+    }
+    assert not (user_data / "refora-prefs.json").exists()
+
+
+def test_mineru_install_root_reads_legacy_shared_preferences_once(tmp_path):
+    user_data = tmp_path / "user-data"
+    user_data.mkdir()
+    (user_data / "refora-prefs.json").write_text(
+        json.dumps({"mineruInstallRoot": "/legacy/mineru"})
+    )
+
+    assert read_mineru_install_root(str(user_data)) == "/legacy/mineru"
 
 
 @pytest.mark.asyncio

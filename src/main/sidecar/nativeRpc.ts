@@ -1,5 +1,3 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, relative, resolve as resolvePath } from 'node:path'
 import { lstatSync, realpathSync } from 'node:fs'
@@ -9,20 +7,9 @@ import { createSafeStorageProxy, type SafeStorageProxy } from '../services/safeS
 import { logger } from '../services/logger'
 import { writeFileToClipboard } from '../services/clipboard'
 
-const HOST = '127.0.0.1'
-const TOKEN_HEADER = 'x-refora-token'
-
-export interface NativeRpcInfo {
-  port: number
-  baseUrl: string
-  token: string
-}
-
 export interface NativeRpcDeps {
-  token: string
   getWin?: () => BrowserWindow | null
   safeStorage?: SafeStorageProxy
-  createHttpServer?: typeof createServer
   copyFileToClipboard?: (path: string) => void
   setProxy?: (proxyRules: string) => Promise<void>
   managedRoots?: string[]
@@ -43,8 +30,7 @@ export interface NativePathPolicy {
 }
 
 export interface NativeRpc {
-  start(): Promise<NativeRpcInfo>
-  stop(): Promise<void>
+  invoke(route: string, body: unknown, signal?: AbortSignal): Promise<Result<unknown>>
   addManagedRoot(path: string): boolean
 }
 
@@ -54,46 +40,6 @@ function ok<T>(data: T): Result<T> {
 
 function fail(code: string, message: string): Result<never> {
   return { ok: false, error: { code, message } }
-}
-
-function safeCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a)
-  const bufB = Buffer.from(b)
-  if (bufA.length !== bufB.length) return false
-  return timingSafeEqual(bufA, bufB)
-}
-
-function send(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body)
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(payload)
-  })
-  res.end(payload)
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (chunk: Buffer) => {
-      data += chunk.toString('utf8')
-      if (data.length > 1_000_000) {
-        reject(new Error('Request body too large'))
-        req.destroy()
-      }
-    })
-    req.on('end', () => resolve(data))
-    req.on('error', reject)
-  })
-}
-
-function parseJson<T>(raw: string): T | null {
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return null
-  }
 }
 
 function asString(value: unknown): string | null {
@@ -207,7 +153,6 @@ interface DialogChooseBody {
 
 export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const safeStorage = deps.safeStorage ?? createSafeStorageProxy()
-  const createHttpServer = deps.createHttpServer ?? createServer
   const copyFileToClipboard = deps.copyFileToClipboard ?? writeFileToClipboard
   const managedRoots = new Set(
     (deps.managedRoots ?? [])
@@ -226,16 +171,6 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
   const setProxy =
     deps.setProxy ??
     ((proxyRules: string) => electronSession.defaultSession.setProxy({ proxyRules }))
-  let server: Server | null = null
-  let info: NativeRpcInfo | null = null
-
-  function verifyToken(req: IncomingMessage): boolean {
-    const header = req.headers[TOKEN_HEADER]
-    const provided = Array.isArray(header) ? header[0] : header
-    if (typeof provided !== 'string' || !provided) return false
-    return safeCompare(provided, deps.token)
-  }
-
   async function handleTrashItem(body: TrashItemBody): Promise<Result<{ trashed: boolean }>> {
     const rawPath = asString(body.path)
     if (!rawPath) return fail('invalid_input', 'path is required')
@@ -473,72 +408,26 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     }
   }
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method !== 'POST') {
-      send(res, 405, fail('method_not_allowed', 'Only POST is supported'))
-      return
+  async function invoke(routePath: string, body: unknown, signal?: AbortSignal): Promise<Result<unknown>> {
+    if (signal?.aborted) {
+      return fail('connector_cancelled', `Native RPC was cancelled: ${routePath}`)
     }
-    if (!verifyToken(req)) {
-      send(res, 401, fail('unauthorized', 'Invalid or missing token'))
-      return
-    }
-    const url = new URL(req.url ?? '', `http://${HOST}`)
-    const path = url.pathname
-    let body: unknown
-    try {
-      const raw = await readBody(req)
-      body = parseJson(raw)
-      if (raw && body === null) {
-        send(res, 400, fail('invalid_json', 'Request body must be valid JSON'))
-        return
-      }
-    } catch (e) {
-      send(res, 400, fail('invalid_body', e instanceof Error ? e.message : String(e)))
-      return
-    }
-    try {
-      const result = await route(path, body)
-      send(res, result.ok ? 200 : 400, result)
-    } catch (e) {
+    const operation = route(routePath, body).catch((error) => {
       logger.warn(
-        `nativeRpc:route-error ${path}: ${e instanceof Error ? e.message : String(e)}`
+        `nativeRpc:route-error ${routePath}: ${error instanceof Error ? error.message : String(error)}`
       )
-      send(res, 500, fail('internal_error', 'Internal error'))
-    }
-  }
-
-  function start(): Promise<NativeRpcInfo> {
-    if (info) return Promise.resolve(info)
-    return new Promise<NativeRpcInfo>((resolve, reject) => {
-      const httpServer = createHttpServer((req, res) => {
-        void handleRequest(req, res)
-      })
-      httpServer.on('error', (error) => {
-        logger.error(`nativeRpc:server-error ${error.message}`)
-        reject(error)
-      })
-      httpServer.listen(0, HOST, () => {
-        const address = httpServer.address()
-        const port = typeof address === 'object' && address ? address.port : 0
-        if (!port) {
-          reject(new Error('Failed to bind native RPC server'))
-          return
-        }
-        server = httpServer
-        info = { port, baseUrl: `http://${HOST}:${port}`, token: deps.token }
-        resolve(info)
-      })
+      return fail('internal_error', 'Internal error')
     })
-  }
-
-  function stop(): Promise<void> {
-    const current = server
-    server = null
-    info = null
-    if (!current) return Promise.resolve()
-    return new Promise<void>((resolve) => {
-      current.close(() => resolve())
-      current.closeAllConnections()
+    if (!signal) return operation
+    return new Promise((resolve) => {
+      const onAbort = () => {
+        resolve(fail('connector_cancelled', `Native RPC was cancelled: ${routePath}`))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      void operation.then((result) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(result)
+      })
     })
   }
 
@@ -549,7 +438,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     return true
   }
 
-  return { start, stop, addManagedRoot }
+  return { invoke, addManagedRoot }
 }
 
 export type NativeRpcService = ReturnType<typeof createNativeRpc>

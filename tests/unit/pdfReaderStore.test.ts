@@ -282,6 +282,36 @@ describe('PDF reader state', () => {
     expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith('paper', [])
   })
 
+  it('persists a multi-annotation patch as one snapshot', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    const first = usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'highlight',
+      page: 1,
+      color: '#f2c94c',
+      text: 'First',
+      comment: '',
+      rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }]
+    })
+    const second = usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'highlight',
+      page: 1,
+      color: '#f2c94c',
+      text: 'Second',
+      comment: '',
+      rects: [{ x: 0.1, y: 0.2, width: 0.2, height: 0.02 }]
+    })
+
+    usePdfReaderStore.getState().updateAnnotations('paper', [first.id, second.id], {
+      color: '#eb5757'
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith('paper', [
+      expect.objectContaining({ id: first.id, color: '#eb5757' }),
+      expect.objectContaining({ id: second.id, color: '#eb5757' })
+    ])
+  })
+
   it('keeps new annotations unselected until the default pointer chooses them', async () => {
     await usePdfReaderStore.getState().open(document('paper'))
     usePdfReaderStore.getState().setTool('ink')

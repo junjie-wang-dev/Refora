@@ -35,7 +35,7 @@ def create_document_presence_service(
             signature = None
             if isinstance(path, str) and path:
                 try:
-                    signature = file_signature(path)
+                    signature = await asyncio.to_thread(file_signature, path)
                 except (OSError, ValueError):
                     pass
             exists = signature is not None

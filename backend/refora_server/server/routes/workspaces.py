@@ -7,11 +7,15 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import FileResponse, JSONResponse
 
-from refora_server.repositories.errors import RepoError
+from refora_server.server.services.result import (
+    error_response,
+    failure as _failure,
+    success as _result,
+)
 
 
 class RequestError(Exception):
-    pass
+    code = "validation"
 
 
 def _dependency(deps: Any, name: str) -> Any:
@@ -26,54 +30,14 @@ def _optional_dependency(deps: Any, name: str) -> Any:
     return getattr(deps, name, None)
 
 
-def _result(data: Any) -> JSONResponse:
-    return JSONResponse({"ok": True, "data": data})
-
-
-def _failure(status_code: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={"ok": False, "error": {"code": code, "message": message}},
-    )
-
-
-def _repo_status(code: str) -> int:
-    if code in {"not_found", "file_missing"}:
-        return 404
-    if code in {"busy", "conflict", "duplicate", "invalid_order", "stale"}:
-        return 409
-    if code in {"not_ready", "unavailable", "engine_unavailable"}:
-        return 503
-    return 400
-
-
-def _runtime_status(error: RuntimeError) -> int:
-    message = str(error).lower()
-    if any(word in message for word in ("already", "while", "before uninstall", "active")):
-        return 409
-    if any(word in message for word in ("unavailable", "not installed", "runtime")):
-        return 503
-    return 400
-
-
 async def _invoke(operation: Callable[[], Any]) -> JSONResponse:
     try:
         value = operation()
         if inspect.isawaitable(value):
             value = await value
         return _result(value)
-    except RequestError as error:
-        return _failure(400, "validation", str(error))
-    except RepoError as error:
-        return _failure(_repo_status(error.code), error.code, str(error))
-    except RuntimeError as error:
-        status_code = _runtime_status(error)
-        code = "unavailable" if status_code == 503 else "conflict" if status_code == 409 else "bad_request"
-        return _failure(status_code, code, str(error))
-    except (KeyError, TypeError, ValueError) as error:
-        return _failure(400, "validation", str(error) or "Invalid request")
-    except Exception:
-        return _failure(500, "internal", "Internal server error")
+    except Exception as error:
+        return error_response(error)
 
 
 def _body(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -388,8 +352,8 @@ def create_workspaces_router(deps: Any) -> APIRouter:
                 media_type=asset.get("mimeType") or "application/octet-stream",
                 headers={"X-Content-Type-Options": "nosniff"},
             )
-        except RepoError as error:
-            return _failure(_repo_status(error.code), error.code, str(error))
+        except Exception as error:
+            return error_response(error)
 
     @router.post("/workspaces/{workspace_id}/assets/{asset_id}/open")
     async def open_asset(workspace_id: str, asset_id: str) -> JSONResponse:
@@ -649,8 +613,8 @@ def create_workspaces_router(deps: Any) -> APIRouter:
                 ocr["resolveAsset"](document_id, result_key, asset_path),
                 headers={"X-Content-Type-Options": "nosniff"},
             )
-        except RepoError as error:
-            return _failure(_repo_status(error.code), error.code, str(error))
+        except Exception as error:
+            return error_response(error)
 
     return router
 

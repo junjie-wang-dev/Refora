@@ -15,6 +15,7 @@ import {
   urlTransform
 } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
+import { useSettingsModalStore } from '../../store/settingsModalStore'
 import { Button as UiButton } from '../ui'
 import { AgentTraceStepItem } from './AgentTrace'
 import AgentTodoList from './AgentTodoList'
@@ -441,9 +442,7 @@ export default function ChatMessages({
                 <UiButton
                   variant="primary"
                   size="md"
-                  onClick={() => {
-                    window.dispatchEvent(new CustomEvent('refora:open-settings'))
-                  }}
+                  onClick={() => useSettingsModalStore.getState().openSettings('aiProviders')}
                 >
                   {t('topbar.settings', 'Gear')}
                 </UiButton>

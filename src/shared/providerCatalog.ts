@@ -271,7 +271,7 @@ export function inferModelCapabilities(
   const reasoningEfforts = reasoningEffortsForModel(presetId, modelId)
   const id = modelId.toLowerCase()
   return {
-    supportsReasoning: true,
+    supportsReasoning: hints.supportsReasoning ?? reasoningEfforts.length > 0,
     reasoningEfforts,
     supportsVision:
       hints.supportsVision === true ||

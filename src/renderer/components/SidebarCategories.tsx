@@ -24,7 +24,7 @@ export default function SidebarCategories() {
   const setListMode = useDocumentStore((s) => s.setListMode)
   const focusedDocId = useDocumentStore((s) => s.focusedDocId)
 
-  const { pendingCatImports, handleDragOver, handleDrop } = useCategoryDrop(fetchCategories, fetchDocuments)
+  const { pendingCatImports, handleDragOver, handleDrop } = useCategoryDrop(fetchDocuments)
 
   const [creatingNew, setCreatingNew] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)

@@ -125,7 +125,19 @@ def schema_for_tokenizer(use_trigram: bool) -> str:
     schema_sql = _load_schema_sql()
     if use_trigram:
         return schema_sql
-    return schema_sql.replace("tokenize='trigram'", "tokenize='unicode61'")
+    marker = "\nCREATE VIRTUAL TABLE IF NOT EXISTS docs_fts"
+    return schema_sql.split(marker, 1)[0]
+
+
+def _drop_unused_fts(db: SqliteLike) -> None:
+    db.exec_script(
+        """
+        DROP TRIGGER IF EXISTS documents_ai;
+        DROP TRIGGER IF EXISTS documents_ad;
+        DROP TRIGGER IF EXISTS documents_au;
+        DROP TABLE IF EXISTS docs_fts;
+        """
+    )
 
 
 def _has_columns(db: SqliteLike, table: str, columns: list[str]) -> bool:
@@ -134,6 +146,23 @@ def _has_columns(db: SqliteLike, table: str, columns: list[str]) -> bool:
 
 def _has_objects(db: SqliteLike, objects: list[tuple[str, str]]) -> bool:
     return all(db.has_object(obj_type, name) for obj_type, name in objects)
+
+
+def _has_foreign_key(
+    db: SqliteLike,
+    table: str,
+    column: str,
+    referenced_table: str,
+    on_delete: str,
+) -> bool:
+    rows = db.fetchall(f'PRAGMA foreign_key_list("{table}")', [])
+    return any(
+        len(row) >= 7
+        and row[2] == referenced_table
+        and row[3] == column
+        and row[6] == on_delete
+        for row in rows
+    )
 
 
 def _sync_library_identity_schema_present(db: SqliteLike) -> bool:
@@ -279,6 +308,23 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
             "documents",
             ["fileDevice", "fileInode", "fileMtimeNs"],
         )
+    if version == 39:
+        return _has_columns(db, "ai_summaries", ["fullTextHash"]) and _has_foreign_key(
+            db,
+            "ai_summaries",
+            "docId",
+            "documents",
+            "CASCADE",
+        )
+    if version == 40:
+        return _has_objects(
+            db,
+            [
+                ("table", "ai_report_sources"),
+                ("index", "uq_ai_report_sources_ordinal"),
+                ("index", "idx_ai_report_sources_document"),
+            ],
+        )
     return version <= current
 
 
@@ -348,6 +394,22 @@ def _new_document_id(db: SqliteLike) -> str:
 
 
 def _repair_report_sources(db: SqliteLike, old_id: str, new_id: str) -> None:
+    if not db.has_object("table", "ai_report_sources"):
+        return
+    db.execute(
+        "UPDATE ai_report_sources SET docId = ? WHERE docId = ?",
+        [new_id, old_id],
+    )
+
+
+def _backfill_ai_report_sources(db: SqliteLike) -> None:
+    if not db.has_object("table", "ai_report_sources"):
+        return
+    document_ids = {
+        row[0]
+        for row in db.fetchall("SELECT id FROM documents", [])
+        if isinstance(row[0], str)
+    }
     rows = db.fetchall("SELECT id, sourceDocIds FROM ai_reports", [])
     for row in rows:
         report_id = row[0]
@@ -358,13 +420,22 @@ def _repair_report_sources(db: SqliteLike, old_id: str, new_id: str) -> None:
             sources = json.loads(raw_sources)
         except (TypeError, ValueError):
             continue
-        if not isinstance(sources, list) or old_id not in sources:
+        if not isinstance(sources, list):
             continue
-        updated = [new_id if source == old_id else source for source in sources]
-        db.execute(
-            "UPDATE ai_reports SET sourceDocIds = ? WHERE id = ?",
-            [json.dumps(updated, ensure_ascii=False), report_id],
-        )
+        seen: set[str] = set()
+        for ordinal, document_id in enumerate(sources):
+            if (
+                not isinstance(document_id, str)
+                or document_id not in document_ids
+                or document_id in seen
+            ):
+                continue
+            seen.add(document_id)
+            db.execute(
+                "INSERT OR IGNORE INTO ai_report_sources(reportId, docId, ordinal) "
+                "VALUES (?, ?, ?)",
+                [report_id, document_id, ordinal],
+            )
 
 
 def _repair_unsafe_document_ids(db: SqliteLike) -> None:
@@ -566,17 +637,27 @@ def run_migrations(db: SqliteLike) -> MigrationResult:
         if migration.version == 27 and current_version < 27:
             _normalize_document_authors(db)
             continue
+        if migration.version == 40 and migration_schema_present(db, migration.version):
+            if current_version < migration.version:
+                _backfill_ai_report_sources(db)
+                db.set_user_version(migration.version)
+            continue
         if migration.version >= 12 and migration_schema_present(db, migration.version):
             if current_version < migration.version:
                 db.set_user_version(migration.version)
             continue
         try:
             db.exec_script("BEGIN;\n" + migration.sql)
+            if migration.version == 40:
+                _backfill_ai_report_sources(db)
             db.set_user_version(max(current_version, migration.version))
             db.exec("COMMIT")
         except Exception:
             db.exec("ROLLBACK")
             raise
+
+    if not use_trigram:
+        _drop_unused_fts(db)
 
     _repair_legacy_paths(db)
     _repair_legacy_authors(db)

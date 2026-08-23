@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { CaretUp, CaretDown, Star, Warning, Lightning, Check, FileText, FolderOpen, Copy, ArrowClockwise, Trash, MagnifyingGlass, TreeStructure, Plus, FilePlus } from '@phosphor-icons/react'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
@@ -10,11 +10,13 @@ import { formatAuthors, formatDate, formatFilePath } from '../utils/format'
 import { Button as UiButton, EmptyState, PanelTabHeader } from './ui'
 import type { Document, ColumnId, SortField, ListColumn, Category } from '../../shared/ipc-types'
 import { errorMessage } from '../../shared/ipc-types'
+import { DOCUMENT_IDS_MIME } from '../utils/documentDrag'
+import { highlightMatch } from '../utils/highlightMatch'
 
 const ROW_HEIGHT = 36
 const COMPACT_ROW_HEIGHT = 52
 const MIN_COL_WIDTH = 40
-const DOC_MIME = 'application/x-refora-docids'
+const DOC_MIME = DOCUMENT_IDS_MIME
 
 function renderCell(doc: Document, col: ColumnId): string {
   switch (col) {
@@ -31,22 +33,6 @@ function renderCell(doc: Document, col: ColumnId): string {
     case 'filePath':
       return formatFilePath(doc.filePath)
   }
-}
-
-function highlightMatch(text: string, query: string): ReactNode {
-  const tokens = query.trim().split(/\s+/).filter(Boolean)
-  if (tokens.length === 0) return text
-  const pattern = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
-  const parts = text.split(new RegExp(`(${pattern})`, 'gi'))
-  return parts.map((part, i) =>
-    i % 2 === 1 ? (
-      <mark key={i} className="rounded-[3px] bg-warning/30 px-0.5 text-inherit">
-        {part}
-      </mark>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  )
 }
 
 function ColumnHeader({
@@ -251,9 +237,9 @@ export default function DocumentList({
   const clearSearch = useDocumentStore((s) => s.clearSearch)
   const categories = useDocumentStore((s) => s.categories)
   const createCategory = useDocumentStore((s) => s.createCategory)
+  const assignDocumentsToCategory = useDocumentStore((s) => s.assignDocumentsToCategory)
   const fetchDocuments = useDocumentStore((s) => s.fetchDocuments)
   const loadMoreDocuments = useDocumentStore((s) => s.loadMoreDocuments)
-  const loadMoreSearchResults = useDocumentStore((s) => s.loadMoreSearchResults)
 
   const parentRef = useRef<HTMLDivElement>(null)
 
@@ -285,17 +271,14 @@ export default function DocumentList({
 
   useEffect(() => {
     if (displayDocs.length === 0 || lastVirtualIndex < displayDocs.length - 10) return
-    if (isSearching) {
-      void loadMoreSearchResults?.()
-    } else {
+    if (!isSearching) {
       void loadMoreDocuments?.()
     }
   }, [
     displayDocs.length,
     isSearching,
     lastVirtualIndex,
-    loadMoreDocuments,
-    loadMoreSearchResults
+    loadMoreDocuments
   ])
 
   const toggleColumn = useCallback(
@@ -361,18 +344,7 @@ export default function DocumentList({
       const effectiveIds =
         selectedIds.length > 0 && selectedIds.includes(doc.id) ? selectedIds : [doc.id]
       const assignToCategory = async (catId: string) => {
-        try {
-          if (effectiveIds.length === 1) {
-            await api.categories.assign(effectiveIds[0], catId)
-          } else {
-            await api.documents.bulkCategorize(effectiveIds, catId)
-          }
-          void useDocumentStore.getState().fetchCategories()
-        } catch (err) {
-          useDocumentStore.getState().showToast(
-            errorMessage(err, t('documentErrors.categorizeFailed'))
-          )
-        }
+        await assignDocumentsToCategory(effectiveIds, catId)
       }
       const createAndAssign = async () => {
         const name = window.prompt(t('sidebar.categoryName'))
@@ -458,7 +430,7 @@ export default function DocumentList({
       ]
       showContextMenu(items)
     },
-    [t, openInFinder, handleCopyPath, handleCopyBibtex, refreshMetadata, requestDeleteConfirm, selectedIds, categories, createCategory, openPdf]
+    [t, openInFinder, handleCopyPath, handleCopyBibtex, refreshMetadata, requestDeleteConfirm, selectedIds, categories, createCategory, assignDocumentsToCategory, openPdf]
   )
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {

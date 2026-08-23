@@ -4,8 +4,7 @@ const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   ipcHandle: vi.fn(),
   ipcRemoveHandler: vi.fn(),
-  nativeStart: vi.fn(),
-  nativeStop: vi.fn(),
+  nativeInvoke: vi.fn(),
   nativeAddManagedRoot: vi.fn(),
   wsConnect: vi.fn(),
   wsDisconnect: vi.fn(),
@@ -25,8 +24,7 @@ vi.mock('../../src/shared/ipc-channels', () => ({
 
 vi.mock('../../src/main/sidecar/nativeRpc', () => ({
   createNativeRpc: vi.fn(() => ({
-    start: mocks.nativeStart,
-    stop: mocks.nativeStop,
+    invoke: mocks.nativeInvoke,
     addManagedRoot: mocks.nativeAddManagedRoot
   }))
 }))
@@ -84,12 +82,6 @@ describe('main process server assembly', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.calls.length = 0
-    mocks.nativeStart.mockImplementation(async () => {
-      mocks.calls.push('native.start')
-    })
-    mocks.nativeStop.mockImplementation(async () => {
-      mocks.calls.push('native.stop')
-    })
     mocks.nativeAddManagedRoot.mockReturnValue(true)
     mocks.wsConnect.mockImplementation(async () => {
       mocks.calls.push('ws.connect')
@@ -147,7 +139,6 @@ describe('main process server assembly', () => {
       'ipc.removeHandler',
       'ipc.handle',
       'lifecycle.start',
-      'native.start',
       'http.ready',
       'ws.connect',
       'bridge.start',
@@ -160,7 +151,7 @@ describe('main process server assembly', () => {
       'ipc.removeHandler',
       'ipc.handle'
     ])
-    expect(createNativeRpc).toHaveBeenCalledWith(expect.objectContaining({ token: 'token' }))
+    expect(createNativeRpc).toHaveBeenCalledWith(expect.objectContaining({ getWin: expect.any(Function) }))
     expect(createServerClient).toHaveBeenCalledWith(lifecycle, expect.anything())
     expect(createServerEventBridge).toHaveBeenCalledTimes(1)
     expect(createServerAppHandlers).toHaveBeenCalledTimes(1)
@@ -200,7 +191,6 @@ describe('main process server assembly', () => {
       'ipc.handle',
       'ipc.removeHandler',
       'ipc.handle',
-      'native.stop',
       'lifecycle.stop'
     ])
   })
@@ -310,7 +300,6 @@ describe('main process server assembly', () => {
     })
 
     await expect(assembly.start()).rejects.toThrow('Python server protocol mismatch')
-    expect(mocks.nativeStop).toHaveBeenCalledOnce()
     expect(lifecycle.stop).toHaveBeenCalledOnce()
     expect(mocks.wsConnect).not.toHaveBeenCalled()
   })
@@ -346,7 +335,6 @@ describe('main process server assembly', () => {
         message: 'Local library is temporarily unavailable'
       }
     })
-    expect(mocks.nativeStart).not.toHaveBeenCalled()
     expect(lifecycle.stop).toHaveBeenCalledOnce()
   })
 })

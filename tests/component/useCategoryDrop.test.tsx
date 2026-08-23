@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react'
 
 const { api } = vi.hoisted(() => ({
   api: {
-    categories: { assign: vi.fn() },
+    categories: { assign: vi.fn(), unassign: vi.fn(), list: vi.fn() },
     documents: { bulkCategorize: vi.fn() },
     import: { addFiles: vi.fn() },
     getPathForFile: vi.fn()
@@ -31,6 +31,8 @@ function makeDataTransfer(data: Record<string, string>, files: File[] = []): Rea
 
 beforeEach(() => {
   api.categories.assign.mockReset()
+  api.categories.unassign.mockReset()
+  api.categories.list.mockReset().mockResolvedValue([{ id: 'cat1', name: 'Cat', count: 0 }])
   api.documents.bulkCategorize.mockReset()
   api.import.addFiles.mockReset()
   api.getPathForFile.mockReset()
@@ -48,16 +50,14 @@ afterEach(() => {
 })
 
 describe('useCategoryDrop', () => {
-  let fetchCategories: ReturnType<typeof vi.fn>
   let fetchDocuments: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    fetchCategories = vi.fn()
     fetchDocuments = vi.fn()
   })
 
   it('handleDragOver prevents default when DOC_MIME present', () => {
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = {
       dataTransfer: { types: ['application/x-refora-docids'], dropEffect: '' },
       preventDefault: vi.fn()
@@ -68,7 +68,7 @@ describe('useCategoryDrop', () => {
   })
 
   it('handleDragOver does nothing for unrelated types', () => {
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = {
       dataTransfer: { types: ['application/json'], dropEffect: '' },
       preventDefault: vi.fn()
@@ -79,19 +79,18 @@ describe('useCategoryDrop', () => {
 
   it('drops a single doc id via api.categories.assign (JSON array)', async () => {
     api.categories.assign.mockResolvedValue(undefined)
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({ 'application/x-refora-docids': JSON.stringify(['doc-1']) })
     await act(async () => {
       await result.current.handleDrop('cat1', evt)
     })
     expect(api.categories.assign).toHaveBeenCalledWith('doc-1', 'cat1')
-    expect(fetchCategories).toHaveBeenCalled()
     expect(api.documents.bulkCategorize).not.toHaveBeenCalled()
   })
 
   it('drops multiple doc ids via api.documents.bulkCategorize', async () => {
     api.documents.bulkCategorize.mockResolvedValue(undefined)
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({ 'application/x-refora-docids': JSON.stringify(['a', 'b']) })
     await act(async () => {
       await result.current.handleDrop('cat1', evt)
@@ -102,7 +101,7 @@ describe('useCategoryDrop', () => {
 
   it('falls back to text/plain split by comma when JSON parse fails', async () => {
     api.documents.bulkCategorize.mockResolvedValue(undefined)
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({ 'text/plain': 'x,y,z' })
     await act(async () => {
       await result.current.handleDrop('cat1', evt)
@@ -112,7 +111,7 @@ describe('useCategoryDrop', () => {
 
   it('shows toast on assign failure', async () => {
     api.categories.assign.mockRejectedValue(new Error('boom'))
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({ 'application/x-refora-docids': JSON.stringify(['doc-1']) })
     await act(async () => {
       await result.current.handleDrop('cat1', evt)
@@ -128,7 +127,7 @@ describe('useCategoryDrop', () => {
       errors: []
     })
     api.documents.bulkCategorize.mockResolvedValue(undefined)
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const file = { name: 'paper.pdf' } as File
     const evt = makeDataTransfer({}, [file])
     await act(async () => {
@@ -147,7 +146,7 @@ describe('useCategoryDrop', () => {
       errors: []
     })
     api.documents.bulkCategorize.mockRejectedValue(new Error('assign failed'))
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({}, [{ name: 'paper.pdf' } as File])
 
     await act(async () => {
@@ -164,7 +163,7 @@ describe('useCategoryDrop', () => {
 
   it('skips non-PDF files when dropping', async () => {
     api.getPathForFile.mockResolvedValue('/path/image.png')
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const file = { name: 'image.png' } as File
     const evt = makeDataTransfer({}, [file])
     await act(async () => {
@@ -174,13 +173,12 @@ describe('useCategoryDrop', () => {
   })
 
   it('does nothing when drop has no data and no files', async () => {
-    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
     const evt = makeDataTransfer({}, [])
     await act(async () => {
       await result.current.handleDrop('cat1', evt)
     })
     expect(api.categories.assign).not.toHaveBeenCalled()
     expect(api.import.addFiles).not.toHaveBeenCalled()
-    expect(fetchCategories).not.toHaveBeenCalled()
   })
 })

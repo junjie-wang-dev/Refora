@@ -68,6 +68,13 @@ describe('provider catalog', () => {
     })
   })
 
+  it('does not advertise reasoning when the provider and model expose no reasoning levels', () => {
+    expect(inferModelCapabilities('mistral', 'mistral-large-latest')).toMatchObject({
+      supportsReasoning: false,
+      reasoningEfforts: []
+    })
+  })
+
   it('selects a recommended or usable chat model', () => {
     const openai = PROVIDER_PRESETS.find((provider) => provider.id === 'openai')!
     expect(pickDefaultModel(openai, ['text-embedding-3-small', 'gpt-5.6-terra'])).toBe(

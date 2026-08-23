@@ -69,13 +69,11 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
 
   async function start(): Promise<void> {
     try {
-      const connection = await deps.lifecycle.start()
+      await deps.lifecycle.start()
       nativeRpc = createNativeRpc({
-        token: connection.token,
         getWin: deps.getWin,
         managedRoots: deps.nativeManagedRoots
       })
-      await nativeRpc.start()
       serverClient = createServerClient(deps.lifecycle, nativeRpc)
       const ready = await serverClient.http.systemReady()
       if (
@@ -139,7 +137,6 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
       registerUnavailableHandlers(handlerChannels)
       eventBridge?.stop()
       serverClient?.ws.disconnect()
-      await nativeRpc?.stop()
       await deps.lifecycle.stop()
       eventBridge = null
       serverClient = null
@@ -152,7 +149,6 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     eventBridge?.stop()
     serverClient?.ws.disconnect()
     registerUnavailableHandlers(handlerChannels)
-    await nativeRpc?.stop()
     await deps.lifecycle.stop()
     deps.rendererPathCapabilities?.clear()
   }

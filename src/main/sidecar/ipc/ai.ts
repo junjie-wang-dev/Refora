@@ -19,25 +19,7 @@ import type {
   ChatResumePayload,
   ServerClient,
 } from '../client'
-
-function errorResult(error: unknown): Result<never> {
-  const value = error as { code?: unknown; message?: unknown }
-  return {
-    ok: false,
-    error: {
-      code: typeof value?.code === 'string' ? value.code : 'internal_error',
-      message: error instanceof Error ? error.message : String(error)
-    }
-  }
-}
-
-async function asyncWrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
-  try {
-    return { ok: true, data: await fn() }
-  } catch (error) {
-    return errorResult(error)
-  }
-}
+import { resultify as asyncWrap } from './result'
 
 export interface ServerAiHandlerDeps {
   serverClient: ServerClient

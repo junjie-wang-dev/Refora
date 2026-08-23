@@ -16,6 +16,12 @@ import { api } from '../ipc'
 import i18n from '../i18n'
 import { openDocumentPdf } from '../utils/openPdf'
 import { normalizeBootstrapData } from '../../shared/bootstrap'
+import { useConfirmStore } from './confirmStore'
+import {
+  flushRendererSettingWrites,
+  invalidateRendererSettingWrites,
+  scheduleRendererSetting
+} from '../persistence'
 
 const DEFAULT_COLUMNS: ListColumn[] = [
   { id: 'title', visible: true, width: 300, order: 0 },
@@ -30,45 +36,13 @@ function defaultColumnState(): ListColumnState {
   return { columns: DEFAULT_COLUMNS, sort: { field: 'addedAt', dir: 'desc' } }
 }
 
-let persistTimeout: ReturnType<typeof setTimeout> | null = null
-let pendingColumnState: { state: ListColumnState; generation: number } | null = null
-let persistTask: Promise<void> | null = null
 let columnPersistenceGeneration = 0
 
 function persistColumnState(state: ListColumnState): void {
-  if (persistTimeout) clearTimeout(persistTimeout)
-  pendingColumnState = { state, generation: columnPersistenceGeneration }
-  persistTimeout = setTimeout(() => {
-    persistTimeout = null
-    void flushColumnState().catch(() => {
-      useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
-    })
-  }, 500)
-}
-
-async function flushColumnState(): Promise<void> {
-  if (persistTimeout) {
-    clearTimeout(persistTimeout)
-    persistTimeout = null
-  }
-  if (persistTask) await persistTask.catch(() => undefined)
-  const pending = pendingColumnState
-  if (!pending) return
-  pendingColumnState = null
-  if (pending.generation !== columnPersistenceGeneration) return
-  const task = api.settings.set('listColumnState', pending.state)
-  persistTask = task
-  try {
-    await task
-  } catch (error) {
-    if (!pendingColumnState && pending.generation === columnPersistenceGeneration) {
-      pendingColumnState = pending
-    }
-    throw error
-  } finally {
-    if (persistTask === task) persistTask = null
-  }
-  if (pendingColumnState) await flushColumnState()
+  scheduleRendererSetting('listColumnState', state, {
+    delay: 500,
+    onError: () => useDocumentStore.getState().showToast(i18n.t('common.settingsSaveFailed'))
+  })
 }
 
 interface DocumentState {
@@ -79,7 +53,6 @@ interface DocumentState {
   selectedIds: string[]
   focusedDocId: string | null
   toastMessage: string | null
-  confirmDelete: { ids: string[]; message: string } | null
   isImporting: boolean
   importProgress: { current: number; total: number } | null
   identifierImporting: number
@@ -91,8 +64,6 @@ interface DocumentState {
   isSearching: boolean
   searchQuery: string
   searchResults: Document[]
-  isLoadingMoreSearchResults: boolean
-  hasMoreSearchResults: boolean
   fetchDocuments: (filter?: ListFilter) => Promise<void>
   loadMoreDocuments: () => Promise<void>
   fetchDocumentCounts: () => Promise<void>
@@ -117,8 +88,6 @@ interface DocumentState {
   showToast: (message: string) => void
   clearToast: () => void
   requestDeleteConfirm: (ids: string[], message: string) => void
-  confirmDeleteAction: () => Promise<void>
-  cancelDelete: () => void
   patchDocument: (id: string, doc: Document) => void
   startImport: (total: number) => void
   updateImportProgress: (payload: ImportProgress) => void
@@ -132,9 +101,14 @@ interface DocumentState {
   createCategory: (name: string) => Promise<Category | null>
   renameCategory: (id: string, name: string) => Promise<void>
   deleteCategory: (id: string) => Promise<void>
-  performSearch: (q: string) => void
-  loadMoreSearchResults: () => Promise<void>
+  setSearchResults: (query: string, documents: Document[]) => void
   clearSearch: () => void
+  assignDocumentsToCategory: (
+    ids: string[],
+    categoryId: string,
+    mode?: 'assign' | 'bulk'
+  ) => Promise<boolean>
+  unassignDocumentFromCategory: (docId: string, categoryId: string) => Promise<boolean>
 }
 
 const docUpdatedCb: Array<null | ((doc: Document) => void)> = [null]
@@ -146,9 +120,7 @@ const menuImportMendeleyCb: Array<null | (() => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
 
 let toastTimeout: ReturnType<typeof setTimeout> | null = null
-let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let documentRequestVersion = 0
-let searchRequestVersion = 0
 let documentCountsRequestVersion = 0
 let categoriesRequestVersion = 0
 let starUpdateGeneration = 0
@@ -185,6 +157,36 @@ function patchStarredValue(documents: Document[], docId: string, starred: boolea
   return documents.map((document) => document.id === docId
     ? { ...document, starred: starred ? 1 : 0 }
     : document)
+}
+
+function categoryWithoutCount(category: Category): Category {
+  return { ...category, count: undefined }
+}
+
+function addCategoryToDocuments(
+  documents: Document[],
+  ids: Set<string>,
+  category: Category
+): Document[] {
+  return documents.map((document) => {
+    if (!ids.has(document.id)) return document
+    const categories = document.categories ?? []
+    if (categories.some((item) => item.id === category.id)) return document
+    return { ...document, categories: [...categories, categoryWithoutCount(category)] }
+  })
+}
+
+function removeCategoryFromDocuments(
+  documents: Document[],
+  ids: Set<string>,
+  categoryId: string
+): Document[] {
+  return documents.map((document) => {
+    if (!ids.has(document.id)) return document
+    const categories = document.categories ?? []
+    if (!categories.some((item) => item.id === categoryId)) return document
+    return { ...document, categories: categories.filter((item) => item.id !== categoryId) }
+  })
 }
 
 async function runStarUpdateQueue(docId: string, queue: StarUpdateQueue): Promise<void> {
@@ -238,7 +240,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   selectedIds: [],
   focusedDocId: null,
   toastMessage: null,
-  confirmDelete: null,
   isImporting: false,
   importProgress: null,
   identifierImporting: 0,
@@ -250,8 +251,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   isSearching: false,
   searchQuery: '',
   searchResults: [],
-  isLoadingMoreSearchResults: false,
-  hasMoreSearchResults: false,
 
   fetchDocuments: async (filter?: ListFilter) => {
     const requestVersion = ++documentRequestVersion
@@ -368,7 +367,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     })
   },
 
-  flushPendingSettings: flushColumnState,
+  flushPendingSettings: flushRendererSettingWrites,
 
   setFocusedDoc: (docId: string | null) => {
     set({ focusedDocId: docId })
@@ -554,13 +553,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   bulkCategorize: async (ids: string[], catId: string) => {
-    try {
-      await api.documents.bulkCategorize(ids, catId)
-      get().clearSelection()
-      await get().fetchCategories()
-    } catch (e) {
-      get().showToast(errorMessage(e, i18n.t('documentErrors.categorizeFailed')))
-    }
+    if (await get().assignDocumentsToCategory(ids, catId, 'bulk')) get().clearSelection()
   },
 
   updateDocument: async (id: string, patch: DocumentPatch): Promise<Document> => {
@@ -581,22 +574,21 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   requestDeleteConfirm: (ids: string[], message: string) => {
-    set({ confirmDelete: { ids, message } })
-  },
-
-  confirmDeleteAction: async () => {
-    const cd = get().confirmDelete
-    if (!cd) return
-    set({ confirmDelete: null })
-    if (cd.ids.length === 1) {
-      await get().deleteDoc(cd.ids[0])
-    } else {
-      await get().bulkDelete(cd.ids)
-    }
-  },
-
-  cancelDelete: () => {
-    set({ confirmDelete: null })
+    if (ids.length === 0) return
+    const title = i18n.t('dialog.deleteTitle') as string
+    const fallbackMessage = ids.length > 1
+      ? i18n.t('dialog.deleteConfirmBulk', { count: ids.length }) as string
+      : i18n.t('dialog.deleteConfirm') as string
+    useConfirmStore.getState().show({
+      title,
+      message: message || fallbackMessage,
+      confirmText: i18n.t('common.delete') as string,
+      cancelText: i18n.t('common.cancel') as string,
+      danger: true,
+      onConfirm: () => ids.length === 1
+        ? get().deleteDoc(ids[0])
+        : get().bulkDelete(ids)
+    })
   },
 
   patchDocument: (id: string, doc: Document) => {
@@ -750,13 +742,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       columnPersistenceGeneration += 1
       starUpdateGeneration += 1
       starUpdateQueues.clear()
-      if (persistTimeout) clearTimeout(persistTimeout)
-      persistTimeout = null
-      pendingColumnState = null
-      if (searchTimeout) clearTimeout(searchTimeout)
-      searchTimeout = null
+      invalidateRendererSettingWrites()
       documentRequestVersion++
-      searchRequestVersion++
       documentCountsRequestVersion++
       categoriesRequestVersion++
       set({
@@ -765,7 +752,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         listMode: { mode: 'all' },
         selectedIds: [],
         focusedDocId: null,
-        confirmDelete: null,
         isImporting: false,
         importProgress: null,
         identifierImporting: 0,
@@ -776,8 +762,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         isSearching: false,
         searchQuery: '',
         searchResults: [],
-        isLoadingMoreSearchResults: false,
-        hasMoreSearchResults: false,
         listColumnState: defaultColumnState()
       })
       const generation = columnPersistenceGeneration
@@ -851,100 +835,84 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  performSearch: (q: string) => {
-    const trimmed = q.trim()
-    const requestVersion = ++searchRequestVersion
-    if (searchTimeout) clearTimeout(searchTimeout)
-    if (!trimmed) {
-      get().clearSearch()
-      return
-    }
+  setSearchResults: (query: string, documents: Document[]) => {
     set({
-      searchQuery: q,
       isSearching: true,
-      isLoadingMoreSearchResults: false,
-      hasMoreSearchResults: false
+      searchQuery: query,
+      searchResults: documents
     })
-    searchTimeout = setTimeout(async () => {
-      try {
-        const results = await api.documents.search(trimmed, {
-          limit: DOCUMENT_PAGE_SIZE,
-          offset: 0
-        })
-        if (
-          requestVersion === searchRequestVersion &&
-          get().isSearching &&
-          get().searchQuery.trim() === trimmed
-        ) {
-          set({
-            searchResults: results,
-            hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
-          })
-        }
-      } catch (error) {
-        if (requestVersion === searchRequestVersion) {
-          set({ searchResults: [] })
-          get().showToast(errorMessage(error, i18n.t('documentErrors.searchFailed')))
-        }
-      }
-    }, 200)
-  },
-
-  loadMoreSearchResults: async () => {
-    const state = get()
-    if (
-      !state.isSearching ||
-      state.isLoadingMoreSearchResults ||
-      !state.hasMoreSearchResults
-    ) return
-    const trimmed = state.searchQuery.trim()
-    if (!trimmed) return
-    const requestVersion = searchRequestVersion
-    const offset = state.searchResults.length
-    set({ isLoadingMoreSearchResults: true })
-    try {
-      const results = await api.documents.search(trimmed, {
-        limit: DOCUMENT_PAGE_SIZE,
-        offset
-      })
-      if (
-        requestVersion !== searchRequestVersion ||
-        !get().isSearching ||
-        get().searchQuery.trim() !== trimmed
-      ) return
-      set((current) => {
-        const knownIds = new Set(current.searchResults.map((document) => document.id))
-        return {
-          searchResults: [
-            ...current.searchResults,
-            ...results.filter((document) => !knownIds.has(document.id))
-          ],
-          hasMoreSearchResults: results.length === DOCUMENT_PAGE_SIZE
-        }
-      })
-    } catch (error) {
-      if (requestVersion === searchRequestVersion) {
-        get().showToast(errorMessage(error, i18n.t('documentErrors.searchFailed')))
-      }
-    } finally {
-      if (requestVersion === searchRequestVersion) {
-        set({ isLoadingMoreSearchResults: false })
-      }
-    }
   },
 
   clearSearch: () => {
-    searchRequestVersion++
-    if (searchTimeout) clearTimeout(searchTimeout)
-    searchTimeout = null
     set({
       isSearching: false,
       searchQuery: '',
-      searchResults: [],
-      isLoadingMoreSearchResults: false,
-      hasMoreSearchResults: false
+      searchResults: []
     })
     void get().fetchDocuments()
+  },
+
+  assignDocumentsToCategory: async (ids: string[], categoryId: string, mode = 'assign') => {
+    const uniqueIds = [...new Set(ids)]
+    if (uniqueIds.length === 0) return false
+    const category = get().categories.find((item) => item.id === categoryId)
+    const addedIds = new Set(uniqueIds.filter((id) => {
+      const document = findKnownDocument(get(), id)
+      return document !== undefined && !document.categories?.some((item) => item.id === categoryId)
+    }))
+    if (category) {
+      set((state) => ({
+        documents: addCategoryToDocuments(state.documents, addedIds, category),
+        searchResults: addCategoryToDocuments(state.searchResults, addedIds, category)
+      }))
+    }
+    try {
+      if (mode === 'assign' && uniqueIds.length === 1) {
+        await api.categories.assign(uniqueIds[0], categoryId)
+      } else {
+        await api.documents.bulkCategorize(uniqueIds, categoryId)
+      }
+      void get().fetchCategories()
+      return true
+    } catch (error) {
+      if (category) {
+        set((state) => ({
+          documents: removeCategoryFromDocuments(state.documents, addedIds, categoryId),
+          searchResults: removeCategoryFromDocuments(state.searchResults, addedIds, categoryId)
+        }))
+      }
+      get().showToast(errorMessage(error, i18n.t('documentErrors.categorizeFailed')))
+      void get().fetchCategories()
+      return false
+    }
+  },
+
+  unassignDocumentFromCategory: async (docId: string, categoryId: string) => {
+    const document = findKnownDocument(get(), docId)
+    const assignedCategory = document?.categories?.find((item) => item.id === categoryId) ??
+      get().categories.find((item) => item.id === categoryId)
+    const removedIds = new Set(
+      document?.categories?.some((item) => item.id === categoryId) ? [docId] : []
+    )
+    set((state) => ({
+      documents: removeCategoryFromDocuments(state.documents, removedIds, categoryId),
+      searchResults: removeCategoryFromDocuments(state.searchResults, removedIds, categoryId)
+    }))
+    try {
+      await api.categories.unassign(docId, categoryId)
+      void get().fetchCategories()
+      return true
+    } catch (error) {
+      if (assignedCategory) {
+        set((state) => ({
+          documents: addCategoryToDocuments(state.documents, removedIds, assignedCategory),
+          searchResults: addCategoryToDocuments(state.searchResults, removedIds, assignedCategory)
+        }))
+      }
+      get().showToast(errorMessage(error, i18n.t('documentErrors.assignCategoryFailed')))
+      void get().fetchCategories()
+      return false
+    }
   },
 
   destroy: () => {
@@ -952,12 +920,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     starUpdateGeneration++
     starUpdateQueues.clear()
     documentRequestVersion++
-    searchRequestVersion++
     documentCountsRequestVersion++
     categoriesRequestVersion++
-    if (persistTimeout) clearTimeout(persistTimeout)
-    persistTimeout = null
-    pendingColumnState = null
     if (docUpdatedCb[0]) {
       api.events.off('document:updated', docUpdatedCb[0])
       docUpdatedCb[0] = null
@@ -987,8 +951,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       librarySwitchedCb[0] = null
     }
     if (toastTimeout) clearTimeout(toastTimeout)
-    if (searchTimeout) clearTimeout(searchTimeout)
-    searchTimeout = null
     set({ initialized: false })
   }
 }))

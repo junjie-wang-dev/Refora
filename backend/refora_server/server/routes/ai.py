@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import inspect
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from refora_server.db.errors import RepoError
 from refora_server.services.agent_intent import (
     assemble_resume,
     assemble_turn,
@@ -21,6 +19,10 @@ from refora_server.services.agent_memory import (
     memory_scope,
     normalize_memory_path,
     update_memory as update_scoped_memory,
+)
+from refora_server.server.services.result import (
+    error_response as _error_response,
+    success as _success,
 )
 
 
@@ -44,53 +46,6 @@ async def _resolve(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
-
-
-def _success(data: Any) -> JSONResponse:
-    return JSONResponse({"ok": True, "data": data})
-
-
-def _failure(code: str, message: str, status_code: int) -> JSONResponse:
-    return JSONResponse(
-        {"ok": False, "error": {"code": code, "message": message}},
-        status_code=status_code,
-    )
-
-
-def _error_response(error: Exception) -> JSONResponse:
-    if isinstance(error, RouteError):
-        return _failure(error.code, str(error), error.status_code)
-    if isinstance(error, HTTPException):
-        detail = error.detail if isinstance(error.detail, dict) else {}
-        code = detail.get("code") if isinstance(detail.get("code"), str) else "unauthorized"
-        message = detail.get("message") if isinstance(detail.get("message"), str) else "Invalid or missing token"
-        return _failure(code, message, error.status_code)
-    if isinstance(error, RepoError) or isinstance(getattr(error, "code", None), str):
-        code = getattr(error, "code", "internal")
-        status_code = {
-            "not_found": 404,
-            "conflict": 409,
-            "unavailable": 503,
-        }.get(code, 400 if code in {"bad_request", "validation"} or code.startswith("invalid_") else 500)
-        return _failure(code, str(error), status_code)
-    if isinstance(error, ValueError):
-        return _failure("validation", str(error), 400)
-    if isinstance(error, PermissionError):
-        return _failure("forbidden", str(error), 403)
-    if isinstance(error, sqlite3.DatabaseError):
-        message = str(error).lower()
-        if "malformed" in message or "not a database" in message:
-            return _failure(
-                "database_corrupt",
-                "Refora's local database is damaged. Quit Refora and restore or repair the library database.",
-                500,
-            )
-        return _failure(
-            "database_error",
-            "Refora could not read or update the local database.",
-            500,
-        )
-    return _failure("internal", "Internal server error", 500)
 
 
 def _required_string(value: Any, field: str) -> str:

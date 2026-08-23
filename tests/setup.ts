@@ -1,8 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
-
-vi.mock('@emoji-mart/data', () => ({ default: {} }))
-vi.mock('@emoji-mart/react', () => ({ default: () => null }))
+import type { ReforaApi } from '../src/shared/ipc-types'
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -25,8 +23,9 @@ class ResizeObserverMock {
 ;(global as unknown as Record<string, unknown>).ResizeObserver = ResizeObserverMock
 
 const noop = async () => undefined
+const mockResult = <T>(): T => undefined as T
 
-;(window as Record<string, unknown>).api = {
+export const createMockReforaApi = (): ReforaApi => ({
   getBootstrap: async () => ({
     language: 'en',
     theme: 'dark',
@@ -41,31 +40,31 @@ const noop = async () => undefined
     list: async () => [],
     counts: async () => ({ all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 }),
     search: async () => [],
-    get: async () => null,
-    update: noop,
+    get: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['get']>>>(),
+    update: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['update']>>>(),
     setStarred: noop,
     delete: noop,
     bulkDelete: noop,
     bulkCategorize: noop,
     bulkRefreshMetadata: noop,
-    openPdf: noop,
+    openPdf: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['openPdf']>>>(),
     readPdfRange: async (_id: string, begin: number) => ({
       begin,
       fileSize: 1,
       data: new Uint8Array([1])
     }),
     pdfAnnotations: async () => [],
-    setPdfAnnotations: async (_id: string, annotations: unknown[]) => annotations,
+    setPdfAnnotations: async (_id, annotations) => annotations,
     openInFinder: noop,
-    refreshMetadata: noop,
-    relocateFile: noop,
-    restoreFile: noop,
+    refreshMetadata: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['refreshMetadata']>>>(),
+    relocateFile: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['relocateFile']>>>(),
+    restoreFile: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['restoreFile']>>>(),
     previewUrl: (id: string, version: string | number) =>
       `refora-document://preview/${encodeURIComponent(id)}?v=${encodeURIComponent(String(version))}`,
   },
 
   search: {
-    global: async () => ({ documents: [], workspaceFiles: [], chats: [] }),
+    global: async () => ({ documents: [], workspaceFiles: [], workspaceContents: [], chats: [] }),
   },
 
   import: {
@@ -79,7 +78,7 @@ const noop = async () => undefined
 
   categories: {
     list: async () => [],
-    create: noop,
+    create: async () => mockResult<Awaited<ReturnType<ReforaApi['categories']['create']>>>(),
     rename: noop,
     delete: noop,
     assign: noop,
@@ -88,13 +87,13 @@ const noop = async () => undefined
 
   watch: {
     list: async () => [],
-    add: noop,
+    add: async () => mockResult<Awaited<ReturnType<ReforaApi['watch']['add']>>>(),
     remove: noop,
     toggle: noop,
   },
 
   settings: {
-    get: async (_key: string, defaultValue: unknown) => defaultValue,
+    get: async <T>(_key: string, defaultValue: T) => defaultValue,
     set: noop,
   },
 
@@ -157,8 +156,8 @@ const noop = async () => undefined
       ddgsInstalled: false,
       ddgsVersion: '9.14.4',
     }),
-    updateConfig: async (patch: { provider?: string }) => ({
-      provider: patch.provider ?? 'disabled',
+    updateConfig: async (patch) => ({
+      provider: patch.provider ?? ('disabled' as const),
       hasTavilyApiKey: false,
       hasBraveApiKey: false,
       ddgsInstalled: false,
@@ -186,10 +185,10 @@ const noop = async () => undefined
       error: null,
       progress: null,
     }),
-    chooseInstallRoot: noop,
-    install: noop,
-    cancelInstall: noop,
-    uninstall: noop,
+    chooseInstallRoot: async () => mockResult<Awaited<ReturnType<ReforaApi['mineru']['chooseInstallRoot']>>>(),
+    install: async () => mockResult<Awaited<ReturnType<ReforaApi['mineru']['install']>>>(),
+    cancelInstall: async () => mockResult<Awaited<ReturnType<ReforaApi['mineru']['cancelInstall']>>>(),
+    uninstall: async () => mockResult<Awaited<ReturnType<ReforaApi['mineru']['uninstall']>>>(),
   },
 
   ocr: {
@@ -210,8 +209,8 @@ const noop = async () => undefined
       activeJob: null,
       result: null,
     }),
-    start: noop,
-    cancel: noop,
+    start: async () => mockResult<Awaited<ReturnType<ReforaApi['ocr']['start']>>>(),
+    cancel: async () => mockResult<Awaited<ReturnType<ReforaApi['ocr']['cancel']>>>(),
     readMarkdown: async () => '',
     assetUrl: (documentId: string, resultKey: string, assetPath: string) =>
       `refora-document://ocr/${documentId}/${resultKey}/${assetPath}`,
@@ -266,6 +265,7 @@ const noop = async () => undefined
       docId: 'doc',
       reportId: null,
       noteId: null,
+      assetId: null,
       sortOrder: 0,
       width,
       height,
@@ -281,6 +281,7 @@ const noop = async () => undefined
       docId: 'doc',
       reportId: null,
       noteId: null,
+      assetId: null,
       sortOrder: 0,
       width: 300,
       height: 200,
@@ -301,23 +302,29 @@ const noop = async () => undefined
     previewUrl: (id: string) => `refora-asset://asset/${encodeURIComponent(id)}`,
   },
 
+  workspaceFiles: {
+    add: async () => ({ documentIds: [], notes: [], assets: [], errors: [] }),
+  },
+
   workspaceNotes: {
     list: async () => [],
-    create: async (workspaceId: string, title: string, contentMd: string, noteType: 'markdown' | 'plain') => ({
+    create: async (workspaceId, title, contentMd, noteType) => ({
       id: 'note',
       workspaceId,
       noteType,
       title,
       contentMd,
+      color: 'sand' as const,
       createdAt: 0,
       updatedAt: 0
     }),
-    update: async (id: string, patch: { title?: string; contentMd?: string }) => ({
+    update: async (id, patch) => ({
       id,
       workspaceId: 'ws',
       noteType: 'markdown' as const,
       title: patch.title ?? '',
       contentMd: patch.contentMd ?? '',
+      color: patch.color ?? 'sand',
       createdAt: 0,
       updatedAt: 0
     }),
@@ -351,7 +358,7 @@ const noop = async () => undefined
 
   aiProviders: {
     list: async () => [],
-    create: async (input: { name: string; baseUrl: string; model: string }) => ({
+    create: async (input) => ({
       id: 'p',
       presetId: input.name === 'OpenAI' ? 'openai' : 'custom',
       name: input.name,
@@ -360,6 +367,7 @@ const noop = async () => undefined
       reasoningControl: 'openai' as const,
       reasoningEffort: 'medium' as const,
       model: input.model,
+      models: null,
       baseModel: input.model,
       variant: '',
       variantFormat: 'dash' as const,
@@ -368,7 +376,7 @@ const noop = async () => undefined
       maxTokens: null,
       createdAt: 0
     }),
-    update: async (id: string) => ({
+    update: async (id) => ({
       id,
       presetId: 'custom',
       name: '',
@@ -377,6 +385,7 @@ const noop = async () => undefined
       reasoningControl: 'openai' as const,
       reasoningEffort: 'medium' as const,
       model: '',
+      models: null,
       baseModel: '',
       variant: '',
       variantFormat: 'dash' as const,
@@ -392,42 +401,8 @@ const noop = async () => undefined
 
   agentProfiles: {
     list: async () => [],
-    create: async (input: {
-      name: string
-      cliRuntimeId: string
-      executablePath?: string | null
-      model?: string
-      reasoningEffort?: string
-      nativeWebSearch?: boolean
-      webSearchPolicy?: string
-    }) => ({
-      id: 'cli-profile',
-      name: input.name,
-      kind: 'cli' as const,
-      apiProviderId: null,
-      cliRuntimeId: input.cliRuntimeId,
-      executablePath: input.executablePath ?? null,
-      model: input.model ?? 'default',
-      reasoningEffort: input.reasoningEffort ?? 'medium',
-      nativeWebSearch: input.nativeWebSearch ?? true,
-      webSearchPolicy: input.webSearchPolicy ?? 'auto',
-      createdAt: 0,
-      updatedAt: 0
-    }),
-    update: async (id: string) => ({
-      id,
-      name: 'CLI',
-      kind: 'cli' as const,
-      apiProviderId: null,
-      cliRuntimeId: 'codex',
-      executablePath: null,
-      model: 'default',
-      reasoningEffort: 'medium' as const,
-      nativeWebSearch: true,
-      webSearchPolicy: 'auto' as const,
-      createdAt: 0,
-      updatedAt: 0
-    }),
+    create: async () => mockResult<Awaited<ReturnType<ReforaApi['agentProfiles']['create']>>>(),
+    update: async () => mockResult<Awaited<ReturnType<ReforaApi['agentProfiles']['update']>>>(),
     delete: noop,
     test: async () => ({ ok: true, runtimeId: 'codex' }),
     listModels: async () => ({ ok: true, models: [] }),
@@ -478,7 +453,10 @@ const noop = async () => undefined
       id: runId,
       threadId: 't',
       providerId: 'p',
+      agentProfileId: null,
+      runtimeSessionId: null,
       modelId: 'm',
+      activeDocumentId: null,
       status: 'completed' as const,
       checkpointBefore: null,
       checkpointAfter: null,
@@ -489,21 +467,14 @@ const noop = async () => undefined
       endedAt: 0,
       error: null
     }),
-    chatCancel: noop,
+    chatCancel: async () => mockResult<Awaited<ReturnType<ReforaApi['ai']['chatCancel']>>>(),
     chatResume: noop,
     chatPendingInterrupt: async () => null,
     chatDeleteThread: noop,
     renameThread: noop,
-    listMemories: async () => [],
-    updateMemory: async () => ({
-      id: 'memory',
-      workspaceId: null,
-      path: '/memory.md',
-      value: '',
-      createdAt: 0,
-      updatedAt: 0
-    }),
-    deleteMemory: noop,
+    workspaceMemories: async () => [],
+    updateWorkspaceMemory: async () => mockResult<Awaited<ReturnType<ReforaApi['ai']['updateWorkspaceMemory']>>>(),
+    deleteWorkspaceMemory: noop,
   },
 
   reports: {
@@ -521,7 +492,9 @@ const noop = async () => undefined
   },
 
   events: {
+    onRendererFlushRequested: (_cb: unknown) => undefined,
     onDocumentUpdated: (_cb: unknown) => undefined,
+    onWindowFocusChanged: (_cb: unknown) => undefined,
     onImportProgress: (_cb: unknown) => undefined,
     onImportToast: (_cb: unknown) => undefined,
     onMenuExportBibtex: (_cb: unknown) => undefined,
@@ -549,4 +522,6 @@ const noop = async () => undefined
     onOcrError: (_cb: unknown) => undefined,
     off: (_channel: string, _cb: unknown) => undefined,
   },
-}
+} satisfies ReforaApi)
+
+window.api = createMockReforaApi()

@@ -131,6 +131,9 @@ const { default: AccountModal } = await import(
 const { useSyncAccountStore } = await import(
   '../../src/renderer/store/syncAccountStore'
 )
+const { useAgentCatalogStore } = await import(
+  '../../src/renderer/store/agentCatalogStore'
+)
 
 const api = (window as unknown as { api: ReforaApi }).api
 
@@ -139,6 +142,7 @@ describe('AiProvidersSection', () => {
   const set = vi.fn()
 
   beforeEach(() => {
+    useAgentCatalogStore.getState().reset()
     create.mockReset()
     set.mockReset()
     api.aiProviders.list = vi.fn().mockResolvedValue([])
@@ -218,7 +222,6 @@ describe('AiProvidersSection', () => {
   })
 
   it('connects OpenAI with all provider models when advanced settings are untouched', async () => {
-    const dispatchEvent = vi.spyOn(window, 'dispatchEvent')
     const { container } = render(<AiProvidersSection />)
 
     expect(container.querySelector('[data-provider-icon="openai"] svg')).toBeInTheDocument()
@@ -246,9 +249,6 @@ describe('AiProvidersSection', () => {
     )
     expect(api.aiProviders.listModels).not.toHaveBeenCalled()
     expect(set).not.toHaveBeenCalledWith('activeProviderId', expect.anything())
-    expect(dispatchEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'refora:ai-providers-changed' })
-    )
   })
 
   it('traps focus in the provider dialog and closes it with Escape', async () => {

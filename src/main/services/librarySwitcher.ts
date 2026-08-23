@@ -26,6 +26,8 @@ interface LibrarySwitcherDeps {
   onRecoveryFailed: (error: unknown) => void
 }
 
+const INITIAL_IMPORT_COMPLETED_SETTING = 'libraryInitialImportCompleted'
+
 export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
   let switching = false
 
@@ -40,8 +42,19 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
       })
     }
 
-    switching = true
     const previous = deps.getState()
+    if (previous.assembly && previous.libraryFolder === resolvedFolder) {
+      return {
+        libraryFolderPath: resolvedFolder,
+        dbExisted: deps.dbExistsInFolder(resolvedFolder),
+        scanned: 0,
+        imported: 0,
+        skipped: 0,
+        errors: []
+      }
+    }
+
+    switching = true
     const targetDbPath = deps.dbPathForFolder(resolvedFolder)
     const dbExisted = deps.dbExistsInFolder(resolvedFolder)
     let nextAssembly: ServerAssembly | null = null
@@ -67,7 +80,8 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
       let imported = 0
       let skipped = 0
       const errors: Array<{ path: string; message: string }> = []
-      if (!dbExisted) {
+      const settings = await nextAssembly.getClient().http.settingsGet()
+      if (settings[INITIAL_IMPORT_COMPLETED_SETTING] !== true) {
         const importResult = await nextAssembly.getClient().http.importFolder({
           path: resolvedFolder,
           recursive: true
@@ -76,6 +90,9 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
         skipped = importResult.skipped.length
         scanned = imported + skipped + importResult.errors.length
         errors.push(...importResult.errors)
+        await nextAssembly.getClient().http.settingsUpdate({
+          [INITIAL_IMPORT_COMPLETED_SETTING]: true
+        })
       }
       deps.persistLibraryFolder(resolvedFolder)
       preferenceCommitted = true
