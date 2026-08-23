@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
 import { createPdfTextService } from './services/pdfText'
 import type { PdfTextService } from './services/pdfText'
+import { removePdfPreviewCacheForDocument } from './services/pdfPreviewCache'
 import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './services/dbPath'
 import {
   readLibraryFolderPath,
@@ -676,6 +677,21 @@ async function createPythonServerAssembly(
     getWin: () => win,
     nativeManagedRoots: [libraryFolder, app.getPath('userData')],
     rendererPathCapabilities,
+    removeDocumentPreviewCache: async (documentId) => {
+      const currentLibraryFolder = libraryFolder || activeLibraryFolder
+      if (!currentLibraryFolder) return
+      try {
+        if (pdfTextService) {
+          await pdfTextService.removePreviewCacheForDocument(documentId, currentLibraryFolder)
+        } else {
+          await removePdfPreviewCacheForDocument(currentLibraryFolder, documentId)
+        }
+      } catch (error) {
+        logger.warn(
+          `pdf-preview-cache:cleanup failed document=${documentId}: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    },
     switchLibraryFolder,
     onSettingUpdated: (key, value) => {
       if (key !== 'language' || (value !== 'zh' && value !== 'en')) return
@@ -700,12 +716,13 @@ async function createPythonServerAssembly(
       }
     },
     getClient: () => assembly.getClient(),
-    fetchResource: (path, headers) => assembly.fetchResource(path, headers)
+    fetchResource: (path, headers) => assembly.fetchResource(path, headers),
+    addNativeManagedRoot: (path) => assembly.addNativeManagedRoot(path)
   }
 }
 
 async function activatePythonServerAssembly(assembly: ServerAssembly): Promise<BootstrapData> {
-  return activateAssemblySettings({
+  const bootstrap = await activateAssemblySettings({
     assembly,
     setProxy: (proxyRules) => session.defaultSession.setProxy({ proxyRules }),
     setLanguage: (language) => {
@@ -716,6 +733,7 @@ async function activatePythonServerAssembly(assembly: ServerAssembly): Promise<B
       nativeTheme.themeSource = theme
     }
   })
+  return bootstrap
 }
 
 const switchLibraryFolder = createLibrarySwitcher({

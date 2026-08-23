@@ -9,7 +9,8 @@ function assembly(bootstrap: unknown, settings: Record<string, unknown>): Server
         appBootstrap: vi.fn().mockResolvedValue(bootstrap),
         settingsGet: vi.fn().mockResolvedValue(settings)
       }
-    })
+    }),
+    addNativeManagedRoot: vi.fn()
   } as unknown as ServerAssembly
 }
 
@@ -19,16 +20,17 @@ describe('assembly settings activation', () => {
     const setLanguage = vi.fn()
     const setTheme = vi.fn()
 
+    const activeAssembly = assembly({
+      language: 'zh',
+      theme: 'dark',
+      windowBounds: null,
+      listColumnState: null,
+      sidebarCollapsed: false,
+      firstRun: false,
+      libraryFolderPath: '/library'
+    }, { proxyUrl: '  socks5://localhost:1080  ' })
     const result = await activateAssemblySettings({
-      assembly: assembly({
-        language: 'zh',
-        theme: 'dark',
-        windowBounds: null,
-        listColumnState: null,
-        sidebarCollapsed: false,
-        firstRun: false,
-        libraryFolderPath: '/library'
-      }, { proxyUrl: '  socks5://localhost:1080  ' }),
+      assembly: activeAssembly,
       setProxy,
       setLanguage,
       setTheme
@@ -37,6 +39,7 @@ describe('assembly settings activation', () => {
     expect(setProxy).toHaveBeenCalledWith('socks5://localhost:1080')
     expect(setLanguage).toHaveBeenCalledWith('zh')
     expect(setTheme).toHaveBeenCalledWith('dark')
+    expect(activeAssembly.addNativeManagedRoot).toHaveBeenCalledWith('/library')
     expect(result.libraryFolderPath).toBe('/library')
   })
 

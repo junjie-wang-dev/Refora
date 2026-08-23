@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRendererPathCapabilities } from '../../src/main/services/fileCapabilities'
 
 const roots: string[] = []
@@ -13,6 +13,7 @@ function makeRoot(): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -94,5 +95,20 @@ describe('renderer path capabilities', () => {
     ])
     expect(() => capabilities.consumeFile(first)).toThrow('not selected by the user')
     expect(() => capabilities.consumeFile(second)).toThrow('not selected by the user')
+  })
+
+  it('actively releases abandoned capabilities after their TTL', async () => {
+    vi.useFakeTimers()
+    const root = makeRoot()
+    const file = join(root, 'abandoned.pdf')
+    writeFileSync(file, 'pdf')
+    const capabilities = createRendererPathCapabilities(50)
+
+    capabilities.authorizeFile(file)
+    expect(vi.getTimerCount()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(51)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(() => capabilities.consumeFile(file)).toThrow('not selected by the user')
   })
 })

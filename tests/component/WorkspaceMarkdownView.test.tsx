@@ -382,6 +382,50 @@ describe('WorkspaceMarkdownView', () => {
     })
   })
 
+  it('accepts its own report save feedback while keeping a newer draft editable', async () => {
+    vi.useFakeTimers()
+    let resolveFirstSave: (saved: boolean) => void = () => undefined
+    const onUpdate = vi.fn().mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      resolveFirstSave = resolve
+    })).mockResolvedValue(true)
+    const props = {
+      kind: 'report' as const,
+      id: 'report-1',
+      title: 'Report',
+      timestamp: 1,
+      initialMode: 'edit' as const,
+      onBack: vi.fn(),
+      onUpdate
+    }
+    const { rerender } = render(
+      <WorkspaceMarkdownView {...props} contentMd="Initial" />
+    )
+    const content = screen.getByRole('textbox', { name: 'workspace.reportContentLabel' })
+
+    fireEvent.change(content, { target: { value: 'First version' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    fireEvent.change(content, { target: { value: 'Second version' } })
+
+    rerender(<WorkspaceMarkdownView {...props} contentMd="First version" timestamp={2} />)
+    await act(async () => {
+      resolveFirstSave(true)
+      await Promise.resolve()
+    })
+
+    expect(content).toHaveValue('Second version')
+    expect(screen.queryByText('workspace.externalUpdateConflict')).not.toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    expect(onUpdate).toHaveBeenLastCalledWith('report-1', {
+      title: 'Report',
+      contentMd: 'Second version'
+    })
+  })
+
   it('keeps the draft open when returning to reading mode cannot save it', async () => {
     const onUpdate = vi.fn().mockResolvedValue(false)
     renderView({ initialMode: 'edit', onUpdate })

@@ -36,6 +36,13 @@ def become_user(cursor: Any, user_id: str) -> None:
     cursor.execute("set local role authenticated")
 
 
+def ssl_context() -> bool:
+    value = os.environ.get("REFORA_SUPABASE_TEST_SSL", "true").strip().lower()
+    if value not in {"true", "false"}:
+        raise RuntimeError("REFORA_SUPABASE_TEST_SSL must be true or false")
+    return value == "true"
+
+
 def expect_sqlstate(
     cursor: Any,
     sqlstate: str,
@@ -101,7 +108,7 @@ def main() -> None:
         port=parsed_url.port or 5432,
         database=parsed_url.path.lstrip("/") or "postgres",
         timeout=15,
-        ssl_context=True,
+        ssl_context=ssl_context(),
     )
     checks = 0
     cursor = connection.cursor()
@@ -227,6 +234,13 @@ def main() -> None:
             )
             checks += 1
             expect_sqlstate(cursor, "42501", "select count(*) from refora_sync.entities")
+            checks += 1
+            become_postgres(cursor)
+            cursor.execute("grant usage on schema refora_sync to authenticated")
+            cursor.execute("grant select on refora_sync.libraries to authenticated")
+            become_user(cursor, USER_A)
+            cursor.execute("select count(*) from refora_sync.libraries")
+            assert cursor.fetchone()[0] == 0
             checks += 1
             expect_sqlstate(
                 cursor,

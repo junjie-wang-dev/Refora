@@ -146,6 +146,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   window.api.workspaceCanvas.update = originalWorkspaceCanvasUpdate
 })
@@ -886,6 +887,42 @@ describe('Board canvas controls and connections', () => {
         panY: -18,
         zoom: 1
       })
+    })
+  })
+
+  it('serializes viewport saves so the latest viewport is written last', async () => {
+    vi.useFakeTimers()
+    let resolveFirst: () => void = () => undefined
+    const updateViewport = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveFirst = resolve
+      }))
+      .mockResolvedValue(undefined)
+    window.api.workspaceCanvas.update = updateViewport
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+
+    fireEvent.wheel(board, { deltaX: 10, deltaY: 20 })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(160)
+    })
+    expect(updateViewport).toHaveBeenCalledTimes(1)
+
+    fireEvent.wheel(board, { deltaX: 5, deltaY: 7 })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(160)
+    })
+    expect(updateViewport).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirst()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(updateViewport).toHaveBeenNthCalledWith(2, 'ws-1', {
+      panX: -15,
+      panY: -27,
+      zoom: 1
     })
   })
 

@@ -9,6 +9,7 @@ import type {
   BootstrapData,
   LibrarySwitchResult
 } from '../../src/shared/ipc-types'
+import { IpcChannel, SERVER_IPC_CHANNELS } from '../../src/shared/ipc-channels'
 
 describe('ipc-types shapes', () => {
   it('constructs a Document with all DB columns', () => {
@@ -127,5 +128,14 @@ describe('ipc-types shapes', () => {
     expect(res.dbExisted).toBe(false)
     expect(res.imported).toBe(4)
     expect(res.errors).toHaveLength(1)
+  })
+
+  it('keeps main-owned and event channels out of the sidecar handler registry', () => {
+    expect(new Set(SERVER_IPC_CHANNELS).size).toBe(SERVER_IPC_CHANNELS.length)
+    expect(SERVER_IPC_CHANNELS).not.toContain(IpcChannel.RendererFlushComplete)
+    expect(SERVER_IPC_CHANNELS).not.toContain(IpcChannel.SyncStatus)
+    expect(SERVER_IPC_CHANNELS).not.toContain(IpcChannel.SyncSignIn)
+    expect(SERVER_IPC_CHANNELS).not.toContain(IpcChannel.SyncSignOut)
+    expect(SERVER_IPC_CHANNELS).not.toContain(IpcChannel.EventDocumentUpdated)
   })
 })

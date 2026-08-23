@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
-import { realpathSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createNativeRpc } from '../../src/main/sidecar/nativeRpc'
 import type { Server, IncomingMessage, ServerResponse } from 'node:http'
@@ -207,6 +208,41 @@ describe('nativeRpc', () => {
       error: { code: 'invalid_path', message: 'path must be absolute' }
     })
     expect(electronMocks.openPath).not.toHaveBeenCalled()
+  })
+
+  it('accepts non-PDF files after their discovered library is added as a managed root', async () => {
+    const library = mkdtempSync(join(tmpdir(), 'refora-native-root-'))
+    const filePath = join(library, 'notes.md')
+    writeFileSync(filePath, 'notes')
+    const { factory, server } = createFakeHttpServer()
+    const rpc = createNativeRpc({
+      token: TOKEN,
+      safeStorage: makeSafeStorage(),
+      createHttpServer: factory
+    })
+    await rpc.start()
+
+    const rejected = await dispatch(
+      server,
+      'POST',
+      '/native/open-path',
+      { path: filePath },
+      TOKEN
+    )
+    expect(rejected.body).toMatchObject({ ok: false, error: { code: 'invalid_path' } })
+
+    expect(rpc.addManagedRoot(library)).toBe(true)
+    electronMocks.openPath.mockResolvedValue('')
+    const accepted = await dispatch(
+      server,
+      'POST',
+      '/native/open-path',
+      { path: filePath },
+      TOKEN
+    )
+    expect(accepted.body).toEqual({ ok: true, data: { opened: true } })
+    await rpc.stop()
+    rmSync(library, { recursive: true, force: true })
   })
 
   it('rejects non-POST methods with 405', async () => {

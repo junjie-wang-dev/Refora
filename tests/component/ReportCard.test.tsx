@@ -1029,6 +1029,41 @@ describe('ResizableCard', () => {
     expect(onPositionCommit).toHaveBeenNthCalledWith(2, 'item-1', { x: 100, y: 250, zIndex: 5 })
   })
 
+  it('exposes visible keyboard controls for resizing width and height', () => {
+    const onSizeChange = vi.fn()
+    const onSizeCommit = vi.fn()
+    render(
+      <ResizableCard
+        sizeKey="item-1"
+        size={{ width: 300, height: 200 }}
+        position={{ x: 0, y: 0, zIndex: 0 }}
+        getScale={() => 1}
+        frontZIndex={1}
+        onSizeChange={onSizeChange}
+        onSizeCommit={onSizeCommit}
+        onPositionChange={() => {}}
+        onPositionCommit={() => {}}
+        resizeWidthLabel="Resize width"
+        resizeHeightLabel="Resize height"
+        resizeBothLabel="Resize both"
+      >
+        <div>Content</div>
+      </ResizableCard>
+    )
+
+    const widthHandle = screen.getByRole('button', { name: 'Resize width' })
+    const heightHandle = screen.getByRole('button', { name: 'Resize height' })
+    expect(widthHandle).toHaveClass('focus:opacity-100', 'focus-visible:ring-2')
+    expect(heightHandle).toHaveClass('focus:opacity-100', 'focus-visible:ring-2')
+
+    fireEvent.keyDown(widthHandle, { key: 'ArrowRight' })
+    fireEvent.keyDown(heightHandle, { key: 'ArrowUp', shiftKey: true })
+
+    expect(onSizeChange).toHaveBeenNthCalledWith(1, 'item-1', { width: 310, height: 200 })
+    expect(onSizeChange).toHaveBeenNthCalledWith(2, 'item-1', { width: 310, height: 150 })
+    expect(onSizeCommit).toHaveBeenLastCalledWith('item-1', { width: 310, height: 150 })
+  })
+
   it('commits the final size in world coordinates when resizing a zoomed canvas', () => {
     const onSizeChange = vi.fn()
     const onSizeCommit = vi.fn()

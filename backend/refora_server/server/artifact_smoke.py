@@ -14,6 +14,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from refora_server.agent.sandbox_backend import ReforaFilesystemBackend
 from refora_server.db.migrations import MIGRATIONS_DIR, SCHEMA_FILE
+from refora_server.services.mineru import _runtime_resource_path
 
 REQUIRED_MODULES: Final[tuple[str, ...]] = (
     "deepagents",
@@ -57,6 +58,13 @@ def verify_artifact() -> dict[str, Any]:
     }
     if not SCHEMA_FILE.is_file() or not any(MIGRATIONS_DIR.glob("*.sql")):
         raise RuntimeError("Database schema resources are missing")
+    for resource in (
+        "pyproject.toml",
+        "uv.lock",
+        "model-manifest.json",
+        "model_installer.py",
+    ):
+        _runtime_resource_path(resource)
 
     async def verify_checkpointer() -> None:
         connection = await aiosqlite.connect(":memory:")

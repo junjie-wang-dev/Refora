@@ -19,6 +19,9 @@ export async function activateAssemblySettings(
     client.http.settingsGet()
   ])
   const bootstrap = normalizeBootstrapData(bootstrapValue)
+  if (bootstrap.libraryFolderPath) {
+    deps.assembly.addNativeManagedRoot(bootstrap.libraryFolderPath)
+  }
   await deps.setProxy(proxyRulesForRuntime(settings['proxyUrl']))
   deps.setLanguage(bootstrap.language)
   deps.setTheme(bootstrap.theme)

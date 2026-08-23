@@ -35,15 +35,14 @@ def createAgentToolEffectsRepository(db):
             return None
         return _map_effect(row)
 
-    def begin(input: dict[str, Any]) -> dict[str, Any]:
-        existing = get(input["runId"], input["toolCallId"])
-        if existing is not None:
-            return existing
+    def begin(input: dict[str, Any]) -> dict[str, Any] | None:
         now = _now_ms()
-        db.execute(
+        row = db.execute(
             "INSERT INTO agent_tool_effects "
             "(runId, toolCallId, toolName, workspaceId, status, result, createdAt, updatedAt) "
-            "VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, NULL, ?, ?) "
+            "ON CONFLICT(runId, toolCallId) DO NOTHING "
+            "RETURNING *",
             [
                 input["runId"],
                 input["toolCallId"],
@@ -53,13 +52,8 @@ def createAgentToolEffectsRepository(db):
                 now,
                 now,
             ],
-        )
-        row = db.execute(
-            "SELECT * FROM agent_tool_effects WHERE runId = ? AND toolCallId = ?",
-            [input["runId"], input["toolCallId"]],
         ).fetchone()
-        assert row is not None
-        return _map_effect(row)
+        return _map_effect(row) if row is not None else None
 
     def finish(
         runId: str,

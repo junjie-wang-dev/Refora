@@ -162,7 +162,10 @@
     "venue": "期刊/会议",
     "addedAt": "添加时间",
     "filePath": "PDF位置",
-    "resizeColumn": "调整{{column}}列宽"
+    "resizeColumn": "调整{{column}}列宽",
+    "selectDocument": "选择{{title}}",
+    "starDocument": "收藏{{title}}",
+    "unstarDocument": "取消收藏{{title}}"
   },
   "detail": {
     "title": "论文名称",
@@ -829,6 +832,9 @@
     "markdownSelectAll": "全选",
     "markdownEmpty": "这张 Markdown 卡片尚无内容。",
     "moveCard": "拖动卡片即可移动，可使用方向键微调位置。",
+    "resizeCard": "调整卡片大小",
+    "resizeCardWidth": "调整卡片宽度",
+    "resizeCardHeight": "调整卡片高度",
     "selectionActions": "选中卡片操作",
     "selectionCount": "已选卡片",
     "selectionStack": "堆叠",

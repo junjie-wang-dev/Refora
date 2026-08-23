@@ -31,6 +31,7 @@ export interface ServerLibraryHandlerDeps {
   consumeFile?: (path: string, extensions?: readonly string[]) => string
   consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
   consumeDirectory?: (path: string) => string
+  removeDocumentPreviewCache?: (documentId: string) => Promise<void>
 }
 
 function toErrorResult(error: unknown): Result<never> {
@@ -57,7 +58,8 @@ export function createServerLibraryHandlers({
   readPdfRange = readPdfFileRange,
   consumeFile,
   consumeFiles,
-  consumeDirectory
+  consumeDirectory,
+  removeDocumentPreviewCache
 }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
@@ -85,9 +87,19 @@ export function createServerLibraryHandlers({
     [IpcChannel.DocumentsSetStarred]: (documentId: string, starred: boolean) =>
       forward(() => http.documentsSetStarred(documentId, starred)),
     [IpcChannel.DocumentsDelete]: (documentId: string) =>
-      forward(() => http.documentsDelete(documentId)),
+      forward(async () => {
+        const result = await http.documentsDelete(documentId)
+        await removeDocumentPreviewCache?.(documentId)
+        return result
+      }),
     [IpcChannel.DocumentsBulkDelete]: (documentIds: string[]) =>
-      forward(() => http.documentsBulkDelete(documentIds)),
+      forward(async () => {
+        const result = await http.documentsBulkDelete(documentIds)
+        await Promise.all(documentIds.map(async (documentId) => {
+          await removeDocumentPreviewCache?.(documentId)
+        }))
+        return result
+      }),
     [IpcChannel.DocumentsBulkCategorize]: (ids: string[], categoryId: string | null) =>
       forward(() => http.documentsBulkCategorize({ ids, categoryId })),
     [IpcChannel.DocumentsBulkRefreshMetadata]: (documentIds: string[]) =>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Document } from '../../src/shared/ipc-types'
+import type { Document, PdfAnnotation } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
@@ -91,6 +91,65 @@ describe('PDF reader state', () => {
 
     usePdfReaderStore.getState().close('one')
     expect(usePdfReaderStore.getState().activeDocumentId).toBe('two')
+  })
+
+  it('clears loaded annotation caches when a tab closes and reloads them when reopened', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    expect(usePdfReaderStore.getState().annotations).toHaveProperty('paper')
+
+    usePdfReaderStore.getState().close('paper')
+
+    expect(usePdfReaderStore.getState().annotations).not.toHaveProperty('paper')
+    expect(usePdfReaderStore.getState().loadStatus).not.toHaveProperty('paper')
+    expect(usePdfReaderStore.getState().saveStatus).not.toHaveProperty('paper')
+
+    await usePdfReaderStore.getState().open(document('paper'))
+    expect(api.documents.pdfAnnotations).toHaveBeenCalledTimes(2)
+  })
+
+  it('flushes pending annotations before releasing a closed tab cache', async () => {
+    let resolveSave: (annotations: PdfAnnotation[]) => void = () => undefined
+    vi.mocked(api.documents.setPdfAnnotations).mockImplementationOnce(
+      () => new Promise<PdfAnnotation[]>((resolve) => {
+        resolveSave = resolve
+      })
+    )
+    await usePdfReaderStore.getState().open(document('paper'))
+    usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'ink',
+      page: 1,
+      color: '#56ccf2',
+      text: '',
+      comment: '',
+      points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }],
+      strokeWidth: 2
+    })
+
+    usePdfReaderStore.getState().close('paper')
+
+    expect(api.documents.setPdfAnnotations).toHaveBeenCalledWith(
+      'paper',
+      [expect.objectContaining({ kind: 'ink' })]
+    )
+    expect(usePdfReaderStore.getState().annotations).toHaveProperty('paper')
+
+    resolveSave([])
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(usePdfReaderStore.getState().annotations).not.toHaveProperty('paper')
+  })
+
+  it('clears every loaded annotation cache when all tabs close', async () => {
+    await usePdfReaderStore.getState().open(document('one'))
+    await usePdfReaderStore.getState().open(document('two'))
+
+    usePdfReaderStore.getState().closeAll()
+
+    expect(usePdfReaderStore.getState().annotations).toEqual({})
+    expect(usePdfReaderStore.getState().loadStatus).toEqual({})
+    expect(usePdfReaderStore.getState().saveStatus).toEqual({})
   })
 
   it('keeps the annotations sidebar closed until the user toggles it', async () => {

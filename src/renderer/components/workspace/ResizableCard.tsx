@@ -35,6 +35,9 @@ interface ResizableCardProps {
   ) => void
   connectionLabel?: string
   moveLabel?: string
+  resizeWidthLabel?: string
+  resizeHeightLabel?: string
+  resizeBothLabel?: string
   children: ReactNode
   className?: string
   selected?: boolean
@@ -60,6 +63,9 @@ export default function ResizableCard({
   onConnectionStart,
   connectionLabel,
   moveLabel,
+  resizeWidthLabel = 'Resize card width',
+  resizeHeightLabel = 'Resize card height',
+  resizeBothLabel = 'Resize card',
   children,
   className = '',
   selected = false,
@@ -331,6 +337,29 @@ export default function ResizableCard({
     onPositionCommit(sizeKey, next)
   }
 
+  const resizeByKeyboard = (edge: Edge, e: React.KeyboardEvent<HTMLButtonElement>) => {
+    const step = e.shiftKey ? 50 : 10
+    const changesWidth = edge === 'e' || edge === 'se'
+    const changesHeight = edge === 's' || edge === 'se'
+    let nextWidth = latestSizeRef.current.width
+    let nextHeight = latestSizeRef.current.height
+    if (changesWidth && e.key === 'ArrowRight') nextWidth += step
+    else if (changesWidth && e.key === 'ArrowLeft') nextWidth = Math.max(1, nextWidth - step)
+    else if (changesHeight && e.key === 'ArrowDown') nextHeight += step
+    else if (changesHeight && e.key === 'ArrowUp') nextHeight = Math.max(1, nextHeight - step)
+    else return
+    e.preventDefault()
+    e.stopPropagation()
+    const next = { width: nextWidth, height: nextHeight }
+    latestSizeRef.current = next
+    if (cardRef.current) {
+      cardRef.current.style.width = `${next.width}px`
+      cardRef.current.style.height = `${next.height}px`
+    }
+    onSizeChange(sizeKey, next)
+    onSizeCommit(sizeKey, next)
+  }
+
   return (
     <div
       ref={cardRef}
@@ -374,26 +403,35 @@ export default function ResizableCard({
           }}
         />
       ))}
-      <div
+      <button
+        type="button"
         data-card-resize
-        className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize opacity-0 transition-opacity group-hover/card:opacity-100"
+        className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize opacity-0 transition-opacity group-hover/card:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         onPointerDown={(e) => startResize('e', e)}
-        aria-hidden
+        onKeyDown={(e) => resizeByKeyboard('e', e)}
+        aria-label={resizeWidthLabel}
+        title={resizeWidthLabel}
       />
-      <div
+      <button
+        type="button"
         data-card-resize
-        className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize opacity-0 transition-opacity group-hover/card:opacity-100"
+        className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize opacity-0 transition-opacity group-hover/card:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         onPointerDown={(e) => startResize('s', e)}
-        aria-hidden
+        onKeyDown={(e) => resizeByKeyboard('s', e)}
+        aria-label={resizeHeightLabel}
+        title={resizeHeightLabel}
       />
-      <div
+      <button
+        type="button"
         data-card-resize
-        className="absolute bottom-0 right-0 h-3.5 w-3.5 cursor-nwse-resize opacity-0 transition-opacity group-hover/card:opacity-100"
+        className="absolute bottom-0 right-0 h-3.5 w-3.5 cursor-nwse-resize opacity-0 transition-opacity group-hover/card:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         onPointerDown={(e) => startResize('se', e)}
-        aria-hidden
+        onKeyDown={(e) => resizeByKeyboard('se', e)}
+        aria-label={resizeBothLabel}
+        title={resizeBothLabel}
       >
         <span className="absolute bottom-1 right-1 h-2 w-2 rounded-sm border-b-2 border-r-2 border-muted" />
-      </div>
+      </button>
     </div>
   )
 }

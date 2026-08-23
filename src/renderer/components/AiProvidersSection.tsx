@@ -45,6 +45,7 @@ import { api } from '../ipc'
 import { errorMessage } from '../../shared/ipc-types'
 import { Badge, Button, Input } from './ui'
 import { notifyAiProvidersChanged } from '../utils/aiProviderEvents'
+import { useModalDialog } from '../hooks/useModalDialog'
 
 interface ProviderForm {
   id: string | null
@@ -315,6 +316,7 @@ export function AiProvidersSection() {
     setModelFilter('')
     setError(null)
   }
+  const dialogRef = useModalDialog<HTMLDivElement>(!!form, closeForm)
 
   const toggleModel = (model: string) => {
     if (!form) return
@@ -647,7 +649,14 @@ export function AiProvidersSection() {
       )}
 
       {form && selectedPreset && (
-        <div className="dialog-overlay z-[1000]" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title">
+        <div
+          ref={dialogRef}
+          className="dialog-overlay z-[1000]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="provider-dialog-title"
+          tabIndex={-1}
+        >
           <div className="dialog-panel flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-48px))] flex-col gap-4 overflow-hidden p-0">
             <div className="flex items-start gap-3 border-b border-border px-5 py-4">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-panel-2">

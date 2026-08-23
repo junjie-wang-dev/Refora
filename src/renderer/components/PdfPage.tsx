@@ -88,6 +88,13 @@ function normalizedPoint(event: ReactPointerEvent, element: HTMLElement): PdfPoi
 
 type PdfViewport = ReturnType<PDFPageProxy['getViewport']>
 
+export interface PdfPageVisibility {
+  page: number
+  isVisible: boolean
+  visibleArea: number
+  viewportDistance: number
+}
+
 function PdfCanvasTileView({
   page,
   scrollRootRef,
@@ -186,7 +193,7 @@ export default function PdfPage({
   fontSize: number
   strokeWidth: number
   onAddAnnotation: (draft: PdfAnnotationDraft) => PdfAnnotation | null
-  onPageVisible: (page: number) => void
+  onPageVisible: (visibility: PdfPageVisibility) => void
 }) {
   const { t } = useTranslation()
   const pageElementRef = useRef<HTMLDivElement>(null)
@@ -248,10 +255,45 @@ export default function PdfPage({
     const observer = new IntersectionObserver((entries) => {
       const isVisible = entries[0]?.isIntersecting ?? false
       setVisible(isVisible)
-      if (isVisible) onPageVisible(pageNumber)
     }, pdfVisibilityObserverOptions(root))
     observer.observe(element)
     return () => observer.disconnect()
+  }, [onPageVisible, pageNumber, scrollRootRef])
+
+  useEffect(() => {
+    const element = pageElementRef.current
+    const root = scrollRootRef.current
+    if (!element || !root) return
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const visibleArea = entry.isIntersecting
+        ? Math.max(0, entry.intersectionRect.width) * Math.max(0, entry.intersectionRect.height)
+        : 0
+      const rootCenter = entry.rootBounds
+        ? (entry.rootBounds.top + entry.rootBounds.bottom) / 2
+        : root.getBoundingClientRect().top + root.clientHeight / 2
+      const visibleCenter = (entry.intersectionRect.top + entry.intersectionRect.bottom) / 2
+      onPageVisible({
+        page: pageNumber,
+        isVisible: entry.isIntersecting,
+        visibleArea,
+        viewportDistance: Math.abs(visibleCenter - rootCenter)
+      })
+    }, {
+      root,
+      threshold: Array.from({ length: 21 }, (_, index) => index / 20)
+    })
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      onPageVisible({
+        page: pageNumber,
+        isVisible: false,
+        visibleArea: 0,
+        viewportDistance: Number.POSITIVE_INFINITY
+      })
+    }
   }, [onPageVisible, pageNumber, scrollRootRef])
 
   useEffect(() => {
@@ -718,7 +760,17 @@ export default function PdfPage({
                 style={selectedAnnotationIds.includes(annotation.id)
                   ? { filter: 'drop-shadow(0 0 2px var(--color-accent))' }
                   : undefined}
+                role="button"
+                tabIndex={tool === 'eraser' || tool === null ? 0 : -1}
+                aria-label={annotationLabel(annotation, t)}
+                aria-pressed={selectedAnnotationIds.includes(annotation.id)}
                 onClick={() => {
+                  if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
+                  else if (tool === null) selectAnnotation(annotation.id)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
                   if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
                   else if (tool === null) selectAnnotation(annotation.id)
                 }}

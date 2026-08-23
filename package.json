@@ -28,6 +28,7 @@
     "supabase:push:dry-run": "node scripts/supabase-remote.mjs db push --dry-run",
     "supabase:push": "node scripts/supabase-remote.mjs db push",
     "supabase:test": "node scripts/supabase-remote.mjs test rpc",
+    "supabase:test:local": "uv run --project backend --locked python scripts/test-supabase-local.py",
     "package": "sh scripts/package-macos.sh"
   },
   "dependencies": {

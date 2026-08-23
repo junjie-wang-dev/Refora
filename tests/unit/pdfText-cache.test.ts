@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createPdfTextService } from '../../src/main/services/pdfText'
-import { pdfPreviewCachePath } from '../../src/main/services/pdfPreviewCache'
+import {
+  MAX_PDF_PREVIEW_CACHE_BYTES,
+  pdfPreviewCachePath
+} from '../../src/main/services/pdfPreviewCache'
 
 const mocks = vi.hoisted(() => ({
   fork: vi.fn(),
@@ -130,11 +133,89 @@ describe('PDF preview cache', () => {
     writeFileSync(pdfPath, 'pdf')
 
     await service.getPreviewForDocument(document(pdfPath), libraryFolder)
+    const firstStats = statSync(pdfPath)
+    const firstCache = pdfPreviewCachePath(
+      libraryFolder,
+      'd1',
+      `unhashed:${firstStats.size}:${firstStats.mtimeMs}`
+    )
     writeFileSync(pdfPath, 'updated-pdf')
     await service.getPreviewForDocument(document(pdfPath), libraryFolder)
+    const secondStats = statSync(pdfPath)
+    const secondCache = pdfPreviewCachePath(
+      libraryFolder,
+      'd1',
+      `unhashed:${secondStats.size}:${secondStats.mtimeMs}`
+    )
 
     const worker = mocks.fork.mock.results[0].value as MockWorker
     expect(worker.postMessage).toHaveBeenCalledTimes(2)
+    expect(existsSync(firstCache)).toBe(false)
+    expect(existsSync(secondCache)).toBe(true)
+  })
+
+  it('regenerates an oversized cache entry without reading it into memory', async () => {
+    const pdfPath = join(libraryFolder, 'oversized.pdf')
+    writeFileSync(pdfPath, 'pdf')
+    const sourceStats = statSync(pdfPath)
+    const cachePath = pdfPreviewCachePath(
+      libraryFolder,
+      'd1',
+      `unhashed:${sourceStats.size}:${sourceStats.mtimeMs}`
+    )
+    const oversized = Buffer.alloc(MAX_PDF_PREVIEW_CACHE_BYTES + 1)
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(oversized)
+    mkdirSync(dirname(cachePath), { recursive: true })
+    writeFileSync(cachePath, oversized)
+
+    await service.getPreviewForDocument(document(pdfPath), libraryFolder)
+
+    const worker = mocks.fork.mock.results[0].value as MockWorker
+    expect(worker.postMessage).toHaveBeenCalledOnce()
+    expect(statSync(cachePath).size).toBeLessThan(MAX_PDF_PREVIEW_CACHE_BYTES)
+  })
+
+  it('removes every preview version when a document is deleted', async () => {
+    const pdfPath = join(libraryFolder, 'deleted.pdf')
+    writeFileSync(pdfPath, 'pdf')
+    await service.getPreviewForDocument(document(pdfPath), libraryFolder)
+    const sourceStats = statSync(pdfPath)
+    const cachePath = pdfPreviewCachePath(
+      libraryFolder,
+      'd1',
+      `unhashed:${sourceStats.size}:${sourceStats.mtimeMs}`
+    )
+
+    await service.removePreviewCacheForDocument('d1', libraryFolder)
+
+    expect(existsSync(cachePath)).toBe(false)
+  })
+
+  it('does not recreate a deleted document cache after an in-flight preview completes', async () => {
+    service.destroy()
+    let completePreview: (() => void) | null = null
+    mocks.fork.mockImplementation(() => makeControlledWorker((complete) => {
+      completePreview = complete
+    }))
+    service = createPdfTextService()
+    const pdfPath = join(libraryFolder, 'in-flight.pdf')
+    writeFileSync(pdfPath, 'pdf')
+    const sourceStats = statSync(pdfPath)
+    const cachePath = pdfPreviewCachePath(
+      libraryFolder,
+      'd1',
+      `unhashed:${sourceStats.size}:${sourceStats.mtimeMs}`
+    )
+    const preview = service.getPreviewForDocument(document(pdfPath), libraryFolder)
+    await vi.waitFor(() => expect(completePreview).not.toBeNull())
+
+    await service.removePreviewCacheForDocument('d1', libraryFolder)
+    completePreview?.()
+    await expect(preview).resolves.toBeInstanceOf(Uint8Array)
+
+    expect(existsSync(cachePath)).toBe(false)
+    await expect(service.getPreviewForDocument(document(pdfPath), libraryFolder))
+      .rejects.toMatchObject({ code: 'preview_unavailable' })
   })
 
   it('runs at most three previews concurrently with one request per worker', async () => {

@@ -24,6 +24,7 @@ describe('Python server packaging', () => {
     expect(script).toContain('--collect-all langchain_openai')
     expect(script).toContain('--collect-all langgraph.checkpoint.sqlite')
     expect(script).toContain('--collect-all refora_server')
+    expect(script).toContain('refora_server/mineru_runtime:refora_server/mineru_runtime')
     expect(script).toContain('--copy-metadata langchain-openai')
     expect(script).toContain('--copy-metadata langgraph-checkpoint-sqlite')
     expect(script).toContain('verify-server-sidecar.mjs')

@@ -162,7 +162,10 @@
     "venue": "Venue",
     "addedAt": "Added",
     "filePath": "Path",
-    "resizeColumn": "Resize {{column}} column"
+    "resizeColumn": "Resize {{column}} column",
+    "selectDocument": "Select {{title}}",
+    "starDocument": "Star {{title}}",
+    "unstarDocument": "Unstar {{title}}"
   },
   "detail": {
     "title": "Title",
@@ -829,6 +832,9 @@
     "markdownSelectAll": "Select All",
     "markdownEmpty": "This Markdown card is empty.",
     "moveCard": "Drag the card to move it. Use arrow keys to nudge it.",
+    "resizeCard": "Resize card",
+    "resizeCardWidth": "Resize card width",
+    "resizeCardHeight": "Resize card height",
     "selectionActions": "Selected card actions",
     "selectionCount": "Selected cards",
     "selectionStack": "Stack",

@@ -224,7 +224,12 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [applyViewportVisuals])
 
   const persistViewport = useCallback((workspaceId: string, next: WorkspaceCanvasViewport) => {
-    const task = trackRendererPersistence(api.workspaceCanvas.update(workspaceId, next).then(() => undefined)).catch((e) => {
+    const previousTask = viewportSaveTaskRef.current
+    const request = () => api.workspaceCanvas.update(workspaceId, next).then(() => undefined)
+    const orderedRequest = previousTask
+      ? previousTask.then(request, request)
+      : request()
+    const task = trackRendererPersistence(orderedRequest).catch((e) => {
       if (useWorkspaceStore.getState().activeWorkspaceId === workspaceId) {
         useDocumentStore.getState().showToast(errorMessage(e, t('workspace.canvasSaveFailed')))
       }
@@ -1130,7 +1135,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     onPositionCancel: handleCardPositionCancel,
     onConnectionStart: handleConnectionStart,
     connectionLabel: t('workspace.connectionStart'),
-    moveLabel: t('workspace.moveCard')
+    moveLabel: t('workspace.moveCard'),
+    resizeWidthLabel: t('workspace.resizeCardWidth'),
+    resizeHeightLabel: t('workspace.resizeCardHeight'),
+    resizeBothLabel: t('workspace.resizeCard')
   }), [
     getViewportScale,
     animatingItemIds,

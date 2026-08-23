@@ -76,8 +76,10 @@ export function useCategoryDrop(fetchCategories: () => void, fetchDocuments: () 
 
         try {
           const result = await api.import.addFiles(paths)
-          for (const id of result.added) {
-            await api.categories.assign(id, catId)
+          if (result.added.length === 1) {
+            await api.categories.assign(result.added[0], catId)
+          } else if (result.added.length > 1) {
+            await api.documents.bulkCategorize(result.added, catId)
           }
         } catch (e) {
           useDocumentStore.getState().showToast(

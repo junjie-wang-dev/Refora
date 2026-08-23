@@ -21,6 +21,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import { notifyAiProvidersChanged } from '../utils/aiProviderEvents'
 import { Badge, Button, Input } from './ui'
+import { useModalDialog } from '../hooks/useModalDialog'
 
 interface AgentProfilesSectionProps {
   mode?: 'cli' | 'api'
@@ -129,6 +130,8 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
   const [saving, setSaving] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const closeForm = useCallback(() => setForm(null), [])
+  const dialogRef = useModalDialog<HTMLDivElement>(!!form, closeForm)
 
   const availableRuntimes = runtimes.length > 0 ? runtimes : FALLBACK_RUNTIMES
 
@@ -503,16 +506,29 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
       )}
 
       {form && (
-        <div className="dialog-overlay z-[1000]" role="dialog" aria-modal="true">
+        <div
+          ref={dialogRef}
+          className="dialog-overlay z-[1000]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-profile-dialog-title"
+          tabIndex={-1}
+        >
           <div className="dialog-panel flex w-[min(520px,calc(100vw-48px))] flex-col gap-4 p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-foreground">
+                <h3 id="agent-profile-dialog-title" className="text-sm font-semibold text-foreground">
                   {form.id ? t('settings.agentProfiles.editCli') : t('settings.agentProfiles.addCli')}
                 </h3>
                 <p className="mt-1 text-xs text-muted">{t('settings.agentProfiles.cliHint')}</p>
               </div>
-              <Button variant="ghost" size="sm" iconOnly onClick={() => setForm(null)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
+                onClick={closeForm}
+                title={t('common.close')}
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -621,7 +637,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
             </label>
 
             <div className="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" size="sm" onClick={() => setForm(null)}>
+              <Button variant="ghost" size="sm" onClick={closeForm}>
                 {t('common.cancel')}
               </Button>
               <Button variant="primary" size="sm" loading={saving} onClick={() => void save()}>

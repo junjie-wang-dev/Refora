@@ -1,4 +1,4 @@
-import { ipcMain, nativeTheme, net, type BrowserWindow } from 'electron'
+import { ipcMain, nativeTheme, net, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { LibrarySwitchResult } from '../../shared/ipc-types'
 import { createServerAppHandlers } from './ipc/app'
 import { createServerAiHandlers } from './ipc/ai'
@@ -14,6 +14,7 @@ import {
   SERVER_PROTOCOL_DIGEST,
   SERVER_PROTOCOL_VERSION
 } from '../../shared/server-contract'
+import { SERVER_IPC_CHANNELS } from '../../shared/ipc-channels'
 
 export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
@@ -22,6 +23,7 @@ export interface ServerAssemblyDeps {
   switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
   rendererPathCapabilities?: RendererPathCapabilities
+  removeDocumentPreviewCache?: (documentId: string) => Promise<void>
 }
 
 export interface ServerAssembly {
@@ -29,17 +31,45 @@ export interface ServerAssembly {
   stop(): Promise<void>
   getClient(): ServerClient
   fetchResource(path: string, headers?: Headers): Promise<Response>
+  addNativeManagedRoot(path: string): boolean
 }
 
 export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
   let nativeRpc: NativeRpc | null = null
   let serverClient: ServerClient | null = null
   let eventBridge: ServerEventBridge | null = null
-  let handlerChannels: string[] = []
+  const handlerChannels: readonly string[] = SERVER_IPC_CHANNELS
+
+  function registerHandler(
+    channel: string,
+    handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
+  ): void {
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, handler)
+  }
+
+  function registerUnavailableHandlers(channels: readonly string[]): void {
+    for (const channel of channels) {
+      registerHandler(channel, (event) => {
+        if (!isTrustedIpcSender(event, deps.getWin)) {
+          return {
+            ok: false,
+            error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
+          }
+        }
+        return {
+          ok: false,
+          error: { code: 'service_unavailable', message: 'Local library is temporarily unavailable' }
+        }
+      })
+    }
+  }
+
+  registerUnavailableHandlers(handlerChannels)
 
   async function start(): Promise<void> {
-    const connection = await deps.lifecycle.start()
     try {
+      const connection = await deps.lifecycle.start()
       nativeRpc = createNativeRpc({
         token: connection.token,
         getWin: deps.getWin,
@@ -77,7 +107,8 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
           onSettingUpdated: deps.onSettingUpdated,
           consumeFile: deps.rendererPathCapabilities?.consumeFile,
           consumeFiles: deps.rendererPathCapabilities?.consumeFiles,
-          consumeDirectory: deps.rendererPathCapabilities?.consumeDirectory
+          consumeDirectory: deps.rendererPathCapabilities?.consumeDirectory,
+          removeDocumentPreviewCache: deps.removeDocumentPreviewCache
         }),
         ...createServerWorkspaceHandlers(serverClient, {
           consumeFile: deps.rendererPathCapabilities?.consumeFile,
@@ -85,9 +116,16 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         }),
         ...createServerAiHandlers({ serverClient })
       }
-      handlerChannels = Object.keys(handlers)
+      const registeredChannels = Object.keys(handlers)
+      const expectedChannels = new Set(handlerChannels)
+      if (
+        registeredChannels.length !== expectedChannels.size ||
+        registeredChannels.some((channel) => !expectedChannels.has(channel))
+      ) {
+        throw new Error('Server IPC channel registry does not match the handler maps')
+      }
       for (const [channel, handler] of Object.entries(handlers)) {
-        ipcMain.handle(channel, (event, ...args) => {
+        registerHandler(channel, (event, ...args) => {
           if (!isTrustedIpcSender(event, deps.getWin)) {
             return {
               ok: false,
@@ -98,6 +136,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         })
       }
     } catch (error) {
+      registerUnavailableHandlers(handlerChannels)
       eventBridge?.stop()
       serverClient?.ws.disconnect()
       await nativeRpc?.stop()
@@ -112,8 +151,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
   async function stop(): Promise<void> {
     eventBridge?.stop()
     serverClient?.ws.disconnect()
-    for (const channel of handlerChannels) ipcMain.removeHandler(channel)
-    handlerChannels = []
+    registerUnavailableHandlers(handlerChannels)
     await nativeRpc?.stop()
     await deps.lifecycle.stop()
     deps.rendererPathCapabilities?.clear()
@@ -135,5 +173,9 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     })
   }
 
-  return { start, stop, getClient, fetchResource }
+  function addNativeManagedRoot(path: string): boolean {
+    return nativeRpc?.addManagedRoot(path) ?? false
+  }
+
+  return { start, stop, getClient, fetchResource, addNativeManagedRoot }
 }

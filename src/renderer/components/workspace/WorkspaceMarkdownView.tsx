@@ -86,6 +86,7 @@ const WorkspaceMarkdownView = forwardRef<
   const savedDraftRef = useRef<MarkdownDraft>({ title, contentMd })
   const draftRef = useRef<MarkdownDraft>({ title, contentMd })
   const incomingDraftRef = useRef({ id, draft: { title, contentMd } })
+  const ownSaveDraftsRef = useRef<Array<{ id: string; draft: MarkdownDraft }>>([])
   const externalConflictRef = useRef(false)
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true))
   const articleRef = useRef<HTMLElement>(null)
@@ -119,6 +120,23 @@ const WorkspaceMarkdownView = forwardRef<
     const incomingMatchesDraft =
       (incoming.title === currentDraft.title || incoming.title === currentDraft.title.trim()) &&
       incoming.contentMd === currentDraft.contentMd
+    const ownSaveIndex = ownSaveDraftsRef.current.findIndex((entry) =>
+      entry.id === id &&
+      entry.draft.title === incoming.title &&
+      entry.draft.contentMd === incoming.contentMd
+    )
+    const incomingMatchesOwnSave = ownSaveIndex >= 0
+    if (incomingMatchesOwnSave) {
+      ownSaveDraftsRef.current.splice(ownSaveIndex, 1)
+    }
+    if (incomingMatchesOwnSave && dirty && !incomingMatchesDraft) {
+      savedDraftRef.current = incoming
+      setSavedDraft(incoming)
+      externalConflictRef.current = false
+      setExternalConflict(false)
+      setSaveError(null)
+      return
+    }
     if (previousIncoming.id !== id || !dirty || incomingMatchesDraft) {
       savedDraftRef.current = incoming
       setSavedDraft(incoming)
@@ -156,13 +174,18 @@ const WorkspaceMarkdownView = forwardRef<
       }
       setSaveError(null)
       let saved: boolean
+      const ownSave = { id, draft: nextDraft }
+      ownSaveDraftsRef.current.push(ownSave)
+      if (ownSaveDraftsRef.current.length > 8) ownSaveDraftsRef.current.shift()
       try {
         saved = await onUpdate(id, nextDraft)
       } catch {
+        ownSaveDraftsRef.current = ownSaveDraftsRef.current.filter((entry) => entry !== ownSave)
         setSaveError(saveFailed)
         return false
       }
       if (!saved) {
+        ownSaveDraftsRef.current = ownSaveDraftsRef.current.filter((entry) => entry !== ownSave)
         setSaveError(saveFailed)
         return false
       }

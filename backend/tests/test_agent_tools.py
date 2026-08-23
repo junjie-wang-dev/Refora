@@ -504,6 +504,8 @@ def test_write_tool_uses_effects_and_replays_finished_result():
 
     def begin(value):
         calls.append(("begin", value))
+        if state["effect"] is not None:
+            return None
         state["effect"] = {"status": "running"}
         return state["effect"]
 
@@ -522,7 +524,39 @@ def test_write_tool_uses_effects_and_replays_finished_result():
 
     assert json.loads(result)["added"] == ["doc-1"]
     assert replay == result
-    assert [call[0] for call in calls] == ["begin", "finish"]
+    assert [call[0] for call in calls] == ["begin", "finish", "begin"]
+
+
+def test_write_tool_does_not_dispatch_when_claim_is_already_running():
+    writes = []
+    items = Functions(
+        list=lambda workspace_id: [],
+        add=lambda workspace_id, kind, ids: writes.extend(ids),
+    )
+    repos = {
+        "documents": Functions(get=lambda doc_id: {"id": doc_id}),
+        "workspaceItems": items,
+        "agentToolEffects": Functions(
+            begin=lambda value: None,
+            get=lambda run_id, tool_call_id: {"status": "running"},
+            finish=lambda *args: None,
+        ),
+    }
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {"repos": repos},
+    )
+
+    result = json.loads(
+        executor.execute(
+            "add_docs_to_workspace",
+            {"docIds": "doc-1"},
+            "call-1",
+        )
+    )
+
+    assert "unknown outcome" in result["error"]
+    assert writes == []
 
 
 def test_external_tool_executor_has_no_parallel_approval_callback():

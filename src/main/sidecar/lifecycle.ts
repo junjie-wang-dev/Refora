@@ -119,8 +119,10 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   let connection: ServerConnection | null = null
   let startPromise: Promise<ServerConnection> | null = null
   let healthTimer: ReturnType<typeof setTimeout> | null = null
+  let restartTimer: ReturnType<typeof setTimeout> | null = null
   let restartResetTimer: ReturnType<typeof setTimeout> | null = null
   let stopping = false
+  let recovering = false
   let restartCount = 0
   let restartExhaustedError: Error | null = null
   const terminationPromises = new WeakMap<ChildProcess, Promise<void>>()
@@ -140,6 +142,13 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     if (restartResetTimer) {
       clearTimeout(restartResetTimer)
       restartResetTimer = null
+    }
+  }
+
+  function clearRestartTimer(): void {
+    if (restartTimer) {
+      clearTimeout(restartTimer)
+      restartTimer = null
     }
   }
 
@@ -256,33 +265,44 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     throw new Error('Server startup was cancelled')
   }
 
-  function handleUnexpectedExit(spawned: ChildProcess, reason: string | number | null): void {
-    if (stopping || child !== spawned) return
-    child = null
+  function exhaustRestarts(): void {
+    restartExhaustedError = Object.assign(
+      new Error(`Server crashed and exhausted ${maxRestarts} restart attempts`),
+      { code: 'server_restart_exhausted' }
+    )
+    logger.error(`serverLifecycle:${restartExhaustedError.message}`)
     connection = null
-    clearHealthTimer()
-    clearRestartResetTimer()
+    startPromise = null
+  }
+
+  function scheduleRestart(reason: string | number | null): void {
+    if (stopping || restartTimer || connection) return
     if (restartCount >= maxRestarts) {
-      restartExhaustedError = Object.assign(
-        new Error(`Server crashed and exhausted ${maxRestarts} restart attempts`),
-        { code: 'server_restart_exhausted' }
-      )
-      logger.error(`serverLifecycle:${restartExhaustedError.message}`)
-      connection = null
-      startPromise = null
+      exhaustRestarts()
       return
     }
     restartCount += 1
     const backoff = BASE_BACKOFF_MS * 2 ** (restartCount - 1)
     logger.warn(
-      `serverLifecycle:crashed (code=${reason}), restarting in ${backoff}ms (attempt ${restartCount}/${maxRestarts})`
+      `serverLifecycle:unavailable (reason=${reason}), restarting in ${backoff}ms (attempt ${restartCount}/${maxRestarts})`
     )
-    setTimeout(() => {
+    restartTimer = setTimeout(() => {
+      restartTimer = null
       if (stopping) return
       void start().catch((error) => {
         logger.error(`serverLifecycle:restart failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     }, backoff)
+  }
+
+  function handleUnexpectedExit(spawned: ChildProcess, reason: string | number | null): void {
+    if (stopping || child !== spawned) return
+    child = null
+    connection = null
+    recovering = true
+    clearHealthTimer()
+    clearRestartResetTimer()
+    scheduleRestart(reason)
   }
 
   function attachCrashHandler(spawned: ChildProcess): void {
@@ -364,6 +384,8 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     attachCrashHandler(spawned)
     scheduleHealthCheck()
     scheduleRestartReset(spawned)
+    clearRestartTimer()
+    recovering = false
     return connection
   }
 
@@ -371,9 +393,18 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     if (connection) return Promise.resolve(connection)
     if (restartExhaustedError) return Promise.reject(restartExhaustedError)
     if (startPromise) return startPromise
-    startPromise = doStart().finally(() => {
-      startPromise = null
-    })
+    let recoveryFailure: string | null = null
+    startPromise = doStart()
+      .catch((error) => {
+        if (recovering && !stopping) {
+          recoveryFailure = error instanceof Error ? error.message : String(error)
+        }
+        throw error
+      })
+      .finally(() => {
+        startPromise = null
+        if (recoveryFailure !== null) scheduleRestart(recoveryFailure)
+      })
     return startPromise
   }
 
@@ -406,6 +437,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   async function stop(): Promise<void> {
     stopping = true
     clearHealthTimer()
+    clearRestartTimer()
     clearRestartResetTimer()
     const current = child
     child = null

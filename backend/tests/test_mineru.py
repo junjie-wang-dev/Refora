@@ -116,6 +116,21 @@ def _make_executable(path):
     os.chmod(path, 0o755)
 
 
+def _manifest(architecture="arm64", **overrides):
+    return {
+        "version": mineru_mod.MINERU_VERSION,
+        "architecture": architecture,
+        "pythonRelativePath": "runtime/venv/bin/python",
+        "modelConfigRelativePath": "mineru.json",
+        "modelRevision": f"sha256:{mineru_mod._resource_sha256('model-manifest.json')}",
+        "runtimeLockSha256": mineru_mod._resource_sha256("uv.lock"),
+        "modelManifestSha256": mineru_mod._resource_sha256("model-manifest.json"),
+        "installedAt": 123,
+        "diskBytes": None,
+        **overrides,
+    }
+
+
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     deps = _make_deps(tmp_path, trash_paths=[], download_calls=[])
@@ -131,16 +146,19 @@ def manager(tmp_path, monkeypatch):
                 with open(os.path.join(extracted, "uv"), "wb") as fh:
                     fh.write(b"")
             elif "python" in args and "install" in args:
+                assert args[2] == mineru_mod.MINERU_PYTHON_VERSION
                 idx = args.index("--install-dir") if "--install-dir" in args else None
                 py_dir = args[idx + 1] if idx is not None else os.path.join(cwd, "runtime", "python")
                 _make_executable(os.path.join(py_dir, "3.12", "bin", "python3.12"))
             elif "venv" in args:
                 venv = args[-1]
                 _make_executable(os.path.join(venv, "bin", "python"))
-            elif "pip" in args and "install" in args:
-                pass
-            elif command.endswith("mineru-models-download"):
-                with open(os.path.join(cwd, "mineru.json"), "w") as fh:
+            elif "sync" in args:
+                assert "--locked" in args
+                assert args[args.index("--extra") + 1] == "arm64"
+                assert env["VIRTUAL_ENV"].endswith("runtime/venv")
+            elif args and args[0].endswith("model_installer.py"):
+                with open(args[2], "w") as fh:
                     json.dump({"models": {}}, fh)
             elif "-c" in args and "mineru.version" in " ".join(args):
                 return mineru_mod.MINERU_VERSION
@@ -201,15 +219,7 @@ async def test_status_invalid_when_manifest_missing_runtime(tmp_path):
     mgr = create_mineru_engine_manager(deps)
     path = _install_path(tmp_path)
     os.makedirs(path, exist_ok=True)
-    manifest = {
-        "version": mineru_mod.MINERU_VERSION,
-        "architecture": "arm64",
-        "pythonRelativePath": "runtime/venv/bin/python",
-        "modelConfigRelativePath": "mineru.json",
-        "modelRevision": "rev",
-        "installedAt": 123,
-        "diskBytes": None,
-    }
+    manifest = _manifest(modelRevision="rev")
     with open(os.path.join(path, "installed-manifest.json"), "w") as fh:
         json.dump(manifest, fh)
     status = await mgr["getStatus"]()
@@ -223,15 +233,7 @@ async def test_status_installed_when_manifest_and_runtime_present(tmp_path):
     mgr = create_mineru_engine_manager(deps)
     path = _install_path(tmp_path)
     os.makedirs(path, exist_ok=True)
-    manifest = {
-        "version": mineru_mod.MINERU_VERSION,
-        "architecture": "arm64",
-        "pythonRelativePath": "runtime/venv/bin/python",
-        "modelConfigRelativePath": "mineru.json",
-        "modelRevision": "rev-1",
-        "installedAt": 123,
-        "diskBytes": None,
-    }
+    manifest = _manifest(modelRevision="rev-1")
     with open(os.path.join(path, "installed-manifest.json"), "w") as fh:
         json.dump(manifest, fh)
     _make_executable(os.path.join(path, "runtime", "venv", "bin", "python"))
@@ -242,6 +244,21 @@ async def test_status_installed_when_manifest_and_runtime_present(tmp_path):
     assert status.version == mineru_mod.MINERU_VERSION
     assert status.pythonPath.endswith("runtime/venv/bin/python")
     assert status.modelConfigPath.endswith("mineru.json")
+
+
+@pytest.mark.asyncio
+async def test_status_rejects_stale_runtime_lock(tmp_path):
+    deps = _make_deps(tmp_path, trash_paths=[], download_calls=[])
+    mgr = create_mineru_engine_manager(deps)
+    path = _install_path(tmp_path)
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "installed-manifest.json"), "w") as fh:
+        json.dump(_manifest(runtimeLockSha256="0" * 64), fh)
+    _make_executable(os.path.join(path, "runtime", "venv", "bin", "python"))
+    with open(os.path.join(path, "mineru.json"), "w") as fh:
+        json.dump({"models": {}}, fh)
+    status = await mgr["getStatus"]()
+    assert status.state == "invalid"
 
 
 @pytest.mark.asyncio
@@ -257,6 +274,10 @@ async def test_install_creates_engine_and_reports_installed(manager):
     assert manifest["version"] == mineru_mod.MINERU_VERSION
     assert manifest["architecture"] == "arm64"
     assert manifest["pythonRelativePath"] == "runtime/venv/bin/python"
+    assert manifest["runtimeLockSha256"] == mineru_mod._resource_sha256("uv.lock")
+    assert manifest["modelManifestSha256"] == mineru_mod._resource_sha256(
+        "model-manifest.json"
+    )
 
 
 @pytest.mark.asyncio
@@ -363,14 +384,15 @@ async def test_uninstall_trashes_install_path(tmp_path, monkeypatch):
                 os.makedirs(extracted, exist_ok=True)
                 open(os.path.join(extracted, "uv"), "wb").close()
             elif "python" in args and "install" in args:
+                assert args[2] == mineru_mod.MINERU_PYTHON_VERSION
                 idx = args.index("--install-dir") if "--install-dir" in args else None
                 py_dir = args[idx + 1] if idx is not None else os.path.join(cwd, "runtime", "python")
                 _make_executable(os.path.join(py_dir, "3.12", "bin", "python3.12"))
             elif "venv" in args:
                 venv = args[-1]
                 _make_executable(os.path.join(venv, "bin", "python"))
-            elif command.endswith("mineru-models-download"):
-                with open(os.path.join(cwd, "mineru.json"), "w") as fh:
+            elif args and args[0].endswith("model_installer.py"):
+                with open(args[2], "w") as fh:
                     json.dump({"models": {}}, fh)
             elif "-c" in args and "mineru.version" in " ".join(args):
                 return mineru_mod.MINERU_VERSION
@@ -445,7 +467,7 @@ async def test_get_runtime_returns_environment_after_install(manager):
     mgr, deps = manager
     await mgr["install"]()
     runtime = await mgr["getRuntime"]()
-    assert runtime.modelRevision.startswith(f"mineru-{mineru_mod.MINERU_VERSION}")
+    assert runtime.modelRevision == f"sha256:{mineru_mod._resource_sha256('model-manifest.json')}"
     assert runtime.environment["MINERU_MODEL_SOURCE"] == "local"
     assert "HF_HOME" in runtime.environment
 
@@ -526,14 +548,15 @@ async def test_install_health_check_wrong_version_raises(tmp_path, monkeypatch):
                 os.makedirs(extracted, exist_ok=True)
                 open(os.path.join(extracted, "uv"), "wb").close()
             elif "python" in args and "install" in args:
+                assert args[2] == mineru_mod.MINERU_PYTHON_VERSION
                 idx = args.index("--install-dir") if "--install-dir" in args else None
                 py_dir = args[idx + 1] if idx is not None else os.path.join(cwd, "runtime", "python")
                 _make_executable(os.path.join(py_dir, "3.12", "bin", "python3.12"))
             elif "venv" in args:
                 venv = args[-1]
                 _make_executable(os.path.join(venv, "bin", "python"))
-            elif command.endswith("mineru-models-download"):
-                with open(os.path.join(cwd, "mineru.json"), "w") as fh:
+            elif args and args[0].endswith("model_installer.py"):
+                with open(args[2], "w") as fh:
                     json.dump({"models": {}}, fh)
             elif "-c" in args and "mineru.version" in " ".join(args):
                 return "9.9.9"

@@ -867,7 +867,13 @@ function BulkBar({
           size="md"
           className="self-start"
           icon={<FileText className="h-4 w-4" />}
-          onClick={() => void api.export.toBibtex(selectedIds)}
+          onClick={() => {
+            void api.export.toBibtex(selectedIds).catch((error) => {
+              useDocumentStore.getState().showToast(
+                errorMessage(error, t('topbar.exportBibtexFailed'))
+              )
+            })
+          }}
         >
           {t('common.exportBibtexTitle')} ({count})
         </Button>

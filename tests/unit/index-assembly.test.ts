@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   ipcRemoveHandler: vi.fn(),
   nativeStart: vi.fn(),
   nativeStop: vi.fn(),
+  nativeAddManagedRoot: vi.fn(),
   wsConnect: vi.fn(),
   wsDisconnect: vi.fn(),
   bridgeStart: vi.fn(),
@@ -18,10 +19,15 @@ vi.mock('electron', () => ({
   nativeTheme: { themeSource: 'system' }
 }))
 
+vi.mock('../../src/shared/ipc-channels', () => ({
+  SERVER_IPC_CHANNELS: ['app', 'library', 'workspace', 'ai']
+}))
+
 vi.mock('../../src/main/sidecar/nativeRpc', () => ({
   createNativeRpc: vi.fn(() => ({
     start: mocks.nativeStart,
-    stop: mocks.nativeStop
+    stop: mocks.nativeStop,
+    addManagedRoot: mocks.nativeAddManagedRoot
   }))
 }))
 
@@ -84,6 +90,7 @@ describe('main process server assembly', () => {
     mocks.nativeStop.mockImplementation(async () => {
       mocks.calls.push('native.stop')
     })
+    mocks.nativeAddManagedRoot.mockReturnValue(true)
     mocks.wsConnect.mockImplementation(async () => {
       mocks.calls.push('ws.connect')
     })
@@ -131,14 +138,26 @@ describe('main process server assembly', () => {
     await assembly.start()
 
     expect(mocks.calls).toEqual([
+      'ipc.removeHandler',
+      'ipc.handle',
+      'ipc.removeHandler',
+      'ipc.handle',
+      'ipc.removeHandler',
+      'ipc.handle',
+      'ipc.removeHandler',
+      'ipc.handle',
       'lifecycle.start',
       'native.start',
       'http.ready',
       'ws.connect',
       'bridge.start',
+      'ipc.removeHandler',
       'ipc.handle',
+      'ipc.removeHandler',
       'ipc.handle',
+      'ipc.removeHandler',
       'ipc.handle',
+      'ipc.removeHandler',
       'ipc.handle'
     ])
     expect(createNativeRpc).toHaveBeenCalledWith(expect.objectContaining({ token: 'token' }))
@@ -174,12 +193,65 @@ describe('main process server assembly', () => {
       'bridge.stop',
       'ws.disconnect',
       'ipc.removeHandler',
+      'ipc.handle',
       'ipc.removeHandler',
+      'ipc.handle',
       'ipc.removeHandler',
+      'ipc.handle',
       'ipc.removeHandler',
+      'ipc.handle',
       'native.stop',
       'lifecycle.stop'
     ])
+  })
+
+  it('keeps typed unavailable handlers installed while the assembly is stopped', async () => {
+    const mainFrame = {}
+    const webContents = {
+      isDestroyed: () => false,
+      mainFrame
+    }
+    const window = {
+      isDestroyed: () => false,
+      webContents
+    } as unknown as BrowserWindow
+    const lifecycle = {
+      start: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8123', token: 'token', port: 8123 })),
+      getServerBaseUrl: vi.fn(),
+      stop: vi.fn()
+    }
+    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+    await assembly.start()
+
+    await assembly.stop()
+
+    const fallback = mocks.ipcHandle.mock.calls.at(-1)?.[1] as (
+      event: unknown
+    ) => unknown
+    expect(fallback({ sender: webContents, senderFrame: mainFrame })).toEqual({
+      ok: false,
+      error: {
+        code: 'service_unavailable',
+        message: 'Local library is temporarily unavailable'
+      }
+    })
+    expect(fallback({ sender: {}, senderFrame: {} })).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized_sender' }
+    })
+  })
+
+  it('adds a library discovered after native RPC startup to the managed roots', async () => {
+    const lifecycle = {
+      start: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8123', token: 'token', port: 8123 })),
+      getServerBaseUrl: vi.fn(),
+      stop: vi.fn()
+    }
+    const assembly = createServerAssembly({ lifecycle, getWin: () => null })
+    await assembly.start()
+
+    expect(assembly.addNativeManagedRoot('/library/discovered')).toBe(true)
+    expect(mocks.nativeAddManagedRoot).toHaveBeenCalledWith('/library/discovered')
   })
 
   it('rejects IPC from any sender other than the active main frame', async () => {
@@ -199,7 +271,9 @@ describe('main process server assembly', () => {
     }
     const assembly = createServerAssembly({ lifecycle, getWin: () => window })
     await assembly.start()
-    const invokeHandler = mocks.ipcHandle.mock.calls[0][1] as (
+    const invokeHandler = mocks.ipcHandle.mock.calls
+      .filter(([channel]) => channel === 'app')
+      .at(-1)?.[1] as (
       event: unknown,
       ...args: unknown[]
     ) => unknown
@@ -239,5 +313,40 @@ describe('main process server assembly', () => {
     expect(mocks.nativeStop).toHaveBeenCalledOnce()
     expect(lifecycle.stop).toHaveBeenCalledOnce()
     expect(mocks.wsConnect).not.toHaveBeenCalled()
+  })
+
+  it('keeps typed sidecar fallbacks when lifecycle cold start fails', async () => {
+    const mainFrame = {}
+    const webContents = {
+      isDestroyed: () => false,
+      mainFrame
+    }
+    const window = {
+      isDestroyed: () => false,
+      webContents
+    } as unknown as BrowserWindow
+    const lifecycle = {
+      start: vi.fn(async () => {
+        throw new Error('spawn failed')
+      }),
+      getServerBaseUrl: vi.fn(),
+      stop: vi.fn()
+    }
+    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+
+    await expect(assembly.start()).rejects.toThrow('spawn failed')
+
+    const fallback = mocks.ipcHandle.mock.calls
+      .filter(([channel]) => channel === 'app')
+      .at(-1)?.[1] as (event: unknown) => unknown
+    expect(fallback({ sender: webContents, senderFrame: mainFrame })).toEqual({
+      ok: false,
+      error: {
+        code: 'service_unavailable',
+        message: 'Local library is temporarily unavailable'
+      }
+    })
+    expect(mocks.nativeStart).not.toHaveBeenCalled()
+    expect(lifecycle.stop).toHaveBeenCalledOnce()
   })
 })

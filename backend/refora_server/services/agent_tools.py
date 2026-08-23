@@ -11,7 +11,6 @@ from langchain_core.tools import StructuredTool
 from refora_server.agent.engine_schema import (
     TOOL_EFFECT_STATUS_DONE,
     TOOL_EFFECT_STATUS_ERROR,
-    TOOL_EFFECT_STATUS_RUNNING,
 )
 from refora_server.agent.risk import RiskClass, classify
 from refora_server.agent.tools.academic import AcademicTools
@@ -115,15 +114,21 @@ class AgentToolExecutor:
         effects = value(self.repos, "agentToolEffects")
         if effects is None:
             raise ValueError("Agent tool effects repository is unavailable")
-        _get = value(effects, "get")
         _begin = value(effects, "begin")
         _finish = value(effects, "finish")
-        existing = _get(self.context.run_id, tool_call_id)
-        if existing and existing["status"] == TOOL_EFFECT_STATUS_DONE and isinstance(existing.get("result"), str):
-            return existing["result"]
-        if existing and existing["status"] == TOOL_EFFECT_STATUS_RUNNING:
+        claimed = _begin(
+            {
+                "runId": self.context.run_id,
+                "toolCallId": tool_call_id,
+                "toolName": name,
+                "workspaceId": self.context.workspace_id,
+            }
+        )
+        if claimed is None:
+            existing = value(effects, "get")(self.context.run_id, tool_call_id)
+            if existing and existing["status"] == TOOL_EFFECT_STATUS_DONE and isinstance(existing.get("result"), str):
+                return existing["result"]
             return _json({"error": "This tool call has an unknown outcome from an interrupted run."})
-        _begin({"runId": self.context.run_id, "toolCallId": tool_call_id, "toolName": name, "workspaceId": self.context.workspace_id})
         try:
             result = _json(self._dispatch(name, arguments))
         except Exception as error:

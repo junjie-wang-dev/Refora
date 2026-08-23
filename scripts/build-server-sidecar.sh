@@ -39,6 +39,7 @@ UV_CACHE_DIR=${UV_CACHE_DIR:-"$WORK_DIR/uv-cache"} uv run \
   --workpath "$WORK_DIR/build" \
   --specpath "$WORK_DIR" \
   --paths "$PROJECT_DIR" \
+  --add-data "$PROJECT_DIR/refora_server/mineru_runtime:refora_server/mineru_runtime" \
   --collect-all refora_server \
   --collect-all deepagents \
   --collect-all langchain \

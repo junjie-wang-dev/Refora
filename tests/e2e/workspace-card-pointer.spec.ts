@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type Locator } from '@playwright/t
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import electronExe from 'electron'
 import { authorizeFilePath } from './path-capability'
@@ -412,11 +413,13 @@ test.describe('Workspace card pointer gestures', () => {
       }, 0)
     }).toBeGreaterThan(0)
 
-    const initialCacheCount = fs.readdirSync(previewCacheRoot).reduce((count, directory) => {
-      const directoryPath = path.join(previewCacheRoot, directory)
-      if (!fs.statSync(directoryPath).isDirectory()) return count
-      return count + fs.readdirSync(directoryPath).filter((name) => name.endsWith('.png')).length
-    }, 0)
+    const documentCacheDirectory = path.join(
+      previewCacheRoot,
+      createHash('sha256').update(setup.docId).digest('hex')
+    )
+    const initialCacheFiles = fs.readdirSync(documentCacheDirectory)
+      .filter((name) => name.endsWith('.png'))
+    expect(initialCacheFiles).toHaveLength(1)
     const sourceStats = fs.statSync(setup.filePath)
     fs.utimesSync(
       setup.filePath,
@@ -427,11 +430,11 @@ test.describe('Workspace card pointer gestures', () => {
       const response = await net.fetch(url)
       await response.arrayBuffer()
     }, previewUrl)
-    await expect.poll(() => fs.readdirSync(previewCacheRoot).reduce((count, directory) => {
-      const directoryPath = path.join(previewCacheRoot, directory)
-      if (!fs.statSync(directoryPath).isDirectory()) return count
-      return count + fs.readdirSync(directoryPath).filter((name) => name.endsWith('.png')).length
-    }, 0)).toBe(initialCacheCount + 1)
+    await expect.poll(() => {
+      const cacheFiles = fs.readdirSync(documentCacheDirectory)
+        .filter((name) => name.endsWith('.png'))
+      return cacheFiles.length === 1 && cacheFiles[0] !== initialCacheFiles[0]
+    }).toBe(true)
 
     await dragLocator(
       electronPage.locator('[data-paper-preview]'),

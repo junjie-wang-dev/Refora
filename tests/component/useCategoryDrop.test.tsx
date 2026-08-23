@@ -127,7 +127,7 @@ describe('useCategoryDrop', () => {
       skipped: [],
       errors: []
     })
-    api.categories.assign.mockResolvedValue(undefined)
+    api.documents.bulkCategorize.mockResolvedValue(undefined)
     const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
     const file = { name: 'paper.pdf' } as File
     const evt = makeDataTransfer({}, [file])
@@ -135,8 +135,30 @@ describe('useCategoryDrop', () => {
       await result.current.handleDrop('cat1', evt)
     })
     expect(api.import.addFiles).toHaveBeenCalledWith(['/path/paper.pdf'])
-    expect(api.categories.assign).toHaveBeenCalledWith('new-1', 'cat1')
-    expect(api.categories.assign).toHaveBeenCalledWith('new-2', 'cat1')
+    expect(api.documents.bulkCategorize).toHaveBeenCalledWith(['new-1', 'new-2'], 'cat1')
+    expect(fetchDocuments).toHaveBeenCalled()
+  })
+
+  it('submits every imported document in one category assignment request', async () => {
+    api.getPathForFile.mockResolvedValue('/path/paper.pdf')
+    api.import.addFiles.mockResolvedValue({
+      added: ['new-1', 'new-2', 'new-3'],
+      skipped: [],
+      errors: []
+    })
+    api.documents.bulkCategorize.mockRejectedValue(new Error('assign failed'))
+    const { result } = renderHook(() => useCategoryDrop(fetchCategories, fetchDocuments))
+    const evt = makeDataTransfer({}, [{ name: 'paper.pdf' } as File])
+
+    await act(async () => {
+      await result.current.handleDrop('cat1', evt)
+    })
+
+    expect(api.documents.bulkCategorize).toHaveBeenCalledWith(
+      ['new-1', 'new-2', 'new-3'],
+      'cat1'
+    )
+    expect(useDocumentStore.getState().showToast).toHaveBeenCalled()
     expect(fetchDocuments).toHaveBeenCalled()
   })
 

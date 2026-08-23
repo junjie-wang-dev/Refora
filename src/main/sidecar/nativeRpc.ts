@@ -45,6 +45,7 @@ export interface NativePathPolicy {
 export interface NativeRpc {
   start(): Promise<NativeRpcInfo>
   stop(): Promise<void>
+  addManagedRoot(path: string): boolean
 }
 
 function ok<T>(data: T): Result<T> {
@@ -540,7 +541,14 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     })
   }
 
-  return { start, stop }
+  function addManagedRoot(path: string): boolean {
+    const root = normalizeRoot(path)
+    if (!root) return false
+    managedRoots.add(root)
+    return true
+  }
+
+  return { start, stop, addManagedRoot }
 }
 
 export type NativeRpcService = ReturnType<typeof createNativeRpc>

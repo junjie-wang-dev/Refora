@@ -125,7 +125,8 @@ test.describe('Built-in PDF reader', () => {
     const bounds = await pdfPage.boundingBox()
     expect(bounds).not.toBeNull()
 
-    await page.getByRole('button', { name: 'Freehand drawing', exact: true }).click()
+    const freehandTool = page.locator('button[data-shortcut="P"]')
+    await freehandTool.click()
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Freehand drawing')
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(5)
@@ -144,14 +145,13 @@ test.describe('Built-in PDF reader', () => {
     await expect(page.getByRole('button', {
       name: 'Delete selected annotations (1)'
     })).toHaveCount(0)
-    await page.getByRole('button', { name: 'Freehand drawing', exact: true }).click()
+    await freehandTool.click()
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     await expect(page.getByRole('button', {
       name: 'Read and select text',
       exact: true
     })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Freehand drawing', exact: true }))
-      .not.toHaveAttribute('aria-pressed', 'true')
+    await expect(freehandTool).not.toHaveAttribute('aria-pressed', 'true')
 
     const selectableText = pdfPage.locator('.textLayer span')
       .filter({ hasText: /\S{2}/ })

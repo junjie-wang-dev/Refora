@@ -7,7 +7,9 @@ import { MainProcessError } from './errors'
 import { logger } from './logger'
 import {
   pdfPreviewCachePath,
+  prunePdfPreviewCacheVersions,
   readPdfPreviewCache,
+  removePdfPreviewCacheForDocument,
   writePdfPreviewCache
 } from './pdfPreviewCache'
 import { resolvePdfFilePath } from './pdfPath'
@@ -52,6 +54,8 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
   let executionCount = 0
   const executionWaiters: ExecutionWaiter[] = []
   const previewRequests = new Map<string, Promise<Uint8Array>>()
+  const previewGenerations = new Map<string, number>()
+  const deletedPreviewDocuments = new Set<string>()
   const pool: WorkerSlot[] = Array.from({ length: MAX_WORKERS }, () => ({
     proc: null,
     killed: false,
@@ -228,21 +232,42 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
     configuredLibrary: string
   ): Promise<Uint8Array> {
     if (destroyed) throw new Error('PDF text service destroyed')
-    const filePath = resolvePdfFilePath(doc.filePath)
     const libraryFolder = resolvePath(configuredLibrary.trim())
     if (!configuredLibrary.trim() || !existsSync(libraryFolder) || !statSync(libraryFolder).isDirectory()) {
       throw new MainProcessError('invalid_library', 'Library folder is not configured or unavailable')
     }
+    const documentKey = `${libraryFolder}\0${doc.id}`
+    if (deletedPreviewDocuments.has(documentKey)) {
+      throw new MainProcessError('preview_unavailable', `Unable to preview deleted document: ${doc.fileName}`)
+    }
+    const generation = previewGenerations.get(documentKey) ?? 0
+    const filePath = resolvePdfFilePath(doc.filePath)
     const sourceStats = statSync(filePath)
     const sourceIdentity = `${doc.fileHash ?? 'unhashed'}:${sourceStats.size}:${sourceStats.mtimeMs}`
     const cachePath = pdfPreviewCachePath(libraryFolder, doc.id, sourceIdentity)
     const cached = await readPdfPreviewCache(cachePath)
-    if (cached) return cached
+    if (cached) {
+      await prunePdfPreviewCacheVersions(cachePath)
+      return cached
+    }
 
     const pending = previewRequests.get(cachePath)
     if (pending) return pending
     const request = renderPreview(filePath, doc.fileName).then(async (preview) => {
-      await writePdfPreviewCache(cachePath, preview)
+      if (
+        !destroyed &&
+        !deletedPreviewDocuments.has(documentKey) &&
+        (previewGenerations.get(documentKey) ?? 0) === generation
+      ) {
+        await writePdfPreviewCache(cachePath, preview)
+      }
+      if (
+        destroyed ||
+        deletedPreviewDocuments.has(documentKey) ||
+        (previewGenerations.get(documentKey) ?? 0) !== generation
+      ) {
+        await removePdfPreviewCacheForDocument(libraryFolder, doc.id)
+      }
       return preview
     }).finally(() => {
       previewRequests.delete(cachePath)
@@ -251,8 +276,24 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
     return request
   }
 
+  async function removePreviewCacheForDocument(
+    documentId: string,
+    configuredLibrary: string
+  ): Promise<void> {
+    const libraryFolder = resolvePath(configuredLibrary.trim())
+    if (!configuredLibrary.trim() || !existsSync(libraryFolder) || !statSync(libraryFolder).isDirectory()) {
+      throw new MainProcessError('invalid_library', 'Library folder is not configured or unavailable')
+    }
+    const documentKey = `${libraryFolder}\0${documentId}`
+    previewGenerations.set(documentKey, (previewGenerations.get(documentKey) ?? 0) + 1)
+    deletedPreviewDocuments.add(documentKey)
+    await removePdfPreviewCacheForDocument(libraryFolder, documentId)
+  }
+
   function destroy(): void {
     destroyed = true
+    previewGenerations.clear()
+    deletedPreviewDocuments.clear()
     for (const waiter of executionWaiters.splice(0)) {
       waiter.reject(new Error('PDF text service destroyed'))
     }
@@ -275,7 +316,7 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
     }
   }
 
-  return { getPreviewForDocument, destroy }
+  return { getPreviewForDocument, removePreviewCacheForDocument, destroy }
 }
 
 export type PdfTextService = ReturnType<typeof createPdfTextService>

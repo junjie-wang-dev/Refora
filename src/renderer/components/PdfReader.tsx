@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode
@@ -41,7 +42,7 @@ import {
 import { api } from '../ipc'
 import { openDocumentPdf } from '../utils/openPdf'
 import PdfAnnotationSidebar from './PdfAnnotationSidebar'
-import PdfPage from './PdfPage'
+import PdfPage, { type PdfPageVisibility } from './PdfPage'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -148,6 +149,15 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     annotationLoadStatus[activeDocumentId] === 'loaded'
   const effectiveTool = annotationsLoaded ? tool : null
   const annotations = activeDocumentId ? annotationMap[activeDocumentId] ?? [] : []
+  const annotationsByPage = useMemo(() => {
+    const grouped = new Map<number, typeof annotations>()
+    for (const annotation of annotations) {
+      const pageAnnotations = grouped.get(annotation.page)
+      if (pageAnnotations) pageAnnotations.push(annotation)
+      else grouped.set(annotation.page, [annotation])
+    }
+    return grouped
+  }, [annotations])
   const selectedAnnotations = annotations.filter((annotation) =>
     selectedAnnotationIds.includes(annotation.id)
   )
@@ -182,6 +192,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchGenerationRef = useRef(0)
+  const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
 
   useEffect(() => {
     const updateDevicePixelRatio = () => {
@@ -242,6 +253,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     setPdf(null)
     setCurrentPage(1)
     setPageInput('1')
+    visiblePagesRef.current.clear()
     searchGenerationRef.current += 1
     setSearchPages([])
     setSearchError(null)
@@ -313,6 +325,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       `[data-page-number="${safePage}"]`
     )
     element?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    visiblePagesRef.current.clear()
     setCurrentPage(safePage)
     setPageInput(String(safePage))
     if (annotationId) {
@@ -321,12 +334,20 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     }
   }, [pdf?.numPages])
 
-  const handleVisiblePage = useCallback((page: number) => {
-    setCurrentPage((current) => {
-      if (Math.abs(page - current) > 1 && page !== 1) return current
-      setPageInput(String(page))
-      return page
-    })
+  const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
+    if (visibility.isVisible && visibility.visibleArea > 0) {
+      visiblePagesRef.current.set(visibility.page, visibility)
+    } else {
+      visiblePagesRef.current.delete(visibility.page)
+    }
+    const primaryPage = [...visiblePagesRef.current.values()].sort((left, right) =>
+      right.visibleArea - left.visibleArea ||
+      left.viewportDistance - right.viewportDistance ||
+      left.page - right.page
+    )[0]?.page
+    if (primaryPage === undefined) return
+    setCurrentPage(primaryPage)
+    setPageInput(String(primaryPage))
   }, [])
 
   const addAnnotation = useCallback((draft: PdfAnnotationDraft) => {
@@ -919,7 +940,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
                   scrollRootRef={scrollRef}
                   documentId={activeDocument.id}
                   documentTitle={activeDocument.title || activeDocument.fileName}
-                  annotations={annotations.filter((annotation) => annotation.page === index + 1)}
+                  annotations={annotationsByPage.get(index + 1) ?? []}
                   tool={effectiveTool}
                   color={displayedColor}
                   fontSize={fontSize}

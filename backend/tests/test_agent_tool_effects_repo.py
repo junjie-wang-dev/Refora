@@ -1,8 +1,14 @@
 import time
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from conftest import make_agent_tool_effects_repo, make_workspaces_repo, open_migrated_db
+from refora_server.db.connection import _SqliteAdapter
+from refora_server.db.migrations import run_migrations
+from refora_server.repositories import create_repositories
 
 
 def _now_ms() -> int:
@@ -84,7 +90,8 @@ def test_begin_is_idempotent_returns_existing(db):
             "workspaceId": None,
         }
     )
-    assert second == first
+    assert first is not None
+    assert second is None
     assert repo["get"]("run-1", "call-1")["toolCallId"] == "call-1"
     rows = db.execute(
         "SELECT COUNT(*) FROM agent_tool_effects WHERE runId = ? AND toolCallId = ?",
@@ -114,8 +121,42 @@ def test_begin_idempotent_after_finish_does_not_reset(db):
             "workspaceId": None,
         }
     )
-    assert again["status"] == "done"
-    assert again["result"] == '{"ok": true}'
+    assert again is None
+    persisted = repo["get"]("run-1", "call-1")
+    assert persisted["status"] == "done"
+    assert persisted["result"] == '{"ok": true}'
+
+
+def test_begin_atomically_claims_once_across_threads():
+    db = sqlite3.connect(
+        ":memory:", isolation_level=None, check_same_thread=False
+    )
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
+    run_migrations(_SqliteAdapter(db))
+    _insert_thread(db)
+    _insert_run(db)
+    repo = create_repositories(db)["agentToolEffects"]
+    barrier = threading.Barrier(2)
+
+    def claim():
+        barrier.wait()
+        return repo["begin"](
+            {
+                "runId": "run-1",
+                "toolCallId": "call-1",
+                "toolName": "add_docs_to_workspace",
+                "workspaceId": None,
+            }
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: claim(), range(2)))
+        assert sum(result is not None for result in results) == 1
+        assert repo["get"]("run-1", "call-1")["status"] == "running"
+    finally:
+        db.close()
 
 
 def test_finish_done(db):

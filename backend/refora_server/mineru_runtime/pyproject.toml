@@ -1,0 +1,16 @@
+[project]
+name = "refora-mineru-runtime"
+version = "3.4.4"
+requires-python = "==3.12.13"
+dependencies = []
+
+[project.optional-dependencies]
+arm64 = ["mineru[all]==3.4.4"]
+x64 = ["mineru[core]==3.4.4"]
+
+[tool.uv]
+package = false
+conflicts = [[
+  { extra = "arm64" },
+  { extra = "x64" },
+]]

@@ -253,10 +253,19 @@ describe('DocumentList', () => {
 
     render(<DocumentList />)
 
-    const starButton = screen.getByRole('button', { name: 'sidebar.starred' })
+    const starButton = screen.getByRole('button', { name: 'list.starDocument' })
+    expect(starButton).toHaveAttribute('aria-pressed', 'false')
     await userEvent.click(starButton)
 
     expect(mockState.toggleStar).toHaveBeenCalledWith('doc-1')
+  })
+
+  it('names each document selection checkbox', () => {
+    mockState.documents = [makeDoc({ id: 'doc-1', title: 'Alpha Paper' })]
+
+    render(<DocumentList />)
+
+    expect(screen.getByRole('checkbox', { name: 'list.selectDocument' })).toBeInTheDocument()
   })
 
   it('renders filled star when document is starred', () => {
@@ -264,7 +273,8 @@ describe('DocumentList', () => {
 
     render(<DocumentList />)
 
-    const starBtn = screen.getByRole('button', { name: 'sidebar.starred' })
+    const starBtn = screen.getByRole('button', { name: 'list.unstarDocument' })
+    expect(starBtn).toHaveAttribute('aria-pressed', 'true')
     const starSvg = starBtn.querySelector('svg')
     expect(starSvg).toBeTruthy()
     expect(starSvg!.className.baseVal || starSvg!.getAttribute('class')).toContain('fill-yellow-400')
@@ -349,7 +359,7 @@ describe('DocumentList', () => {
     expect(screen.getByText('Compact Paper').closest('[style*="height: 52px"]')).not.toBeNull()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'detail.open' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'sidebar.starred' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'list.starDocument' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'list.expand' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'list.close' }))

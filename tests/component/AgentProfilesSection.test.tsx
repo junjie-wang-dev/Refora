@@ -148,6 +148,26 @@ describe('ModelSettingsSection', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('names and traps focus in the CLI profile dialog and restores focus on Escape', async () => {
+    render(<ModelSettingsSection />)
+    const trigger = (await screen.findAllByRole('button', { name: 'Configure' }))[0]
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    const dialog = screen.getByRole('dialog', { name: 'Add CLI agent' })
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    const buttons = within(dialog).getAllByRole('button')
+    const firstButton = buttons[0]
+    const lastButton = buttons[buttons.length - 1]
+    lastButton.focus()
+    fireEvent.keyDown(lastButton, { key: 'Tab' })
+    expect(firstButton).toHaveFocus()
+
+    fireEvent.keyDown(firstButton, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
   it('switches between local CLI and API provider tabs', async () => {
     render(<ModelSettingsSection />)
     await waitFor(() => expect(api.agentProfiles.scanRuntimes).toHaveBeenCalledOnce())

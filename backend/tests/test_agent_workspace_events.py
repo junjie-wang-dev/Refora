@@ -8,7 +8,7 @@ from refora_server.services.agent_tools import AgentToolContext, AgentToolExecut
 def _effects():
     return {
         "get": lambda _run_id, _tool_call_id: None,
-        "begin": lambda _input: None,
+        "begin": lambda _input: {"status": "running"},
         "finish": lambda _run_id, _tool_call_id, _status, _result: None,
     }
 

@@ -414,6 +414,38 @@ describe('serverLifecycle', () => {
     expect(connection.port).toBe(7002)
   })
 
+  it('continues the restart budget through consecutive replacement startup failures', async () => {
+    let spawnCount = 0
+    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+      spawnCount += 1
+      const child = createFakeChild()
+      if (spawnCount === 2 || spawnCount === 3) {
+        queueMicrotask(() => child.emit('close', 1, null))
+      } else {
+        queueMicrotask(() => announce(child, 7200 + spawnCount))
+      }
+      return child as unknown as ChildProcess
+    })
+    mockReadFile.mockImplementation(async () => JSON.stringify({
+      port: 7200 + spawnCount,
+      token
+    }))
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn, maxRestarts: 3 }))
+    await lifecycle.start()
+
+    const firstChild = spawn.mock.results[0].value as FakeChildProcess
+    firstChild.emit('close', 1, null)
+    await vi.advanceTimersByTimeAsync(600)
+    expect(spawnCount).toBe(2)
+
+    await vi.advanceTimersByTimeAsync(1_100)
+    expect(spawnCount).toBe(3)
+
+    await vi.advanceTimersByTimeAsync(2_100)
+    expect(spawnCount).toBe(4)
+    await expect(lifecycle.getServerBaseUrl()).resolves.toMatchObject({ port: 7204 })
+  })
+
   it('invalidates a crashed connection and coalesces reconnect-triggered startup', async () => {
     let spawnCount = 0
     const spawn = vi.fn((_cmd: string, _args: string[]) => {

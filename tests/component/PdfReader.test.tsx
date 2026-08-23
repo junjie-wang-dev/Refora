@@ -117,6 +117,34 @@ class IntersectionObserverMock {
   }
 }
 
+function pageVisibilityEntry(
+  pageTop: number,
+  visibleTop: number,
+  visibleHeight: number,
+  isIntersecting = true
+): IntersectionObserverEntry {
+  const rect = (top: number, height: number) => ({
+    top,
+    bottom: top + height,
+    left: 0,
+    right: 600,
+    width: 600,
+    height,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  }) as DOMRectReadOnly
+  return {
+    isIntersecting,
+    intersectionRatio: isIntersecting ? visibleHeight / 800 : 0,
+    intersectionRect: rect(visibleTop, isIntersecting ? visibleHeight : 0),
+    boundingClientRect: rect(pageTop, 800),
+    rootBounds: rect(0, 800),
+    target: window.document.createElement('div'),
+    time: 0
+  }
+}
+
 function document(): Document {
   return {
     id: 'paper',
@@ -267,6 +295,57 @@ describe('PdfReader rendering visibility', () => {
     })
 
     await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(3))
+    const thirdPageCurrentObserver = observers.find(
+      (observer) =>
+        (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '3' &&
+        observer.options?.rootMargin === undefined
+    )
+    act(() => {
+      thirdPageCurrentObserver?.callback(
+        [pageVisibilityEntry(1600, 0, 800)],
+        thirdPageCurrentObserver as unknown as IntersectionObserver
+      )
+    })
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('3')
+  })
+
+  it('chooses the largest page in the real viewport regardless of preload callback order', async () => {
+    pdfMocks.document.numPages = 2
+    render(<PdfReader />)
+    await waitFor(() => {
+      expect(observers.filter((observer) =>
+        (observer.target as HTMLElement | undefined)?.dataset.pageNumber
+      )).toHaveLength(4)
+    })
+    const pageObservers = (page: string) => observers.filter(
+      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === page
+    )
+    const pageOneCurrent = pageObservers('1').find(
+      (observer) => observer.options?.rootMargin === undefined
+    )!
+    const pageTwoPreload = pageObservers('2').find(
+      (observer) => observer.options?.rootMargin === '700px 0px'
+    )!
+    const pageTwoCurrent = pageObservers('2').find(
+      (observer) => observer.options?.rootMargin === undefined
+    )!
+
+    act(() => {
+      pageOneCurrent.callback(
+        [pageVisibilityEntry(0, 0, 600)],
+        pageOneCurrent as unknown as IntersectionObserver
+      )
+      pageTwoPreload.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        pageTwoPreload as unknown as IntersectionObserver
+      )
+      pageTwoCurrent.callback(
+        [pageVisibilityEntry(620, 620, 180)],
+        pageTwoCurrent as unknown as IntersectionObserver
+      )
+    })
+
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('1')
   })
 
   it('reports PDF text search failures without leaving the search busy', async () => {
@@ -397,6 +476,14 @@ describe('PdfReader rendering visibility', () => {
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['highlight-1'])
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([])
+
+    const ink = pdfPage.querySelector<SVGPolylineElement>('[data-annotation-kind="ink"]')!
+    fireEvent.keyDown(ink, { key: 'Enter' })
+    expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['ink-1'])
+    act(() => usePdfReaderStore.getState().setTool('eraser'))
+    fireEvent.keyDown(ink, { key: ' ' })
+    expect(usePdfReaderStore.getState().annotations.paper.map((item) => item.id))
+      .toEqual(['highlight-1'])
   })
 
   it('clears and suppresses text selection when drawing starts', async () => {

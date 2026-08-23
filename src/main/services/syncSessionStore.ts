@@ -46,15 +46,51 @@ export function createSyncSessionStore(
   return {
     load() {
       if (!existsSync(path)) return null
+      let encrypted: Buffer
       try {
-        const encrypted = readFileSync(path)
-        const parsed = JSON.parse(safeStorage.decrypt(encrypted)) as unknown
-        if (!isSession(parsed)) throw new Error('Invalid session payload')
-        return parsed
+        encrypted = readFileSync(path)
       } catch (error) {
         logger.warn(
           `sync-session:read failed: ${error instanceof Error ? error.message : String(error)}`
         )
+        return null
+      }
+      if (!safeStorage.isEncryptionAvailable()) {
+        logger.warn('sync-session:read deferred because encryption is unavailable')
+        return null
+      }
+      let decrypted: string
+      try {
+        decrypted = safeStorage.decrypt(encrypted)
+      } catch (error) {
+        logger.warn(
+          `sync-session:decrypt failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+        const quarantinePath = `${path}.quarantine-${randomUUID()}`
+        try {
+          renameSync(path, quarantinePath)
+        } catch (quarantineError) {
+          logger.warn(
+            `sync-session:quarantine failed: ${quarantineError instanceof Error ? quarantineError.message : String(quarantineError)}`
+          )
+        }
+        return null
+      }
+      try {
+        const parsed = JSON.parse(decrypted) as unknown
+        if (!isSession(parsed)) throw new Error('Invalid session payload')
+        return parsed
+      } catch (error) {
+        logger.warn(
+          `sync-session:payload invalid: ${error instanceof Error ? error.message : String(error)}`
+        )
+        try {
+          unlinkSync(path)
+        } catch (cleanupError) {
+          logger.warn(
+            `sync-session:corrupt cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+          )
+        }
         return null
       }
     },

@@ -178,6 +178,31 @@ describe('createServerLibraryHandlers', () => {
     })
   })
 
+  it('cleans preview caches only after document deletion succeeds', async () => {
+    const { client, methods } = createClient()
+    void client.http.documentsDelete
+    void client.http.documentsBulkDelete
+    const removeDocumentPreviewCache = vi.fn().mockResolvedValue(undefined)
+    const handlers = createServerLibraryHandlers({
+      serverClient: client,
+      removeDocumentPreviewCache
+    })
+
+    await handlers[IpcChannel.DocumentsDelete]('doc-1')
+    await handlers[IpcChannel.DocumentsBulkDelete](['doc-2', 'doc-3'])
+
+    expect(removeDocumentPreviewCache.mock.calls).toEqual([
+      ['doc-1'],
+      ['doc-2'],
+      ['doc-3']
+    ])
+    methods.get('documentsDelete')?.mockRejectedValueOnce(new Error('delete failed'))
+    await expect(handlers[IpcChannel.DocumentsDelete]('doc-4')).resolves.toMatchObject({
+      ok: false
+    })
+    expect(removeDocumentPreviewCache).not.toHaveBeenCalledWith('doc-4')
+  })
+
   it('requires authorized renderer paths before forwarding file operations', async () => {
     const { client, methods } = createClient()
     const consumeFile = vi.fn((path: string) => `/approved${path}`)

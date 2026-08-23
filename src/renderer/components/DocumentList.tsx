@@ -664,6 +664,9 @@ export default function DocumentList({
                             type="checkbox"
                             className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
                             checked={isSelected}
+                            aria-label={t('list.selectDocument', {
+                              title: doc.title || doc.fileName
+                            })}
                             onChange={(e) => {
                               e.stopPropagation()
                               toggleSelect(doc.id)
@@ -695,8 +698,13 @@ export default function DocumentList({
                     <div role="gridcell" className={`flex-shrink-0 text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
                       <button
                         className="cursor-pointer"
-                        title={t('sidebar.starred')}
-                        aria-label={t('sidebar.starred')}
+                        title={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                          title: doc.title || doc.fileName
+                        })}
+                        aria-label={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                          title: doc.title || doc.fileName
+                        })}
+                        aria-pressed={Boolean(doc.starred)}
                         onClick={(e) => {
                           e.stopPropagation()
                           toggleStar(doc.id)

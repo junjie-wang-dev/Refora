@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import platform
@@ -10,6 +11,7 @@ import stat
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from refora_server.ocr.paths import safe_makedirs, sha256_file
@@ -21,6 +23,7 @@ from refora_server.ocr.types import (
 )
 
 UV_VERSION = "0.11.16"
+MINERU_PYTHON_VERSION = "3.12.13"
 UV_RELEASES: dict[str, dict[str, str]] = {
     "arm64": {
         "archive": "uv-aarch64-apple-darwin.tar.gz",
@@ -41,6 +44,21 @@ _VENV_TIMEOUT_SECONDS = 5 * 60
 _PACKAGE_INSTALL_TIMEOUT_SECONDS = 60 * 60
 _MODEL_DOWNLOAD_TIMEOUT_SECONDS = 2 * 60 * 60
 _HEALTH_CHECK_TIMEOUT_SECONDS = 60
+
+
+def _runtime_resource_path(name: str) -> str:
+    path = Path(__file__).resolve().parent.parent / "mineru_runtime" / name
+    if not path.is_file():
+        raise RuntimeError(f"MinerU runtime resource is missing: {name}")
+    return str(path)
+
+
+def _resource_sha256(name: str) -> str:
+    digest = hashlib.sha256()
+    with open(_runtime_resource_path(name), "rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def now_ms() -> int:
@@ -189,6 +207,8 @@ class MineruInstallManifest:
     pythonRelativePath: str
     modelConfigRelativePath: str
     modelRevision: str
+    runtimeLockSha256: str
+    modelManifestSha256: str
     installedAt: int
     diskBytes: int | None = None
 
@@ -199,6 +219,8 @@ class MineruInstallManifest:
             "pythonRelativePath": self.pythonRelativePath,
             "modelConfigRelativePath": self.modelConfigRelativePath,
             "modelRevision": self.modelRevision,
+            "runtimeLockSha256": self.runtimeLockSha256,
+            "modelManifestSha256": self.modelManifestSha256,
             "installedAt": self.installedAt,
             "diskBytes": self.diskBytes,
         }
@@ -414,6 +436,11 @@ ProgressListener = Callable[[MineruInstallProgress], None]
 
 def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
     architecture = deps.architecture or _detect_architecture()
+    runtime_project_path = os.path.dirname(_runtime_resource_path("pyproject.toml"))
+    runtime_lock_sha256 = _resource_sha256("uv.lock")
+    model_manifest_path = _runtime_resource_path("model-manifest.json")
+    model_manifest_sha256 = _resource_sha256("model-manifest.json")
+    model_installer_path = _runtime_resource_path("model_installer.py")
     listeners: set[ProgressListener] = set()
     state: dict[str, Any] = {
         "progress": None,
@@ -482,6 +509,8 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
             or parsed.get("architecture") != architecture
             or not parsed.get("pythonRelativePath")
             or not parsed.get("modelConfigRelativePath")
+            or parsed.get("runtimeLockSha256") != runtime_lock_sha256
+            or parsed.get("modelManifestSha256") != model_manifest_sha256
         ):
             return None
         try:
@@ -491,6 +520,8 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 pythonRelativePath=parsed["pythonRelativePath"],
                 modelConfigRelativePath=parsed["modelConfigRelativePath"],
                 modelRevision=parsed.get("modelRevision", ""),
+                runtimeLockSha256=parsed["runtimeLockSha256"],
+                modelManifestSha256=parsed["modelManifestSha256"],
                 installedAt=int(parsed.get("installedAt", 0)),
                 diskBytes=parsed.get("diskBytes"),
             )
@@ -686,13 +717,13 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 _emit(
                     install_id,
                     "installingPython",
-                    "Installing managed Python 3.12",
+                    f"Installing managed Python {MINERU_PYTHON_VERSION}",
                     None,
-                    currentArtifact="Python 3.12",
+                    currentArtifact=f"Python {MINERU_PYTHON_VERSION}",
                 )
                 await _run_file(
                     uv_path,
-                    ["python", "install", "3.12", "--install-dir", os.path.join(path, "runtime", "python")],
+                    ["python", "install", MINERU_PYTHON_VERSION, "--install-dir", os.path.join(path, "runtime", "python")],
                     cwd=path,
                     env=environment,
                     cancel_event=cancel_event,
@@ -724,18 +755,34 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 await _run_file(
                     uv_path,
                     [
-                        "pip",
-                        "install",
-                        "--python",
-                        venv_python,
-                        "--upgrade",
-                        f"mineru[{mineru_extra}]=={MINERU_VERSION}",
+                        "sync",
+                        "--project",
+                        runtime_project_path,
+                        "--locked",
+                        "--no-dev",
+                        "--no-install-project",
+                        "--active",
+                        "--extra",
+                        architecture,
                     ],
+                    cwd=path,
+                    env={
+                        **environment,
+                        "VIRTUAL_ENV": venv,
+                        "UV_PROJECT_ENVIRONMENT": venv,
+                    },
+                    cancel_event=cancel_event,
+                    on_child=_on_child,
+                    timeout_seconds=_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+                )
+                await _run_file(
+                    uv_path,
+                    ["pip", "check", "--python", venv_python],
                     cwd=path,
                     env=environment,
                     cancel_event=cancel_event,
                     on_child=_on_child,
-                    timeout_seconds=_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+                    timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
                 )
                 _emit(
                     install_id,
@@ -745,8 +792,8 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     currentArtifact="MinerU models",
                 )
                 await _run_file(
-                    os.path.join(venv, "bin", "mineru-models-download"),
-                    ["-s", "auto", "-m", "all"],
+                    venv_python,
+                    [model_installer_path, model_manifest_path, os.path.join(path, "mineru.json")],
                     cwd=path,
                     env=environment,
                     cancel_event=cancel_event,
@@ -774,7 +821,9 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                     architecture=architecture,
                     pythonRelativePath="runtime/venv/bin/python",
                     modelConfigRelativePath="mineru.json",
-                    modelRevision=f"mineru-{MINERU_VERSION}-{mineru_extra}",
+                    modelRevision=f"sha256:{model_manifest_sha256}",
+                    runtimeLockSha256=runtime_lock_sha256,
+                    modelManifestSha256=model_manifest_sha256,
                     installedAt=now_ms(),
                     diskBytes=None,
                 )

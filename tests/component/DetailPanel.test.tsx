@@ -83,6 +83,8 @@ const mockStoreState = vi.hoisted(() => ({
   categories: [] as Category[],
   updateDocument: vi.fn().mockResolvedValue(undefined),
   fetchCategories: vi.fn().mockResolvedValue(undefined),
+  bulkRefreshMetadata: vi.fn().mockResolvedValue(undefined),
+  bulkCategorize: vi.fn().mockResolvedValue(undefined),
   deleteDoc: vi.fn().mockResolvedValue(undefined),
   openInFinder: vi.fn().mockResolvedValue(undefined),
   refreshMetadata: vi.fn().mockResolvedValue(undefined),
@@ -115,6 +117,8 @@ function resetStore(): void {
   mockStoreState.toastMessage = null
   mockStoreState.updateDocument.mockReset().mockResolvedValue(undefined)
   mockStoreState.fetchCategories.mockReset().mockResolvedValue(undefined)
+  mockStoreState.bulkRefreshMetadata.mockReset().mockResolvedValue(undefined)
+  mockStoreState.bulkCategorize.mockReset().mockResolvedValue(undefined)
   mockStoreState.requestDeleteConfirm.mockReset()
   mockStoreState.showToast.mockReset()
   mockStoreState.patchDocument.mockReset()
@@ -152,6 +156,18 @@ afterEach(() => {
 })
 
 describe('DetailPanel', () => {
+  it('reports a failed bulk BibTeX export', async () => {
+    mockStoreState.selectedIds = ['doc-1', 'doc-2']
+    vi.spyOn(api.export, 'toBibtex').mockRejectedValue(new Error('export unavailable'))
+    render(<DetailPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: /common.exportBibtexTitle/ }))
+
+    await waitFor(() => {
+      expect(mockStoreState.showToast).toHaveBeenCalledWith('export unavailable')
+    })
+  })
+
   describe('no selection — empty state', () => {
     it('shows placeholder when focusedDocId is null', () => {
       mockStoreState.focusedDocId = null

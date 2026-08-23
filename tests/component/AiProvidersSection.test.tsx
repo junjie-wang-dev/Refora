@@ -251,6 +251,25 @@ describe('AiProvidersSection', () => {
     )
   })
 
+  it('traps focus in the provider dialog and closes it with Escape', async () => {
+    render(<AiProvidersSection />)
+    const trigger = screen.getAllByRole('button', { name: 'Connect' })[0]
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    const dialog = screen.getByRole('dialog', { name: 'settings.aiProviders.connectProvider' })
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    const buttons = within(dialog).getAllByRole('button')
+    const firstButton = buttons[0]
+    const lastButton = buttons[buttons.length - 1]
+    lastButton.focus()
+    fireEvent.keyDown(lastButton, { key: 'Tab' })
+    expect(firstButton).toHaveFocus()
+
+    fireEvent.keyDown(firstButton, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('fetches, searches, and selects multiple models inline in one dialog', async () => {
     api.aiProviders.listModels = vi.fn().mockResolvedValue({
       ok: true,

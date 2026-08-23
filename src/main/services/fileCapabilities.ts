@@ -6,6 +6,7 @@ export type RendererPathKind = 'file' | 'directory'
 interface Capability {
   expiresAt: number
   kind: RendererPathKind
+  timeout: ReturnType<typeof setTimeout>
 }
 
 export interface RendererPathCapabilities {
@@ -46,9 +47,24 @@ export function createRendererPathCapabilities(
 ): RendererPathCapabilities {
   const capabilities = new Map<string, Capability>()
 
+  function deleteCapability(path: string): void {
+    const capability = capabilities.get(path)
+    if (!capability) return
+    clearTimeout(capability.timeout)
+    capabilities.delete(path)
+  }
+
   function authorize(path: string, kind: RendererPathKind): string {
     const resolved = resolveExisting(path, kind)
-    capabilities.set(resolved, { kind, expiresAt: now() + ttlMs })
+    deleteCapability(resolved)
+    const capability: Capability = {
+      kind,
+      expiresAt: now() + ttlMs,
+      timeout: setTimeout(() => {
+        if (capabilities.get(resolved) === capability) capabilities.delete(resolved)
+      }, Math.max(0, ttlMs))
+    }
+    capabilities.set(resolved, capability)
     return resolved
   }
 
@@ -57,7 +73,7 @@ export function createRendererPathCapabilities(
     const capability = capabilities.get(resolved)
     if (!capability || capability.kind !== kind || capability.expiresAt < now()) {
       if (capability?.expiresAt !== undefined && capability.expiresAt < now()) {
-        capabilities.delete(resolved)
+        deleteCapability(resolved)
       }
       throw pathError('path_not_authorized', 'Path was not selected by the user')
     }
@@ -73,7 +89,7 @@ export function createRendererPathCapabilities(
 
   function consume(path: string, kind: RendererPathKind, extensions?: readonly string[]): string {
     const resolved = validate(path, kind, extensions)
-    capabilities.delete(resolved)
+    deleteCapability(resolved)
     return resolved
   }
 
@@ -82,7 +98,7 @@ export function createRendererPathCapabilities(
     if (new Set(resolvedPaths).size !== resolvedPaths.length) {
       throw pathError('path_not_authorized', 'A path authorization cannot be reused')
     }
-    for (const resolved of resolvedPaths) capabilities.delete(resolved)
+    for (const resolved of resolvedPaths) deleteCapability(resolved)
     return resolvedPaths
   }
 
@@ -92,6 +108,8 @@ export function createRendererPathCapabilities(
     consumeFile: (path, extensions) => consume(path, 'file', extensions),
     consumeFiles,
     consumeDirectory: (path) => consume(path, 'directory'),
-    clear: () => capabilities.clear()
+    clear: () => {
+      for (const path of capabilities.keys()) deleteCapability(path)
+    }
   }
 }
