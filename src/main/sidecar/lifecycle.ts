@@ -353,16 +353,20 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   function scheduleHealthCheck(): void {
     clearHealthTimer()
     healthTimer = setInterval(() => {
-      if (!connection || stopping) return
-      void fetchHealth(`${connection.baseUrl}/health`, healthTimeoutMs).then((ok) => {
-        if (ok || !connection || stopping) return
+      const checkedConnection = connection
+      const checkedChild = child
+      if (!checkedConnection || !checkedChild || stopping) return
+      void fetchHealth(`${checkedConnection.baseUrl}/health`, healthTimeoutMs).then((ok) => {
+        if (
+          ok ||
+          stopping ||
+          connection !== checkedConnection ||
+          child !== checkedChild
+        ) return
         logger.warn('serverLifecycle:health check failed, restarting server')
-        const current = child
-        if (current) {
-          void terminateAndWait(current).then(() => {
-            handleUnexpectedExit(current, 'unhealthy')
-          })
-        }
+        void terminateAndWait(checkedChild).then(() => {
+          handleUnexpectedExit(checkedChild, 'unhealthy')
+        })
       })
     }, healthIntervalMs)
   }
@@ -373,8 +377,10 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     let port: number
     try {
       port = await portPromise
-      connection = await buildConnection(port)
-      await waitUntilHealthy(connection)
+      const candidate = await buildConnection(port)
+      await waitUntilHealthy(candidate)
+      if (stopping || child !== spawned) throw new Error('Server startup was cancelled')
+      connection = candidate
     } catch (error) {
       await terminateAndWait(spawned)
       connection = null

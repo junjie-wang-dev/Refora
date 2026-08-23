@@ -171,6 +171,29 @@ describe('serverLifecycle', () => {
     expect(mockFetchHealth).toHaveBeenCalledTimes(2)
   })
 
+  it('does not publish a connection through getServerBaseUrl before health succeeds', async () => {
+    let resolveHealth: (healthy: boolean) => void = () => undefined
+    mockFetchHealth.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      resolveHealth = resolve
+    }))
+    const lifecycle = createServerLifecycle(makeDeps())
+    const started = lifecycle.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mockFetchHealth).toHaveBeenCalledOnce()
+
+    let connectionResolved = false
+    const requested = lifecycle.getServerBaseUrl().then((value) => {
+      connectionResolved = true
+      return value
+    })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(connectionResolved).toBe(false)
+    resolveHealth(true)
+    await expect(requested).resolves.toMatchObject({ port })
+    await expect(started).resolves.toMatchObject({ port })
+  })
+
   it('rejects when stdout does not report a listening port in time', async () => {
     const spawn = makeSpawn(() => {
     })
@@ -552,6 +575,47 @@ describe('serverLifecycle', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(mockFetchHealth).toHaveBeenCalledTimes(2)
     expect(mockFetchHealth).toHaveBeenLastCalledWith('http://127.0.0.1:5555/health', 100)
+  })
+
+  it('ignores a stale failed health check after a replacement becomes active', async () => {
+    let spawnCount = 0
+    let resolveOldHealth: (healthy: boolean) => void = () => undefined
+    const oldHealth = new Promise<boolean>((resolve) => {
+      resolveOldHealth = resolve
+    })
+    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+      spawnCount += 1
+      const child = createFakeChild()
+      queueMicrotask(() => announce(child, 5700 + spawnCount))
+      return child as unknown as ChildProcess
+    })
+    mockReadFile.mockImplementation(async () =>
+      JSON.stringify({ port: 5700 + spawnCount, token })
+    )
+    mockFetchHealth
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => oldHealth)
+      .mockResolvedValue(true)
+    const lifecycle = createServerLifecycle(makeDeps({
+      spawnChild: spawn,
+      healthIntervalMs: 100,
+      healthTimeoutMs: 50
+    }))
+    await lifecycle.start()
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(mockFetchHealth).toHaveBeenCalledTimes(2)
+    const firstChild = spawn.mock.results[0].value as FakeChildProcess
+    firstChild.emit('close', 1, null)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(spawnCount).toBe(2)
+    const replacement = spawn.mock.results[1].value as FakeChildProcess
+
+    resolveOldHealth(false)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(replacement.kill).not.toHaveBeenCalled()
+    await expect(lifecycle.getServerBaseUrl()).resolves.toMatchObject({ port: 5702 })
   })
 
   it('escalates an unhealthy child and restarts after it exits', async () => {

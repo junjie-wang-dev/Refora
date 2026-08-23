@@ -223,7 +223,7 @@ function setupApi(messages: ChatMessage[]): void {
     threadId: req.threadId ?? 'thread-1',
     runId: req.runId ?? 'run-1'
   }))
-  mockChatCancel.mockResolvedValue(undefined)
+  mockChatCancel.mockResolvedValue({ ack: true, cancelRequested: true, terminated: true })
   mockChatRun.mockImplementation(async (runId: string) => makeRun({ id: runId }))
   mockChatTraces.mockResolvedValue([])
 }
@@ -2535,6 +2535,26 @@ describe('useChatStream lifecycle', () => {
       runId,
       terminalStatus: 'cancelled'
     })
+  })
+
+  it('surfaces a cancellation request that has not terminated the run', async () => {
+    mockChatCancel.mockResolvedValueOnce({
+      ack: true,
+      cancelRequested: true,
+      terminated: false
+    })
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Keep working', [], 'thread-1')
+    })
+
+    act(() => {
+      result.current.handleCancel()
+    })
+
+    await waitFor(() => expect(result.current.error).toBe('workspace.chat.stopFailed'))
+    expect(result.current.streaming).toBe(true)
   })
 
   it('preserves streamed text when a run fails', async () => {

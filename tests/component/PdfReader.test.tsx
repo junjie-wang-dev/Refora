@@ -57,6 +57,43 @@ const pdfMocks = vi.hoisted(() => {
   }
 })
 
+const pdfVirtualizerMocks = vi.hoisted(() => ({
+  scrollToIndex: vi.fn(),
+  startIndex: 0
+}))
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: (options: {
+    count: number
+    estimateSize: (index: number) => number
+    getItemKey?: (index: number) => string | number
+    gap?: number
+    paddingStart?: number
+    paddingEnd?: number
+  }) => {
+    const startIndex = Math.min(pdfVirtualizerMocks.startIndex, Math.max(0, options.count - 1))
+    const mountedCount = Math.min(Math.max(0, options.count - startIndex), 3)
+    const size = options.estimateSize(0)
+    const gap = options.gap ?? 0
+    const paddingStart = options.paddingStart ?? 0
+    const paddingEnd = options.paddingEnd ?? 0
+    return {
+      getVirtualItems: () => Array.from({ length: mountedCount }, (_, offset) => ({
+        index: startIndex + offset,
+        key: options.getItemKey?.(startIndex + offset) ?? startIndex + offset,
+        start: paddingStart + (startIndex + offset) * (size + gap),
+        size,
+        end: paddingStart + (startIndex + offset) * (size + gap) + size
+      })),
+      getTotalSize: () => paddingStart + options.count * size +
+        Math.max(0, options.count - 1) * gap + paddingEnd,
+      measureElement: () => undefined,
+      measure: () => undefined,
+      scrollToIndex: pdfVirtualizerMocks.scrollToIndex
+    }
+  }
+}))
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: pdfMocks.translate
@@ -192,6 +229,8 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.destroyDocument.mockClear()
     pdfMocks.getDocument.mockClear()
     pdfMocks.gateLoad(null)
+    pdfVirtualizerMocks.scrollToIndex.mockReset()
+    pdfVirtualizerMocks.startIndex = 0
     vi.spyOn(api.documents, 'readPdfRange').mockResolvedValue({
       begin: 0,
       fileSize: 1,
@@ -276,37 +315,64 @@ describe('PdfReader rendering visibility', () => {
     expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
   })
 
-  it('defers loading distant pages until they enter the reader preload window', async () => {
-    pdfMocks.document.numPages = 4
+  it('bounds mounted pages and page observers for a long document', async () => {
+    pdfMocks.document.numPages = 1000
     pdfMocks.document.getPage.mockClear()
-    render(<PdfReader />)
+    const view = render(<PdfReader />)
 
-    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(2))
-    const thirdPageObserver = observers.find(
-      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '3'
-    )
-    expect(thirdPageObserver).toBeDefined()
-
-    act(() => {
-      thirdPageObserver?.callback(
-        [{ isIntersecting: true } as IntersectionObserverEntry],
-        thirdPageObserver as unknown as IntersectionObserver
-      )
-    })
-
+    await waitFor(() => expect(view.container.querySelectorAll('.pdf-reader-page')).toHaveLength(3))
     await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(3))
-    const thirdPageCurrentObserver = observers.find(
-      (observer) =>
-        (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '3' &&
-        observer.options?.rootMargin === undefined
-    )
+    expect(observers.filter(
+      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber
+    )).toHaveLength(3)
+  })
+
+  it('jumps to an unmounted page through the virtualizer', async () => {
+    pdfMocks.document.numPages = 1000
+    render(<PdfReader />)
+    await waitFor(() => expect(screen.getByText('/ 1000')).toBeInTheDocument())
+    const input = screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })
+
+    fireEvent.change(input, { target: { value: '900' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+
+    expect(pdfVirtualizerMocks.scrollToIndex).toHaveBeenCalledWith(899, {
+      behavior: 'smooth',
+      align: 'start'
+    })
+    expect(input).toHaveValue('900')
+  })
+
+  it('removes an unmounted page from current-page visibility tracking', async () => {
+    pdfMocks.document.numPages = 4
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelectorAll('.pdf-reader-page')).toHaveLength(3))
+    const pageOne = observers.find(
+      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '1'
+    )!
     act(() => {
-      thirdPageCurrentObserver?.callback(
-        [pageVisibilityEntry(1600, 0, 800)],
-        thirdPageCurrentObserver as unknown as IntersectionObserver
+      pageOne.callback(
+        [pageVisibilityEntry(0, 0, 800)],
+        pageOne as unknown as IntersectionObserver
       )
     })
-    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('3')
+
+    pdfVirtualizerMocks.startIndex = 1
+    view.rerender(<PdfReader />)
+    await waitFor(() => expect(
+      view.container.querySelector('[data-page-number="1"]')
+    ).not.toBeInTheDocument())
+    const pageFour = observers.find(
+      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '4'
+    )!
+    act(() => {
+      pageFour.callback(
+        [pageVisibilityEntry(2400, 700, 100)],
+        pageFour as unknown as IntersectionObserver
+      )
+    })
+
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('4')
   })
 
   it('chooses the largest page in the real viewport regardless of preload callback order', async () => {
@@ -315,16 +381,13 @@ describe('PdfReader rendering visibility', () => {
     await waitFor(() => {
       expect(observers.filter((observer) =>
         (observer.target as HTMLElement | undefined)?.dataset.pageNumber
-      )).toHaveLength(4)
+      )).toHaveLength(2)
     })
     const pageObservers = (page: string) => observers.filter(
       (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === page
     )
     const pageOneCurrent = pageObservers('1').find(
       (observer) => observer.options?.rootMargin === undefined
-    )!
-    const pageTwoPreload = pageObservers('2').find(
-      (observer) => observer.options?.rootMargin === '700px 0px'
     )!
     const pageTwoCurrent = pageObservers('2').find(
       (observer) => observer.options?.rootMargin === undefined
@@ -334,10 +397,6 @@ describe('PdfReader rendering visibility', () => {
       pageOneCurrent.callback(
         [pageVisibilityEntry(0, 0, 600)],
         pageOneCurrent as unknown as IntersectionObserver
-      )
-      pageTwoPreload.callback(
-        [{ isIntersecting: true } as IntersectionObserverEntry],
-        pageTwoPreload as unknown as IntersectionObserver
       )
       pageTwoCurrent.callback(
         [pageVisibilityEntry(620, 620, 180)],

@@ -41,7 +41,7 @@ interface WorkspaceState {
   createWorkspace: (name: string) => Promise<Workspace | null>
   renameWorkspace: (id: string, name: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
-  setActiveWorkspace: (id: string | null) => void
+  setActiveWorkspace: (id: string | null) => boolean
   requestActiveWorkspace: (id: string | null) => Promise<boolean>
   closeWorkspaceTab: (id: string) => void
   setActiveThreadId: (id: string | null) => void
@@ -87,7 +87,11 @@ const noteUpdateRevisions = new Map<
   string,
   Partial<Record<keyof WorkspaceNotePatch, number>>
 >()
+const threadRenameRevisions = new Map<string, number>()
+const threadRenameQueues = new Map<string, Promise<void>>()
+const threadConfirmedTitles = new Map<string, string | null>()
 let nextNoteUpdateRevision = 0
+let nextThreadRenameRevision = 0
 let libraryGeneration = 0
 let workspaceRequestVersion = 0
 let threadRequestVersion = 0
@@ -169,6 +173,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       libraryGeneration++
       noteUpdateQueues.clear()
       noteUpdateRevisions.clear()
+      threadRenameRevisions.clear()
+      threadRenameQueues.clear()
+      threadConfirmedTitles.clear()
       set({
         workspaces: [],
         activeWorkspaceId: null,
@@ -196,6 +203,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     libraryGeneration++
     noteUpdateQueues.clear()
     noteUpdateRevisions.clear()
+    threadRenameRevisions.clear()
+    threadRenameQueues.clear()
+    threadConfirmedTitles.clear()
     if (aiSummaryUpdatedCb[0]) {
       api.events.off('ai:summary:updated', aiSummaryUpdatedCb[0])
       aiSummaryUpdatedCb[0] = null
@@ -296,13 +306,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setActiveWorkspace: (id: string | null) => {
     const current = get()
     if (current.chatStreaming) {
-      if (!id || current.activeWorkspaceId !== id) return
+      if (!id || current.activeWorkspaceId !== id) return false
       set((state) => ({
         panelOpen: true,
         panelView: 'workspace',
         openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, id)
       }))
-      return
+      return true
     }
     set((state) => ({
       activeWorkspaceId: id,
@@ -324,6 +334,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       void get().fetchAssets()
     }
     void get().fetchThreads({ selectLatestIfNone: true })
+    return true
   },
 
   requestActiveWorkspace: async (id: string | null) => {
@@ -332,8 +343,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     } catch {
       return false
     }
-    get().setActiveWorkspace(id)
-    return true
+    return get().setActiveWorkspace(id)
   },
 
   closeWorkspaceTab: (id: string) => {
@@ -366,16 +376,48 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   renameThread: async (threadId: string, title: string) => {
     const generation = libraryGeneration
-    const prev = get().threads
+    if (!threadRenameQueues.has(threadId)) {
+      const currentTitle = get().threads.find((thread) => thread.id === threadId)?.title ?? null
+      threadConfirmedTitles.set(threadId, currentTitle)
+    }
+    const revision = ++nextThreadRenameRevision
+    threadRenameRevisions.set(threadId, revision)
     set((s) => ({
       threads: s.threads.map((t) => (t.id === threadId ? { ...t, title } : t))
     }))
+    const previousRequest = threadRenameQueues.get(threadId) ?? Promise.resolve()
+    const request = previousRequest
+      .catch(() => undefined)
+      .then(() => api.ai.renameThread(threadId, title))
+    threadRenameQueues.set(threadId, request)
     try {
-      await api.ai.renameThread(threadId, title)
+      await request
+      if (generation !== libraryGeneration) return
+      threadConfirmedTitles.set(threadId, title)
+      if (threadRenameRevisions.get(threadId) === revision) {
+        threadRenameRevisions.delete(threadId)
+      }
     } catch (e) {
       if (generation !== libraryGeneration) return
-      set({ threads: prev })
+      if (threadRenameRevisions.get(threadId) === revision) {
+        threadRenameRevisions.delete(threadId)
+        set((state) => ({
+          threads: state.threads.map((thread) =>
+            thread.id === threadId && thread.title === title
+              ? { ...thread, title: threadConfirmedTitles.get(threadId) ?? null }
+              : thread
+          )
+        }))
+      }
       toast(errorMessage(e, i18n.t('workspaceErrors.renameThread')))
+    } finally {
+      if (threadRenameQueues.get(threadId) === request) {
+        threadRenameQueues.delete(threadId)
+        threadConfirmedTitles.delete(threadId)
+        if (threadRenameRevisions.get(threadId) === revision) {
+          threadRenameRevisions.delete(threadId)
+        }
+      }
     }
   },
 

@@ -12,7 +12,10 @@ from conftest import open_migrated_db
 from refora_server.services import mineru as mineru_mod
 from refora_server.services.mineru import (
     MineruEngineManagerDeps,
+    MineruRuntime,
+    MineruWorkerProcessDeps,
     create_mineru_engine_manager,
+    create_mineru_worker_process,
 )
 
 UV_RELEASE = mineru_mod.UV_RELEASES["arm64"]
@@ -60,6 +63,148 @@ async def test_run_file_times_out_and_releases_child(tmp_path):
 
     assert children[-1] is None
     assert children[0].returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_worker_cancel_kills_and_reaps_sigterm_ignoring_process(
+    tmp_path, monkeypatch
+):
+    script = tmp_path / "worker.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import json, signal, sys",
+                "signal.signal(signal.SIGTERM, lambda *_: None)",
+                "for line in sys.stdin:",
+                "    request = json.loads(line)",
+                "    method = request.get('method')",
+                "    if method == 'hello':",
+                (
+                    "        result = {'protocolVersion': "
+                    f"{mineru_mod.MINERU_WORKER_PROTOCOL_VERSION!r}, "
+                    f"'mineruVersion': {mineru_mod.MINERU_VERSION!r}}}"
+                ),
+                "        print(json.dumps({'id': request['id'], 'result': result}), flush=True)",
+                "    elif method == 'parse':",
+                "        print(json.dumps({'event': 'progress', 'requestId': request['id'], 'stage': 'parsing'}), flush=True)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime = MineruRuntime(
+        installPath=str(tmp_path),
+        pythonPath=sys.executable,
+        modelConfigPath=str(tmp_path / "model.json"),
+        modelRevision="test",
+        environment=dict(os.environ),
+    )
+
+    async def get_runtime():
+        return runtime
+
+    children = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def capture_child(*args, **kwargs):
+        child = await spawn(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(mineru_mod.asyncio, "create_subprocess_exec", capture_child)
+    worker = create_mineru_worker_process(
+        MineruWorkerProcessDeps(
+            engineManager={"getRuntime": get_runtime},
+            workerScriptPath=str(script),
+            terminateGraceMs=25,
+        )
+    )
+    parsing = asyncio.Event()
+    parse_task = asyncio.create_task(
+        worker["parse"](
+            str(tmp_path / "input.pdf"),
+            str(tmp_path / "output"),
+            "balanced",
+            lambda _progress: parsing.set(),
+        )
+    )
+    await asyncio.wait_for(parsing.wait(), timeout=2)
+
+    await asyncio.wait_for(worker["cancel"](), timeout=2)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await parse_task
+    assert len(children) == 1
+    assert children[0].returncode == -mineru_mod.signal.SIGKILL
+    assert children[0].stdout.at_eof()
+    assert children[0].stderr.at_eof()
+    await worker["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_worker_timeout_kills_and_reaps_sigterm_ignoring_process(
+    tmp_path, monkeypatch
+):
+    script = tmp_path / "worker.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import json, signal, sys",
+                "signal.signal(signal.SIGTERM, lambda *_: None)",
+                "for line in sys.stdin:",
+                "    request = json.loads(line)",
+                "    if request.get('method') == 'hello':",
+                (
+                    "        result = {'protocolVersion': "
+                    f"{mineru_mod.MINERU_WORKER_PROTOCOL_VERSION!r}, "
+                    f"'mineruVersion': {mineru_mod.MINERU_VERSION!r}}}"
+                ),
+                "        print(json.dumps({'id': request['id'], 'result': result}), flush=True)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime = MineruRuntime(
+        installPath=str(tmp_path),
+        pythonPath=sys.executable,
+        modelConfigPath=str(tmp_path / "model.json"),
+        modelRevision="test",
+        environment=dict(os.environ),
+    )
+
+    async def get_runtime():
+        return runtime
+
+    children = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def capture_child(*args, **kwargs):
+        child = await spawn(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(mineru_mod.asyncio, "create_subprocess_exec", capture_child)
+    worker = create_mineru_worker_process(
+        MineruWorkerProcessDeps(
+            engineManager={"getRuntime": get_runtime},
+            workerScriptPath=str(script),
+            requestTimeoutMs=25,
+            terminateGraceMs=25,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await worker["parse"](
+            str(tmp_path / "input.pdf"),
+            str(tmp_path / "output"),
+            "balanced",
+            lambda _progress: None,
+        )
+    await asyncio.wait_for(worker["destroy"](), timeout=2)
+
+    assert len(children) == 1
+    assert children[0].returncode == -mineru_mod.signal.SIGKILL
+    assert children[0].stdout.at_eof()
+    assert children[0].stderr.at_eof()
 
 
 def _make_deps(tmp_path, *, trash_paths=None, download_calls=None):

@@ -760,6 +760,12 @@ export interface AgentRun {
   error: string | null
 }
 
+export interface ChatCancelResult {
+  ack: boolean
+  cancelRequested: boolean
+  terminated: boolean
+}
+
 export type AgentInterruptDecision = 'approve' | 'reject' | 'edit'
 
 export interface AgentInterruptAction {
@@ -1074,7 +1080,7 @@ export interface ReforaApi {
     usageStats(): Promise<AiUsageStats>
     chatTraces(threadId: string): Promise<AgentTraceStep[]>
     chatRun(runId: string): Promise<AgentRun>
-    chatCancel(runId: string): Promise<void>
+    chatCancel(runId: string): Promise<ChatCancelResult>
     chatResume(req: AgentResumeRequest): Promise<void>
     chatPendingInterrupt(runId: string): Promise<AgentInterrupt | null>
     chatDeleteThread(threadId: string): Promise<void>

@@ -8,8 +8,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 _DEFAULT_LOOPBACK_ORIGINS = [
     "http://127.0.0.1",
@@ -72,6 +74,57 @@ def _make_app(
     )
     verifier = TokenVerifier(token)
     app.state.token_verifier = verifier
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(
+        _request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        details = error.errors()
+        message = "Invalid request"
+        if details:
+            detail = details[0]
+            location = ".".join(
+                str(value) for value in detail.get("loc", ()) if value != "body"
+            )
+            detail_message = str(detail.get("msg") or message)
+            message = f"{location}: {detail_message}" if location else detail_message
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": {"code": "validation", "message": message},
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(
+        _request: Request, error: StarletteHTTPException
+    ) -> JSONResponse:
+        detail = error.detail
+        status_codes = {
+            400: "bad_request",
+            401: "unauthorized",
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            503: "unavailable",
+        }
+        code = status_codes.get(error.status_code, "internal")
+        message = "Request failed"
+        if isinstance(detail, dict):
+            candidate_code = detail.get("code")
+            candidate_message = detail.get("message")
+            if isinstance(candidate_code, str) and candidate_code:
+                code = candidate_code
+            if isinstance(candidate_message, str) and candidate_message:
+                message = candidate_message
+        elif isinstance(detail, str) and detail:
+            message = detail
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"ok": False, "error": {"code": code, "message": message}},
+            headers=error.headers,
+        )
 
     app.add_middleware(
         CORSMiddleware,

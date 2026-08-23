@@ -61,6 +61,7 @@ class _FakeWorker:
         self.block_event = block_event
         self.parse_calls: list[dict] = []
         self.cancelled = False
+        self.destroyed = False
 
     async def parse(self, input_path, output_path, profile, on_progress):
         self.parse_calls.append(
@@ -102,7 +103,7 @@ class _FakeWorker:
         pass
 
     def destroy(self):
-        pass
+        self.destroyed = True
 
     def __getitem__(self, name):
         return getattr(self, name)
@@ -173,6 +174,16 @@ def _make_deps(library_folder, worker, engine=None, *, progress_events=None, com
         emitCompleted=lambda event: completed_events.append(event) if completed_events is not None else None,
         emitError=lambda event: error_events.append(event) if error_events is not None else None,
     )
+
+
+@pytest.mark.asyncio
+async def test_destroy_accepts_synchronous_worker_cleanup(repos, library_folder):
+    worker = _FakeWorker()
+    service = create_ocr_service(repos, _make_deps(library_folder, worker))
+
+    await service["destroy"]()
+
+    assert worker.destroyed is True
 
 
 @pytest.mark.asyncio

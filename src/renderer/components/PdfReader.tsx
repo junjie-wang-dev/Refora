@@ -30,6 +30,7 @@ import {
   X
 } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy
@@ -49,6 +50,11 @@ const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
 const MIN_SCALE = 0.5
 const MAX_SCALE = 3
 const PDF_RANGE_CHUNK_SIZE = 64 * 1024
+const PDF_PAGE_WIDTH = 612
+const PDF_PAGE_HEIGHT = 792
+const PDF_PAGE_GAP = 20
+const PDF_PAGE_PADDING = 24
+const PDF_PAGE_OVERSCAN = 2
 
 interface PdfRuntime {
   getDocument: typeof import('pdfjs-dist').getDocument
@@ -193,6 +199,30 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchGenerationRef = useRef(0)
   const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
+  const rotated = Math.abs(rotation) % 180 !== 0
+  const estimatedPageWidth = (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH) * scale
+  const estimatedPageHeight = (rotated ? PDF_PAGE_WIDTH : PDF_PAGE_HEIGHT) * scale
+  const estimatePageSize = useCallback(() => estimatedPageHeight, [estimatedPageHeight])
+  const pageKey = useCallback(
+    (index: number) => `${activeDocumentId ?? 'pdf'}-${index + 1}`,
+    [activeDocumentId]
+  )
+  const pageVirtualizer = useVirtualizer({
+    count: pdf?.numPages ?? 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: estimatePageSize,
+    getItemKey: pageKey,
+    gap: PDF_PAGE_GAP,
+    paddingStart: PDF_PAGE_PADDING,
+    paddingEnd: PDF_PAGE_PADDING,
+    overscan: PDF_PAGE_OVERSCAN,
+    initialRect: { width: 0, height: 800 }
+  })
+  const virtualPages = pageVirtualizer.getVirtualItems()
+
+  useEffect(() => {
+    pageVirtualizer.measure()
+  }, [activeDocumentId, pageVirtualizer, rotation, scale])
 
   useEffect(() => {
     const updateDevicePixelRatio = () => {
@@ -321,10 +351,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
 
   const navigateToPage = useCallback((page: number, annotationId?: string) => {
     const safePage = Math.max(1, Math.min(pdf?.numPages ?? 1, page))
-    const element = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-page-number="${safePage}"]`
-    )
-    element?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    pageVirtualizer.scrollToIndex(safePage - 1, { behavior: 'smooth', align: 'start' })
     visiblePagesRef.current.clear()
     setCurrentPage(safePage)
     setPageInput(String(safePage))
@@ -332,7 +359,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       usePdfReaderStore.getState().setTool(null)
       usePdfReaderStore.getState().selectAnnotation(annotationId)
     }
-  }, [pdf?.numPages])
+  }, [pageVirtualizer, pdf?.numPages])
 
   const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
     if (visibility.isVisible && visibility.visibleArea > 0) {
@@ -928,27 +955,47 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
               {t('pdfReader.loading')}
             </div>
           ) : (
-            <div className="flex min-w-max flex-col items-center gap-5 p-6">
-              {Array.from({ length: pdf.numPages }, (_, index) => (
-                <PdfPage
-                  key={`${activeDocument.id}-${index + 1}`}
-                  pdf={pdf}
-                  pageNumber={index + 1}
-                  scale={scale}
-                  rotation={rotation}
-                  devicePixelRatio={devicePixelRatio}
-                  scrollRootRef={scrollRef}
-                  documentId={activeDocument.id}
-                  documentTitle={activeDocument.title || activeDocument.fileName}
-                  annotations={annotationsByPage.get(index + 1) ?? []}
-                  tool={effectiveTool}
-                  color={displayedColor}
-                  fontSize={fontSize}
-                  strokeWidth={strokeWidth}
-                  onAddAnnotation={addAnnotation}
-                  onPageVisible={handleVisiblePage}
-                />
-              ))}
+            <div
+              data-pdf-page-virtualizer
+              className="relative min-w-full"
+              style={{
+                height: pageVirtualizer.getTotalSize(),
+                width: estimatedPageWidth + PDF_PAGE_PADDING * 2
+              }}
+            >
+              {virtualPages.map((virtualPage) => {
+                const pageNumber = virtualPage.index + 1
+                return (
+                  <div
+                    key={virtualPage.key}
+                    ref={pageVirtualizer.measureElement}
+                    data-index={virtualPage.index}
+                    data-virtual-page={pageNumber}
+                    className="absolute left-1/2 top-0 w-max"
+                    style={{
+                      transform: `translate(-50%, ${virtualPage.start}px)`
+                    }}
+                  >
+                    <PdfPage
+                      pdf={pdf}
+                      pageNumber={pageNumber}
+                      scale={scale}
+                      rotation={rotation}
+                      devicePixelRatio={devicePixelRatio}
+                      scrollRootRef={scrollRef}
+                      documentId={activeDocument.id}
+                      documentTitle={activeDocument.title || activeDocument.fileName}
+                      annotations={annotationsByPage.get(pageNumber) ?? []}
+                      tool={effectiveTool}
+                      color={displayedColor}
+                      fontSize={fontSize}
+                      strokeWidth={strokeWidth}
+                      onAddAnnotation={addAnnotation}
+                      onPageVisible={handleVisiblePage}
+                    />
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

@@ -25,7 +25,15 @@ def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tm
     app = create_app_with_token("test-token", str(tmp_path / "refora.db"), str(tmp_path))
     with TestClient(app) as client:
         assert client.get("/health").json() == {"ok": True, "data": {"status": "ok"}}
-        assert client.get("/ready").status_code == 401
+        unauthorized = client.get("/ready")
+        assert unauthorized.status_code == 401
+        assert unauthorized.json() == {
+            "ok": False,
+            "error": {
+                "code": "unauthorized",
+                "message": "Invalid or missing token",
+            },
+        }
         headers = {"X-Refora-Token": "test-token"}
         assert client.get("/ready", headers=headers).json() == {
             "ok": True,
@@ -43,6 +51,29 @@ def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tm
         with client.websocket_connect("/ws", subprotocols=["refora-token.test-token"]) as websocket:
             websocket.send_json({"event": "ping"})
             assert websocket.receive_json() == {"event": "pong"}
+
+
+def test_assembled_app_wraps_framework_request_validation_errors(tmp_path: Path) -> None:
+    app = create_app_with_token("test-token", str(tmp_path / "refora.db"), str(tmp_path))
+    headers = {
+        "X-Refora-Token": "test-token",
+        "Content-Type": "application/json",
+    }
+
+    with TestClient(app) as client:
+        malformed = client.post(
+            "/documents/doc-1/starred", headers=headers, content="{"
+        )
+        wrong_shape = client.patch(
+            "/documents/doc-1", headers=headers, json=[]
+        )
+
+    assert malformed.status_code == 400
+    assert malformed.json()["ok"] is False
+    assert malformed.json()["error"]["code"] == "validation"
+    assert wrong_shape.status_code == 400
+    assert wrong_shape.json()["ok"] is False
+    assert wrong_shape.json()["error"]["code"] == "validation"
 
 
 def test_assembled_app_reports_missing_mineru_worker_as_unavailable(tmp_path: Path, monkeypatch) -> None:

@@ -18,6 +18,7 @@ import type {
   BibImportResult,
   BootstrapData,
   Category,
+  ChatCancelResult,
   ChatDoneEvent,
   ChatErrorEvent,
   ChatInterruptedEvent,
@@ -449,7 +450,7 @@ const api: ReforaApi = {
     chatTraces: (threadId: string) =>
       invoke<AgentTraceStep[]>(IpcChannel.AiChatTraces, threadId),
     chatRun: (runId: string) => invoke<AgentRun>(IpcChannel.AiChatRun, runId),
-    chatCancel: (runId: string) => invoke<void>(IpcChannel.AiChatCancel, runId),
+    chatCancel: (runId: string) => invoke<ChatCancelResult>(IpcChannel.AiChatCancel, runId),
     chatResume: (req: AgentResumeRequest) => invoke<void>(IpcChannel.AiChatResume, req),
     chatPendingInterrupt: (runId: string) =>
       invoke<AgentInterrupt | null>(IpcChannel.AiChatPendingInterrupt, runId),

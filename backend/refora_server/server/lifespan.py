@@ -997,7 +997,7 @@ def create_lifespan(
             if callable(stop_watcher):
                 stop_watcher()
             await ocr["stopWorker"]()
-            ocr["destroy"]()
+            await ocr["destroy"]()
             mineru["destroy"]()
             await connector.cancel_pending()
             await events.flush()

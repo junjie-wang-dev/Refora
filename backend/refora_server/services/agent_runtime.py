@@ -78,6 +78,7 @@ async def _await(value: Any) -> Any:
 
 def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None):
     deps = deps or {}
+    cancel_wait_seconds = max(float(deps.get("cancelWaitSeconds", 5.0)), 0.0)
     configured_checkpoint_path = deps.get("checkpointPath") or deps.get("checkpoint_path")
     if isinstance(configured_checkpoint_path, str) and configured_checkpoint_path:
         try:
@@ -577,6 +578,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             "agent": None,
             "thread_id": thread_id,
             "stop_reason": None,
+            "task": asyncio.current_task(),
         }
         active[run_id] = control
         active_by_thread[thread_id] = run_id
@@ -1357,31 +1359,83 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         return {"runId": run_id, "threadId": request["threadId"]}
 
     async def cancel(run_id: str) -> dict[str, Any]:
-        if cancel_run is not None:
+        def cleanup_task(method: Callable[..., Any], *args: Any) -> asyncio.Task[Any]:
+            async def invoke() -> Any:
+                if inspect.iscoroutinefunction(method):
+                    return await method(*args)
+                result = await asyncio.to_thread(method, *args)
+                return await _await(result)
+
+            return asyncio.create_task(invoke())
+
+        def consume_cleanup(completed: asyncio.Task[Any]) -> None:
             try:
-                await _await(cancel_run(run_id))
-            except Exception:
+                completed.exception()
+            except BaseException:
                 pass
+
+        async def wait_bounded(tasks: set[asyncio.Task[Any]]) -> None:
+            if not tasks:
+                return
+            done, pending = await asyncio.wait(tasks, timeout=cancel_wait_seconds)
+            if done:
+                await asyncio.gather(*done, return_exceptions=True)
+            for pending_task in pending:
+                pending_task.cancel()
+                pending_task.add_done_callback(consume_cleanup)
+
         control = active.get(run_id)
         if control is None:
             run = repos["agentRuns"]["get"](run_id)
             if run is None or is_terminal_run(run["status"]):
-                return {"runId": run_id, "cancelled": False}
+                return {
+                    "runId": run_id,
+                    "cancelled": False,
+                    "cancelRequested": False,
+                    "terminated": run is not None,
+                }
+            cleanup = (
+                {cleanup_task(cancel_run, run_id)}
+                if callable(cancel_run)
+                else set()
+            )
+            await wait_bounded(cleanup)
             request = {"runId": run_id, "threadId": run["threadId"]}
             await terminalize(request, RUN_STATUS_CANCELLED, "Cancelled", None)
             resume_contexts.pop(run_id, None)
-            return {"runId": run_id, "cancelled": True}
+            return {
+                "runId": run_id,
+                "cancelled": True,
+                "cancelRequested": True,
+                "terminated": True,
+            }
         control["cancelled"] = True
+        task = background_tasks.get(run_id) or control.get("task")
+        wait_for: set[asyncio.Task[Any]] = set()
+        if (
+            isinstance(task, asyncio.Task)
+            and task is not asyncio.current_task()
+            and not task.done()
+        ):
+            task.cancel()
+            wait_for.add(task)
+        if callable(cancel_run):
+            wait_for.add(cleanup_task(cancel_run, run_id))
         agent = control.get("agent")
         for method_name in ("cancel", "abort", "aclose"):
             method = getattr(agent, method_name, None)
             if callable(method):
-                try:
-                    await _await(method())
-                except Exception:
-                    pass
+                wait_for.add(cleanup_task(method))
                 break
-        return {"runId": run_id, "cancelled": True}
+        await wait_bounded(wait_for)
+        persisted = repos["agentRuns"]["get"](run_id)
+        terminated = persisted is not None and is_terminal_run(persisted["status"])
+        return {
+            "runId": run_id,
+            "cancelled": terminated,
+            "cancelRequested": True,
+            "terminated": terminated,
+        }
 
     async def delete_thread(thread_id: str) -> None:
         runs = repos["agentRuns"]["listByThread"](thread_id)

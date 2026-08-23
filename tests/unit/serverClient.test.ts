@@ -370,7 +370,12 @@ describe('serverClient', () => {
     })
 
     it('routes ai chat endpoints', async () => {
-      const { fetch, calls } = makeFetchSpy(() => makeResponse({ runId: 'r1', threadId: 't1' }))
+      const cancelResult = { ack: true, cancelRequested: true, terminated: false }
+      const { fetch, calls } = makeFetchSpy((request) =>
+        request.url.includes('/ai/chat/cancel')
+          ? makeResponse(cancelResult)
+          : makeResponse({ runId: 'r1', threadId: 't1' })
+      )
       const client = createServerClient(lifecycle, nativeRpc, { fetchImpl: fetch })
       await client.http.aiChatSend({
         runId: 'r1',
@@ -380,7 +385,7 @@ describe('serverClient', () => {
         providerId: 'p1',
         model: 'm'
       })
-      await client.http.aiChatCancel({ runId: 'r1' })
+      await expect(client.http.aiChatCancel({ runId: 'r1' })).resolves.toEqual(cancelResult)
       await client.http.aiChatThreads({ workspaceId: 'w1' })
       await client.http.aiUsageStats()
       await client.http.aiChatRun('r1')
@@ -712,6 +717,32 @@ describe('serverClient', () => {
       })
       const reply = JSON.parse(ws.sent[ws.sent.length - 1])
       expect(reply.data.error.code).toBe('native_error')
+    })
+
+    it('aborts active native connector requests when the client disconnects', async () => {
+      let requestSignal: AbortSignal | null = null
+      const fetchFn = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          requestSignal = init?.signal ?? null
+          requestSignal?.addEventListener('abort', () => {
+            reject(new DOMException('Cancelled', 'AbortError'))
+          }, { once: true })
+        })) as unknown as typeof fetch
+      const client = createServerClient(lifecycle, nativeRpc, {
+        fetchImpl: fetchFn,
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
+      })
+      const ws = await openWs(client)
+      ws.message({
+        event: 'connector.dialog-open-directory',
+        data: { requestId: 'req-cancel', title: 'Choose library' }
+      })
+      await vi.waitFor(() => expect(requestSignal).not.toBeNull())
+
+      client.ws.disconnect()
+
+      expect(requestSignal?.aborted).toBe(true)
+      await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce())
     })
   })
 

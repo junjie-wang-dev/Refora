@@ -1073,21 +1073,19 @@ def create_metadata_service(
         for document_id in unique_ids:
             enqueue(document_id)
 
-    async def update_verified_arxiv_id(
+    async def verify_arxiv_id(
         document_id: str, value: str
-    ) -> dict[str, Any]:
+    ) -> str:
         document = documents["get"](document_id)
         if document is None:
             raise RepoError("not_found", f"document not found: {document_id}")
         if not value.strip():
-            updated = documents["update"](document_id, {"arxivId": ""})
-            await broadcast(updated)
-            return updated
+            return ""
         normalized = normalize_arxiv_id(value)
         if normalized is None:
             raise RepoError("invalid_arxiv_id", "Invalid arXiv ID format", "arxivId")
         if document.get("arxivId") == normalized:
-            return document
+            return normalized
         try:
             paper = await arxiv_paper(normalized)
         except BaseException as error:
@@ -1119,6 +1117,15 @@ def create_metadata_service(
                 "The arXiv record does not match this paper metadata",
                 "arxivId",
             )
+        return normalized
+
+    async def update_verified_arxiv_id(
+        document_id: str, value: str
+    ) -> dict[str, Any]:
+        before = documents["get"](document_id)
+        normalized = await verify_arxiv_id(document_id, value)
+        if normalized and before is not None and before.get("arxivId") == normalized:
+            return before
         updated = documents["update"](document_id, {"arxivId": normalized})
         await broadcast(updated)
         return updated
@@ -1141,6 +1148,7 @@ def create_metadata_service(
         "refresh": refresh,
         "refreshMetadata": refresh,
         "bulkRefreshMetadata": bulk_refresh,
+        "verifyArxivId": verify_arxiv_id,
         "updateVerifiedArxivId": update_verified_arxiv_id,
         "fetchDoiMetadata": fetch_doi_metadata,
         "findVerifiedArxivMetadata": find_verified_arxiv_metadata,

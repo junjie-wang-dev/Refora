@@ -113,7 +113,7 @@ def unavailable_ocr_service(reason: str) -> dict[str, Any]:
     async def stop_worker() -> None:
         return None
 
-    def destroy() -> None:
+    async def destroy() -> None:
         return None
 
     return {

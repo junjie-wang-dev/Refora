@@ -13,11 +13,12 @@ from refora_server.server.routes.ai import create_ai_router
 
 
 class FakeRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, cancel_terminated: bool = True) -> None:
         self.sent: list[dict[str, Any]] = []
         self.resumed: list[dict[str, Any]] = []
         self.cancelled: list[str] = []
         self.deleted_threads: list[str] = []
+        self.cancel_terminated = cancel_terminated
 
     async def send(self, payload: dict[str, Any]) -> dict[str, str]:
         self.sent.append(payload)
@@ -30,8 +31,12 @@ class FakeRuntime:
         self.resumed.append(payload)
         return payload["runId"]
 
-    async def cancel(self, run_id: str) -> None:
+    async def cancel(self, run_id: str) -> dict[str, bool]:
         self.cancelled.append(run_id)
+        return {
+            "cancelRequested": True,
+            "terminated": self.cancel_terminated,
+        }
 
     async def deleteThread(self, thread_id: str) -> None:
         self.deleted_threads.append(thread_id)
@@ -485,7 +490,10 @@ def test_send_resume_cancel_only_use_injected_runtime() -> None:
         "data": {"runId": "run-1", "threadId": "thread-1"},
     }
     assert resumed.json() == {"ok": True, "data": {"runId": "run-1"}}
-    assert cancelled.json() == {"ok": True, "data": {"ack": True}}
+    assert cancelled.json() == {
+        "ok": True,
+        "data": {"ack": True, "cancelRequested": True, "terminated": True},
+    }
     assert runtime.sent[0]["runId"] == "run-1"
     assert runtime.sent[0]["threadId"] == "thread-1"
     assert runtime.sent[0]["messages"][-1] == {"role": "user", "content": "Hello"}
@@ -494,6 +502,19 @@ def test_send_resume_cancel_only_use_injected_runtime() -> None:
     assert runtime.resumed[0]["threadId"] == "thread-1"
     assert runtime.cancelled == ["run-1"]
     assert "request-only-secret" not in repr(repos.calls)
+
+
+def test_cancel_response_distinguishes_requested_from_terminated() -> None:
+    client, _, _, _, _ = make_client(FakeRuntime(cancel_terminated=False))
+
+    cancelled = request(
+        client, "POST", "/ai/chat/cancel", json={"runId": "run-1"}
+    )
+
+    assert cancelled.json() == {
+        "ok": True,
+        "data": {"ack": True, "cancelRequested": True, "terminated": False},
+    }
 
 
 def test_chat_history_traces_interrupt_threads_and_memories() -> None:

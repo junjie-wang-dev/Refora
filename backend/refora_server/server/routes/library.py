@@ -20,6 +20,7 @@ from refora_server.library.identifier_import import importByIdentifier
 from refora_server.library.json_import import importFromJson
 from refora_server.library.paths import containsLibrary, isInsideLibrary
 from refora_server.library.pdf_path import resolvePdfFilePath
+from refora_server.repositories.documents import validatePatch
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.clipboard_temp import create_clipboard_temp_service
 from refora_server.server.services.library_route_support import (
@@ -286,18 +287,23 @@ def create_library_router(deps: Any) -> APIRouter:
     @router.patch("/documents/{document_id}")
     async def patch_document(document_id: str, body: dict[str, Any]):
         async def action():
-            patch = _body_dict(body)
-            arxiv_id = patch.pop("arxivId", None)
+            patch = dict(_body_dict(body))
+            validatePatch(patch)
+            arxiv_id = patch.get("arxivId")
             if arxiv_id is not None:
-                if not isinstance(arxiv_id, str):
-                    raise ValueError("arxivId must be a string")
                 if metadata is None:
                     raise _UnavailableError("Metadata service is unavailable")
-                item = await _call(
-                    metadata, "updateVerifiedArxivId", document_id, arxiv_id
+                before = await document(document_id)
+                normalized = await _call(
+                    metadata, "verifyArxivId", document_id, arxiv_id
                 )
-                if not patch:
-                    return item
+                patch["arxivId"] = normalized
+                if (
+                    normalized
+                    and len(patch) == 1
+                    and before.get("arxivId") == normalized
+                ):
+                    return before
             item = await _call(documents, "update", document_id, patch)
             if callable(emit):
                 emitted = emit("document.updated", dict(item))

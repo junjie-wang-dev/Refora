@@ -251,6 +251,24 @@ function reportMenuError(action: string, error: unknown): void {
   dialog.showErrorBox(`${action} ${MENU_COPY[menuLanguage].failed}`, message)
 }
 
+export async function persistWindowBounds(
+  assembly: ServerAssembly | null,
+  target: Pick<BrowserWindow, 'isDestroyed' | 'isMaximized' | 'getNormalBounds' | 'getBounds'>
+): Promise<void> {
+  if (!assembly || target.isDestroyed()) return
+  const maximized = target.isMaximized()
+  const bounds = maximized ? target.getNormalBounds() : target.getBounds()
+  await assembly.getClient().http.settingsUpdate({
+    windowBounds: {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      isMaximized: maximized
+    }
+  })
+}
+
 function applyCsp(): void {
   const csp = contentSecurityPolicy(app.isPackaged)
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -520,28 +538,17 @@ function createWindow(bounds?: WindowBounds | null): BrowserWindow {
   let closeFlushInProgress = false
   let closeAfterFlush = false
   const saveBounds = async (): Promise<void> => {
-    const assembly = serverAssembly
-    if (!assembly || bw.isDestroyed()) return
-    try {
-      const maximized = bw.isMaximized()
-      const bounds = maximized ? bw.getNormalBounds() : bw.getBounds()
-      await assembly.getClient().http.settingsUpdate({
-        windowBounds: {
-          x: bounds.x,
-          y: bounds.y,
-          width: bounds.width,
-          height: bounds.height,
-          isMaximized: maximized
-        }
-      })
-    } catch (e) {
-      logger.warn(`saveBounds: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    await persistWindowBounds(serverAssembly, bw)
+  }
+  const saveBoundsBestEffort = (): void => {
+    void saveBounds().catch((error) => {
+      logger.warn(`saveBounds: ${error instanceof Error ? error.message : String(error)}`)
+    })
   }
   flushWindowState = saveBounds
   const debouncedSaveBounds = () => {
     if (saveBoundsTimeout) clearTimeout(saveBoundsTimeout)
-    saveBoundsTimeout = setTimeout(saveBounds, 500)
+    saveBoundsTimeout = setTimeout(saveBoundsBestEffort, 500)
   }
 
   bw.on('resize', debouncedSaveBounds)
@@ -552,7 +559,7 @@ function createWindow(bounds?: WindowBounds | null): BrowserWindow {
       saveBoundsTimeout = null
     }
     if (allowWindowClose || closeAfterFlush) {
-      void saveBounds()
+      saveBoundsBestEffort()
       return
     }
     event.preventDefault()

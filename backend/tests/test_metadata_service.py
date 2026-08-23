@@ -172,6 +172,58 @@ class FakeDocuments:
         }
 
 
+@pytest.mark.asyncio
+async def test_arxiv_verification_does_not_write_or_emit_before_caller_commits() -> None:
+    documents = FakeDocuments()
+    events = []
+
+    async def get_by_id(arxiv_id: str) -> dict[str, Any]:
+        return {
+            "arxivId": arxiv_id,
+            "title": "Manual title",
+            "authors": ["Ada Lovelace"],
+            "doi": f"10.48550/arXiv.{arxiv_id}",
+        }
+
+    documents.document["doi"] = "10.48550/arXiv.2401.12345"
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={"arxiv": {"getById": get_by_id}},
+        emit=lambda name, data: events.append((name, data)),
+    )
+
+    normalized = await service["verifyArxivId"]("doc-1", "2401.12345")
+
+    assert normalized == "2401.12345"
+    assert documents.document.get("arxivId") is None
+    assert events == []
+    await service["destroy"]()
+
+
+@pytest.mark.asyncio
+async def test_updating_same_verified_arxiv_id_remains_idempotent() -> None:
+    documents = FakeDocuments()
+    documents.document["arxivId"] = "2401.12345"
+    events = []
+    service = create_metadata_service(
+        {
+            "documents": documents.service(),
+            "settings": {"get": lambda _key, default=None: default},
+        },
+        academic={"arxiv": {}},
+        emit=lambda name, data: events.append((name, data)),
+    )
+
+    result = await service["updateVerifiedArxivId"]("doc-1", "2401.12345")
+
+    assert result["arxivId"] == "2401.12345"
+    assert events == []
+    await service["destroy"]()
+
+
 def test_bulk_metadata_refresh_rolls_back_all_statuses_on_failure() -> None:
     statuses = {"doc-1": "done", "doc-2": "done"}
 

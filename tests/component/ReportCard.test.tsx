@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { AiReport, Document, WorkspaceAsset, WorkspaceNote } from '../../src/shared/ipc-types'
 
 vi.mock('react-i18next', () => ({
@@ -225,6 +226,24 @@ afterEach(() => {
 })
 
 describe('ReportCard', () => {
+  it('opens the report with the keyboard from its title action', async () => {
+    const user = userEvent.setup()
+    const onOpen = vi.fn()
+    render(
+      <ReportCard
+        report={makeReport()}
+        onDelete={() => {}}
+        onUpdate={async () => true}
+        onOpen={onOpen}
+      />
+    )
+
+    screen.getByRole('button', { name: 'Test Report' }).focus()
+    await user.keyboard('{Enter}')
+
+    expect(onOpen).toHaveBeenCalledOnce()
+  })
+
   it('opens a citation PDF without opening the Markdown reader or a browser link', async () => {
     const onOpen = vi.fn()
     render(
@@ -796,6 +815,24 @@ describe('NoteCard', () => {
     createdAt: 1,
     updatedAt: 1
   }
+
+  it('opens the note with the keyboard from its title action', async () => {
+    const user = userEvent.setup()
+    const onOpen = vi.fn()
+    render(
+      <NoteCard
+        note={note}
+        onDelete={() => {}}
+        onUpdate={async () => true}
+        onOpen={onOpen}
+      />
+    )
+
+    screen.getByRole('button', { name: 'Original' }).focus()
+    await user.keyboard(' ')
+
+    expect(onOpen).toHaveBeenCalledOnce()
+  })
 
   it('copies a Markdown note from its context menu', () => {
     const onCopy = vi.fn()

@@ -441,8 +441,12 @@ def create_ai_router(deps: Any) -> APIRouter:
                 raise RouteError("unavailable", "Agent runtime is unavailable", 503)
             if _value(_value(repos, "agentRuns"), "get")(run_id) is None:
                 raise RouteError("not_found", f"run not found: {run_id}", 404)
-            await _resolve(_value(runtime, "cancel")(run_id))
-            return {"ack": True}
+            result = await _resolve(_value(runtime, "cancel")(run_id))
+            return {
+                "ack": True,
+                "cancelRequested": _value(result, "cancelRequested", True),
+                "terminated": _value(result, "terminated", False),
+            }
 
         return await execute(authorization, action)
 

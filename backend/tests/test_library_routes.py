@@ -24,6 +24,7 @@ class Fakes:
         self.clipboard_files = []
         self.imported_file_paths = []
         self.document_overrides = {}
+        self.document_updates = []
         self.last_read_at = {}
         self.metadata_refreshes = []
         self.bulk_metadata_refreshes = []
@@ -43,7 +44,7 @@ class Fakes:
             "get": self.get_document,
             "delete": self.delete_document,
             "setStarred": lambda _id, _starred: None,
-            "update": lambda _id, patch: {"id": _id, **patch},
+            "update": self.update_document,
             "updateFilePath": self.update_file_path,
             "updateFileIdentity": self.update_file_identity,
             "setLastReadAt": self.set_last_read_at,
@@ -124,12 +125,14 @@ class Fakes:
         self.metadata = {
             "refresh": self.refresh_metadata,
             "bulkRefreshMetadata": self.bulk_refresh_metadata,
+            "verifyArxivId": self.verify_arxiv_id,
             "updateVerifiedArxivId": lambda document_id, arxiv_id: {
                 "id": document_id,
                 "arxivId": arxiv_id,
             },
         }
         self.requested_arxiv_ids = []
+        self.verified_arxiv_ids = []
         self.services = {
             "agentProfiles": {
                 "list": lambda: [],
@@ -213,6 +216,10 @@ class Fakes:
     def delete_document(self, document_id: str):
         self.deleted_documents.append(document_id)
 
+    def update_document(self, document_id: str, patch: dict):
+        self.document_updates.append((document_id, dict(patch)))
+        return {"id": document_id, **patch}
+
     def search_documents(self, query: str, limit: int, offset: int = 0):
         self.document_search_args = (query, limit, offset)
         return self.searched_documents[offset : offset + limit]
@@ -254,6 +261,10 @@ class Fakes:
 
     def bulk_refresh_metadata(self, document_ids: list[str]):
         self.bulk_metadata_refreshes.append(document_ids)
+
+    def verify_arxiv_id(self, document_id: str, arxiv_id: str):
+        self.verified_arxiv_ids.append((document_id, arxiv_id))
+        return arxiv_id.strip()
 
     def get_arxiv_by_id(self, arxiv_id: str):
         self.requested_arxiv_ids.append(arxiv_id)
@@ -474,6 +485,66 @@ def test_document_update_emits_updated_document():
     updated = {"id": "doc-1", "title": "Updated title"}
     assert response.json() == {"ok": True, "data": updated}
     assert fakes.emitted_events == [("document.updated", updated)]
+
+
+def test_document_update_validates_full_patch_before_arxiv_verification():
+    client, fakes = make_client()
+
+    response = client.patch(
+        "/documents/doc-1",
+        headers={"X-Refora-Token": "test-token"},
+        json={"arxivId": "2401.12345", "unknown": "value"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "forbidden_field"
+    assert fakes.verified_arxiv_ids == []
+    assert fakes.document_updates == []
+    assert fakes.emitted_events == []
+
+
+def test_document_update_applies_verified_arxiv_patch_once_and_emits_once():
+    client, fakes = make_client()
+
+    response = client.patch(
+        "/documents/doc-1",
+        headers={"X-Refora-Token": "test-token"},
+        json={"arxivId": " 2401.12345 ", "title": "Updated title"},
+    )
+
+    updated = {
+        "id": "doc-1",
+        "arxivId": "2401.12345",
+        "title": "Updated title",
+    }
+    assert response.json() == {"ok": True, "data": updated}
+    assert fakes.verified_arxiv_ids == [("doc-1", " 2401.12345 ")]
+    assert fakes.document_updates == [
+        (
+            "doc-1",
+            {"arxivId": "2401.12345", "title": "Updated title"},
+        )
+    ]
+    assert fakes.emitted_events == [("document.updated", updated)]
+
+
+def test_document_update_same_arxiv_id_remains_idempotent():
+    client, fakes = make_client()
+    fakes.document_overrides["doc-1"] = {
+        "id": "doc-1",
+        "filePath": "/tmp/source.pdf",
+        "arxivId": "2401.12345",
+    }
+
+    response = client.patch(
+        "/documents/doc-1",
+        headers={"X-Refora-Token": "test-token"},
+        json={"arxivId": "2401.12345"},
+    )
+
+    assert response.json()["data"]["arxivId"] == "2401.12345"
+    assert fakes.document_updates == []
+    assert fakes.emitted_events == []
 
 
 def test_bulk_delete_removes_records_when_files_are_missing_or_trash_fails(tmp_path):

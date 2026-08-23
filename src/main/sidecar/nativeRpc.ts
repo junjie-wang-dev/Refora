@@ -538,6 +538,7 @@ export function createNativeRpc(deps: NativeRpcDeps): NativeRpc {
     if (!current) return Promise.resolve()
     return new Promise<void>((resolve) => {
       current.close(() => resolve())
+      current.closeAllConnections()
     })
   }
 

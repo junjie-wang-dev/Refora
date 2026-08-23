@@ -13,8 +13,9 @@ TypeScript artifact is current.
 - Every HTTP request (except `GET /health`) MUST carry header
   `X-Refora-Token: <token>`. The token is generated at startup and written to
   `<state-dir>/server.token` (mode `0o600`, owner-only).
-- WebSocket connections authenticate the token via query string
-  `?token=<token>` on the upgrade request.
+- WebSocket connections authenticate with the `Sec-WebSocket-Protocol`
+  subprotocol `refora-token.<token>` on the upgrade request. Query-string
+  tokens are not accepted.
 - API keys are encrypted and decrypted only through the Electron native
   connector. Python persists encrypted bytes and never logs plaintext keys.
 
@@ -149,7 +150,7 @@ never raise across the transport.
 |---|---|---|---|---|
 | POST | `/ai/chat/send` | required | `AgentRequest` | `{runId:string}` (events on WS) |
 | POST | `/ai/chat/resume` | required | `{runId:string,...}` | `{runId:string}` |
-| POST | `/ai/chat/cancel` | required | `{runId:string}` | `{ack:true}` |
+| POST | `/ai/chat/cancel` | required | `{runId:string}` | `{ack:true,cancelRequested:boolean,terminated:boolean}` |
 | GET | `/ai/chat/threads` | required | `?workspaceId=` | `Thread[]` |
 | GET | `/ai/chat/threads/{threadId}/history` | required | — | `Message[]` |
 | GET | `/ai/chat/threads/{threadId}/traces` | required | — | `Trace[]` |

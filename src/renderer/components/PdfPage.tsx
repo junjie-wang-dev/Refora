@@ -202,7 +202,6 @@ export default function PdfPage({
   const [page, setPage] = useState<PDFPageProxy | null>(null)
   const [pageLoadError, setPageLoadError] = useState(false)
   const [pageLoadAttempt, setPageLoadAttempt] = useState(0)
-  const [visible, setVisible] = useState(pageNumber <= 2)
   const [inkPoints, setInkPoints] = useState<PdfPoint[] | null>(null)
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
   const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null)
@@ -235,7 +234,7 @@ export default function PdfPage({
     tool === 'strikeout'
 
   useEffect(() => {
-    if (!visible || page) return
+    if (page) return
     let cancelled = false
     setPageLoadError(false)
     void pdf.getPage(pageNumber).then((nextPage) => {
@@ -246,19 +245,7 @@ export default function PdfPage({
     return () => {
       cancelled = true
     }
-  }, [page, pageLoadAttempt, pageNumber, pdf, visible])
-
-  useEffect(() => {
-    const element = pageElementRef.current
-    const root = scrollRootRef.current
-    if (!element || !root) return
-    const observer = new IntersectionObserver((entries) => {
-      const isVisible = entries[0]?.isIntersecting ?? false
-      setVisible(isVisible)
-    }, pdfVisibilityObserverOptions(root))
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [onPageVisible, pageNumber, scrollRootRef])
+  }, [page, pageLoadAttempt, pageNumber, pdf])
 
   useEffect(() => {
     const element = pageElementRef.current
@@ -301,9 +288,6 @@ export default function PdfPage({
     const textContainer = textLayerRef.current
     textLayerTaskRef.current?.cancel()
     textContainer.replaceChildren()
-    if (!visible) {
-      return
-    }
     let disposed = false
     void Promise.all([
       page.getTextContent(),
@@ -323,7 +307,7 @@ export default function PdfPage({
       disposed = true
       textLayerTaskRef.current?.cancel()
     }
-  }, [page, viewport, visible])
+  }, [page, viewport])
 
   const addTextAnnotation = useCallback(() => {
     if (

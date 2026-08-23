@@ -150,6 +150,11 @@ export default function NoteCard({
     setSaveError(null)
   }
 
+  const openCard = () => {
+    if (onOpen) onOpen()
+    else setExpanded(true)
+  }
+
   return (
     <>
       <MotionConfig reducedMotion="user">
@@ -159,16 +164,24 @@ export default function NoteCard({
           transition={{ duration: 0.18 }}
           data-card-kind="note"
           className={cardClassName('default', false, 'workspace-content-card workspace-content-card--note group/card flex h-full w-full cursor-pointer flex-col gap-2 overflow-hidden p-3')}
-          onClick={() => {
-            if (onOpen) onOpen()
-            else setExpanded(true)
-          }}
+          onClick={openCard}
           onContextMenu={handleContextMenu}
         >
           <div className="flex shrink-0 items-start gap-2">
             <div className="workspace-card-heading min-w-0 flex-1">
               <span className="workspace-card-type-label">{t('workspace.cardTypeNote')}</span>
-              <h3 className="workspace-card-title line-clamp-2 text-base font-semibold text-foreground">{note.title}</h3>
+              <h3 className="workspace-card-title line-clamp-2 text-base font-semibold text-foreground">
+                <button
+                  type="button"
+                  className="rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openCard()
+                  }}
+                >
+                  {note.title}
+                </button>
+              </h3>
               <p className="mt-0.5 text-xs text-muted">{formatDate(note.updatedAt)}</p>
             </div>
             <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/card:opacity-100 group-focus-within/card:opacity-100">

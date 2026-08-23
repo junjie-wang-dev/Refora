@@ -8,6 +8,7 @@ import type {
   AiReport,
   AiSummary,
   AiUsageStats,
+  ChatCancelResult,
   ChatMessage,
   ChatSendRequest,
   ChatThread,
@@ -70,10 +71,8 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       asyncWrap(async () => {
         await http.aiChatResume(request as ChatResumePayload)
       }),
-    [IpcChannel.AiChatCancel]: (runId: string): Promise<Result<void>> =>
-      asyncWrap(async () => {
-        await http.aiChatCancel({ runId })
-      }),
+    [IpcChannel.AiChatCancel]: (runId: string): Promise<Result<ChatCancelResult>> =>
+      asyncWrap(() => http.aiChatCancel({ runId })),
     [IpcChannel.AiChatHistory]: (threadId: string): Promise<Result<ChatMessage[]>> =>
       asyncWrap(() => http.aiChatHistory(threadId)),
     [IpcChannel.AiChatThreads]: (workspaceId: string | null): Promise<Result<ChatThread[]>> =>

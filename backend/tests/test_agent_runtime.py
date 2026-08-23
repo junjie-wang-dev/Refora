@@ -695,7 +695,12 @@ def test_cancel_terminalizes_active_run(repos, db):
         )
         pending = asyncio.create_task(runtime["send"](request()))
         await started.wait()
-        assert await runtime["cancel"]("run-1") == {"runId": "run-1", "cancelled": True}
+        assert await runtime["cancel"]("run-1") == {
+            "runId": "run-1",
+            "cancelled": True,
+            "cancelRequested": True,
+            "terminated": True,
+        }
         return await pending
 
     result = asyncio.run(exercise())
@@ -708,6 +713,83 @@ def test_cancel_terminalizes_active_run(repos, db):
     assert cancelled_message["content"] == "Starting"
     assert cancelled_message["runId"] == "run-1"
     assert cancelled_message["runStatus"] == "cancelled"
+
+
+def test_cancel_forces_background_task_when_agent_does_not_release_stream(repos, db):
+    insert_thread(db)
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def stream(agent, req, mode):
+        yield {"event": "token", "delta": "Starting"}
+        started.set()
+        await blocked.wait()
+        yield {"event": "complete", "result": "late", "state": {}}
+
+    async def exercise():
+        runtime = createAgentRuntime(
+            repos,
+            {
+                "createTools": lambda req: [],
+                "createModel": lambda provider: "model",
+                "createAgent": lambda model, tools, req: Agent(),
+                "stream": stream,
+                "cancelWaitSeconds": 0.2,
+            },
+        )
+        await runtime["start"](request())
+        await started.wait()
+        result = await runtime["cancel"]("run-1")
+        return result
+
+    result = asyncio.run(exercise())
+
+    assert result == {
+        "runId": "run-1",
+        "cancelled": True,
+        "cancelRequested": True,
+        "terminated": True,
+    }
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
+
+
+def test_cancel_does_not_wait_indefinitely_for_agent_cancel_hook(repos, db):
+    insert_thread(db)
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+    cancel_called = asyncio.Event()
+
+    class BlockingCancelAgent:
+        async def cancel(self):
+            cancel_called.set()
+            await blocked.wait()
+
+    async def stream(agent, req, mode):
+        yield {"event": "token", "delta": "Starting"}
+        started.set()
+        await blocked.wait()
+
+    async def exercise():
+        runtime = createAgentRuntime(
+            repos,
+            {
+                "createTools": lambda req: [],
+                "createModel": lambda provider: "model",
+                "createAgent": lambda model, tools, req: BlockingCancelAgent(),
+                "stream": stream,
+                "cancelWaitSeconds": 0.05,
+            },
+        )
+        await runtime["start"](request())
+        await started.wait()
+        result = await asyncio.wait_for(runtime["cancel"]("run-1"), timeout=0.2)
+        return result
+
+    result = asyncio.run(exercise())
+
+    assert cancel_called.is_set()
+    assert result["terminated"] is True
+    assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
 
 
 def test_cancel_without_partial_does_not_persist_assistant_message(repos, db):
@@ -732,7 +814,12 @@ def test_cancel_without_partial_does_not_persist_assistant_message(repos, db):
 
     result = asyncio.run(runtime["cancel"]("run-1"))
 
-    assert result == {"runId": "run-1", "cancelled": True}
+    assert result == {
+        "runId": "run-1",
+        "cancelled": True,
+        "cancelRequested": True,
+        "terminated": True,
+    }
     assert repos["agentRuns"]["get"]("run-1")["status"] == "cancelled"
     assert repos["chat"]["listMessages"]("thread-1") == []
 

@@ -420,6 +420,27 @@ describe('WorkspaceStore', () => {
       }
     })
 
+    it('reports a blocked switch when chat starts while renderer drafts are flushing', async () => {
+      let release: () => void = () => undefined
+      const draftSave = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const unregister = registerRendererFlushTask(() => draftSave)
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-old', chatStreaming: false })
+
+      try {
+        const switching = useWorkspaceStore.getState().requestActiveWorkspace('ws-new')
+        await Promise.resolve()
+        useWorkspaceStore.setState({ chatStreaming: true })
+        release()
+
+        await expect(switching).resolves.toBe(false)
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-old')
+      } finally {
+        unregister()
+      }
+    })
+
     it('sets active workspace and fetches the latest thread', async () => {
       mockChatThreads.mockResolvedValue([
         { id: 'thread-1', workspaceId: 'ws-1', providerId: 'p1', createdAt: 0 }
@@ -968,6 +989,98 @@ describe('WorkspaceStore', () => {
       await useWorkspaceStore.getState().renameThread('thread-1', 'Rejected')
       expect(useWorkspaceStore.getState().threads[0].title).toBe('Renamed')
       expect(mockShowToast).toHaveBeenCalled()
+    })
+
+    it('does not roll back a newer rename when an older request fails', async () => {
+      let rejectOlder: (reason: Error) => void = () => undefined
+      mockRenameThread
+        .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+          rejectOlder = reject
+        }))
+        .mockResolvedValueOnce(undefined)
+      useWorkspaceStore.setState({
+        threads: [{
+          id: 'thread-1',
+          workspaceId: 'ws-1',
+          providerId: 'provider-1',
+          agentProfileId: null,
+          title: 'Original',
+          createdAt: 0,
+          headCheckpointId: null,
+          agentStateVersion: 0
+        }]
+      })
+
+      const older = useWorkspaceStore.getState().renameThread('thread-1', 'Older title')
+      const newer = useWorkspaceStore.getState().renameThread('thread-1', 'Newer title')
+      await vi.waitFor(() => expect(mockRenameThread).toHaveBeenCalledTimes(1))
+      rejectOlder(new Error('older rename failed'))
+      await older
+      await newer
+
+      expect(useWorkspaceStore.getState().threads[0].title).toBe('Newer title')
+    })
+
+    it('restores the confirmed title when every queued rename fails', async () => {
+      let rejectOlder: (reason: Error) => void = () => undefined
+      mockRenameThread
+        .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+          rejectOlder = reject
+        }))
+        .mockRejectedValueOnce(new Error('newer rename failed'))
+      useWorkspaceStore.setState({
+        threads: [{
+          id: 'thread-1',
+          workspaceId: 'ws-1',
+          providerId: 'provider-1',
+          agentProfileId: null,
+          title: 'Original',
+          createdAt: 0,
+          headCheckpointId: null,
+          agentStateVersion: 0
+        }]
+      })
+
+      const older = useWorkspaceStore.getState().renameThread('thread-1', 'Older title')
+      const newer = useWorkspaceStore.getState().renameThread('thread-1', 'Newer title')
+      await vi.waitFor(() => expect(mockRenameThread).toHaveBeenCalledTimes(1))
+      rejectOlder(new Error('older rename failed'))
+      await Promise.all([older, newer])
+
+      expect(useWorkspaceStore.getState().threads[0].title).toBe('Original')
+    })
+
+    it('only rolls back the failed thread when renames overlap', async () => {
+      let rejectFirst: (reason: Error) => void = () => undefined
+      mockRenameThread
+        .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject
+        }))
+        .mockResolvedValueOnce(undefined)
+      const makeThread = (id: string, title: string): ChatThread => ({
+        id,
+        workspaceId: 'ws-1',
+        providerId: 'provider-1',
+        agentProfileId: null,
+        title,
+        createdAt: 0,
+        headCheckpointId: null,
+        agentStateVersion: 0
+      })
+      useWorkspaceStore.setState({
+        threads: [makeThread('thread-1', 'First'), makeThread('thread-2', 'Second')]
+      })
+
+      const first = useWorkspaceStore.getState().renameThread('thread-1', 'First changed')
+      const second = useWorkspaceStore.getState().renameThread('thread-2', 'Second changed')
+      await vi.waitFor(() => expect(mockRenameThread).toHaveBeenCalledTimes(2))
+      rejectFirst(new Error('first rename failed'))
+      await Promise.all([first, second])
+
+      expect(useWorkspaceStore.getState().threads.map((thread) => thread.title)).toEqual([
+        'First',
+        'Second changed'
+      ])
     })
 
     it('shows an error when deleting a thread fails', async () => {

@@ -758,7 +758,13 @@ export function useChatStream({
   const cancelRun = useCallback((runId: string) => {
     if (cancelledRunRef.current === runId) return
     cancelledRunRef.current = runId
-    void api.ai.chatCancel(runId).catch((e) => {
+    void api.ai.chatCancel(runId).then((result) => {
+      if (result.terminated || cancelledRunRef.current !== runId) return
+      cancelledRef.current = false
+      cancelledRunRef.current = null
+      setCanRetry(false)
+      setError(tRef.current('workspace.chat.stopFailed', 'Failed to stop response'))
+    }).catch((e) => {
       cancelledRef.current = false
       cancelledRunRef.current = null
       setCanRetry(false)

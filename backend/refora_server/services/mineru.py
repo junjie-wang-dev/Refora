@@ -996,11 +996,13 @@ class MineruWorkerProcessDeps:
     workerScriptPath: str
     idleTimeoutMs: int = 5 * 60 * 1000
     requestTimeoutMs: int = 2 * 60 * 60 * 1000
+    terminateGraceMs: int = 5_000
 
 
 def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
     idle_timeout_ms = deps.idleTimeoutMs
     request_timeout_ms = deps.requestTimeoutMs
+    terminate_grace_seconds = max(deps.terminateGraceMs, 0) / 1000
     state: dict[str, Any] = {
         "child": None,
         "startup": None,
@@ -1012,6 +1014,8 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
         "destroyed": False,
         "pending": {},
         "reader_task": None,
+        "stderr_task": None,
+        "termination_task": None,
     }
 
     def _clear_idle() -> None:
@@ -1028,10 +1032,9 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
         pending.clear()
         state["active_parse_id"] = None
 
-    def _terminate(term_signal: int = signal.SIGTERM) -> None:
-        child: asyncio.subprocess.Process | None = state["child"]
-        if child is None:
-            return
+    def _signal_child(
+        child: asyncio.subprocess.Process, term_signal: int
+    ) -> None:
         try:
             os.killpg(os.getpgid(child.pid), term_signal)
         except (ProcessLookupError, OSError):
@@ -1039,6 +1042,61 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
                 child.send_signal(term_signal)
             except (ProcessLookupError, OSError):
                 pass
+
+    async def _clear_io_tasks() -> None:
+        tasks = [
+            task
+            for task in (state["reader_task"], state["stderr_task"])
+            if isinstance(task, asyncio.Task)
+        ]
+        state["reader_task"] = None
+        state["stderr_task"] = None
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _terminate_and_reap(
+        child: asyncio.subprocess.Process,
+    ) -> None:
+        wait_task = asyncio.ensure_future(child.wait())
+        if child.returncode is None:
+            _signal_child(child, signal.SIGTERM)
+            done, _ = await asyncio.wait(
+                {wait_task}, timeout=terminate_grace_seconds
+            )
+            if not done:
+                _signal_child(child, signal.SIGKILL)
+        await asyncio.gather(wait_task, return_exceptions=True)
+        await _clear_io_tasks()
+        if state["child"] is child:
+            state["child"] = None
+
+    def _begin_termination(error: Exception) -> asyncio.Task[Any]:
+        existing = state["termination_task"]
+        if isinstance(existing, asyncio.Task) and not existing.done():
+            return existing
+
+        async def terminate() -> None:
+            state["stopping"] = True
+            _reject_pending(error)
+            child = state["child"]
+            if child is not None:
+                await _terminate_and_reap(child)
+            else:
+                await _clear_io_tasks()
+            state["stopping"] = False
+
+        task = asyncio.ensure_future(terminate())
+        state["termination_task"] = task
+
+        def clear(completed: asyncio.Task[Any]) -> None:
+            if state["termination_task"] is completed:
+                state["termination_task"] = None
+
+        task.add_done_callback(clear)
+        return task
 
     def _handle_message(message: dict[str, Any]) -> None:
         event = message.get("event")
@@ -1093,6 +1151,9 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
     async def _start() -> None:
         if state["destroyed"]:
             raise RuntimeError("MinerU worker is unavailable")
+        termination = state["termination_task"]
+        if isinstance(termination, asyncio.Task):
+            await asyncio.gather(termination, return_exceptions=True)
         if state["child"] is not None:
             return
         if state["startup"] is not None:
@@ -1128,14 +1189,16 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
                     if not line:
                         break
 
-            asyncio.ensure_future(_drain_stderr())
+            state["stderr_task"] = asyncio.ensure_future(_drain_stderr())
             hello = await _send_request("hello", {}, 30_000)
             if (
                 not isinstance(hello, dict)
                 or hello.get("protocolVersion") != MINERU_WORKER_PROTOCOL_VERSION
                 or hello.get("mineruVersion") != MINERU_VERSION
             ):
-                _terminate()
+                await _begin_termination(
+                    RuntimeError("MinerU worker protocol or version is incompatible")
+                )
                 raise RuntimeError("MinerU worker protocol or version is incompatible")
 
         startup = asyncio.ensure_future(_do_start())
@@ -1166,7 +1229,9 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
                 state["active_parse_id"] = None
             if not future.done():
                 future.set_exception(RuntimeError(f"MinerU worker request timed out: {method}"))
-            _terminate()
+            _begin_termination(
+                RuntimeError(f"MinerU worker request timed out: {method}")
+            )
 
         timer = loop.call_later(timeout / 1000, _on_timeout)
         state["pending"][request_id] = {
@@ -1248,17 +1313,15 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
         if not state["parse_in_flight"]:
             return
         state["cancel_requested"] = True
-        state["stopping"] = True
-        if state["child"] is not None:
-            _terminate()
-        _reject_pending(RuntimeError("MinerU conversion was cancelled"))
-        state["child"] = None
-        state["stopping"] = False
+        await _begin_termination(RuntimeError("MinerU conversion was cancelled"))
 
     async def _stop() -> None:
         _clear_idle()
         child = state["child"]
         if child is None:
+            termination = state["termination_task"]
+            if isinstance(termination, asyncio.Task):
+                await asyncio.gather(termination, return_exceptions=True)
             return
         state["stopping"] = True
         try:
@@ -1270,20 +1333,13 @@ def create_mineru_worker_process(deps: MineruWorkerProcessDeps):
             except Exception:
                 pass
         finally:
-            if state["child"] is not None:
-                _terminate()
-            state["child"] = None
-            _reject_pending(RuntimeError("MinerU worker stopped"))
-            state["stopping"] = False
+            await _begin_termination(RuntimeError("MinerU worker stopped"))
 
-    def _destroy() -> None:
+    async def _destroy() -> None:
         _clear_idle()
         state["destroyed"] = True
         state["cancel_requested"] = True
-        state["stopping"] = True
-        _terminate()
-        state["child"] = None
-        _reject_pending(RuntimeError("MinerU worker stopped"))
+        await _begin_termination(RuntimeError("MinerU worker stopped"))
 
     return {
         "parse": _parse,

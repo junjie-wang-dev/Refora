@@ -16,7 +16,11 @@ describe('server AI IPC handlers', () => {
       aiSummaryGet: vi.fn().mockResolvedValue(null),
       aiChatSend: vi.fn().mockResolvedValue({ threadId: 'thread-1', runId: 'server-run' }),
       aiChatResume: vi.fn().mockResolvedValue({ runId: 'run-1' }),
-      aiChatCancel: vi.fn().mockResolvedValue({ ack: true }),
+      aiChatCancel: vi.fn().mockResolvedValue({
+        ack: true,
+        cancelRequested: true,
+        terminated: true
+      }),
       aiChatHistory: vi.fn().mockResolvedValue([]),
       aiChatThreads: vi.fn().mockResolvedValue([]),
       aiUsageStats: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -76,7 +80,7 @@ describe('server AI IPC handlers', () => {
     })).resolves.toEqual({ ok: true, data: undefined })
     await expect(handlers[IpcChannel.AiChatCancel]('run-1')).resolves.toEqual({
       ok: true,
-      data: undefined
+      data: { ack: true, cancelRequested: true, terminated: true }
     })
 
     expect(http.aiChatSend).toHaveBeenCalledWith(expect.objectContaining(request))

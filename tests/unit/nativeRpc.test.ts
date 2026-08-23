@@ -48,6 +48,7 @@ function createFakeHttpServer() {
   const server = new EventEmitter() as Server & {
     listen: ReturnType<typeof vi.fn>
     close: ReturnType<typeof vi.fn>
+    closeAllConnections: ReturnType<typeof vi.fn>
     address: () => { port: number }
     _dispatch: (req: IncomingMessage, res: ServerResponse) => void
   }
@@ -58,6 +59,7 @@ function createFakeHttpServer() {
   server.close = vi.fn((cb?: () => void) => {
     cb?.()
   })
+  server.closeAllConnections = vi.fn()
   ;(server as unknown as { _dispatch: RequestHandler })._dispatch = (req, res) => {
     currentHandler?.(req, res)
   }
@@ -585,7 +587,15 @@ describe('nativeRpc', () => {
 
   it('stops the http server', async () => {
     const { rpc, server } = await setup()
-    await rpc.stop()
+    let closeCallback: (() => void) | undefined
+    server.close.mockImplementationOnce((callback?: (error?: Error) => void) => {
+      closeCallback = () => callback?.()
+      return server
+    })
+    server.closeAllConnections.mockImplementationOnce(() => closeCallback?.())
+
+    await expect(rpc.stop()).resolves.toBeUndefined()
     expect(server.close).toHaveBeenCalled()
+    expect(server.closeAllConnections).toHaveBeenCalledOnce()
   })
 })

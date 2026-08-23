@@ -20,6 +20,7 @@ import type {
   BootstrapData,
   Category,
   ChatMessage,
+  ChatCancelResult,
   ChatThread,
   Document,
   DocumentCounts,
@@ -422,7 +423,7 @@ export interface ServerHttp {
 
   aiChatSend(payload: ChatSendPayload): Promise<{ runId: string; threadId: string }>
   aiChatResume(payload: ChatResumePayload): Promise<{ runId: string }>
-  aiChatCancel(payload: ChatCancelPayload): Promise<{ ack: boolean }>
+  aiChatCancel(payload: ChatCancelPayload): Promise<ChatCancelResult>
   aiChatThreads(query?: ChatThreadsQuery): Promise<ChatThread[]>
   aiUsageStats(): Promise<AiUsageStats>
   aiChatHistory(threadId: string): Promise<ChatMessage[]>
@@ -715,7 +716,7 @@ export function createServerClient(
 
     aiChatSend: (payload) => post<{ runId: string; threadId: string }>('/ai/chat/send', payload),
     aiChatResume: (payload) => post<{ runId: string }>('/ai/chat/resume', payload),
-    aiChatCancel: (payload) => post<{ ack: boolean }>('/ai/chat/cancel', payload),
+    aiChatCancel: (payload) => post<ChatCancelResult>('/ai/chat/cancel', payload),
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
     aiUsageStats: () => get<AiUsageStats>('/ai/usage'),
     aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${pathSegment(id)}/history`),
@@ -794,6 +795,8 @@ export function createServerClient(
   let reconnectAttempts = 0
   let manualClose = false
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let connectorGeneration = 0
+  const connectorControllers = new Set<AbortController>()
   const subscribedTopics = new Set<string>()
 
   function ensureListeners(event: WsEventName): Set<WsEventListener> {
@@ -837,6 +840,7 @@ export function createServerClient(
     route: string,
     body: unknown
   ): Promise<Result<unknown>> {
+    const generation = connectorGeneration
     let info: NativeRpcInfo
     try {
       info = await nativeRpc.start()
@@ -846,8 +850,19 @@ export function createServerClient(
         error: { code: 'native_unavailable', message: e instanceof Error ? e.message : String(e) }
       }
     }
+    if (generation !== connectorGeneration) {
+      return {
+        ok: false,
+        error: { code: 'connector_cancelled', message: `Native RPC was cancelled: ${route}` }
+      }
+    }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), connectorTimeoutMs)
+    connectorControllers.add(controller)
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, connectorTimeoutMs)
     try {
       const res = await fetchImpl(`${info.baseUrl}${route}`, {
         method: 'POST',
@@ -860,8 +875,10 @@ export function createServerClient(
       })
       return (await res.json()) as Result<unknown>
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        return { ok: false, error: { code: 'connector_timeout', message: `Native RPC timed out: ${route}` } }
+      if (controller.signal.aborted) {
+        return timedOut
+          ? { ok: false, error: { code: 'connector_timeout', message: `Native RPC timed out: ${route}` } }
+          : { ok: false, error: { code: 'connector_cancelled', message: `Native RPC was cancelled: ${route}` } }
       }
       return {
         ok: false,
@@ -869,6 +886,7 @@ export function createServerClient(
       }
     } finally {
       clearTimeout(timer)
+      connectorControllers.delete(controller)
     }
   }
 
@@ -1082,6 +1100,9 @@ export function createServerClient(
     },
     disconnect(): void {
       manualClose = true
+      connectorGeneration += 1
+      for (const controller of connectorControllers) controller.abort()
+      connectorControllers.clear()
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -637,11 +638,13 @@ def create_ocr_service(repos: dict[str, Any], deps: OcrServiceDeps):
         root = get_ocr_document_root(deps.getLibraryFolder(), document_id)
         shutil.rmtree(root, ignore_errors=True)
 
-    def destroy() -> None:
+    async def destroy() -> None:
         state["destroyed"] = True
         if state["running_job_id"]:
             cancelled.add(state["running_job_id"])
-        deps.worker["destroy"]()
+        result = deps.worker["destroy"]()
+        if inspect.isawaitable(result):
+            await result
 
     async def stop_worker() -> None:
         await deps.worker["stop"]()
