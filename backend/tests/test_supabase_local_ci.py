@@ -18,15 +18,20 @@ def test_local_harness_bootstraps_and_applies_every_migration() -> None:
     assert "create table if not exists auth.users" in bootstrap
 
 
-def test_ci_and_release_gate_on_real_postgres_suite() -> None:
+def test_ci_and_release_gate_on_shared_quality_workflow() -> None:
+    quality_workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "image: postgres:17.6-bookworm" in quality_workflow
+    assert (
+        "uv run --project backend --locked python scripts/test-supabase-local.py"
+        in quality_workflow
+    )
+    assert "REFORA_SUPABASE_TEST_SSL: 'false'" in quality_workflow
+
     for name in ("ci.yml", "release.yml"):
         workflow = (ROOT / ".github" / "workflows" / name).read_text(
             encoding="utf-8"
         )
-        assert "image: postgres:17.6-bookworm" in workflow
-        assert (
-            "uv run --project backend --locked python scripts/test-supabase-local.py"
-            in workflow
-        )
-        assert "needs: [verify, e2e, supabase]" in workflow
-        assert "REFORA_SUPABASE_TEST_SSL: 'false'" in workflow
+        assert "uses: ./.github/workflows/quality.yml" in workflow
+        assert "needs: quality" in workflow

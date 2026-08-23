@@ -372,21 +372,26 @@ def test_fallback_scan_loop_runs_library_health_check(monkeypatch):
     db = open_migrated_db()
     checks: list[None] = []
     try:
-        svc = watcher_module.createWatcherService(
-            {"watchFolders": make_watch_folders_repo(db)},
-            {
-                "onNewPdf": lambda _paths: None,
-                "getLibraryFolder": lambda: "",
-                "pollInterval": 0.01,
-                "onLibraryHealthCheck": lambda: checks.append(None),
-                "libraryHealthInterval": 600,
-            },
-        )
-
         async def run():
+            check_completed = asyncio.Event()
+
+            def on_library_health_check():
+                checks.append(None)
+                check_completed.set()
+
+            svc = watcher_module.createWatcherService(
+                {"watchFolders": make_watch_folders_repo(db)},
+                {
+                    "onNewPdf": lambda _paths: None,
+                    "getLibraryFolder": lambda: "",
+                    "pollInterval": 0.01,
+                    "onLibraryHealthCheck": on_library_health_check,
+                    "libraryHealthInterval": 600,
+                },
+            )
             svc["startScanning"]()
             try:
-                await asyncio.sleep(0.05)
+                await asyncio.wait_for(check_completed.wait(), timeout=1)
             finally:
                 svc["stopScanning"]()
 
