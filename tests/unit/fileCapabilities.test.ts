@@ -47,6 +47,14 @@ describe('renderer path capabilities', () => {
     expect(() => capabilities.consumeFile(pdf)).toThrow('not selected by the user')
   })
 
+  it('rejects paths that cannot be inspected', () => {
+    const root = makeRoot()
+    const missing = join(root, 'missing.pdf')
+    const capabilities = createRendererPathCapabilities()
+
+    expect(() => capabilities.authorizeFile(missing)).toThrow(`Unable to inspect path: ${missing}`)
+  })
+
   it('keeps file and directory capabilities distinct and rejects symlinks', () => {
     const root = makeRoot()
     const directory = join(root, 'library')
@@ -93,6 +101,38 @@ describe('renderer path capabilities', () => {
       realpathSync(first),
       realpathSync(second)
     ])
+    expect(() => capabilities.consumeFile(first)).toThrow('not selected by the user')
+    expect(() => capabilities.consumeFile(second)).toThrow('not selected by the user')
+  })
+
+  it('rejects duplicate paths in a batch without consuming the authorization', () => {
+    const root = makeRoot()
+    const file = join(root, 'paper.pdf')
+    writeFileSync(file, 'pdf')
+    const capabilities = createRendererPathCapabilities()
+    capabilities.authorizeFile(file)
+
+    expect(() => capabilities.consumeFiles([file, file], ['.pdf'])).toThrow(
+      'A path authorization cannot be reused'
+    )
+    expect(capabilities.consumeFile(file, ['.pdf'])).toBe(realpathSync(file))
+  })
+
+  it('clears every authorization and its expiry timer', () => {
+    vi.useFakeTimers()
+    const root = makeRoot()
+    const first = join(root, 'first.pdf')
+    const second = join(root, 'second.pdf')
+    writeFileSync(first, 'pdf')
+    writeFileSync(second, 'pdf')
+    const capabilities = createRendererPathCapabilities()
+    capabilities.authorizeFile(first)
+    capabilities.authorizeFile(second)
+
+    expect(vi.getTimerCount()).toBe(2)
+    capabilities.clear()
+
+    expect(vi.getTimerCount()).toBe(0)
     expect(() => capabilities.consumeFile(first)).toThrow('not selected by the user')
     expect(() => capabilities.consumeFile(second)).toThrow('not selected by the user')
   })
