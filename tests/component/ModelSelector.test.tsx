@@ -155,9 +155,36 @@ describe('ModelSelector', () => {
 
     expect(screen.getByText('Choose model')).toBeInTheDocument()
     expect(screen.queryByText('CLI')).not.toBeInTheDocument()
+    expect(screen.queryByText('Variant')).not.toBeInTheDocument()
     expect(screen.getByText('GPT-5.6-Luna')).toBeInTheDocument()
     await user.click(screen.getByRole('option', { name: 'OpenAI Codex CLI/gpt-5.6-luna' }))
     expect(defaultProps.onApplyModel).toHaveBeenCalledWith('gpt-5.6-luna', '', 'provider-1')
+  })
+
+  it('hides variants for CLI models that look variant capable', async () => {
+    const user = userEvent.setup()
+    const cliProvider: AiProvider = {
+      ...provider,
+      presetId: 'codex-cli',
+      model: 'gpt-5.6-luna',
+      models: ['gpt-5.6-luna'],
+      baseModel: 'gpt-5.6-luna',
+      variant: '',
+      variantFormat: 'none'
+    }
+    renderSelector({
+      providers: [cliProvider],
+      activeProviderId: cliProvider.id,
+      selectedModel: 'gpt-5.6-luna',
+      selectedVariant: '',
+      requestModel: 'gpt-5.6-luna',
+      providerModels: {
+        [cliProvider.id]: [{ ...providerModel, id: 'gpt-5.6-luna' }]
+      }
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Select model / provider' }))
+    expect(screen.queryByText('Variant')).not.toBeInTheDocument()
   })
 
   it('does not expose a custom model id input in chat', async () => {

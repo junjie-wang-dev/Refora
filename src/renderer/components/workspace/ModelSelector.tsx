@@ -97,7 +97,8 @@ export default function ModelSelector({
     ? selectedModelInfo.providerName
     : activeModelId
   const variantCapable =
-    supportsModelVariants(selectedModel) || selectedModelInfo?.supportsVariants === true
+    !activeIsCli &&
+    (supportsModelVariants(selectedModel) || selectedModelInfo?.supportsVariants === true)
   const displayModelLabel = providers.length === 0
     ? t('workspace.chat.notConfigured', 'Not configured')
     : activeProvider && activeModelId

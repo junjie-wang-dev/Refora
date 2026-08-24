@@ -31,12 +31,12 @@ def test_interactive_mode_requires_approval_for_external_tools():
         "web_fetch",
     ],
 )
-def test_network_reads_require_approval_in_every_mode(tool_name):
+def test_network_reads_are_allowed_without_approval_in_every_mode(tool_name):
     for mode in Mode:
         decision = PermissionEngine(mode=mode).evaluate(tool_name, {})
-        assert not decision.allowed
-        assert decision.needs_user
-        assert decision.reason == "network access requires approval"
+        assert decision.allowed
+        assert not decision.needs_user
+        assert decision.reason == "network read allowed"
 
 
 def test_network_read_can_be_allowed_for_the_session():
@@ -47,7 +47,7 @@ def test_network_read_can_be_allowed_for_the_session():
 
     assert decision.allowed
     assert not decision.needs_user
-    assert decision.reason == "network access allowed for session"
+    assert decision.reason == "network read allowed"
 
 
 def test_plan_mode_rejects_local_writes():
@@ -82,14 +82,14 @@ def test_interactive_mode_allows_refora_workspace_writes(tool_name):
     assert not decision.needs_user
 
 
-def test_interactive_mode_requires_approval_for_sandbox_commands():
+def test_interactive_mode_allows_os_isolated_sandbox_commands_without_approval():
     engine = PermissionEngine(sandbox_root="/tmp/refora-sandbox")
 
     decision = engine.evaluate("__execute", {"command": "python -m pytest; rm -rf /"})
 
-    assert not decision.allowed
-    assert decision.needs_user
-    assert decision.reason == "requires approval"
+    assert decision.allowed
+    assert not decision.needs_user
+    assert decision.reason == "sandboxed command execution"
 
 
 def test_interactive_mode_allows_allowlisted_sandbox_commands_without_approval():
@@ -102,7 +102,7 @@ def test_interactive_mode_allows_allowlisted_sandbox_commands_without_approval()
 
     assert decision.allowed
     assert not decision.needs_user
-    assert decision.reason == "command on allowlist"
+    assert decision.reason == "sandboxed command execution"
 
 
 def test_sandbox_command_without_a_managed_root_still_requires_approval():

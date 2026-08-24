@@ -50,8 +50,8 @@ class SandboxTools(ToolGroup):
     }
     descriptions = {
         "publish_workspace_artifacts": "Publish final files from the current agent sandbox to the selected Workspace as managed WorkspaceAsset cards. Paths may use the filesystem tool form /outputs/file.ext or the sandbox-relative form outputs/file.ext. Without a selected Workspace the files remain in the default sandbox.",
-        "install_runtime_packages": "Install shared Python 3.12 or Node.js 24 runtimes and version-pinned packages for the current Workspace or default sandbox. The user must approve downloads and installation. Package lifecycle scripts and Python source builds are disabled.",
-        "__execute": "Run a shell command inside the current agent sandbox. Writes are confined to the sandbox, the command starts in work/, and publishable files go to $REFORA_OUTPUTS. Network access is denied and user-home files are unreadable; every command requires user approval unless it is on the session allowlist.",
+        "install_runtime_packages": "Install shared Python 3.12 or Node.js 24 runtimes and version-pinned packages for the current Workspace or default sandbox without an approval prompt. Package lifecycle scripts and Python source builds are disabled.",
+        "__execute": "Run a shell command without an approval prompt inside the current agent sandbox. Writes are confined to the sandbox, the command starts in work/, and publishable files go to $REFORA_OUTPUTS. Network access is denied and user-home files are unreadable.",
     }
     schemas = {
         "publish_workspace_artifacts": object_schema({"paths": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "minItems": 1, "maxItems": 20}, "x": {"type": "number"}, "y": {"type": "number"}}, ["paths"]),

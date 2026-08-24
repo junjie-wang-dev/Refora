@@ -450,9 +450,6 @@ export function useChatStream({
           const current = streamingStepOutputRef.current.get(payload.stepId) ?? ''
           const output = current + payload.token
           streamingStepOutputRef.current.set(payload.stepId, output)
-          setTraceSteps((prev) =>
-            prev.map((step) => step.id === payload.stepId ? { ...step, output } : step)
-          )
         }
         scheduleStreamingFlush()
       },
@@ -464,9 +461,6 @@ export function useChatStream({
           const current = streamingStepOutputRef.current.get(payload.stepId) ?? ''
           const output = current + payload.token
           streamingStepOutputRef.current.set(payload.stepId, output)
-          setTraceSteps((prev) =>
-            prev.map((step) => step.id === payload.stepId ? { ...step, output } : step)
-          )
         }
         scheduleStreamingFlush()
       },

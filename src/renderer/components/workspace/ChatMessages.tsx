@@ -1,5 +1,14 @@
-import { useState, useEffect, useMemo, memo } from 'react'
+import {
+  useState,
+  useEffect,
+  useMemo,
+  memo,
+  useCallback,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
 import { useTranslation } from 'react-i18next'
+import { showContextMenu } from '@lobehub/ui'
+import type { ContextMenuItem } from '@lobehub/ui'
 import {
   Check,
   Copy,
@@ -346,6 +355,37 @@ export default function ChatMessages({
   const { t } = useTranslation()
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
+  const handleMessageContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    const message = event.currentTarget
+    const selection = window.getSelection()
+    const selectionInsideMessage = Boolean(
+      selection?.rangeCount
+      && selection.anchorNode
+      && selection.focusNode
+      && (selection.anchorNode === message || message.contains(selection.anchorNode))
+      && (selection.focusNode === message || message.contains(selection.focusNode))
+    )
+    const selectedText = selectionInsideMessage ? selection?.toString() ?? '' : ''
+    if (!selectedText) return
+
+    event.preventDefault()
+    const items: ContextMenuItem[] = [
+      {
+        key: 'copySelection',
+        label: t('workspace.chat.copySelection', 'Copy selected text'),
+        icon: <Copy className="h-3.5 w-3.5" />,
+        onClick: () => {
+          void window.api.clipboard.writeText(selectedText).catch(() => {
+            useDocumentStore.getState().showToast(
+              t('workspace.chat.copySelectionFailed', 'Failed to copy selected text')
+            )
+          })
+        }
+      }
+    ]
+    showContextMenu(items)
+  }, [t])
+
   const displayMessages = useMemo(
     () => enrichChatMessages(messages, traceSteps).filter((message) => message.role !== 'tool'),
     [messages, traceSteps]
@@ -487,7 +527,11 @@ export default function ChatMessages({
 
               if (m.role === 'user') {
                 return (
-                  <div key={m.id} className="group flex w-full flex-col items-end">
+                  <div
+                    key={m.id}
+                    className="group flex w-full flex-col items-end"
+                    onContextMenu={handleMessageContextMenu}
+                  >
                     <div className="chat-user-message">
                       {m.content}
                     </div>
@@ -497,7 +541,11 @@ export default function ChatMessages({
               }
 
               return (
-                <article key={m.id} className="chat-response-group">
+                <article
+                  key={m.id}
+                  className="chat-response-group"
+                  onContextMenu={handleMessageContextMenu}
+                >
                   <RunTimeline
                     steps={runSteps}
                     fallbackAnswer={m.content}
@@ -524,7 +572,11 @@ export default function ChatMessages({
               )
             })}
             {streaming && (
-              <article className="chat-response-group" aria-live="polite">
+              <article
+                className="chat-response-group"
+                aria-live="polite"
+                onContextMenu={handleMessageContextMenu}
+              >
                 <RunTimeline
                   steps={streamingSteps}
                   fallbackAnswer={streamingText}

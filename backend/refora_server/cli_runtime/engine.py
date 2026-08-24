@@ -183,7 +183,11 @@ class CliRuntimeAgent:
             )
         session_id = session.get("sessionId") if isinstance(session, dict) else None
         prompt = _build_prompt(request, bool(session_id))
-        self._mcp = self._broker.open_run(request["runId"], self._tools)
+        self._mcp = self._broker.open_run(
+            request["runId"],
+            self._tools,
+            request.get("sandboxRoot"),
+        )
         replay = request.get("cliApprovalReplay")
         if self._mcp is not None and isinstance(replay, list):
             self._broker.set_replay_approvals(

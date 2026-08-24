@@ -1044,6 +1044,8 @@
       "exportFailed": "无法导出对话",
       "cut": "剪切",
       "copy": "复制",
+      "copySelection": "复制所选文本",
+      "copySelectionFailed": "复制所选文本失败",
       "paste": "粘贴",
       "selectAll": "全选"
     }

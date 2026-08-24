@@ -218,7 +218,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             configurable["checkpoint_id"] = checkpoint
         return {
             "configurable": configurable,
-            "recursion_limit": int(request.get("recursionLimit") or 50),
+            "recursion_limit": int(request.get("recursionLimit") or 500),
         }
 
     async def configure_checkpoint(

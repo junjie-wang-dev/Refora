@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from refora_server.agent.permissions import PermissionEngine
 from refora_server.agent.risk import RiskClass, classify
 
 
@@ -35,7 +36,12 @@ class CliToolBroker:
             raise ValueError("CLI tool artifact path is invalid")
         return path
 
-    def open_run(self, run_id: str, tools: list[Any]) -> dict[str, Any] | None:
+    def open_run(
+        self,
+        run_id: str,
+        tools: list[Any],
+        sandbox_root: str | None = None,
+    ) -> dict[str, Any] | None:
         path = self._artifact_path(run_id, ".json")
         allowed = {
             tool.name: tool
@@ -53,6 +59,7 @@ class CliToolBroker:
             "activeBatch": [],
             "replay": [],
             "artifacts": set(),
+            "permissions": PermissionEngine(sandbox_root=sandbox_root),
         }
         self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = {
@@ -238,7 +245,7 @@ class CliToolBroker:
         tool = entry["tools"].get(name)
         if tool is None:
             raise ValueError(f"CLI tool is unavailable: {name}")
-        if classify(name) is RiskClass.READ:
+        if entry["permissions"].evaluate(name, arguments).allowed:
             return await self._invoke_tool(tool, arguments, tool_call_id)
         for index, replay in enumerate(entry["replay"]):
             if replay.get("name") == name and replay.get("args") == arguments:

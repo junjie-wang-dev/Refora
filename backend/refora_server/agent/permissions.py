@@ -11,13 +11,10 @@ from refora_server.agent.risk import RiskClass, RiskOverrides, classify, is_cons
 
 
 _SHELL_OPERATORS = (";", "&", "|", ">", "<", "`", "$(", "(", "\n", "\r")
-_INTERACTIVE_LOCAL_TOOLS = frozenset(
+_AUTO_APPROVED_EXTERNAL_TOOLS = frozenset(
     {
-        "generate_report",
-        "add_docs_to_workspace",
-        "create_workspace_connections",
-        "write_file",
-        "edit_file",
+        "publish_workspace_artifacts",
+        "install_runtime_packages",
     }
 )
 
@@ -71,9 +68,7 @@ class PermissionEngine:
         risk = classify(tool_name, metadata, self.risk_overrides)
 
         if risk is RiskClass.NETWORK_READ:
-            if tool_name in self.session_allow_tools:
-                return Decision(True, "network access allowed for session")
-            return Decision(False, "network access requires approval", needs_user=True)
+            return Decision(True, "network read allowed")
 
         if self.mode in READ_ONLY_MODES and is_consequential(risk):
             return Decision(False, f"{self.mode.value} mode is read-only")
@@ -86,15 +81,20 @@ class PermissionEngine:
         if risk is RiskClass.READ:
             return Decision(True, "low risk")
 
-        if risk is RiskClass.WRITE_LOCAL and tool_name in _INTERACTIVE_LOCAL_TOOLS:
+        if risk is RiskClass.WRITE_LOCAL:
             return Decision(True, "local workspace write")
 
         if risk is RiskClass.EXEC:
+            if self.sandbox_root is not None:
+                return Decision(True, "sandboxed command execution")
             command = arguments.get("command")
             if isinstance(command, str) and self._command_allowed(command):
                 return Decision(True, "command on allowlist")
             if isinstance(command, str) and command in self.session_allow_commands:
                 return Decision(True, "command allowed for session")
+
+        if tool_name in _AUTO_APPROVED_EXTERNAL_TOOLS:
+            return Decision(True, "built-in workspace operation")
 
         if tool_name in self.session_allow_tools:
             return Decision(True, "tool allowed for session")

@@ -2,10 +2,15 @@ import pytest
 
 from refora_server.services import agent_intent
 from refora_server.services.agent_intent import (
+    MAX_RECURSION_LIMIT,
     SYSTEM_PROMPT,
     WORKSPACE_SYSTEM_PROMPT,
     _turn_messages,
 )
+
+
+def test_agent_tool_step_limit_is_500():
+    assert MAX_RECURSION_LIMIT == 500
 
 
 def test_system_prompt_restores_academic_web_frontier_report_and_memory_boundaries():

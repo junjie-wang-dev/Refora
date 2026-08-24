@@ -1044,6 +1044,8 @@
       "exportFailed": "Failed to export conversation",
       "cut": "Cut",
       "copy": "Copy",
+      "copySelection": "Copy selected text",
+      "copySelectionFailed": "Failed to copy selected text",
       "paste": "Paste",
       "selectAll": "Select All"
     }

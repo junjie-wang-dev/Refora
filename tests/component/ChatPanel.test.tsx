@@ -2355,6 +2355,90 @@ describe('useChatStream lifecycle', () => {
     })
   })
 
+  it('commits streamed content and timeline output in the same animation frame', async () => {
+    let flushStreaming: FrameRequestCallback | undefined
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      flushStreaming = callback
+      return 1
+    })
+
+    try {
+      const { result } = renderChatStream()
+      await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+
+      await act(async () => {
+        await result.current.sendText('Compare these papers', [], 'thread-1')
+      })
+      const runId = (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId!
+      const reasoningStep: AgentTraceStep = {
+        id: 'reasoning-atomic',
+        threadId: 'thread-1',
+        runId,
+        kind: 'reasoning',
+        name: 'model_reasoning',
+        input: null,
+        output: null,
+        status: 'running',
+        startedAt: 1,
+        endedAt: null,
+        seq: 0,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        parentStepId: null,
+        agentName: null,
+        namespace: null,
+        depth: 0,
+        checkpointId: null
+      }
+      const messageStep: AgentTraceStep = {
+        ...reasoningStep,
+        id: 'message-atomic',
+        kind: 'message',
+        name: 'assistant_message',
+        seq: 1
+      }
+
+      act(() => {
+        chatTraceHandler?.({ threadId: 'thread-1', runId, step: reasoningStep })
+        chatReasoningHandler?.({
+          threadId: 'thread-1',
+          runId,
+          stepId: reasoningStep.id,
+          token: 'Inspect sources'
+        })
+        chatTraceHandler?.({ threadId: 'thread-1', runId, step: messageStep })
+        chatTokenHandler?.({
+          threadId: 'thread-1',
+          runId,
+          stepId: messageStep.id,
+          token: 'Answer'
+        })
+      })
+
+      expect(requestFrame).toHaveBeenCalledTimes(1)
+      expect(result.current.streamingReasoning).toBe('')
+      expect(result.current.streamingText).toBe('')
+      expect(result.current.traceSteps.find((step) => step.id === reasoningStep.id)?.output)
+        .toBeNull()
+      expect(result.current.traceSteps.find((step) => step.id === messageStep.id)?.output)
+        .toBeNull()
+
+      act(() => {
+        flushStreaming?.(0)
+      })
+
+      expect(result.current.streamingReasoning).toBe('Inspect sources')
+      expect(result.current.streamingText).toBe('Answer')
+      expect(result.current.traceSteps.find((step) => step.id === reasoningStep.id)?.output)
+        .toBe('Inspect sources')
+      expect(result.current.traceSteps.find((step) => step.id === messageStep.id)?.output)
+        .toBe('Answer')
+    } finally {
+      requestFrame.mockRestore()
+    }
+  })
+
   it('keeps fast file activity running long enough to render before completion', async () => {
     const { result } = renderChatStream()
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))

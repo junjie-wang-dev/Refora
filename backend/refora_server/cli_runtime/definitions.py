@@ -234,6 +234,10 @@ class CodexCliAdapter(CliRuntimeAdapter):
                 "--skip-git-repo-check",
                 "--ignore-user-config",
                 "--ignore-rules",
+                "-c",
+                'approval_policy="never"',
+                "-c",
+                "sandbox_workspace_write.network_access=true",
             ]
         )
         if not session_id:
@@ -426,13 +430,19 @@ class GeminiCliAdapter(CliRuntimeAdapter):
                         }
                     },
                     "security": {
-                        "disableYoloMode": True,
+                        "disableYoloMode": False,
                         "folderTrust": {"enabled": False},
                     },
                 },
             )
             environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settings_path
-        args = ["--output-format", "stream-json", "--approval-mode", "default"]
+        args = [
+            "--output-format",
+            "stream-json",
+            "--sandbox",
+            "--approval-mode",
+            "yolo",
+        ]
         if mcp is not None:
             args.extend(["--allowed-mcp-server-names", "refora"])
         if session_id:

@@ -12,7 +12,7 @@ from refora_server.services.agent_tools import agent_tool_names
 from refora_server.services.chat_history import historyToMessages, truncateHistoryByTokens
 
 AGENT_STATE_VERSION = 2
-MAX_RECURSION_LIMIT = 50
+MAX_RECURSION_LIMIT = 500
 MAX_ATTACHMENTS = 8
 WORKSPACE_CONTEXT_DOC_LIMIT = 80
 WORKSPACE_CONTEXT_CHAR_LIMIT = 6000

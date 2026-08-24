@@ -194,6 +194,8 @@ def test_codex_invocation_is_run_scoped_and_never_bypasses_sandbox(monkeypatch, 
     assert "--json" in invocation.args
     assert "--ignore-user-config" in invocation.args
     assert "--sandbox" in invocation.args
+    assert 'approval_policy="never"' in invocation.args
+    assert "sandbox_workspace_write.network_access=true" in invocation.args
     assert invocation.args[invocation.args.index("--model") + 1] == "gpt-5.6-luna"
     assert 'model_reasoning_effort="ultra"' in invocation.args
     assert "dangerously-bypass-approvals-and-sandbox" not in " ".join(invocation.args)
@@ -296,7 +298,20 @@ class _WriteTool:
         return {"title": arguments["query"], "created": True}
 
 
-class _ToolCallAwareWriteTool(_WriteTool):
+class _ApprovalTool(_WriteTool):
+    name = "propose_workspace_memory_update"
+    description = "Propose a memory update"
+
+
+class _OcrTool(_WriteTool):
+    name = "prepare_paper_ocr"
+    description = "Prepare paper OCR"
+
+    async def ainvoke(self, arguments):
+        return {"docId": arguments["docId"], "queued": True}
+
+
+class _ToolCallAwareApprovalTool(_ApprovalTool):
     async def ainvoke(self, invocation):
         return invocation
 
@@ -348,7 +363,7 @@ def test_cli_tool_broker_mcp_entrypoint_has_explicit_import_root(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cli_tool_broker_approval_gates_consequential_tools(tmp_path):
+async def test_cli_tool_broker_auto_approves_workspace_writes(tmp_path):
     broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
     config = broker.open_run("run-1", [_ReadTool(), _WriteTool()])
     assert config is not None
@@ -363,20 +378,9 @@ async def test_cli_tool_broker_approval_gates_consequential_tools(tmp_path):
         "query": "AI",
         "count": 1,
     }
-    call = asyncio.create_task(
-        broker.call_tool("run-1", run_token, "generate_report", {"query": "AI"})
-    )
-    approvals = await broker.next_approvals("run-1")
-    assert call.done() is False
-    assert approvals == [
-        {
-            "name": "generate_report",
-            "args": {"query": "AI"},
-            "description": "Write a report",
-        }
-    ]
-    broker.resolve_approvals("run-1", [{"type": "approve"}])
-    assert await call == {"title": "AI", "created": True}
+    assert await broker.call_tool(
+        "run-1", run_token, "generate_report", {"query": "AI"}
+    ) == {"title": "AI", "created": True}
     runtime_config = config["writeConfig"]("runtime", {"enabled": True})
     assert os.stat(runtime_config).st_mode & 0o777 == 0o600
     broker.close_run("run-1")
@@ -385,12 +389,39 @@ async def test_cli_tool_broker_approval_gates_consequential_tools(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cli_tool_broker_returns_rejection_to_the_cli(tmp_path):
+async def test_cli_tool_broker_requires_approval_for_ocr(tmp_path):
     broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
-    config = broker.open_run("run-1", [_WriteTool()])
+    broker.open_run("run-1", [_OcrTool()])
     run_token = broker._runs["run-1"]["token"]
     call = asyncio.create_task(
-        broker.call_tool("run-1", run_token, "generate_report", {"query": "AI"})
+        broker.call_tool("run-1", run_token, "prepare_paper_ocr", {"docId": "doc-1"})
+    )
+
+    approvals = await broker.next_approvals("run-1")
+
+    assert approvals == [{
+        "name": "prepare_paper_ocr",
+        "args": {"docId": "doc-1"},
+        "description": "Prepare paper OCR",
+    }]
+    assert call.done() is False
+    broker.resolve_approvals("run-1", [{"type": "approve"}])
+    assert await call == {"docId": "doc-1", "queued": True}
+    broker.close_run("run-1")
+
+
+@pytest.mark.asyncio
+async def test_cli_tool_broker_returns_rejection_to_the_cli(tmp_path):
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    config = broker.open_run("run-1", [_ApprovalTool()])
+    run_token = broker._runs["run-1"]["token"]
+    call = asyncio.create_task(
+        broker.call_tool(
+            "run-1",
+            run_token,
+            "propose_workspace_memory_update",
+            {"query": "AI"},
+        )
     )
     await broker.next_approvals("run-1")
     broker.resolve_approvals("run-1", [{"type": "reject"}])
@@ -403,13 +434,13 @@ async def test_cli_tool_broker_returns_rejection_to_the_cli(tmp_path):
 @pytest.mark.asyncio
 async def test_cli_tool_broker_replays_approval_once_with_tool_call_identity(tmp_path):
     broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
-    broker.open_run("run-1", [_ToolCallAwareWriteTool()])
+    broker.open_run("run-1", [_ToolCallAwareApprovalTool()])
     run_token = broker._runs["run-1"]["token"]
     broker.set_replay_approvals(
         "run-1",
         [
             {
-                "name": "generate_report",
+                "name": "propose_workspace_memory_update",
                 "args": {"query": "AI"},
                 "decision": {"type": "approve"},
             }
@@ -419,7 +450,7 @@ async def test_cli_tool_broker_replays_approval_once_with_tool_call_identity(tmp
     result = await broker.call_tool(
         "run-1",
         run_token,
-        "generate_report",
+        "propose_workspace_memory_update",
         {"query": "AI"},
         "mcp-call-1",
     )
@@ -427,7 +458,7 @@ async def test_cli_tool_broker_replays_approval_once_with_tool_call_identity(tmp
     assert result == {
         "type": "tool_call",
         "id": "mcp-call-1",
-        "name": "generate_report",
+        "name": "propose_workspace_memory_update",
         "args": {"query": "AI"},
     }
     assert broker._runs["run-1"]["replay"] == []
@@ -456,10 +487,13 @@ def test_gemini_invocation_uses_isolated_settings_and_maps_events(monkeypatch, t
         },
     )
     assert invocation.args[:2] == ("--output-format", "stream-json")
+    assert "--sandbox" in invocation.args
+    assert invocation.args[invocation.args.index("--approval-mode") + 1] == "yolo"
     assert invocation.env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"].endswith("settings.json")
     assert captured["gemini-settings"]["tools"]["core"] == []
     assert captured["gemini-settings"]["mcpServers"]["refora"]["trust"] is True
     assert captured["gemini-settings"]["mcpServers"]["refora"]["cwd"] == str(tmp_path)
+    assert captured["gemini-settings"]["security"]["disableYoloMode"] is False
     assert adapter.session_id({"type": "init", "session_id": "gemini-session"}) == "gemini-session"
     assert adapter.parse_event(
         {"type": "message", "role": "assistant", "content": "Answer"}
@@ -664,14 +698,17 @@ async def test_cli_engine_resumes_the_same_process_after_tool_approval(tmp_path)
             "cliRuntimeId": "approval-test",
         },
     }
-    agent = engine.create_agent([_WriteTool()], request)
+    agent = engine.create_agent([_ApprovalTool()], request)
     first_stream = agent.astream_events({})
     assert (await anext(first_stream))["event"] == "on_chat_model_start"
     assert (await anext(first_stream))["delta"] == "Preparing report."
     run_token = broker._runs["run-approval"]["token"]
     call = asyncio.create_task(
         broker.call_tool(
-            "run-approval", run_token, "generate_report", {"query": "AI"}
+            "run-approval",
+            run_token,
+            "propose_workspace_memory_update",
+            {"query": "AI"},
         )
     )
     interrupted = await anext(first_stream)
@@ -679,7 +716,7 @@ async def test_cli_engine_resumes_the_same_process_after_tool_approval(tmp_path)
     with pytest.raises(StopAsyncIteration):
         await anext(first_stream)
     resumed = engine.create_agent(
-        [_WriteTool()], {**request, "decisions": [{"type": "approve"}]}
+        [_ApprovalTool()], {**request, "decisions": [{"type": "approve"}]}
     )
     assert resumed is agent
     resumed_events = [event async for event in resumed.astream_events({})]
