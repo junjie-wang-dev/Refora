@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
 import { IpcChannel } from '../../src/shared/ipc-channels'
 import type { ServerClient } from '../../src/main/sidecar/client'
+import type { AiProviderPatch } from '../../src/shared/ipc-types'
+
+vi.mock('../../src/main/services/logger', () => ({
+  logger: {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn()
+  }
+}))
 
 function createClient() {
   const methods = new Map<string, ReturnType<typeof vi.fn>>()
@@ -269,6 +279,29 @@ describe('createServerLibraryHandlers', () => {
     })
     expect(methods.get('documentsGet')).toHaveBeenCalledWith('doc-1')
     expect(readPdfRange).toHaveBeenCalledWith('/library/paper.pdf', 1024, 2048)
+  })
+
+  it('validates provider updates and strips unknown fields before forwarding', async () => {
+    const { client, methods } = createClient()
+    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
+    void client.http.aiProvidersUpdate
+
+    await handlers[IpcChannel.AiProvidersUpdate]('provider-1', {
+      name: 'Updated',
+      rogueField: 'x'
+    } as AiProviderPatch)
+
+    expect(methods.get('aiProvidersUpdate')).toHaveBeenCalledWith('provider-1', { name: 'Updated' })
+
+    await expect(
+      handlers[IpcChannel.AiProvidersUpdate]('provider-1', { name: 42 } as unknown as AiProviderPatch)
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid_request_payload', message: 'AI provider update field name is invalid' }
+    })
   })
 
   it('uses the saved provider preset when normalizing dynamically listed models', async () => {

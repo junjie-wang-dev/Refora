@@ -409,7 +409,7 @@ export default function AgentApprovalCard({
       style={{ paddingInline: 'clamp(12px, 7cqi, 64px)' }}
     >
       <div
-        className="mx-auto w-full max-w-[768px] rounded-xl border border-accent bg-white px-5 py-4 text-[#1d1d1f] shadow-sm"
+        className="mx-auto w-full max-w-[768px] rounded-xl border border-accent bg-panel px-5 py-4 text-foreground shadow-sm"
         data-testid="agent-approval-card"
       >
         <div className="text-sm font-semibold">
@@ -424,16 +424,16 @@ export default function AgentApprovalCard({
               <div key={`${action.name}-${index}`} className="space-y-3">
                 <div>
                   <div className="text-sm font-medium">{copy.name}</div>
-                  <p className="mt-1 text-xs leading-5 text-[#5f5f64]">{copy.description}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">{copy.description}</p>
                 </div>
                 {copy.details.length > 0 && (
-                  <dl className="grid gap-3 rounded-lg border border-[#d2d2d7] bg-white p-3">
+                  <dl className="grid gap-3 rounded-lg border border-border bg-panel p-3">
                     {copy.details.map((detail) => (
                       <div key={detail.label} className="grid gap-1">
-                        <dt className="text-xs font-medium text-[#1d1d1f]">
+                        <dt className="text-xs font-medium text-foreground">
                           {detail.label}
                         </dt>
-                        <dd className="text-xs leading-5 text-[#5f5f64]">
+                        <dd className="text-xs leading-5 text-muted">
                           <ul className="list-disc space-y-0.5 pl-4">
                             {detail.values.map((value, valueIndex) => (
                               <li
@@ -450,11 +450,11 @@ export default function AgentApprovalCard({
                   </dl>
                 )}
                 {isMemoryUpdate && (
-                  <div className="grid gap-3 rounded-lg border border-[#d2d2d7] p-3">
+                  <div className="grid gap-3 rounded-lg border border-border p-3">
                     <label className="grid gap-1 text-xs font-medium">
                       <span>{t('workspace.chat.approvalMemorySection', 'Save under')}</span>
                       <select
-                        className="h-9 rounded-lg border border-[#d2d2d7] bg-white px-3 text-xs text-[#1d1d1f] outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                        className="h-9 rounded-lg border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={memoryPath(draft.path)}
                         disabled={!canEditAll}
                         onChange={(event) => updateDraft(index, { path: event.target.value })}
@@ -469,7 +469,7 @@ export default function AgentApprovalCard({
                     <label className="grid gap-1 text-xs font-medium">
                       <span>{t('workspace.chat.approvalMemoryContent', 'Information to remember')}</span>
                       <textarea
-                        className="min-h-24 w-full resize-y rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-xs font-normal leading-5 text-[#1d1d1f] outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                        className="min-h-24 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs font-normal leading-5 text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={stringValue(draft.content)}
                         maxLength={16_384}
                         disabled={!canEditAll}
@@ -479,7 +479,7 @@ export default function AgentApprovalCard({
                     <label className="grid gap-1 text-xs font-medium">
                       <span>{t('workspace.chat.approvalMemoryRationale', 'Why remember this')}</span>
                       <textarea
-                        className="min-h-16 w-full resize-y rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-xs font-normal leading-5 text-[#1d1d1f] outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                        className="min-h-16 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs font-normal leading-5 text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={stringValue(draft.rationale)}
                         maxLength={1000}
                         disabled={!canEditAll}
@@ -499,7 +499,7 @@ export default function AgentApprovalCard({
           <UiButton
             variant="ghost"
             size="md"
-            className="min-w-20 text-[#1d1d1f] hover:bg-black/5 active:bg-black/10"
+            className="min-w-20 text-foreground hover:bg-hover active:bg-active"
             disabled={streaming}
             onClick={() => void onResolve('reject')}
           >

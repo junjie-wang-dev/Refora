@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
@@ -822,10 +822,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [worldPositionAt])
 
   const handleWheel = useCallback((event: WheelEvent) => {
-    if (event.ctrlKey || event.metaKey) {
-      event.preventDefault()
-      return
-    }
     const target = event.target
     if (target instanceof HTMLElement && target.closest('[data-card-scroll]')) return
     event.preventDefault()
@@ -893,14 +889,44 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       const initialSelection = new Set(selectedItemIds)
       const additive = e.shiftKey || e.metaKey || e.ctrlKey
       let moved = false
+      let rectCache: Array<{ id: string; left: number; top: number; right: number; bottom: number }> = []
+      let rectCacheItems = itemMapRef.current
+      let marqueeFrame: number | null = null
+      let pendingMarquee: MarqueeSelection | null = null
+      let pendingMarqueeSelection: Set<string> | null = null
       if (!additive) setSelectedItemIds(new Set())
       setSelectedConnectionId(null)
+
+      const measureCards = () => {
+        rectCacheItems = itemMapRef.current
+        rectCache = []
+        canvasRef.current?.querySelectorAll<HTMLElement>('[data-workspace-card-id]').forEach((card) => {
+          const itemId = card.dataset.workspaceCardId
+          if (!itemId) return
+          const cardRect = card.getBoundingClientRect()
+          rectCache.push({
+            id: itemId,
+            left: cardRect.left,
+            top: cardRect.top,
+            right: cardRect.right,
+            bottom: cardRect.bottom
+          })
+        })
+      }
+      measureCards()
 
       const cleanup = () => {
         document.removeEventListener('pointermove', onMove)
         document.removeEventListener('pointerup', onUp)
         document.removeEventListener('pointercancel', onCancel)
         document.body.style.userSelect = ''
+        if (marqueeFrame !== null) {
+          cancelAnimationFrame(marqueeFrame)
+          marqueeFrame = null
+        }
+        pendingMarquee = null
+        pendingMarqueeSelection = null
+        rectCache = []
         setMarqueeSelection(null)
         marqueeCleanupRef.current = null
       }
@@ -910,33 +936,41 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         const deltaY = event.clientY - startY
         if (!moved && Math.hypot(deltaX, deltaY) < 4) return
         moved = true
+        if (rectCacheItems !== itemMapRef.current) measureCards()
         const left = Math.min(startX, event.clientX)
         const top = Math.min(startY, event.clientY)
         const right = Math.max(startX, event.clientX)
         const bottom = Math.max(startY, event.clientY)
-        setMarqueeSelection({
-          left: left - rect.left,
-          top: top - rect.top,
-          width: right - left,
-          height: bottom - top
-        })
         const next = additive ? new Set(initialSelection) : new Set<string>()
-        canvasRef.current?.querySelectorAll<HTMLElement>('[data-workspace-card-id]').forEach((card) => {
-          const cardRect = card.getBoundingClientRect()
+        for (const cardRect of rectCache) {
           if (
             cardRect.right >= left
             && cardRect.left <= right
             && cardRect.bottom >= top
             && cardRect.top <= bottom
           ) {
-            const itemId = card.dataset.workspaceCardId
-            if (itemId) next.add(itemId)
+            next.add(cardRect.id)
           }
-        })
-        setSelectedItemIds(next)
+        }
+        pendingMarquee = {
+          left: left - rect.left,
+          top: top - rect.top,
+          width: right - left,
+          height: bottom - top
+        }
+        pendingMarqueeSelection = next
+        if (marqueeFrame === null) {
+          marqueeFrame = requestAnimationFrame(() => {
+            marqueeFrame = null
+            if (pendingMarquee) setMarqueeSelection(pendingMarquee)
+            if (pendingMarqueeSelection) setSelectedItemIds(pendingMarqueeSelection)
+          })
+        }
       }
       const onUp = (event: PointerEvent) => {
-        if (event.pointerId === pointerId) cleanup()
+        if (event.pointerId !== pointerId) return
+        if (pendingMarqueeSelection) setSelectedItemIds(pendingMarqueeSelection)
+        cleanup()
       }
       const onCancel = (event: PointerEvent) => {
         if (event.pointerId !== pointerId) return
@@ -1140,16 +1174,8 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     showContextMenu(items)
   }, [addAssets, handleCreateNote, t, worldPositionAt])
 
-  const getViewportScale = useCallback(() => WORKSPACE_CANVAS_DEFAULT_ZOOM, [])
-
-  const cardProps = useCallback((item: WorkspaceItem) => ({
-    sizeKey: item.id,
-    size: sizeFor(item),
-    position: positionFor(item),
-    getScale: getViewportScale,
+  const cardShell = useMemo<ComponentProps<typeof WorkspaceCards>['shell']>(() => ({
     canStartDrag: () => !spacePressedRef.current,
-    selected: selectedItemIds.has(item.id),
-    animatePosition: animatingItemIds.has(item.id),
     frontZIndex: maxZIndex + 1,
     onSizeChange: handleCardSizeChange,
     onSizeCommit: handleCardSizeCommit,
@@ -1164,19 +1190,14 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     resizeHeightLabel: t('workspace.resizeCardHeight'),
     resizeBothLabel: t('workspace.resizeCard')
   }), [
-    getViewportScale,
-    animatingItemIds,
-    handleCardPositionChange,
     handleCardPositionCancel,
+    handleCardPositionChange,
     handleCardPositionCommit,
-    handleCardSizeChange,
     handleCardSizeCancel,
+    handleCardSizeChange,
     handleCardSizeCommit,
     handleConnectionStart,
     maxZIndex,
-    positionFor,
-    selectedItemIds,
-    sizeFor,
     t
   ])
 
@@ -1193,7 +1214,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       summaryErrors={summaryErrors}
       autoEditNoteId={autoEditNoteId}
       autoEditStickyNoteId={autoEditStickyNoteId}
-      cardProps={cardProps}
+      shell={cardShell}
+      selectedItemIds={selectedItemIds}
+      animatingItemIds={animatingItemIds}
       onSummarize={handleSummarize}
       onRemoveItem={(itemId) => void removeItem(itemId)}
       onDeleteReport={(reportId) => void deleteReport(reportId)}

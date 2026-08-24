@@ -6,6 +6,7 @@ import {
   normalizeModelList,
   detectVariantFormat
 } from '../../src/shared/modelVariant'
+import type { ProviderModelInfo } from '../../src/shared/ipc-types'
 
 describe('modelVariant', () => {
   it('parses dash and colon variants', () => {
@@ -46,5 +47,20 @@ describe('modelVariant', () => {
     expect(list).toHaveLength(2)
     expect(list.find((m) => m.id === 'glm-4')?.supportsVariants).toBe(true)
     expect(list.find((m) => m.id === 'gpt-4o')?.providerName).toBe('OpenAI')
+  })
+
+  it('produces the converged ProviderModelInfo contract shape', () => {
+    const model: ProviderModelInfo = normalizeModelList(['gpt-4o'], 'OpenAI')[0]
+    expect(model).toMatchObject({
+      id: 'gpt-4o',
+      providerName: 'OpenAI',
+      supportsVariants: false,
+      supportsReasoning: true,
+      supportsVision: true,
+      supportsTools: true,
+      supportedParameters: []
+    })
+    expect(model.reasoningEfforts).toEqual(expect.arrayContaining(['medium', 'high']))
+    expect(model.defaultReasoningEffort).toBeUndefined()
   })
 })

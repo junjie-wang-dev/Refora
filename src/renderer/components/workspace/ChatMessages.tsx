@@ -162,9 +162,13 @@ function RunTimeline({
   useEffect(() => {
     if (streaming) setOpen(true)
   }, [streaming])
-  const ordered = [...steps]
-    .filter((step) => step.kind !== 'run' && step.kind !== 'todo')
-    .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq)
+  const lastStepStatus = steps.length > 0 ? steps[steps.length - 1].status : null
+  const ordered = useMemo(
+    () => [...steps]
+      .filter((step) => step.kind !== 'run' && step.kind !== 'todo')
+      .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq),
+    [steps, steps.length, lastStepStatus]
+  )
   const hasReasoningStep = ordered.some((step) => step.kind === 'reasoning')
   const messageSteps = ordered.filter((step) => step.kind === 'message')
   const messageOutputs = messageSteps.map((step) => step.output ?? '')
@@ -193,9 +197,12 @@ function RunTimeline({
     if (step.kind === 'message') return !!step.output
     return true
   }) || (!hasReasoningStep && !!fallbackReasoning)
-  const runSteps = steps
-    .filter((step) => step.kind === 'run')
-    .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq)
+  const runSteps = useMemo(
+    () => steps
+      .filter((step) => step.kind === 'run')
+      .sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq),
+    [steps, steps.length, lastStepStatus]
+  )
   const firstRunStep = runSteps[0]
   const lastRunStep = runSteps.at(-1)
   const completedSteps = steps.filter((step) => step.endedAt != null)

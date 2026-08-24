@@ -7,6 +7,10 @@ import httpx
 
 from refora_server.services.proxy import normalize_proxy_rules
 
+MODEL_HTTP_TIMEOUT = httpx.Timeout(
+    120.0, connect=5.0, read=120.0, write=30.0, pool=5.0
+)
+
 
 def create_model_http_client_pool() -> dict[str, Any]:
     clients: dict[str, tuple[httpx.Client, httpx.AsyncClient]] = {}
@@ -20,8 +24,8 @@ def create_model_http_client_pool() -> dict[str, Any]:
             pair = clients.get(normalized)
             if pair is None:
                 pair = (
-                    httpx.Client(proxy=normalized),
-                    httpx.AsyncClient(proxy=normalized),
+                    httpx.Client(proxy=normalized, timeout=MODEL_HTTP_TIMEOUT),
+                    httpx.AsyncClient(proxy=normalized, timeout=MODEL_HTTP_TIMEOUT),
                 )
                 clients[normalized] = pair
         return {
@@ -43,4 +47,4 @@ def create_model_http_client_pool() -> dict[str, Any]:
     }
 
 
-__all__ = ["create_model_http_client_pool"]
+__all__ = ["MODEL_HTTP_TIMEOUT", "create_model_http_client_pool"]

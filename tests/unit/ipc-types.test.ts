@@ -7,7 +7,9 @@ import type {
   EditableField,
   DocumentPatch,
   BootstrapData,
-  LibrarySwitchResult
+  LibrarySwitchResult,
+  AgentInterrupt,
+  AgentInterruptDecisionEntry
 } from '../../src/shared/ipc-types'
 import { IpcChannel, SERVER_IPC_CHANNELS } from '../../src/shared/ipc-channels'
 
@@ -128,6 +130,26 @@ describe('ipc-types shapes', () => {
     expect(res.dbExisted).toBe(false)
     expect(res.imported).toBe(4)
     expect(res.errors).toHaveLength(1)
+  })
+
+  it('AgentInterrupt carries structured decision entries matching backend storage', () => {
+    const entry: AgentInterruptDecisionEntry = {
+      type: 'edit',
+      editedAction: { name: 'propose_workspace_memory_update', args: { path: '/m.md', content: 'c' } }
+    }
+    const interrupt: AgentInterrupt = {
+      id: 'int-1',
+      runId: 'run-1',
+      threadId: 'thread-1',
+      checkpointId: null,
+      actions: [],
+      status: 'resolved',
+      decision: [entry],
+      createdAt: 1,
+      resolvedAt: 2
+    }
+    expect(interrupt.decision?.[0]?.type).toBe('edit')
+    expect(interrupt.decision?.[0]?.editedAction?.name).toBe('propose_workspace_memory_update')
   })
 
   it('keeps main-owned and event channels out of the sidecar handler registry', () => {

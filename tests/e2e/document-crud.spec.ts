@@ -23,10 +23,10 @@ test.describe('Document CRUD', () => {
     const launchEnv = {
       ...process.env,
       REFORA_E2E_USER_DATA_DIR: userDataFolder
-    }
+    } as Record<string, string>
     delete launchEnv.ELECTRON_RUN_AS_NODE
     electronApp = await electron.launch({
-      executablePath: electronExe,
+      executablePath: String(electronExe),
       env: launchEnv,
       args: [testMain],
     })

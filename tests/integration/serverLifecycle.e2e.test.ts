@@ -69,7 +69,7 @@ describe('managed Python server lifecycle', () => {
     expect((await stat(join(stateDir, 'server.token'))).mode & 0o077).toBe(0)
     expect((await eventually(() => fetch(`${connection.baseUrl}/health`))).ok).toBe(true)
     expect((await fetch(`${connection.baseUrl}/ready`)).status).toBe(401)
-    client = createServerClient(lifecycle, { start: vi.fn(), stop: vi.fn() }, { fetchImpl: fetch, WebSocketCtor: WebSocket, requestTimeoutMs: 2_000, wsReconnectMaxAttempts: 0 })
+    client = createServerClient(lifecycle, { invoke: vi.fn(), addManagedRoot: () => false }, { fetchImpl: fetch, WebSocketCtor: WebSocket, requestTimeoutMs: 2_000, wsReconnectMaxAttempts: 0 })
     await expect(eventually(() => client!.http.systemReady())).resolves.toEqual({
       status: 'ready',
       protocolVersion: SERVER_PROTOCOL_VERSION,

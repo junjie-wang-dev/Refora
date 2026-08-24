@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import type { ReforaApi } from '../../src/shared/ipc-types'
+import type { EventChannel, ReforaApi } from '../../src/shared/ipc-types'
 
 const bridgeState = vi.hoisted(() => ({ api: undefined as unknown }))
 const electronMocks = vi.hoisted(() => ({
@@ -230,7 +230,7 @@ describe('preload IPC bridge', () => {
   })
 
   it('subscribes every event method and forwards only the payload', () => {
-    const eventCases: Array<[string, (cb: () => void) => void]> = [
+    const eventCases: Array<[EventChannel, (cb: () => void) => void]> = [
       [IpcChannel.EventDocumentUpdated, (cb) => api.events.onDocumentUpdated(cb)],
       [IpcChannel.EventWindowFocusChanged, (cb) => api.events.onWindowFocusChanged(cb)],
       [IpcChannel.EventImportProgress, (cb) => api.events.onImportProgress(cb)],

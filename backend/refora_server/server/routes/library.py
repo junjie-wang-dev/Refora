@@ -44,6 +44,7 @@ from refora_server.server.services.library_route_support import (
 from refora_server.server.services.library_settings_routes import (
     register_library_settings_routes,
 )
+from refora_server.server.services.run_blocking import run_blocking as _run_blocking
 
 
 def create_library_router(deps: Any) -> APIRouter:
@@ -87,6 +88,12 @@ def create_library_router(deps: Any) -> APIRouter:
             return _success(await action())
         except Exception as exc:
             return _error(exc)
+
+    async def call_off_loop(source: Any, name: str, *args: Any) -> Any:
+        result = await _run_blocking(_method(source, name), *args)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     async def document(document_id: str) -> dict[str, Any]:
         result = await _call(documents, "get", document_id)
@@ -157,10 +164,10 @@ def create_library_router(deps: Any) -> APIRouter:
                 }
             query = q.strip()[:500]
             return {
-                "documents": await _call(documents, "search", query, 10),
-                "workspaceFiles": await _call(workspace_assets, "search", query, 10),
-                "workspaceContents": await _call(workspaces, "searchContent", query, 10),
-                "chats": await _call(chat, "search", query, 10),
+                "documents": await call_off_loop(documents, "search", query, 10),
+                "workspaceFiles": await call_off_loop(workspace_assets, "search", query, 10),
+                "workspaceContents": await call_off_loop(workspaces, "searchContent", query, 10),
+                "chats": await call_off_loop(chat, "search", query, 10),
             }
         return await run(action)
 
@@ -202,10 +209,10 @@ def create_library_router(deps: Any) -> APIRouter:
             raise ValueError("offset must not be negative")
         if q.strip():
             if offset > 0:
-                return await _call(
+                return await call_off_loop(
                     documents, "search", q.strip(), limit or 500, offset
                 )
-            return await _call(documents, "search", q.strip(), limit or 500)
+            return await call_off_loop(documents, "search", q.strip(), limit or 500)
         else:
             valid_modes = {"all", "recentlyRead", "recentlyAdded", "starred", "category"}
             if mode and mode not in valid_modes:
@@ -236,7 +243,7 @@ def create_library_router(deps: Any) -> APIRouter:
                 filter_["limit"] = limit
             if offset > 0:
                 filter_["offset"] = offset
-            return await _call(documents, "list", filter_)
+            return await call_off_loop(documents, "list", filter_)
 
     @router.get("/documents")
     async def list_documents(
@@ -851,6 +858,15 @@ def create_library_router(deps: Any) -> APIRouter:
     async def switch_library(body: dict[str, Any]):
         return await run(lambda: _call(library, "switchLibrary", _absolute_directory(_string(_body_dict(body), "path"))))
 
+    export_target = exporter
+    if isinstance(exporter, Mapping) and callable(exporter.get("exportJson")):
+        raw_export_json = exporter["exportJson"]
+
+        def export_json_off_loop(*args: Any) -> Any:
+            return _run_blocking(raw_export_json, *args)
+
+        export_target = {**exporter, "exportJson": export_json_off_loop}
+
     register_library_settings_routes(
         router,
         {
@@ -864,7 +880,7 @@ def create_library_router(deps: Any) -> APIRouter:
             "provider_repo": provider_repo,
             "agent_profiles": agent_profiles,
             "get_proxy": get_proxy,
-            "exporter": exporter,
+            "exporter": export_target,
             "clipboard_temp": clipboard_temp,
             "workspace_assets": workspace_assets,
             "create_ai_providers": createAiProvidersService,

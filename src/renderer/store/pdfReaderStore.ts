@@ -83,7 +83,6 @@ interface PdfReaderState {
   undoLastDeletion: () => void
   clearLastDeletion: () => void
   flushPendingSaves: () => Promise<void>
-  prepareForLibrarySwitch: () => Promise<void>
   resetForLibrarySwitch: () => void
 }
 
@@ -264,10 +263,6 @@ async function flushPendingSaves(): Promise<void> {
     )
     if (failure) throw failure.reason
   }
-}
-
-async function prepareForLibrarySwitch(): Promise<void> {
-  await flushPendingSaves()
 }
 
 function resetForLibrarySwitch(): void {
@@ -559,8 +554,6 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   clearLastDeletion: () => set({ lastDeletion: null }),
 
   flushPendingSaves,
-
-  prepareForLibrarySwitch,
 
   resetForLibrarySwitch
 }))

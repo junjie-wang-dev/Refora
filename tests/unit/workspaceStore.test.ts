@@ -843,7 +843,7 @@ describe('WorkspaceStore', () => {
         reports: [makeReport()],
         notes: [makeNote()],
         assets: [makeAsset()],
-        threads: [{ id: 'old-thread', workspaceId: 'old-ws', providerId: 'p', title: 'T', createdAt: 0 }]
+        threads: [{ id: 'old-thread', workspaceId: 'old-ws', providerId: 'p', agentProfileId: null, title: 'T', createdAt: 0, headCheckpointId: null, agentStateVersion: 0 }]
       })
 
       useWorkspaceStore.getState().init()
@@ -897,7 +897,7 @@ describe('WorkspaceStore', () => {
 
       resolveOldWorkspaces([{ id: 'old-ws', name: 'Old', createdAt: 0, updatedAt: 0 }])
       resolveOldThreads([
-        { id: 'old-thread', workspaceId: null, providerId: 'p', title: 'Old', createdAt: 0 }
+        { id: 'old-thread', workspaceId: null, providerId: 'p', agentProfileId: null, title: 'Old', createdAt: 0, headCheckpointId: null, agentStateVersion: 0 }
       ])
       await oldThreads
       await Promise.resolve()
@@ -931,6 +931,34 @@ describe('WorkspaceStore', () => {
   })
 
   describe('thread and panel actions', () => {
+    it('blocks switching to another thread while chat is streaming and allows it afterwards', () => {
+      useWorkspaceStore.setState({ activeThreadId: 'thread-1', chatStreaming: true })
+
+      useWorkspaceStore.getState().setActiveThreadId('thread-2')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
+
+      useWorkspaceStore.getState().setActiveThreadId(null)
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
+
+      useWorkspaceStore.getState().setChatStreaming(false)
+      useWorkspaceStore.getState().setActiveThreadId('thread-2')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-2')
+    })
+
+    it('adopts a newly created streaming thread past the switch guard', () => {
+      useWorkspaceStore.setState({ activeThreadId: null, chatStreaming: true })
+
+      useWorkspaceStore.getState().adoptStreamingThread('thread-new')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-new')
+
+      useWorkspaceStore.getState().setActiveThreadId('thread-1')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-new')
+
+      useWorkspaceStore.getState().setChatStreaming(false)
+      useWorkspaceStore.getState().setActiveThreadId('thread-1')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
+    })
+
     it('updates thread, streaming, panel, and fullscreen state', () => {
       useWorkspaceStore.getState().setActiveThreadId('thread-1')
       useWorkspaceStore.getState().setChatStreaming(true)
@@ -972,8 +1000,11 @@ describe('WorkspaceStore', () => {
         id: 'thread-1',
         workspaceId: 'ws-1',
         providerId: 'provider-1',
+        agentProfileId: null,
         title: 'Original',
-        createdAt: 0
+        createdAt: 0,
+        headCheckpointId: null,
+        agentStateVersion: 0
       }
       useWorkspaceStore.setState({ threads: [thread], activeThreadId: 'thread-1' })
 

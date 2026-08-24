@@ -572,3 +572,82 @@ async def test_connector_cancels_pending_requests() -> None:
         "ok": False,
         "error": {"code": "connector_shutdown", "message": "Server is shutting down"},
     }
+
+
+async def test_lifespan_startup_failure_cleans_created_resources_without_name_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    db = object()
+    events = Mock(flush=AsyncMock(), broadcast=AsyncMock())
+    connector = Mock(cancel_pending=AsyncMock())
+    destroy_mineru = Mock()
+    stop_worker = AsyncMock()
+    destroy_ocr = AsyncMock()
+    initialize_ocr = AsyncMock()
+    ocr_service = {
+        "initialize": initialize_ocr,
+        "stopWorker": stop_worker,
+        "destroy": destroy_ocr,
+    }
+    worker_script = tmp_path / "mineru_worker.py"
+    worker_script.write_text("")
+
+    def failing_summary_factory(*_args, **_kwargs):
+        raise RuntimeError("summary service construction failed")
+
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_repositories",
+        Mock(
+            return_value={
+                "documents": object(),
+                "documentOcr": object(),
+                "agentRuns": {"listActive": Mock(return_value=[])},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_event_bus",
+        Mock(return_value=events),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_connector_broker",
+        Mock(return_value=connector),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createLibraryService",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_mineru_engine_manager",
+        Mock(return_value={"destroy": destroy_mineru}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan._mineru_worker_path",
+        lambda: str(worker_script),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_mineru_worker_process",
+        Mock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.create_ocr_service",
+        Mock(return_value=ocr_service),
+    )
+    monkeypatch.setattr(
+        "refora_server.server.lifespan.createAiSummaryService",
+        failing_summary_factory,
+    )
+
+    app = FastAPI(lifespan=create_lifespan("/tmp/refora.db", "/tmp/library", db))
+
+    with pytest.raises(RuntimeError, match="summary service construction failed"):
+        async with app.router.lifespan_context(app):
+            pass
+
+    initialize_ocr.assert_awaited_once()
+    stop_worker.assert_awaited_once()
+    destroy_ocr.assert_awaited_once()
+    destroy_mineru.assert_called_once_with()
+    connector.cancel_pending.assert_awaited_once()
+    events.flush.assert_awaited_once()

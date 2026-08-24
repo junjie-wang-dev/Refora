@@ -16,9 +16,13 @@ import type {
   WorkspaceAgentMemory
 } from '../../../shared/ipc-types'
 import type {
-  ChatResumePayload,
   ServerClient,
 } from '../client'
+import {
+  expectAgentInterrupt,
+  expectAgentTraces,
+  expectChatResumePayload
+} from './guards'
 import { resultify as asyncWrap } from './result'
 
 export interface ServerAiHandlerDeps {
@@ -51,7 +55,7 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       }),
     [IpcChannel.AiChatResume]: (request: AgentResumeRequest): Promise<Result<void>> =>
       asyncWrap(async () => {
-        await http.aiChatResume(request as ChatResumePayload)
+        await http.aiChatResume(expectChatResumePayload(request))
       }),
     [IpcChannel.AiChatCancel]: (runId: string): Promise<Result<ChatCancelResult>> =>
       asyncWrap(() => http.aiChatCancel({ runId })),
@@ -62,16 +66,18 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
     [IpcChannel.AiUsageStats]: (): Promise<Result<AiUsageStats>> =>
       asyncWrap(() => http.aiUsageStats()),
     [IpcChannel.AiChatTraces]: (threadId: string): Promise<Result<AgentTraceStep[]>> =>
-      asyncWrap(async () => (await http.aiChatTraces(threadId)) as AgentTraceStep[]),
+      asyncWrap(async () => expectAgentTraces(await http.aiChatTraces(threadId))),
     [IpcChannel.AiChatRun]: (runId: string): Promise<Result<AgentRun>> =>
       asyncWrap(() => http.aiChatRun(runId)),
     [IpcChannel.AiChatPendingInterrupt]: (runId: string): Promise<Result<AgentInterrupt | null>> =>
-      asyncWrap(async () => (await http.aiChatPendingInterrupt(runId)) as AgentInterrupt | null),
+      asyncWrap(async () => expectAgentInterrupt(await http.aiChatPendingInterrupt(runId))),
     [IpcChannel.AiChatRenameThread]: (
       threadId: string,
       title: string
-    ): Promise<Result<ChatThread>> =>
-      asyncWrap(() => http.aiChatRenameThread(threadId, { title })),
+    ): Promise<Result<void>> =>
+      asyncWrap(async () => {
+        await http.aiChatRenameThread(threadId, { title })
+      }),
     [IpcChannel.AiChatDeleteThread]: (threadId: string): Promise<Result<void>> =>
       asyncWrap(async () => {
         await http.aiChatDeleteThread(threadId)

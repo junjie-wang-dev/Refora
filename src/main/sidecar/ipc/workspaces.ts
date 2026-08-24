@@ -10,6 +10,11 @@ import type {
 } from '../../../shared/ipc-types'
 import type { OcrJob, OcrProfile } from '../../../shared/mineru-types'
 import type { ServerClient } from '../client'
+import {
+  expectWorkspaceCanvasViewport,
+  INVALID_REQUEST_PAYLOAD,
+  INVALID_UPSTREAM_PAYLOAD
+} from './guards'
 import { resultify as wrap } from './result'
 
 export interface ServerWorkspaceHandlerDeps {
@@ -128,9 +133,18 @@ export function createServerWorkspaceHandlers(
     })),
 
     [IpcChannel.WorkspaceCanvasGet]: (workspaceId: string) =>
-      wrap(async () => (await http.workspaceCanvasGet(workspaceId)) as WorkspaceCanvasViewport),
+      wrap(async () => expectWorkspaceCanvasViewport(
+        await http.workspaceCanvasGet(workspaceId),
+        INVALID_UPSTREAM_PAYLOAD
+      )),
     [IpcChannel.WorkspaceCanvasUpdate]: (workspaceId: string, viewport: WorkspaceCanvasViewport) =>
-      wrap(async () => (await http.workspaceCanvasUpdate(workspaceId, viewport)) as WorkspaceCanvasViewport),
+      wrap(async () => expectWorkspaceCanvasViewport(
+        await http.workspaceCanvasUpdate(
+          workspaceId,
+          expectWorkspaceCanvasViewport(viewport, INVALID_REQUEST_PAYLOAD)
+        ),
+        INVALID_UPSTREAM_PAYLOAD
+      )),
 
     [IpcChannel.WorkspaceConnectionsList]: (workspaceId: string) => wrap(() => http.workspaceConnectionsList(workspaceId)),
     [IpcChannel.WorkspaceConnectionsCreate]: (

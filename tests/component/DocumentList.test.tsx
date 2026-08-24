@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DocumentList from '@renderer/components/DocumentList'
+import ConfirmDialog from '../../src/renderer/components/ConfirmDialog'
+import { useConfirmStore } from '../../src/renderer/store/confirmStore'
 import type { Document } from '@shared/ipc-types'
+import { showContextMenu } from '../mocks/lobehub-ui'
+
+vi.mock('@lobehub/ui', async () => await import('../mocks/lobehub-ui'))
 
 function makeDoc(overrides: Partial<Document> = {}): Document {
   return {
@@ -23,13 +28,15 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
     keywords: null,
     url: null,
     doi: null,
+    arxivId: null,
     note: null,
+    affiliations: null,
     starred: 0,
     addedAt: 1700000000000,
     lastReadAt: null,
     updatedAt: 1700000000000,
     metadataSource: null,
-    metadataStatus: 'success',
+    metadataStatus: 'done',
     metadataAttempts: 0,
     editedFields: [],
     remoteValues: null,
@@ -59,6 +66,7 @@ let mockState: {
   toggleStar: ReturnType<typeof vi.fn>
   categories: { id: string; name: string; count: number }[]
   createCategory: ReturnType<typeof vi.fn>
+  assignDocumentsToCategory: ReturnType<typeof vi.fn>
   loadMoreDocuments: ReturnType<typeof vi.fn>
   loadMoreSearchResults: ReturnType<typeof vi.fn>
 }
@@ -89,6 +97,7 @@ vi.mock('@renderer/store/documentStore', () => ({
         refreshMetadata: vi.fn(),
         categories: mockState.categories,
         createCategory: mockState.createCategory,
+        assignDocumentsToCategory: mockState.assignDocumentsToCategory,
         loadMoreDocuments: mockState.loadMoreDocuments,
         loadMoreSearchResults: mockState.loadMoreSearchResults
       })
@@ -139,18 +148,39 @@ function setupDefaultState() {
     toggleStar: vi.fn(),
     categories: [],
     createCategory: vi.fn(),
+    assignDocumentsToCategory: vi.fn(),
     loadMoreDocuments: vi.fn(),
     loadMoreSearchResults: vi.fn()
   }
 }
 
+type MenuItem = {
+  key?: string
+  onClick?: () => void
+  children?: MenuItem[]
+}
+
+function findMenuItem(nodes: MenuItem[], key: string): MenuItem | undefined {
+  for (const node of nodes) {
+    if (node.key === key) return node
+    if (node.children) {
+      const found = findMenuItem(node.children, key)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
 describe('DocumentList', () => {
   beforeEach(() => {
     setupDefaultState()
+    vi.mocked(showContextMenu).mockClear()
+    useConfirmStore.setState({ request: null })
   })
 
   afterEach(() => {
     cleanup()
+    useConfirmStore.setState({ request: null })
   })
 
   it('renders empty state when store has 0 documents', () => {
@@ -371,5 +401,89 @@ describe('DocumentList', () => {
 
     expect(screen.queryByPlaceholderText('topbar.search')).not.toBeInTheDocument()
     expect(screen.queryByText('sidebar.allFiles · 0')).not.toBeInTheDocument()
+  })
+
+  it('creates a category from the row menu dialog and assigns the documents', async () => {
+    mockState.documents = [makeDoc()]
+    mockState.createCategory.mockResolvedValue({ id: 'cat-9', name: 'New Cat' })
+
+    render(
+      <>
+        <DocumentList />
+        <ConfirmDialog />
+      </>
+    )
+
+    fireEvent.contextMenu(screen.getByText('Test Title'))
+    const items = vi.mocked(showContextMenu).mock.calls.at(-1)![0] as MenuItem[]
+    const createItem = findMenuItem(items, 'create-category')
+    expect(createItem).toBeDefined()
+
+    await act(async () => {
+      createItem!.onClick?.()
+      await Promise.resolve()
+    })
+    const input = screen.getByPlaceholderText('sidebar.categoryName')
+    fireEvent.change(input, { target: { value: ' New Cat ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockState.createCategory).toHaveBeenCalledWith('New Cat')
+      expect(mockState.assignDocumentsToCategory).toHaveBeenCalledWith(['doc-1'], 'cat-9')
+    })
+    expect(useConfirmStore.getState().request).toBeNull()
+  })
+
+  it('does not create a category when the dialog is dismissed with Escape', async () => {
+    mockState.documents = [makeDoc()]
+
+    render(
+      <>
+        <DocumentList />
+        <ConfirmDialog />
+      </>
+    )
+
+    fireEvent.contextMenu(screen.getByText('Test Title'))
+    const items = vi.mocked(showContextMenu).mock.calls.at(-1)![0] as MenuItem[]
+    const createItem = findMenuItem(items, 'create-category')
+
+    await act(async () => {
+      createItem!.onClick?.()
+      await Promise.resolve()
+    })
+    const input = screen.getByPlaceholderText('sidebar.categoryName')
+    fireEvent.change(input, { target: { value: 'Somewhere' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(mockState.createCategory).not.toHaveBeenCalled()
+    expect(mockState.assignDocumentsToCategory).not.toHaveBeenCalled()
+    expect(useConfirmStore.getState().request).toBeNull()
+  })
+
+  it('ignores an empty category name confirmed with Enter', async () => {
+    mockState.documents = [makeDoc()]
+
+    render(
+      <>
+        <DocumentList />
+        <ConfirmDialog />
+      </>
+    )
+
+    fireEvent.contextMenu(screen.getByText('Test Title'))
+    const items = vi.mocked(showContextMenu).mock.calls.at(-1)![0] as MenuItem[]
+    const createItem = findMenuItem(items, 'create-category')
+
+    await act(async () => {
+      createItem!.onClick?.()
+      await Promise.resolve()
+    })
+    const input = screen.getByPlaceholderText('sidebar.categoryName')
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(mockState.createCategory).not.toHaveBeenCalled()
+    expect(useConfirmStore.getState().request).toBeNull()
   })
 })

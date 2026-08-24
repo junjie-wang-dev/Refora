@@ -339,7 +339,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setListMode: (filter: ListFilter) => {
     set({ listMode: filter, selectedIds: [], focusedDocId: null })
-    void get().fetchDocuments(filter)
+    void get().fetchDocuments(filter).catch(() => undefined)
   },
 
   setListColumnState: (state: ListColumnState) => {
@@ -356,7 +356,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       persistColumnState(newState)
       return { listColumnState: newState }
     })
-    void get().fetchDocuments()
+    void get().fetchDocuments().catch(() => undefined)
   },
 
   setColumns: (columns: ListColumn[]) => {
@@ -609,7 +609,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       if (!get().isImporting) return
       set({ importProgress: { current: payload.current, total: payload.total } })
       set({ isImporting: false, importProgress: null })
-      void get().fetchDocuments()
+      void get().fetchDocuments().catch(() => undefined)
       void get().fetchDocumentCounts()
       return
     }
@@ -618,7 +618,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   endImport: () => {
     set({ isImporting: false, importProgress: null })
-    void get().fetchDocuments()
+    void get().fetchDocuments().catch(() => undefined)
     void get().fetchDocumentCounts()
   },
 
@@ -632,7 +632,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         }) as string
       )
       if (result.added > 0 || result.skipped > 0) {
-        void get().fetchDocuments()
+        void get().fetchDocuments().catch(() => undefined)
         void get().fetchDocumentCounts()
       }
     } catch (e) {
@@ -650,7 +650,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         }) as string
       )
       if (result.added > 0 || result.skipped > 0) {
-        void get().fetchDocuments()
+        void get().fetchDocuments().catch(() => undefined)
         void get().fetchDocumentCounts()
       }
     } catch (e) {
@@ -682,7 +682,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return message
     } finally {
       set((s) => ({ identifierImporting: Math.max(0, s.identifierImporting - 1) }))
-      void get().fetchDocuments()
+      void get().fetchDocuments().catch(() => undefined)
       void get().fetchDocumentCounts()
     }
   },
@@ -849,7 +849,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       searchQuery: '',
       searchResults: []
     })
-    void get().fetchDocuments()
+    void get().fetchDocuments().catch(() => undefined)
   },
 
   assignDocumentsToCategory: async (ids: string[], categoryId: string, mode = 'assign') => {

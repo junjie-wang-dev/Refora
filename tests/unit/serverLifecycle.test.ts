@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServerLifecycle } from '../../src/main/sidecar/lifecycle'
-import type { ChildProcess } from 'node:child_process'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { Mock } from 'vitest'
 
 const { mockFetchHealth, mockReadFile } = vi.hoisted(() => ({
   mockFetchHealth: vi.fn(),
@@ -22,11 +23,11 @@ vi.mock('../../src/main/services/logger', () => ({
   }
 }))
 
-interface FakeChildProcess extends EventEmitter {
+interface FakeChildProcess extends ChildProcessWithoutNullStreams {
   pid: number
   stdout: PassThrough
   stderr: PassThrough
-  kill: ReturnType<typeof vi.fn>
+  kill: Mock<(signal?: NodeJS.Signals | number) => boolean>
   killed: boolean
 }
 
@@ -36,7 +37,7 @@ function createFakeChild(): FakeChildProcess {
   child.stdout = new PassThrough()
   child.stderr = new PassThrough()
   child.killed = false
-  child.kill = vi.fn((signal?: string) => {
+  child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
     child.killed = true
     child.emit('close', 0, signal ?? 'SIGTERM')
     return true
@@ -48,11 +49,17 @@ function announce(child: FakeChildProcess, port: number): void {
   child.stdout.write(`LISTENING ${port}\n`)
 }
 
-function makeSpawn(emitListening: (child: FakeChildProcess) => void) {
-  return vi.fn((_cmd: string, _args: string[]) => {
+function spawnMock(impl: () => FakeChildProcess): Mock {
+  const stub = vi.fn()
+  stub.mockImplementation(impl)
+  return stub
+}
+
+function makeSpawn(emitListening: (child: FakeChildProcess) => void): Mock {
+  return spawnMock(() => {
     const child = createFakeChild()
     queueMicrotask(() => emitListening(child))
-    return child as unknown as ChildProcess
+    return child
   })
 }
 
@@ -243,7 +250,7 @@ describe('serverLifecycle', () => {
   it('waits for startup cleanup and escalates when SIGTERM is ignored', async () => {
     const spawn = makeSpawn((child) => {
       announce(child, port)
-      child.kill = vi.fn((signal?: string) => {
+      child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
         if (signal === 'SIGKILL') child.emit('close', null, 'SIGKILL')
         return true
       })
@@ -275,13 +282,35 @@ describe('serverLifecycle', () => {
     expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
   })
 
+  it('rejects start during stop without spawning a ghost process', async () => {
+    const spawn = makeSpawn((child) => {
+      announce(child, 9004)
+      child.kill = vi.fn(() => true)
+    })
+    mockReadFile.mockResolvedValue(JSON.stringify({ port: 9004, token }))
+    const lifecycle = createServerLifecycle(makeDeps({ spawnChild: spawn }))
+    await lifecycle.start()
+    expect(spawn).toHaveBeenCalledTimes(1)
+
+    const stopPromise = lifecycle.stop()
+    await vi.advanceTimersByTimeAsync(0)
+
+    await expect(lifecycle.start()).rejects.toMatchObject({ code: 'server_stopped' })
+    await expect(lifecycle.getServerBaseUrl()).rejects.toMatchObject({ code: 'server_stopped' })
+    expect(spawn).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(6_000)
+    await stopPromise
+    expect(spawn).toHaveBeenCalledTimes(1)
+  })
+
   it('spawns a detached process group and terminates the whole group on macOS', async () => {
     if (process.platform !== 'darwin') return
-    let child: FakeChildProcess
-    const spawn = vi.fn(() => {
+    let child!: FakeChildProcess
+    const spawn = spawnMock(() => {
       child = createFakeChild()
       queueMicrotask(() => announce(child, 9010))
-      return child as unknown as ChildProcess
+      return child
     })
     const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals) => {
       child.emit('close', 0, signal)
@@ -307,11 +336,11 @@ describe('serverLifecycle', () => {
 
   it('cleans the detached process group after an unexpected sidecar exit', async () => {
     if (process.platform !== 'darwin') return
-    let child: FakeChildProcess
-    const spawn = vi.fn(() => {
+    let child!: FakeChildProcess
+    const spawn = spawnMock(() => {
       child = createFakeChild()
       queueMicrotask(() => announce(child, 9011))
-      return child as unknown as ChildProcess
+      return child
     })
     const signalProcessGroup = vi.fn(() => true)
     mockReadFile.mockResolvedValue(JSON.stringify({ port: 9011, token }))
@@ -328,11 +357,11 @@ describe('serverLifecycle', () => {
 
   it('terminates the detached process group after a failed health check', async () => {
     if (process.platform !== 'darwin') return
-    let child: FakeChildProcess
-    const spawn = vi.fn(() => {
+    let child!: FakeChildProcess
+    const spawn = spawnMock(() => {
       child = createFakeChild()
       queueMicrotask(() => announce(child, 9012))
-      return child as unknown as ChildProcess
+      return child
     })
     const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals) => {
       if (signal === 'SIGTERM') child.emit('close', null, signal)
@@ -358,10 +387,11 @@ describe('serverLifecycle', () => {
   it('falls back to SIGKILL after the grace period on stop', async () => {
     const spawn = makeSpawn((child) => {
       announce(child, 9001)
-      child.kill = vi.fn((signal?: string) => {
+      child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
         if (signal === 'SIGKILL') {
           child.emit('close', null, 'SIGKILL')
         }
+        return true
       })
     })
     mockReadFile.mockResolvedValue(JSON.stringify({ port: 9001, token }))
@@ -379,7 +409,7 @@ describe('serverLifecycle', () => {
   it('falls back immediately when SIGTERM throws during stop', async () => {
     const spawn = makeSpawn((child) => {
       announce(child, 9002)
-      child.kill = vi.fn((signal?: string) => {
+      child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
         if (signal === 'SIGTERM') throw new Error('SIGTERM failed')
         child.emit('close', null, signal ?? 'SIGKILL')
         return true
@@ -414,11 +444,11 @@ describe('serverLifecycle', () => {
 
   it('restarts the server with exponential backoff after an unexpected crash', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       queueMicrotask(() => announce(child, 7000 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 3 })
@@ -439,7 +469,7 @@ describe('serverLifecycle', () => {
 
   it('continues the restart budget through consecutive replacement startup failures', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       if (spawnCount === 2 || spawnCount === 3) {
@@ -447,7 +477,7 @@ describe('serverLifecycle', () => {
       } else {
         queueMicrotask(() => announce(child, 7200 + spawnCount))
       }
-      return child as unknown as ChildProcess
+      return child
     })
     mockReadFile.mockImplementation(async () => JSON.stringify({
       port: 7200 + spawnCount,
@@ -471,11 +501,11 @@ describe('serverLifecycle', () => {
 
   it('invalidates a crashed connection and coalesces reconnect-triggered startup', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       queueMicrotask(() => announce(child, 7100 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 3 })
@@ -498,11 +528,11 @@ describe('serverLifecycle', () => {
 
   it('stops restarting after reaching the max restart count', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       queueMicrotask(() => announce(child, 6000 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 2 })
@@ -532,11 +562,11 @@ describe('serverLifecycle', () => {
 
   it('restores the restart budget after a stable running window', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       queueMicrotask(() => announce(child, 6500 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     const lifecycle = createServerLifecycle(
       makeDeps({ spawnChild: spawn, maxRestarts: 1, restartStabilityMs: 1_000 })
@@ -583,11 +613,11 @@ describe('serverLifecycle', () => {
     const oldHealth = new Promise<boolean>((resolve) => {
       resolveOldHealth = resolve
     })
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
       queueMicrotask(() => announce(child, 5700 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     mockReadFile.mockImplementation(async () =>
       JSON.stringify({ port: 5700 + spawnCount, token })
@@ -620,15 +650,15 @@ describe('serverLifecycle', () => {
 
   it('escalates an unhealthy child and restarts after it exits', async () => {
     let spawnCount = 0
-    const spawn = vi.fn((_cmd: string, _args: string[]) => {
+    const spawn = spawnMock(() => {
       spawnCount += 1
       const child = createFakeChild()
-      child.kill = vi.fn((signal?: string) => {
+      child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
         if (signal === 'SIGKILL') child.emit('close', null, 'SIGKILL')
         return true
       })
       queueMicrotask(() => announce(child, 5600 + spawnCount))
-      return child as unknown as ChildProcess
+      return child
     })
     mockReadFile.mockImplementation(async () => JSON.stringify({ port: 5600 + spawnCount, token }))
     mockFetchHealth.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValue(true)

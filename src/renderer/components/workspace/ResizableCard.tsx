@@ -20,7 +20,6 @@ interface ResizableCardProps {
   sizeKey: string
   size: CardSize
   position: CardPosition
-  getScale: () => number
   frontZIndex: number
   onSizeChange: (sizeKey: string, size: CardSize) => void
   onSizeCommit: (sizeKey: string, size: CardSize) => void
@@ -47,12 +46,12 @@ interface ResizableCardProps {
 
 type Edge = 'e' | 's' | 'se'
 const DRAG_START_DISTANCE = 5
+const KEYBOARD_COMMIT_DELAY = 300
 
 export default function ResizableCard({
   sizeKey,
   size,
   position,
-  getScale,
   frontZIndex,
   onSizeChange,
   onSizeCommit,
@@ -84,8 +83,48 @@ export default function ResizableCard({
   const suppressClickUntilRef = useRef(0)
   const movingRef = useRef(false)
   const resizingRef = useRef(false)
+  const positionCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sizeCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const commitCallbacksRef = useRef({ onPositionCommit, onSizeCommit, sizeKey })
+  commitCallbacksRef.current = { onPositionCommit, onSizeCommit, sizeKey }
   const [resizing, setResizing] = useState(false)
   const [moving, setMoving] = useState(false)
+
+  const flushPendingPositionCommit = useCallback(() => {
+    if (positionCommitTimerRef.current === null) return
+    clearTimeout(positionCommitTimerRef.current)
+    positionCommitTimerRef.current = null
+    commitCallbacksRef.current.onPositionCommit(
+      commitCallbacksRef.current.sizeKey,
+      latestPositionRef.current
+    )
+  }, [])
+
+  const schedulePositionCommit = useCallback(() => {
+    if (positionCommitTimerRef.current !== null) clearTimeout(positionCommitTimerRef.current)
+    positionCommitTimerRef.current = setTimeout(() => {
+      positionCommitTimerRef.current = null
+      commitCallbacksRef.current.onPositionCommit(
+        commitCallbacksRef.current.sizeKey,
+        latestPositionRef.current
+      )
+    }, KEYBOARD_COMMIT_DELAY)
+  }, [])
+
+  const flushPendingSizeCommit = useCallback(() => {
+    if (sizeCommitTimerRef.current === null) return
+    clearTimeout(sizeCommitTimerRef.current)
+    sizeCommitTimerRef.current = null
+    commitCallbacksRef.current.onSizeCommit(commitCallbacksRef.current.sizeKey, latestSizeRef.current)
+  }, [])
+
+  const scheduleSizeCommit = useCallback(() => {
+    if (sizeCommitTimerRef.current !== null) clearTimeout(sizeCommitTimerRef.current)
+    sizeCommitTimerRef.current = setTimeout(() => {
+      sizeCommitTimerRef.current = null
+      commitCallbacksRef.current.onSizeCommit(commitCallbacksRef.current.sizeKey, latestSizeRef.current)
+    }, KEYBOARD_COMMIT_DELAY)
+  }, [])
 
   const flushVisuals = useCallback(() => {
     if (frameRef.current !== null) {
@@ -139,8 +178,10 @@ export default function ResizableCard({
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      flushPendingPositionCommit()
+      flushPendingSizeCommit()
     }
-  }, [])
+  }, [flushPendingPositionCommit, flushPendingSizeCommit])
 
   const startPointerDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || canStartDrag?.() === false) return
@@ -150,6 +191,8 @@ export default function ResizableCard({
     const interactiveTarget = target.closest<HTMLElement>('button, a, input, textarea, select, audio, video, [contenteditable="true"], [role="button"], [role="link"], [data-card-resize]')
     if (interactiveTarget && interactiveTarget !== dragClickTarget) return
     interactionCleanupRef.current?.()
+    flushPendingPositionCommit()
+    flushPendingSizeCommit()
     const pointerId = e.pointerId
     const pointerTarget = dragClickTarget ?? target.closest<HTMLElement>('[data-card-kind]') ?? e.currentTarget
     moveStartRef.current = {
@@ -190,10 +233,9 @@ export default function ResizableCard({
       if (dx === 0 && dy === 0) return
       if (!activated && Math.hypot(dx, dy) >= DRAG_START_DISTANCE) activate()
       ev.preventDefault()
-      const scale = getScale()
       const next = {
-        x: Math.round(moveStartRef.current.cardX + dx / scale),
-        y: Math.round(moveStartRef.current.cardY + dy / scale),
+        x: Math.round(moveStartRef.current.cardX + dx),
+        y: Math.round(moveStartRef.current.cardY + dy),
         zIndex: activated ? moveStartRef.current.zIndex : position.zIndex
       }
       previewed = true
@@ -241,7 +283,7 @@ export default function ResizableCard({
     document.addEventListener('pointermove', onMove)
     document.addEventListener('pointerup', onUp)
     document.addEventListener('pointercancel', onCancel)
-  }, [canStartDrag, flushVisuals, frontZIndex, getScale, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
+  }, [canStartDrag, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, frontZIndex, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
 
   const startResize = useCallback(
     (edge: Edge, e: React.PointerEvent) => {
@@ -249,6 +291,8 @@ export default function ResizableCard({
       e.preventDefault()
       e.stopPropagation()
       interactionCleanupRef.current?.()
+      flushPendingPositionCommit()
+      flushPendingSizeCommit()
       const pointerId = e.pointerId
       e.currentTarget.setPointerCapture?.(pointerId)
       resizeStartRef.current = {
@@ -271,9 +315,8 @@ export default function ResizableCard({
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return
-        const scale = getScale()
-        const dx = (ev.clientX - resizeStartRef.current.x) / scale
-        const dy = (ev.clientY - resizeStartRef.current.y) / scale
+        const dx = ev.clientX - resizeStartRef.current.x
+        const dy = ev.clientY - resizeStartRef.current.y
         let nextW = resizeStartRef.current.w
         let nextH = resizeStartRef.current.h
         if (resizeStartRef.current.edge === 'e' || resizeStartRef.current.edge === 'se') {
@@ -318,23 +361,24 @@ export default function ResizableCard({
         edge === 'e' ? 'ew-resize' : edge === 's' ? 'ns-resize' : 'nwse-resize'
       document.body.style.userSelect = 'none'
     },
-    [canStartDrag, flushVisuals, getScale, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
+    [canStartDrag, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
   )
 
   const moveByKeyboard = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return
     const step = e.shiftKey ? 50 : 10
+    const base = latestPositionRef.current
     let next: CardPosition | null = null
-    if (e.key === 'ArrowLeft') next = { x: position.x - step, y: position.y, zIndex: frontZIndex }
-    if (e.key === 'ArrowRight') next = { x: position.x + step, y: position.y, zIndex: frontZIndex }
-    if (e.key === 'ArrowUp') next = { x: position.x, y: position.y - step, zIndex: frontZIndex }
-    if (e.key === 'ArrowDown') next = { x: position.x, y: position.y + step, zIndex: frontZIndex }
+    if (e.key === 'ArrowLeft') next = { x: base.x - step, y: base.y, zIndex: frontZIndex }
+    if (e.key === 'ArrowRight') next = { x: base.x + step, y: base.y, zIndex: frontZIndex }
+    if (e.key === 'ArrowUp') next = { x: base.x, y: base.y - step, zIndex: frontZIndex }
+    if (e.key === 'ArrowDown') next = { x: base.x, y: base.y + step, zIndex: frontZIndex }
     if (!next) return
     e.preventDefault()
     latestPositionRef.current = next
     positionDirtyRef.current = true
     flushVisuals()
-    onPositionCommit(sizeKey, next)
+    schedulePositionCommit()
   }
 
   const resizeByKeyboard = (edge: Edge, e: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -357,7 +401,7 @@ export default function ResizableCard({
       cardRef.current.style.height = `${next.height}px`
     }
     onSizeChange(sizeKey, next)
-    onSizeCommit(sizeKey, next)
+    scheduleSizeCommit()
   }
 
   return (
@@ -373,6 +417,10 @@ export default function ResizableCard({
       className={`resizable-card group/card absolute ${selected ? 'is-selected' : ''} ${animatePosition ? 'is-layout-animating' : ''} ${moving ? 'is-moving cursor-grabbing' : ''} ${resizing ? 'is-resizing' : ''} ${className}`}
       onPointerDown={startPointerDrag}
       onKeyDown={moveByKeyboard}
+      onBlur={() => {
+        flushPendingPositionCommit()
+        flushPendingSizeCommit()
+      }}
       onClickCapture={(e) => {
         if (Date.now() >= suppressClickUntilRef.current) return
         e.preventDefault()

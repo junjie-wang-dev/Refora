@@ -1,4 +1,5 @@
 import base64
+import threading
 
 from fastapi import FastAPI, Request
 from fastapi.routing import iter_route_contexts
@@ -1442,3 +1443,58 @@ def test_unsaved_provider_models_uses_request_key_without_persisting(monkeypatch
     assert captured["raw"]["baseUrl"] == "https://models.example/v1"
     assert captured["apiKey"] == "ephemeral-key"
     assert fakes.created_provider is None
+
+
+def test_heavy_read_routes_keep_envelopes_while_running_repositories_off_loop():
+    fakes = Fakes()
+    fakes.listed_documents = [{"id": "doc-list"}]
+    fakes.searched_documents = [{"id": "doc-search"}]
+    repo_threads = []
+    export_threads = []
+    original_search = fakes.documents["search"]
+    original_export_json = fakes.exporter["exportJson"]
+
+    def searching(query, limit, offset=0):
+        repo_threads.append(threading.get_ident())
+        return original_search(query, limit, offset)
+
+    def exporting(document_ids, workspace_id):
+        export_threads.append(threading.get_ident())
+        return original_export_json(document_ids, workspace_id)
+
+    fakes.documents["search"] = searching
+    fakes.exporter["exportJson"] = exporting
+    app = FastAPI()
+    app.include_router(create_library_router(fakes))
+    loop_threads = []
+
+    @app.get("/__loop-probe")
+    async def probe():
+        loop_threads.append(threading.get_ident())
+        return {"ok": True}
+
+    client = TestClient(app)
+    headers = {"X-Refora-Token": "test-token"}
+
+    probe_response = client.get("/__loop-probe")
+    search_response = client.get("/search/global?q=paper", headers=headers)
+    list_response = client.get("/documents?q=paper&limit=5", headers=headers)
+    export_response = client.post("/export/json", headers=headers, json={})
+
+    assert probe_response.json() == {"ok": True}
+    assert search_response.json() == {
+        "ok": True,
+        "data": {
+            "documents": [{"id": "doc-search"}],
+            "workspaceFiles": [],
+            "workspaceContents": [],
+            "chats": [],
+        },
+    }
+    assert list_response.json() == {"ok": True, "data": [{"id": "doc-search"}]}
+    assert export_response.json() == {"ok": True, "data": {}}
+    loop_thread = loop_threads[0]
+    assert repo_threads and all(thread != loop_thread for thread in repo_threads)
+    assert export_threads and all(
+        thread != loop_thread for thread in export_threads
+    )

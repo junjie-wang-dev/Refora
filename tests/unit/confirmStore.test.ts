@@ -34,6 +34,19 @@ describe('useConfirmStore', () => {
     expect(req.danger).toBe(true)
   })
 
+  it('show() stores optional input options for prompt-style requests', () => {
+    const onConfirm = vi.fn()
+    useConfirmStore.getState().show({
+      title: 't',
+      message: 'm',
+      input: { defaultValue: 'draft', placeholder: 'Name' },
+      onConfirm
+    })
+    const req = useConfirmStore.getState().request!
+    expect(req.input).toEqual({ defaultValue: 'draft', placeholder: 'Name' })
+    expect(req.onConfirm).toBe(onConfirm)
+  })
+
   it('dismiss() clears the request', () => {
     useConfirmStore.getState().show({ title: 't', message: 'm', onConfirm: () => {} })
     useConfirmStore.getState().dismiss()

@@ -38,6 +38,8 @@ const AI_REASONING_EFFORTS = new Set<AiReasoningEffort>([
   'ultra'
 ])
 
+const MAX_HANDLED_CHAT_DRAFT_IDS = 256
+
 function persistChatSetting(key: string, value: unknown): void {
   scheduleRendererSetting(key, value, {
     onError: () => {
@@ -90,7 +92,6 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const panelView = useWorkspaceStore((s) => s.panelView)
   const activePdfDocumentId = usePdfReaderStore((s) => s.activeDocumentId)
   const activeThreadId = useWorkspaceStore((s) => s.activeThreadId)
-  const setActiveThreadId = useWorkspaceStore((s) => s.setActiveThreadId)
   const setChatStreaming = useWorkspaceStore((s) => s.setChatStreaming)
   const startNewChat = useWorkspaceStore((s) => s.startNewChat)
   const threads = useWorkspaceStore((s) => s.threads)
@@ -157,7 +158,6 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     requestModel,
     deepThinking,
     reasoningEffort: selectedReasoningEffort,
-    setActiveThreadId,
     setChatStreaming,
     fetchThreads
   })
@@ -174,6 +174,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   useEffect(() => {
     if (!pendingChatDraft || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
     handledChatDraftIdsRef.current.add(pendingChatDraft.id)
+    if (handledChatDraftIdsRef.current.size > MAX_HANDLED_CHAT_DRAFT_IDS) {
+      for (const draftId of handledChatDraftIdsRef.current) {
+        handledChatDraftIdsRef.current.delete(draftId)
+        if (handledChatDraftIdsRef.current.size <= MAX_HANDLED_CHAT_DRAFT_IDS / 2) break
+      }
+    }
     setInput((current) => {
       if (pendingChatDraft.mode === 'prefill' && !current.trim()) {
         return pendingChatDraft.text

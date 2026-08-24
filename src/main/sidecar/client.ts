@@ -10,6 +10,7 @@ import type {
   CliRuntimeInfo,
   AiProvider,
   AiProviderInput,
+  AiProviderPatch,
   AiUsageStats,
   AgentRun,
   AgentTurnIntent,
@@ -403,7 +404,7 @@ export interface ServerHttp {
 
   aiProvidersList(): Promise<AiProvider[]>
   aiProvidersCreate(input: AiProviderInput): Promise<AiProvider>
-  aiProvidersUpdate(providerId: string, input: AiProviderInput): Promise<AiProvider>
+  aiProvidersUpdate(providerId: string, input: AiProviderInput | AiProviderPatch): Promise<AiProvider>
   aiProvidersDelete(providerId: string): Promise<{ ack: boolean }>
   aiProvidersTest(providerId: string): Promise<{ ok: boolean; models?: string[] }>
   aiProvidersModels(request: ListModelsRequest): Promise<{ ok: boolean; models: string[]; error?: string }>

@@ -21,6 +21,7 @@ import type {
   ServerClient
 } from '../client'
 import { readPdfFileRange } from '../../services/pdfRange'
+import { expectAiProviderPatch } from './guards'
 import { resultify as forward } from './result'
 
 export interface ServerLibraryHandlerDeps {
@@ -189,7 +190,7 @@ export function createServerLibraryHandlers({
     [IpcChannel.AiProvidersCreate]: (input: AiProviderInput) =>
       forward(() => http.aiProvidersCreate(input)),
     [IpcChannel.AiProvidersUpdate]: (providerId: string, input: AiProviderPatch) =>
-      forward(() => http.aiProvidersUpdate(providerId, input as AiProviderInput)),
+      forward(() => http.aiProvidersUpdate(providerId, expectAiProviderPatch(input))),
     [IpcChannel.AiProvidersDelete]: (providerId: string) =>
       forward(() => http.aiProvidersDelete(providerId)),
     [IpcChannel.AiProvidersTest]: (providerId: string) =>

@@ -2,6 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
 import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
 import type { ServerClient } from '../../src/main/sidecar/client'
+import type { WorkspaceCanvasViewport } from '../../src/shared/ipc-types'
+
+vi.mock('../../src/main/services/logger', () => ({
+  logger: {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn()
+  }
+}))
 
 const workspace = { id: 'workspace-1', name: 'Workspace', createdAt: 1, updatedAt: 2 }
 const item = {
@@ -270,6 +280,38 @@ describe('server workspace IPC handlers', () => {
     expect(http.workspaceNotesDelete).toHaveBeenCalledWith(workspace.id, note.id)
     expect(http.workspaceConnectionGet).toHaveBeenCalledOnce()
     expect(http.workspaceNoteGet).toHaveBeenCalledTimes(2)
+  })
+
+  it('guards canvas payloads in both directions and drops unknown keys', async () => {
+    await expect(handlers[IpcChannel.WorkspaceCanvasGet](workspace.id)).resolves.toEqual({
+      ok: true,
+      data: { panX: 1, panY: 2, zoom: 1 }
+    })
+
+    http.workspaceCanvasGet.mockResolvedValueOnce({ panX: 'left', panY: 2, zoom: 1 })
+    await expect(handlers[IpcChannel.WorkspaceCanvasGet](workspace.id)).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_upstream_payload' }
+    })
+
+    await expect(
+      handlers[IpcChannel.WorkspaceCanvasUpdate](workspace.id, { panX: 3, panY: 4, zoom: 2 })
+    ).resolves.toEqual({
+      ok: true,
+      data: { panX: 3, panY: 4, zoom: 2 }
+    })
+    expect(http.workspaceCanvasUpdate).toHaveBeenCalledWith(workspace.id, { panX: 3, panY: 4, zoom: 2 })
+
+    await expect(
+      handlers[IpcChannel.WorkspaceCanvasUpdate](
+        workspace.id,
+        { panX: Number.POSITIVE_INFINITY, panY: 4, zoom: 2 } as unknown as WorkspaceCanvasViewport
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request_payload' }
+    })
+    expect(http.workspaceCanvasUpdate).toHaveBeenCalledTimes(1)
   })
 
   it('forwards MinerU and OCR operations through HTTP with legacy result shapes', async () => {

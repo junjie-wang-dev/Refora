@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { showContextMenu } from '@lobehub/ui'
 import Board from '@renderer/components/workspace/Board'
 import type {
@@ -15,6 +16,7 @@ import type {
 
 const DOC_MIME = 'application/x-refora-docids'
 const originalWorkspaceCanvasUpdate = window.api.workspaceCanvas.update
+const originalDocumentsOpenPdf = window.api.documents.openPdf
 
 const mockAddDocs = vi.fn()
 const mockAddAssets = vi.fn()
@@ -161,6 +163,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   window.api.workspaceCanvas.update = originalWorkspaceCanvasUpdate
+  window.api.documents.openPdf = originalDocumentsOpenPdf
 })
 
 function makeItem(id: string, docId: string, x: number): WorkspaceItem {
@@ -275,6 +278,7 @@ describe('Board card clipboard actions', () => {
       id: 'note-1',
       workspaceId: 'ws-1',
       noteType: 'markdown',
+      color: 'sand',
       title: 'Markdown note',
       contentMd: '- Item',
       createdAt: 1,
@@ -458,6 +462,7 @@ describe('Board card clipboard actions', () => {
       id: 'note-1',
       workspaceId: 'ws-1',
       noteType: 'markdown',
+      color: 'sand',
       title: 'Markdown note',
       contentMd: '- Item',
       createdAt: 1,
@@ -499,6 +504,7 @@ describe('Board card clipboard actions', () => {
       id: 'sticky-1',
       workspaceId: 'ws-1',
       noteType: 'plain',
+      color: 'sand',
       title: 'Sticky note',
       contentMd: 'Saved text',
       createdAt: 1,
@@ -798,7 +804,14 @@ describe('Board error handling', () => {
         kind: 'document',
         docId: 'doc-1',
         reportId: null,
+        noteId: null,
+        assetId: null,
         sortOrder: 0,
+        width: 300,
+        height: 200,
+        x: 0,
+        y: 0,
+        zIndex: 0,
         addedAt: 0
       }
     ]
@@ -814,7 +827,7 @@ describe('Board error handling', () => {
 })
 
 describe('Board canvas controls and connections', () => {
-  it('keeps the canvas at 100% without zoom controls or a dotted grid', () => {
+  it('keeps the canvas at 100% without zoom controls or a dotted grid', async () => {
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
     const world = container.querySelector('.workspace-canvas-world') as HTMLElement
@@ -827,7 +840,9 @@ describe('Board canvas controls and connections', () => {
     })
     board.dispatchEvent(wheel)
 
-    expect(world.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
+    await waitFor(() => {
+      expect(world.style.transform).toBe('translate3d(0px, -120px, 0) scale(1)')
+    })
     expect(wheel.defaultPrevented).toBe(true)
     expect(screen.queryByRole('button', { name: 'workspace.canvasZoomIn' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'workspace.canvasZoomOut' })).not.toBeInTheDocument()
@@ -959,7 +974,7 @@ describe('Board canvas controls and connections', () => {
     })
   })
 
-  it('selects cards by click, focus, and marquee while showing floating actions', () => {
+  it('selects cards by click, focus, and marquee while showing floating actions', async () => {
     mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
@@ -999,11 +1014,101 @@ describe('Board canvas controls and connections', () => {
     })
     fireEvent.pointerDown(board, { pointerId: 22, button: 0, clientX: 10, clientY: 10 })
     fireEvent.pointerMove(document, { pointerId: 22, clientX: 350, clientY: 250 })
-    expect(container.querySelector('.workspace-selection-marquee')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(container.querySelector('.workspace-selection-marquee')).toBeInTheDocument()
+      expect(first).toHaveAttribute('data-selected', 'true')
+    })
     fireEvent.pointerUp(document, { pointerId: 22 })
 
     expect(first).toHaveAttribute('data-selected', 'true')
     expect(second).not.toHaveAttribute('data-selected')
+  })
+
+  it('caches card rects once per marquee gesture and reuses them across moves', async () => {
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
+    const { container, rerender } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    const first = container.querySelector('[data-workspace-card-id="item-1"]') as HTMLElement
+    const second = container.querySelector('[data-workspace-card-id="item-2"]') as HTMLElement
+    const firstRect = {
+      left: 20,
+      top: 20,
+      right: 320,
+      bottom: 220,
+      width: 300,
+      height: 200,
+      x: 20,
+      y: 20,
+      toJSON: () => ({})
+    }
+    const secondRect = {
+      left: 420,
+      top: 20,
+      right: 720,
+      bottom: 220,
+      width: 300,
+      height: 200,
+      x: 420,
+      y: 20,
+      toJSON: () => ({})
+    }
+    const measureFirst = vi.fn(() => firstRect)
+    const measureSecond = vi.fn(() => secondRect)
+    first.getBoundingClientRect = measureFirst
+    second.getBoundingClientRect = measureSecond
+
+    fireEvent.pointerDown(board, { pointerId: 51, button: 0, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { pointerId: 51, clientX: 800, clientY: 250 })
+    await waitFor(() => expect(second).toHaveAttribute('data-selected', 'true'))
+    expect(first).toHaveAttribute('data-selected', 'true')
+    fireEvent.pointerMove(document, { pointerId: 51, clientX: 810, clientY: 260 })
+    await waitFor(() => expect(container.querySelector('.workspace-selection-marquee')).toHaveStyle({
+      left: '10px',
+      top: '10px',
+      width: '800px',
+      height: '250px'
+    }))
+
+    expect(measureFirst).toHaveBeenCalledTimes(1)
+    expect(measureSecond).toHaveBeenCalledTimes(1)
+
+    mockItems = [...mockItems]
+    rerender(<Board />)
+    fireEvent.pointerMove(document, { pointerId: 51, clientX: 820, clientY: 270 })
+
+    await waitFor(() => expect(measureFirst.mock.calls.length).toBeGreaterThan(1))
+    expect(measureSecond.mock.calls.length).toBeGreaterThan(1)
+    fireEvent.pointerUp(document, { pointerId: 51 })
+  })
+
+  it('commits the final marquee selection when pointerup wins the animation-frame race', () => {
+    mockItems = [makeItem('item-1', 'doc-1', 0)]
+    const callbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback)
+      return callbacks.length
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    const card = container.querySelector('[data-workspace-card-id="item-1"]') as HTMLElement
+    card.getBoundingClientRect = () => ({
+      left: 20,
+      top: 20,
+      right: 320,
+      bottom: 220,
+      width: 300,
+      height: 200,
+      x: 20,
+      y: 20,
+      toJSON: () => ({})
+    })
+
+    fireEvent.pointerDown(board, { pointerId: 52, button: 0, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { pointerId: 52, clientX: 350, clientY: 250 })
+    fireEvent.pointerUp(document, { pointerId: 52 })
+
+    expect(card).toHaveAttribute('data-selected', 'true')
   })
 
   it('moves focus to the canvas and exits sticky editing when blank space is pressed', () => {
@@ -1224,5 +1329,26 @@ describe('Board canvas controls and connections', () => {
     window.dispatchEvent(event)
 
     expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('activates a focused card button with Space instead of entering pan mode', async () => {
+    const user = userEvent.setup()
+    const paper = { id: 'doc-1', fileName: 'paper.pdf', title: 'Paper title' } as Document
+    mockItems = [makeItem('item-paper', paper.id, 0)]
+    const api = window.api as unknown as Record<string, unknown>
+    ;(api.documents as Record<string, unknown>).get = vi.fn().mockResolvedValue(paper)
+    const openPdf = vi.fn().mockResolvedValue(paper)
+    window.api.documents.openPdf = openPdf
+    const { container } = render(<Board />)
+
+    const button = await screen.findByRole('button', { name: 'workspace.openPdf' })
+    button.focus()
+    await user.keyboard(' ')
+
+    expect(openPdf).toHaveBeenCalledWith('doc-1')
+    const world = container.querySelector('.workspace-canvas-world') as HTMLElement
+    expect(world.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
+    const board = container.firstElementChild as HTMLElement
+    expect(board).not.toHaveClass('is-pan-ready')
   })
 })

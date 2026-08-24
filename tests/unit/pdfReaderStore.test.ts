@@ -166,7 +166,7 @@ describe('PDF reader state', () => {
     })
     expect(usePdfReaderStore.getState().sidebarOpen).toBe(false)
 
-    usePdfReaderStore.getState().removeAnnotation('paper', annotation.id)
+    usePdfReaderStore.getState().removeAnnotation('paper', annotation!.id)
     usePdfReaderStore.getState().undoLastDeletion()
     expect(usePdfReaderStore.getState().sidebarOpen).toBe(false)
 
@@ -184,7 +184,7 @@ describe('PDF reader state', () => {
       comment: '',
       rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.04 }]
     })
-    usePdfReaderStore.getState().updateAnnotation('paper', annotation.id, {
+    usePdfReaderStore.getState().updateAnnotation('paper', annotation!.id, {
       comment: 'Important result'
     })
     await vi.advanceTimersByTimeAsync(300)
@@ -192,7 +192,7 @@ describe('PDF reader state', () => {
     expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith(
       'paper',
       [expect.objectContaining({
-        id: annotation.id,
+        id: annotation!.id,
         kind: 'highlight',
         page: 2,
         comment: 'Important result'
@@ -260,21 +260,21 @@ describe('PDF reader state', () => {
 
     usePdfReaderStore.getState().setFontSize(20)
     usePdfReaderStore.getState().setStrokeWidth(5)
-    usePdfReaderStore.getState().updateAnnotation('paper', text.id, { fontSize: 20 })
-    usePdfReaderStore.getState().updateAnnotation('paper', ink.id, { strokeWidth: 5 })
-    usePdfReaderStore.getState().selectAnnotations([text.id, ink.id])
+    usePdfReaderStore.getState().updateAnnotation('paper', text!.id, { fontSize: 20 })
+    usePdfReaderStore.getState().updateAnnotation('paper', ink!.id, { strokeWidth: 5 })
+    usePdfReaderStore.getState().selectAnnotations([text!.id, ink!.id])
 
     expect(usePdfReaderStore.getState()).toMatchObject({
       fontSize: 20,
       strokeWidth: 5,
-      selectedAnnotationIds: [text.id, ink.id]
+      selectedAnnotationIds: [text!.id, ink!.id]
     })
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([
-      expect.objectContaining({ id: text.id, fontSize: 20 }),
-      expect.objectContaining({ id: ink.id, strokeWidth: 5 })
+      expect.objectContaining({ id: text!.id, fontSize: 20 }),
+      expect.objectContaining({ id: ink!.id, strokeWidth: 5 })
     ])
 
-    usePdfReaderStore.getState().removeAnnotations('paper', [text.id, ink.id])
+    usePdfReaderStore.getState().removeAnnotations('paper', [text!.id, ink!.id])
     await vi.advanceTimersByTimeAsync(300)
 
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
@@ -301,14 +301,14 @@ describe('PDF reader state', () => {
       rects: [{ x: 0.1, y: 0.2, width: 0.2, height: 0.02 }]
     })
 
-    usePdfReaderStore.getState().updateAnnotations('paper', [first.id, second.id], {
+    usePdfReaderStore.getState().updateAnnotations('paper', [first!.id, second!.id], {
       color: '#eb5757'
     })
     await vi.advanceTimersByTimeAsync(300)
 
     expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith('paper', [
-      expect.objectContaining({ id: first.id, color: '#eb5757' }),
-      expect.objectContaining({ id: second.id, color: '#eb5757' })
+      expect.objectContaining({ id: first!.id, color: '#eb5757' }),
+      expect.objectContaining({ id: second!.id, color: '#eb5757' })
     ])
   })
 
@@ -332,8 +332,8 @@ describe('PDF reader state', () => {
     })
 
     usePdfReaderStore.getState().setTool(null)
-    usePdfReaderStore.getState().selectAnnotation(annotation.id)
-    expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([annotation.id])
+    usePdfReaderStore.getState().selectAnnotation(annotation!.id)
+    expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([annotation!.id])
   })
 
   it('focuses new notes and restores deleted annotations in their original order', async () => {
@@ -356,21 +356,21 @@ describe('PDF reader state', () => {
     })
 
     expect(usePdfReaderStore.getState()).toMatchObject({
-      pendingCommentFocusId: note.id,
+      pendingCommentFocusId: note!.id,
       selectedAnnotationIds: []
     })
 
-    usePdfReaderStore.getState().removeAnnotations('paper', [first.id, note.id])
+    usePdfReaderStore.getState().removeAnnotations('paper', [first!.id, note!.id])
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
 
     usePdfReaderStore.getState().undoLastDeletion()
     expect(usePdfReaderStore.getState()).toMatchObject({
       tool: null,
-      selectedAnnotationIds: [first.id, note.id],
+      selectedAnnotationIds: [first!.id, note!.id],
       lastDeletion: null
     })
     expect(usePdfReaderStore.getState().annotations.paper.map((item) => item.id))
-      .toEqual([first.id, note.id])
+      .toEqual([first!.id, note!.id])
   })
 
   it('exposes annotation persistence failures', async () => {
@@ -501,41 +501,6 @@ describe('PDF reader state', () => {
     })
   })
 
-  it('flushes pending annotations before a library switch and clears reader state afterward', async () => {
-    await usePdfReaderStore.getState().open(document('paper'))
-    usePdfReaderStore.getState().addAnnotation('paper', {
-      kind: 'note',
-      page: 1,
-      color: '#f2c94c',
-      text: '',
-      comment: 'Pending note',
-      point: { x: 0.5, y: 0.5 }
-    })
-
-    await usePdfReaderStore.getState().prepareForLibrarySwitch()
-
-    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
-    expect(api.documents.setPdfAnnotations).toHaveBeenCalledWith(
-      'paper',
-      [expect.objectContaining({ comment: 'Pending note' })]
-    )
-
-    usePdfReaderStore.getState().resetForLibrarySwitch()
-    await vi.advanceTimersByTimeAsync(300)
-
-    expect(api.documents.setPdfAnnotations).toHaveBeenCalledTimes(1)
-    expect(usePdfReaderStore.getState()).toMatchObject({
-      tabs: [],
-      activeDocumentId: null,
-      annotations: {},
-      saveStatus: {},
-      tool: null,
-      sidebarOpen: false,
-      selectedAnnotationIds: [],
-      lastDeletion: null
-    })
-  })
-
   it('flushes pending annotations immediately and exposes a failed flush', async () => {
     await usePdfReaderStore.getState().open(document('paper'))
     usePdfReaderStore.getState().addAnnotation('paper', {
@@ -591,7 +556,7 @@ describe('PDF reader state', () => {
     })
 
     usePdfReaderStore.getState().setColor('#eb5757')
-    usePdfReaderStore.getState().updateAnnotation('paper', annotation.id, {
+    usePdfReaderStore.getState().updateAnnotation('paper', annotation!.id, {
       color: '#eb5757'
     })
 
@@ -599,7 +564,7 @@ describe('PDF reader state', () => {
       color: '#eb5757',
       annotations: {
         paper: [expect.objectContaining({
-          id: annotation.id,
+          id: annotation!.id,
           color: '#eb5757'
         })]
       }

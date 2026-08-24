@@ -33,6 +33,7 @@ interface WorkerSlot {
   idleTimer: ReturnType<typeof setTimeout> | null
   pending: Map<string, PendingRequest>
   active: number
+  generation: number
 }
 
 interface ExecutionWaiter {
@@ -61,8 +62,17 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
     killed: false,
     idleTimer: null,
     pending: new Map<string, PendingRequest>(),
-    active: 0
+    active: 0,
+    generation: 0
   }))
+
+  function failSlotPending(slot: WorkerSlot, error: Error): void {
+    for (const [, req] of slot.pending) {
+      clearTimeout(req.timer)
+      req.reject(error)
+    }
+    slot.pending.clear()
+  }
 
   function scheduleIdleKill(slot: WorkerSlot): void {
     if (slot.idleTimer) clearTimeout(slot.idleTimer)
@@ -85,6 +95,8 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
       slot.idleTimer = null
     }
     if (slot.proc && !slot.killed) return slot
+    const generation = slot.generation + 1
+    slot.generation = generation
     const proc = utilityProcess.fork(join(__dirname, 'worker/pdf-worker.js'), [], {
       serviceName: `PDF Text Worker ${index + 1}`,
       stdio: 'pipe'
@@ -101,17 +113,13 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
       }
     })
     proc.on('exit', (code) => {
-      if (slot.proc !== proc) return
+      if (slot.proc !== proc || slot.generation !== generation) return
       logger.warn(`pdfText-worker:exit idx=${index} code=${code} pending=${slot.pending.size}`)
       if (slot.idleTimer) {
         clearTimeout(slot.idleTimer)
         slot.idleTimer = null
       }
-      for (const [, req] of slot.pending) {
-        clearTimeout(req.timer)
-        req.reject(new Error('PDF text worker exited unexpectedly'))
-      }
-      slot.pending.clear()
+      failSlotPending(slot, new Error('PDF text worker exited unexpectedly'))
       slot.proc = null
       slot.killed = true
     })
@@ -137,13 +145,6 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
       }
     }
     if (best && bestLoad === 0) return best
-    if (best && bestLoad > 0) {
-      for (const slot of pool) {
-        if (!slot.proc || slot.killed) {
-          return ensureWorkerSlot(pool.indexOf(slot))
-        }
-      }
-    }
     for (const slot of pool) {
       if (!slot.proc || slot.killed) {
         return ensureWorkerSlot(pool.indexOf(slot))
@@ -164,6 +165,7 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
       const timer = setTimeout(() => {
         slot.pending.delete(correlationId)
         if (slot.proc === proc && !slot.killed) {
+          slot.generation += 1
           slot.proc = null
           slot.killed = true
           try {
@@ -171,6 +173,7 @@ export function createPdfTextService(deps: PdfTextServiceDeps = {}) {
           } catch (error) {
             logger.warn(`pdfText-worker:timeout-kill ${error instanceof Error ? error.message : String(error)}`)
           }
+          failSlotPending(slot, new Error(`PDF text worker request timed out: ${filePath}`))
         }
         reject(new Error(`PDF text worker request timed out: ${filePath}`))
       }, workerTimeoutMs)

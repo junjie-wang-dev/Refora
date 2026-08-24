@@ -3,7 +3,57 @@ import { IpcChannel } from '../../src/shared/ipc-channels'
 import { createServerAiHandlers } from '../../src/main/sidecar/ipc/ai'
 import type { ServerClient } from '../../src/main/sidecar/client'
 
+vi.mock('../../src/main/services/logger', () => ({
+  logger: {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn()
+  }
+}))
+
 type Result = { ok: true; data: unknown } | { ok: false; error: { code: string; message: string } }
+
+const traceStep = {
+  id: 'step-1',
+  threadId: 'thread-1',
+  runId: 'run-1',
+  kind: 'llm' as const,
+  name: null,
+  input: null,
+  output: null,
+  status: 'done' as const,
+  startedAt: 1,
+  endedAt: 2,
+  seq: 0,
+  inputTokens: null,
+  outputTokens: null,
+  totalTokens: null,
+  parentStepId: null,
+  agentName: null,
+  namespace: null,
+  depth: 0,
+  checkpointId: null
+}
+
+const pendingInterrupt = {
+  id: 'interrupt-1',
+  runId: 'run-1',
+  threadId: 'thread-1',
+  checkpointId: null,
+  actions: [
+    {
+      name: 'run_command',
+      args: { command: 'ls' },
+      description: 'Lists files',
+      allowedDecisions: ['approve', 'reject']
+    }
+  ],
+  status: 'pending' as const,
+  decision: null,
+  createdAt: 1,
+  resolvedAt: null
+}
 
 describe('server AI IPC handlers', () => {
   let http: Record<string, ReturnType<typeof vi.fn>>
@@ -124,6 +174,60 @@ describe('server AI IPC handlers', () => {
     expect(http.aiReportsList).toHaveBeenCalledWith('workspace-1')
     expect(http.aiReportsUpdate).toHaveBeenCalledWith('report-1', { title: 'Updated' })
     expect(http.aiReportsDelete).toHaveBeenCalledWith('report-1')
+
+    await expect(handlers[IpcChannel.AiChatRenameThread]('thread-1', 'Renamed')).resolves.toEqual({
+      ok: true,
+      data: undefined
+    })
+  })
+
+  it('validates upstream trace and interrupt payloads before resolving', async () => {
+    http.aiChatTraces.mockResolvedValue([traceStep, { broken: true }])
+    await expect(handlers[IpcChannel.AiChatTraces]('thread-1')).resolves.toEqual({
+      ok: true,
+      data: [traceStep]
+    })
+
+    http.aiChatTraces.mockResolvedValue({ id: 'step-1' })
+    await expect(handlers[IpcChannel.AiChatTraces]('thread-1')).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid_upstream_payload', message: 'Upstream chat traces payload must be an array' }
+    })
+
+    http.aiChatPendingInterrupt.mockResolvedValue(pendingInterrupt)
+    await expect(handlers[IpcChannel.AiChatPendingInterrupt]('run-1')).resolves.toEqual({
+      ok: true,
+      data: pendingInterrupt
+    })
+
+    http.aiChatPendingInterrupt.mockResolvedValue({ ...pendingInterrupt, actions: [{ name: 42 }] })
+    await expect(handlers[IpcChannel.AiChatPendingInterrupt]('run-1')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_upstream_payload' }
+    })
+  })
+
+  it('rejects chat resume requests with invalid decisions before forwarding', async () => {
+    await expect(handlers[IpcChannel.AiChatResume]({
+      threadId: 'thread-1',
+      runId: 'run-1',
+      decisions: [{ type: 'approve' }]
+    })).resolves.toEqual({ ok: true, data: undefined })
+    expect(http.aiChatResume).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      runId: 'run-1',
+      decisions: [{ type: 'approve' }]
+    })
+
+    await expect(handlers[IpcChannel.AiChatResume]({
+      threadId: 'thread-1',
+      runId: 'run-1',
+      decisions: [{ type: 'nonsense' }]
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request_payload' }
+    })
+    expect(http.aiChatResume).toHaveBeenCalledTimes(1)
   })
 
   it('returns server failures as typed result envelopes', async () => {

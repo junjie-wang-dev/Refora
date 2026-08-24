@@ -9,7 +9,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { showContextMenu } from '@lobehub/ui'
-import type { Document } from '../../src/shared/ipc-types'
+import type { Document as LibraryDocument } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import PdfReader from '../../src/renderer/components/PdfReader'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
@@ -182,7 +182,7 @@ function pageVisibilityEntry(
   }
 }
 
-function document(): Document {
+function document(): LibraryDocument {
   return {
     id: 'paper',
     filePath: '/tmp/paper.pdf',

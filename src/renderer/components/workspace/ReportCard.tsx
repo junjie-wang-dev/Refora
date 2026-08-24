@@ -1,31 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Modal, Button } from '@lobehub/ui'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { BookOpen, Copy, Trash, PencilSimple, Download } from '@phosphor-icons/react'
+import { BookOpen, Download, PencilSimple, Trash } from '@phosphor-icons/react'
 import { motion, MotionConfig } from 'motion/react'
-import ReactMarkdown from 'react-markdown'
 import {
-  REMARK_PLUGINS,
+  MARKDOWN_COMPONENTS,
+  MarkdownCardModal,
   REHYPE_PLUGINS,
-  createReforaDocMarkdownComponents,
-  urlTransform
-} from '../../utils/markdown'
-import { useDocumentStore } from '../../store/documentStore'
+  REMARK_PLUGINS,
+  ReactMarkdown,
+  openMarkdownCardContextMenu,
+  urlTransform,
+  useMarkdownCardExport
+} from './noteReportShared'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
 import { Input as UiInput, Textarea as UiTextarea, cardClassName } from '../ui'
 import type { AiReport, Document } from '../../../shared/ipc-types'
-import { openDocumentPdf } from '../../utils/openPdf'
-import i18n from '../../i18n'
-
-const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => openDocumentPdf(docId),
-  () => useDocumentStore.getState().showToast(
-    i18n.t('workspace.openDocFailed') as string
-  )
-)
 
 interface ReportCardProps {
   report: AiReport
@@ -57,17 +47,7 @@ export default function ReportCard({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const boardPreview = useMemo(() => boardCardPreview(report.contentMd), [report.contentMd])
-
-  const handleExportMarkdown = () => {
-    const header = `# ${report.title}\n\n`
-    const blob = new Blob([header + report.contentMd], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${report.title.replace(/[^\w\u4e00-\u9fff\s-]/g, '').trim() || 'report'}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const handleExportMarkdown = useMarkdownCardExport(report.title, report.contentMd, 'report')
 
   const enterEditMode = () => {
     setEditTitle(report.title)
@@ -75,46 +55,32 @@ export default function ReportCard({
     setEditing(true)
   }
 
+  const requestInternalEdit = () => {
+    setExpanded(true)
+    enterEditMode()
+  }
+
+  const requestDelete = () => {
+    setExpanded(true)
+    setConfirmDelete(true)
+  }
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const menuItems: ContextMenuItem[] = [
-      {
-        key: 'copy',
-        label: t('workspace.cardCopy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
-        onClick: () => onCopy?.()
+    openMarkdownCardContextMenu({
+      copyLabel: t('workspace.cardCopy'),
+      editLabel: t('workspace.reportEdit'),
+      exportLabel: t('workspace.reportExportMd'),
+      deleteLabel: t('workspace.reportDelete'),
+      onCopy: () => onCopy?.(),
+      onRequestEdit: () => {
+        if (onEdit) onEdit()
+        else requestInternalEdit()
       },
-      {
-        key: 'edit',
-        label: t('workspace.reportEdit'),
-        icon: <PencilSimple className="h-3.5 w-3.5" />,
-        onClick: () => {
-          if (onEdit) onEdit()
-          else {
-            setExpanded(true)
-            enterEditMode()
-          }
-        }
-      },
-      {
-        key: 'export',
-        label: t('workspace.reportExportMd'),
-        icon: <Download className="h-3.5 w-3.5" />,
-        onClick: handleExportMarkdown
-      },
-      {
-        key: 'delete',
-        label: t('workspace.reportDelete'),
-        icon: <Trash className="h-3.5 w-3.5" />,
-        onClick: () => {
-          setExpanded(true)
-          setConfirmDelete(true)
-        },
-        danger: true
-      }
-    ]
-    showContextMenu(menuItems)
+      onExport: handleExportMarkdown,
+      onDelete: requestDelete
+    })
   }
 
   const closeModal = () => {
@@ -190,10 +156,7 @@ export default function ReportCard({
               onClick={(e) => {
                 e.stopPropagation()
                 if (onEdit) onEdit()
-                else {
-                  setExpanded(true)
-                  enterEditMode()
-                }
+                else requestInternalEdit()
               }}
               title={t('workspace.reportEdit')}
               aria-label={t('workspace.reportEdit')}
@@ -212,7 +175,7 @@ export default function ReportCard({
             <button
               type="button"
               className="rounded p-1 text-muted transition-colors duration-150 hover:text-error"
-              onClick={(e) => { e.stopPropagation(); setExpanded(true); setConfirmDelete(true) }}
+              onClick={(e) => { e.stopPropagation(); requestDelete() }}
               title={t('workspace.reportDelete')}
               aria-label={t('workspace.reportDelete')}
             >
@@ -239,61 +202,36 @@ export default function ReportCard({
       </motion.div>
       </MotionConfig>
 
-      <Modal
+      <MarkdownCardModal
         open={expanded}
         onCancel={closeModal}
         title={editing ? t('workspace.reportEdit') : report.title}
         width={640}
-        footer={
-          <div className="flex items-center justify-between">
-            <Button
-              danger
-              onClick={() => {
-                if (confirmDelete) {
-                  closeModal()
-                  onDelete()
-                } else {
-                  setConfirmDelete(true)
-                }
-              }}
-            >
-              <Trash className="mr-1.5 h-3.5 w-3.5" />
-              {confirmDelete ? t('common.confirm') : t('workspace.reportDelete')}
-            </Button>
-            <div className="flex gap-2">
-              <Button onClick={handleExportMarkdown}>
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                {t('workspace.reportExportMd')}
-              </Button>
-              {editing ? (
-                <>
-                  <Button onClick={handleCancelEdit}>
-                    {t('workspace.reportCancelEdit')}
-                  </Button>
-                  <Button type="primary" disabled={saving || !editTitle.trim()} onClick={() => void handleSave()}>
-                    {saving ? t('workspace.saving') : t('workspace.reportSave')}
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={enterEditMode}>
-                  <PencilSimple className="mr-1.5 h-3.5 w-3.5" />
-                  {t('workspace.reportEdit')}
-                </Button>
-              )}
-            </div>
-          </div>
-        }
+        editing={editing}
+        saving={saving}
+        canSave={editTitle.trim().length > 0}
+        confirmDelete={confirmDelete}
+        deleteConfirmMessage={t('workspace.reportDeleteConfirm')}
+        saveError={saveError}
+        labels={{
+          delete: t('workspace.reportDelete'),
+          confirm: t('common.confirm'),
+          exportMd: t('workspace.reportExportMd'),
+          edit: t('workspace.reportEdit'),
+          cancelEdit: t('workspace.reportCancelEdit'),
+          save: t('workspace.reportSave'),
+          saving: t('workspace.saving')
+        }}
+        onRequestDelete={() => setConfirmDelete(true)}
+        onConfirmDelete={() => {
+          closeModal()
+          onDelete()
+        }}
+        onExport={handleExportMarkdown}
+        onStartEdit={enterEditMode}
+        onCancelEdit={handleCancelEdit}
+        onSave={() => void handleSave()}
       >
-        {confirmDelete && (
-          <div className="mb-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error">
-            {t('workspace.reportDeleteConfirm')}
-          </div>
-        )}
-        {saveError && (
-          <div className="mb-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error">
-            {saveError}
-          </div>
-        )}
         {editing ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
@@ -357,7 +295,7 @@ export default function ReportCard({
             </div>
           </>
         )}
-      </Modal>
+      </MarkdownCardModal>
     </>
   )
 }

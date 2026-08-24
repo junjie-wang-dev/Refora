@@ -520,6 +520,7 @@ describe('Workspace card types', () => {
       id: 'note-1',
       workspaceId: 'ws-1',
       noteType: 'markdown',
+      color: 'sand',
       title: 'Note title',
       contentMd: 'Note content',
       createdAt: 1,
@@ -810,6 +811,7 @@ describe('NoteCard', () => {
     id: 'note-1',
     workspaceId: 'ws-1',
     noteType: 'markdown',
+    color: 'sand',
     title: 'Original',
     contentMd: 'Original content',
     createdAt: 1,
@@ -1038,6 +1040,7 @@ describe('StickyNoteCard', () => {
 
 describe('ResizableCard', () => {
   it('supports keyboard positioning from the card without rendering a move handle', () => {
+    vi.useFakeTimers()
     const onPositionChange = vi.fn()
     const onPositionCommit = vi.fn()
     render(
@@ -1045,7 +1048,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 100, y: 200, zIndex: 2 }}
-        getScale={() => 1}
         frontZIndex={5}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1062,11 +1064,81 @@ describe('ResizableCard', () => {
     fireEvent.keyDown(card, { key: 'ArrowLeft' })
     fireEvent.keyDown(card, { key: 'ArrowDown', shiftKey: true })
 
-    expect(onPositionCommit).toHaveBeenNthCalledWith(1, 'item-1', { x: 90, y: 200, zIndex: 5 })
-    expect(onPositionCommit).toHaveBeenNthCalledWith(2, 'item-1', { x: 100, y: 250, zIndex: 5 })
+    expect(onPositionCommit).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+
+    expect(onPositionCommit).toHaveBeenCalledTimes(1)
+    expect(onPositionCommit).toHaveBeenCalledWith('item-1', { x: 90, y: 250, zIndex: 5 })
+  })
+
+  it('commits a single keyboard move after the debounce even without follow-up keys', () => {
+    vi.useFakeTimers()
+    const onPositionCommit = vi.fn()
+    render(
+      <ResizableCard
+        sizeKey="item-1"
+        size={{ width: 300, height: 200 }}
+        position={{ x: 100, y: 200, zIndex: 2 }}
+        frontZIndex={5}
+        onSizeChange={() => {}}
+        onSizeCommit={() => {}}
+        onPositionChange={() => {}}
+        onPositionCommit={onPositionCommit}
+        moveLabel="Move card"
+      >
+        <div>Content</div>
+      </ResizableCard>
+    )
+
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Move card' }), { key: 'ArrowRight' })
+    act(() => {
+      vi.advanceTimersByTime(299)
+    })
+    expect(onPositionCommit).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+
+    expect(onPositionCommit).toHaveBeenCalledTimes(1)
+    expect(onPositionCommit).toHaveBeenCalledWith('item-1', { x: 110, y: 200, zIndex: 5 })
+  })
+
+  it('flushes a pending keyboard move immediately when the card loses focus', () => {
+    vi.useFakeTimers()
+    const onPositionCommit = vi.fn()
+    render(
+      <ResizableCard
+        sizeKey="item-1"
+        size={{ width: 300, height: 200 }}
+        position={{ x: 100, y: 200, zIndex: 2 }}
+        frontZIndex={5}
+        onSizeChange={() => {}}
+        onSizeCommit={() => {}}
+        onPositionChange={() => {}}
+        onPositionCommit={onPositionCommit}
+        moveLabel="Move card"
+      >
+        <div>Content</div>
+      </ResizableCard>
+    )
+
+    const card = screen.getByRole('group', { name: 'Move card' })
+    fireEvent.keyDown(card, { key: 'ArrowUp' })
+    expect(onPositionCommit).not.toHaveBeenCalled()
+    fireEvent.blur(card)
+
+    expect(onPositionCommit).toHaveBeenCalledTimes(1)
+    expect(onPositionCommit).toHaveBeenCalledWith('item-1', { x: 100, y: 190, zIndex: 5 })
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(onPositionCommit).toHaveBeenCalledTimes(1)
   })
 
   it('exposes visible keyboard controls for resizing width and height', () => {
+    vi.useFakeTimers()
     const onSizeChange = vi.fn()
     const onSizeCommit = vi.fn()
     render(
@@ -1074,7 +1146,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 0 }}
-        getScale={() => 1}
         frontZIndex={1}
         onSizeChange={onSizeChange}
         onSizeCommit={onSizeCommit}
@@ -1098,10 +1169,16 @@ describe('ResizableCard', () => {
 
     expect(onSizeChange).toHaveBeenNthCalledWith(1, 'item-1', { width: 310, height: 200 })
     expect(onSizeChange).toHaveBeenNthCalledWith(2, 'item-1', { width: 310, height: 150 })
-    expect(onSizeCommit).toHaveBeenLastCalledWith('item-1', { width: 310, height: 150 })
+    expect(onSizeCommit).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+
+    expect(onSizeCommit).toHaveBeenCalledTimes(1)
+    expect(onSizeCommit).toHaveBeenCalledWith('item-1', { width: 310, height: 150 })
   })
 
-  it('commits the final size in world coordinates when resizing a zoomed canvas', () => {
+  it('commits pointer-resized dimensions in world coordinates', () => {
     const onSizeChange = vi.fn()
     const onSizeCommit = vi.fn()
     const { container } = render(
@@ -1109,7 +1186,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 0 }}
-        getScale={() => 2}
         frontZIndex={1}
         onSizeChange={onSizeChange}
         onSizeCommit={onSizeCommit}
@@ -1125,8 +1201,8 @@ describe('ResizableCard', () => {
     fireEvent.pointerMove(document, { pointerId: 1, clientX: 180, clientY: 150 })
     fireEvent.pointerUp(document, { pointerId: 1 })
 
-    expect(onSizeChange).toHaveBeenLastCalledWith('item-1', { width: 340, height: 225 })
-    expect(onSizeCommit).toHaveBeenCalledWith('item-1', { width: 340, height: 225 })
+    expect(onSizeChange).toHaveBeenLastCalledWith('item-1', { width: 380, height: 250 })
+    expect(onSizeCommit).toHaveBeenCalledWith('item-1', { width: 380, height: 250 })
   })
 
   it('resizes beyond the former card bounds while keeping dimensions positive', () => {
@@ -1137,7 +1213,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 0 }}
-        getScale={() => 1}
         frontZIndex={1}
         onSizeChange={onSizeChange}
         onSizeCommit={onSizeCommit}
@@ -1166,7 +1241,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: -20, y: 40, zIndex: 1 }}
-        getScale={() => 0.5}
         frontZIndex={8}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1186,15 +1260,15 @@ describe('ResizableCard', () => {
     fireEvent.pointerMove(document, { pointerId: 2, clientX: 103, clientY: 102 })
     expect(setPointerCapture).not.toHaveBeenCalled()
     await waitFor(() => {
-      expect(onPositionChange).toHaveBeenLastCalledWith('item-1', { x: -14, y: 44, zIndex: 1 })
+      expect(onPositionChange).toHaveBeenLastCalledWith('item-1', { x: -17, y: 42, zIndex: 1 })
     })
     fireEvent.pointerMove(document, { pointerId: 2, clientX: 130, clientY: 80 })
     expect(setPointerCapture).toHaveBeenCalledWith(2)
     fireEvent.pointerUp(document, { pointerId: 2 })
     fireEvent.click(content)
 
-    expect(onPositionChange).toHaveBeenLastCalledWith('item-1', { x: 40, y: 0, zIndex: 8 })
-    expect(onPositionCommit).toHaveBeenCalledWith('item-1', { x: 40, y: 0, zIndex: 8 })
+    expect(onPositionChange).toHaveBeenLastCalledWith('item-1', { x: 10, y: 20, zIndex: 8 })
+    expect(onPositionCommit).toHaveBeenCalledWith('item-1', { x: 10, y: 20, zIndex: 8 })
     expect(onOpen).not.toHaveBeenCalled()
 
     fireEvent.pointerDown(content, { pointerId: 5, button: 0, clientX: 130, clientY: 80 })
@@ -1212,7 +1286,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 10, y: 20, zIndex: 1 }}
-        getScale={() => 1}
         frontZIndex={4}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1250,7 +1323,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 1 }}
-        getScale={() => 1}
         frontZIndex={5}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1288,7 +1360,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 20, y: 30, zIndex: 1 }}
-        getScale={() => 1}
         frontZIndex={5}
         onSizeChange={() => {}}
         onSizeCommit={onSizeCommit}
@@ -1336,7 +1407,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 0 }}
-        getScale={() => 1}
         frontZIndex={1}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1374,7 +1444,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 0, y: 0, zIndex: 0 }}
-        getScale={() => 1}
         frontZIndex={1}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}
@@ -1410,7 +1479,6 @@ describe('ResizableCard', () => {
         sizeKey="item-1"
         size={{ width: 300, height: 200 }}
         position={{ x: 10, y: 20, zIndex: 1 }}
-        getScale={() => 1}
         frontZIndex={4}
         onSizeChange={() => {}}
         onSizeCommit={() => {}}

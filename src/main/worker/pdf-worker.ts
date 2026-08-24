@@ -10,7 +10,7 @@ import {
 import { resolvePdfFilePath } from '../services/pdfPath'
 
 const parentPort = process.parentPort
-const pdfGlobals = globalThis as typeof globalThis & {
+const pdfGlobals = globalThis as unknown as {
   DOMMatrix?: typeof CanvasDOMMatrix
   Path2D?: typeof CanvasPath2D
 }

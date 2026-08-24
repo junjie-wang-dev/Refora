@@ -24,6 +24,7 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
     keywords: null,
     url: null,
     doi: null,
+    arxivId: null,
     note: null,
     starred: 0,
     addedAt: 1700000000000,
@@ -339,7 +340,7 @@ describe('DocumentStore', () => {
 
   describe('init', () => {
     it('subscribes to all event channels and sets initialized', () => {
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
 
       expect(mockOnDocUpdated).toHaveBeenCalledWith(expect.any(Function))
       expect(mockOnImportProgress).toHaveBeenCalledWith(expect.any(Function))
@@ -349,15 +350,15 @@ describe('DocumentStore', () => {
     })
 
     it('calls fetchDocuments on init', () => {
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
       expect(mockList).toHaveBeenCalled()
     })
 
     it('does not re-subscribe if already initialized', () => {
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
       const listCalls = mockList.mock.calls.length
 
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
 
       expect(mockList).toHaveBeenCalledTimes(listCalls)
     })
@@ -365,7 +366,7 @@ describe('DocumentStore', () => {
 
   describe('destroy', () => {
     it('unsubscribes all event channels and sets initialized to false', () => {
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
       useDocumentStore.getState().destroy()
 
       expect(mockEventsOff).toHaveBeenCalledWith('document:updated', expect.any(Function))
@@ -401,7 +402,7 @@ describe('DocumentStore', () => {
         documents: [makeDoc({ id: 'old' })]
       })
 
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
       const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void) | undefined
       expect(cb).toBeDefined()
       cb!()
@@ -678,7 +679,7 @@ describe('DocumentStore', () => {
       let rejectStar!: (error: Error) => void
       const original = makeDoc({ starred: 0, title: 'Original title' })
       mockSetStarred.mockReturnValue(new Promise((_resolve, reject) => { rejectStar = reject }))
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
       await Promise.resolve()
       useDocumentStore.setState({ documents: [original] })
 
@@ -1042,7 +1043,7 @@ describe('DocumentStore', () => {
       const original = makeDoc()
       const updated = makeDoc({ title: 'Updated by event' })
       useDocumentStore.setState({ documents: [original], selectedIds: ['doc-1'] })
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
 
       const documentUpdated = mockOnDocUpdated.mock.calls[0][0] as (doc: Document) => void
       const importProgress = mockOnImportProgress.mock.calls[0][0] as (progress: { current: number; total: number }) => void
@@ -1071,7 +1072,7 @@ describe('DocumentStore', () => {
 
     it('shows a toast when the menu BibTeX export fails', async () => {
       useDocumentStore.setState({ documents: [makeDoc()], selectedIds: ['doc-1'] })
-      useDocumentStore.getState().init()
+      useDocumentStore.getState().init(null)
 
       const exportBibtex = mockOnMenuExportBibtex.mock.calls[0][0] as () => void
       mockExportBibtex.mockRejectedValueOnce(new Error(''))

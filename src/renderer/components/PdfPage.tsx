@@ -86,6 +86,12 @@ function normalizedPoint(event: ReactPointerEvent, element: HTMLElement): PdfPoi
   }
 }
 
+function cancelScheduledFrame(frameRef: { current: number | null }): void {
+  if (frameRef.current === null) return
+  window.cancelAnimationFrame(frameRef.current)
+  frameRef.current = null
+}
+
 type PdfViewport = ReturnType<PDFPageProxy['getViewport']>
 
 export interface PdfPageVisibility {
@@ -206,7 +212,10 @@ export default function PdfPage({
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
   const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null)
   const inkPointsRef = useRef<PdfPoint[] | null>(null)
+  const inkFrameRef = useRef<number | null>(null)
   const selectionStartRef = useRef<PdfPoint | null>(null)
+  const selectionFrameRef = useRef<number | null>(null)
+  const pendingSelectionRectRef = useRef<PdfRect | null>(null)
   const textSelectionStartRef = useRef<PdfTextPosition | null>(null)
   const textPointerRef = useRef<PdfTextPointer | null>(null)
   const lastTextClickRef = useRef<PdfTextClick | null>(null)
@@ -423,6 +432,20 @@ export default function PdfPage({
     showContextMenu(items)
   }, [color, documentTitle, onAddAnnotation, scrollRootRef, t])
 
+  const flushInkPreview = () => {
+    inkFrameRef.current = null
+    const points = inkPointsRef.current
+    setInkPoints(points ? [...points] : null)
+  }
+
+  const flushSelectionPreview = () => {
+    selectionFrameRef.current = null
+    const rect = pendingSelectionRectRef.current
+    pendingSelectionRectRef.current = null
+    if (!rect) return
+    setSelectionRect(rect)
+  }
+
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = pageElementRef.current
     if (!element || event.button !== 0) return
@@ -499,9 +522,10 @@ export default function PdfPage({
     }
     if (tool === 'ink') {
       event.currentTarget.setPointerCapture(event.pointerId)
-      const points = [normalizedPoint(event, element)]
-      inkPointsRef.current = points
-      setInkPoints(points)
+      inkPointsRef.current = [normalizedPoint(event, element)]
+      if (inkFrameRef.current === null) {
+        inkFrameRef.current = window.requestAnimationFrame(flushInkPreview)
+      }
     }
   }
 
@@ -524,20 +548,25 @@ export default function PdfPage({
     }
     const selectionStart = selectionStartRef.current
     if (element && selectionStart && tool === null) {
-      setSelectionRect(selectionRectFromPoints(
+      pendingSelectionRectRef.current = selectionRectFromPoints(
         selectionStart,
         normalizedPoint(event, element)
-      ))
+      )
+      if (selectionFrameRef.current === null) {
+        selectionFrameRef.current = window.requestAnimationFrame(flushSelectionPreview)
+      }
       return
     }
     const points = inkPointsRef.current
     if (!element || !points || tool !== 'ink') return
-    const nextPoints = [...points, normalizedPoint(event, element)]
-    inkPointsRef.current = nextPoints
-    setInkPoints(nextPoints)
+    points.push(normalizedPoint(event, element))
+    if (inkFrameRef.current === null) {
+      inkFrameRef.current = window.requestAnimationFrame(flushInkPreview)
+    }
   }
 
   const finishInk = () => {
+    cancelScheduledFrame(inkFrameRef)
     const points = inkPointsRef.current
     inkPointsRef.current = null
     if (!points || points.length < 2) {
@@ -557,11 +586,14 @@ export default function PdfPage({
   }
 
   const cancelInk = () => {
+    cancelScheduledFrame(inkFrameRef)
     inkPointsRef.current = null
     setInkPoints(null)
   }
 
   const finishSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    cancelScheduledFrame(selectionFrameRef)
+    pendingSelectionRectRef.current = null
     const element = pageElementRef.current
     const start = selectionStartRef.current
     selectionStartRef.current = null
@@ -605,6 +637,8 @@ export default function PdfPage({
     lastTextClickRef.current = null
     textSelectionStartRef.current = null
     selectionStartRef.current = null
+    cancelScheduledFrame(selectionFrameRef)
+    pendingSelectionRectRef.current = null
     setSelectionRect(null)
     cancelInk()
   }
@@ -614,14 +648,22 @@ export default function PdfPage({
     lastTextClickRef.current = null
     textSelectionStartRef.current = null
     if (tool !== 'ink') {
+      cancelScheduledFrame(inkFrameRef)
       inkPointsRef.current = null
       setInkPoints(null)
     }
     if (tool !== null) {
+      cancelScheduledFrame(selectionFrameRef)
+      pendingSelectionRectRef.current = null
       selectionStartRef.current = null
       setSelectionRect(null)
     }
   }, [tool])
+
+  useEffect(() => () => {
+    cancelScheduledFrame(inkFrameRef)
+    cancelScheduledFrame(selectionFrameRef)
+  }, [])
 
   useEffect(() => {
     if (!editingTextAnnotationId) return

@@ -87,7 +87,7 @@ describe('AgentApprovalCard', () => {
     )
 
     const card = screen.getByTestId('agent-approval-card')
-    expect(card).toHaveClass('mx-auto', 'w-full', 'max-w-[768px]', 'border-accent', 'bg-white')
+    expect(card).toHaveClass('mx-auto', 'w-full', 'max-w-[768px]', 'border-accent', 'bg-panel')
     expect(await screen.findByText(/^The Agent wants to run OCR on/)).toHaveTextContent(
       'The Agent wants to run OCR on “Reliable Paper Parsing”'
     )

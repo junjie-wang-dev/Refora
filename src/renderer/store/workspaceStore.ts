@@ -45,6 +45,7 @@ interface WorkspaceState {
   requestActiveWorkspace: (id: string | null) => Promise<boolean>
   closeWorkspaceTab: (id: string) => void
   setActiveThreadId: (id: string | null) => void
+  adoptStreamingThread: (id: string) => void
   setChatStreaming: (streaming: boolean) => void
   deleteThread: (threadId: string) => Promise<void>
   renameThread: (threadId: string, title: string) => Promise<void>
@@ -353,6 +354,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveThreadId: (id: string | null) => {
+    const current = get()
+    if (current.chatStreaming && current.activeThreadId !== id) return
+    set({ activeThreadId: id })
+  },
+
+  adoptStreamingThread: (id: string) => {
     set({ activeThreadId: id })
   },
 

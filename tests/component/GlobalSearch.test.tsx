@@ -35,6 +35,8 @@ vi.mock('@renderer/store/documentStore', () => ({
       setSearchResults: typeof mocks.setSearchResults
       setFocusedDoc: typeof mocks.setFocusedDoc
       clearSearch: typeof mocks.clearSearch
+      openPdf: typeof mocks.openPdf
+      showToast: typeof mocks.showToast
     }) => unknown) => selector({
       setSearchResults: mocks.setSearchResults,
       setFocusedDoc: mocks.setFocusedDoc,

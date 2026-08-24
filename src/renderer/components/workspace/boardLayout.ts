@@ -60,5 +60,9 @@ export function compactGridPlacements(
 
 export function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
-    && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
+    && Boolean(
+      target.closest(
+        'input, textarea, select, button, a, [role="button"], [contenteditable="true"]'
+      )
+    )
 }

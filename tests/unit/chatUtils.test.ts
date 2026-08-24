@@ -114,7 +114,9 @@ describe('localMessage', () => {
 describe('mergeTraceStep', () => {
   const base = (id: string, seq: number): AgentTraceStep => ({
     id, threadId: 't', runId: 'r', kind: 'llm', name: id,
-    input: null, output: null, status: 'running', startedAt: seq, endedAt: null, seq
+    input: null, output: null, status: 'running', startedAt: seq, endedAt: null, seq,
+    inputTokens: null, outputTokens: null, totalTokens: null,
+    parentStepId: null, agentName: null, namespace: null, depth: 0, checkpointId: null
   })
 
   it('appends a new step and sorts by start time before seq', () => {

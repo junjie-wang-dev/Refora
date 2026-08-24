@@ -395,7 +395,15 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
     return connection
   }
 
+  function stoppedError(): Error {
+    return Object.assign(
+      new Error('Server lifecycle was stopped and cannot be started again'),
+      { code: 'server_stopped' }
+    )
+  }
+
   function start(): Promise<ServerConnection> {
+    if (stopping) return Promise.reject(stoppedError())
     if (connection) return Promise.resolve(connection)
     if (restartExhaustedError) return Promise.reject(restartExhaustedError)
     if (startPromise) return startPromise
@@ -415,6 +423,7 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   }
 
   async function getServerBaseUrl(): Promise<ServerConnection> {
+    if (stopping) throw stoppedError()
     if (connection) return connection
     return start()
   }

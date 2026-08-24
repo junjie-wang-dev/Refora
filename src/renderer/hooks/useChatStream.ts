@@ -107,7 +107,6 @@ export function useChatStream({
   requestModel,
   deepThinking,
   reasoningEffort,
-  setActiveThreadId,
   setChatStreaming,
   fetchThreads
 }: UseChatStreamParams): UseChatStreamReturn {
@@ -837,7 +836,7 @@ export function useChatStream({
       if (retrySendRef.current === sendContext) retrySendRef.current = resolvedContext
       if (latestSendRef.current === sendContext) latestSendRef.current = resolvedContext
       if (!existingThread) {
-        setActiveThreadId(threadId)
+        useWorkspaceStore.getState().adoptStreamingThread(threadId)
         threadIdRef.current = threadId
       }
       if (cancelledRef.current) cancelRun(runId)
@@ -861,7 +860,6 @@ export function useChatStream({
     activeDocumentId,
     activeProviderId,
     streaming,
-    setActiveThreadId,
     requestModel,
     deepThinking,
     reasoningEffort,

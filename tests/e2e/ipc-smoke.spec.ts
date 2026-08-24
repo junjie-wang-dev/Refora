@@ -45,10 +45,10 @@ test.describe('IPC Smoke', () => {
     const launchEnv = {
       ...process.env,
       REFORA_E2E_USER_DATA_DIR: userDataFolder
-    }
+    } as Record<string, string>
     delete launchEnv.ELECTRON_RUN_AS_NODE
     electronApp = await electron.launch({
-      executablePath: electronExe,
+      executablePath: String(electronExe),
       env: launchEnv,
       args: [testMain],
     })
@@ -65,7 +65,7 @@ test.describe('IPC Smoke', () => {
 
   test('getBootstrap() returns valid shape', async () => {
     const bootstrap = await electronPage.evaluate(() =>
-      (window as Window & { api: ElectronApi }).api.getBootstrap())
+      (window as unknown as { api: ElectronApi }).api.getBootstrap())
     expect(bootstrap).toBeDefined()
     expect(typeof bootstrap.language).toBe('string')
     expect(['zh', 'en']).toContain(bootstrap.language)
@@ -84,7 +84,7 @@ test.describe('IPC Smoke', () => {
 
   test('settings get / set round-trip', async () => {
     const result = await electronPage.evaluate(async () => {
-      const settings = (window as Window & { api: ElectronApi }).api.settings
+      const settings = (window as unknown as { api: ElectronApi }).api.settings
       const previous = await settings.get('sidebarCollapsed', '0')
       const next = previous === '1' ? '0' : '1'
       await settings.set('sidebarCollapsed', next)
@@ -100,7 +100,7 @@ test.describe('IPC Smoke', () => {
     const authorizedPath = await authorizeFilePath(electronPage, pdfPath)
     const result = await electronPage.evaluate(
       async (absPath: string) =>
-        (window as Window & { api: ElectronApi }).api.import.addFiles([absPath]),
+        (window as unknown as { api: ElectronApi }).api.import.addFiles([absPath]),
       authorizedPath,
     )
     const ids = result.added
@@ -109,7 +109,7 @@ test.describe('IPC Smoke', () => {
 
     const eventDoc = await electronPage.evaluate((id: string) => {
       return new Promise<Record<string, unknown>>((resolve, reject) => {
-        const electronApi = (window as Window & { api: ElectronApi }).api
+        const electronApi = (window as unknown as { api: ElectronApi }).api
         const timeout = setTimeout(
           () => reject(new Error('Timeout waiting for document:updated')),
           15000,

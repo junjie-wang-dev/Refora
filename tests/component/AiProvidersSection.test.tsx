@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentProfile, AiProvider, ReforaApi } from '../../src/shared/ipc-types'
+import type { MineruEngineStatus } from '../../src/shared/mineru-types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -864,7 +865,7 @@ describe('AiProvidersSection', () => {
     api.events.onMineruInstallProgress = vi.fn((callback) => {
       emitProgress = callback
     })
-    api.mineru.install = vi.fn(() => new Promise((_resolve, reject) => {
+    api.mineru.install = vi.fn(() => new Promise<MineruEngineStatus>((_resolve, reject) => {
       rejectInstall = reject
     }))
     api.mineru.cancelInstall = vi.fn(async () => {

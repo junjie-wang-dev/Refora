@@ -5,6 +5,7 @@ import { CaretUp, CaretDown, Star, Warning, Lightning, Check, FileText, FolderOp
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
 import { useDocumentStore } from '../store/documentStore'
+import { useConfirmStore } from '../store/confirmStore'
 import { api } from '../ipc'
 import { formatAuthors, formatDate, formatFilePath } from '../utils/format'
 import { Button as UiButton, EmptyState, PanelTabHeader } from './ui'
@@ -240,6 +241,7 @@ export default function DocumentList({
   const assignDocumentsToCategory = useDocumentStore((s) => s.assignDocumentsToCategory)
   const fetchDocuments = useDocumentStore((s) => s.fetchDocuments)
   const loadMoreDocuments = useDocumentStore((s) => s.loadMoreDocuments)
+  const showConfirm = useConfirmStore((s) => s.show)
 
   const parentRef = useRef<HTMLDivElement>(null)
 
@@ -324,7 +326,7 @@ export default function DocumentList({
         errorMessage(error, t('documentErrors.importFilesFailed'))
       )
     }
-    void fetchDocuments()
+    void fetchDocuments().catch(() => undefined)
   }, [fetchDocuments, t])
 
   const handleCopyBibtex = useCallback(async (ids: string[]) => {
@@ -346,11 +348,20 @@ export default function DocumentList({
       const assignToCategory = async (catId: string) => {
         await assignDocumentsToCategory(effectiveIds, catId)
       }
-      const createAndAssign = async () => {
-        const name = window.prompt(t('sidebar.categoryName'))
-        if (!name || !name.trim()) return
-        const cat = await createCategory(name.trim())
-        if (cat) await assignToCategory(cat.id)
+      const createAndAssign = (ids: string[]) => {
+        showConfirm({
+          title: t('sidebar.createCategory'),
+          message: t('sidebar.categoryName'),
+          confirmText: t('common.create'),
+          cancelText: t('common.cancel'),
+          input: { defaultValue: '', placeholder: t('sidebar.categoryName') },
+          onConfirm: async (value?: string) => {
+            const name = typeof value === 'string' ? value.trim() : ''
+            if (!name) return
+            const cat = await createCategory(name)
+            if (cat) await assignDocumentsToCategory(ids, cat.id)
+          }
+        })
       }
 
       const categoryItems: ContextMenuItem[] = categories.length
@@ -379,7 +390,7 @@ export default function DocumentList({
               key: 'create-category',
               label: t('sidebar.createCategory'),
               icon: <Plus className="h-3.5 w-3.5" />,
-              onClick: () => { void createAndAssign() },
+              onClick: () => { createAndAssign(effectiveIds) },
             },
           ],
         },
@@ -430,7 +441,7 @@ export default function DocumentList({
       ]
       showContextMenu(items)
     },
-    [t, openInFinder, handleCopyPath, handleCopyBibtex, refreshMetadata, requestDeleteConfirm, selectedIds, categories, createCategory, assignDocumentsToCategory, openPdf]
+    [t, openInFinder, handleCopyPath, handleCopyBibtex, refreshMetadata, requestDeleteConfirm, selectedIds, categories, createCategory, assignDocumentsToCategory, openPdf, showConfirm]
   )
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
@@ -446,7 +457,7 @@ export default function DocumentList({
         }
       } catch (e) {
         useDocumentStore.getState().showToast(
-          errorMessage(e, t('documentErrors.readFilePathFailed'))
+          errorMessage(e, t('documentErrors.importFilesFailed'))
         )
       }
     }
@@ -458,7 +469,7 @@ export default function DocumentList({
           errorMessage(e, t('documentErrors.importFilesFailed'))
         )
       }
-      void fetchDocuments()
+      void fetchDocuments().catch(() => undefined)
     }
   }, [fetchDocuments, t])
 

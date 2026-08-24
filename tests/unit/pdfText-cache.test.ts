@@ -210,7 +210,8 @@ describe('PDF preview cache', () => {
     await vi.waitFor(() => expect(completePreview).not.toBeNull())
 
     await service.removePreviewCacheForDocument('d1', libraryFolder)
-    completePreview?.()
+    const finishPreview = completePreview as (() => void) | null
+    finishPreview?.()
     await expect(preview).resolves.toBeInstanceOf(Uint8Array)
 
     expect(existsSync(cachePath)).toBe(false)
@@ -284,5 +285,94 @@ describe('PDF preview cache', () => {
     const worker = mocks.fork.mock.results[0].value as MockWorker
     expect(worker.kill).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
+  })
+
+  it('fails the timed-out slot immediately and isolates its stale exit from the replacement worker', async () => {
+    service.destroy()
+    vi.useFakeTimers()
+    try {
+      const emitExit: Array<((code: number | null) => void) | undefined> = []
+      const workers: MockWorker[] = []
+      let autoRespondFrom = Number.POSITIVE_INFINITY
+      mocks.fork.mockImplementation(() => {
+        const index = workers.length
+        const handlers: Record<string, Array<(arg: unknown) => void>> = {}
+        const worker: MockWorker = {
+          on: vi.fn((event: string, cb: (arg: unknown) => void) => {
+            ;(handlers[event] ??= []).push(cb)
+          }),
+          postMessage: vi.fn((msg: { correlationId: string }) => {
+            if (index >= autoRespondFrom) {
+              for (const cb of handlers['message'] ?? []) {
+                cb({ correlationId: msg.correlationId, preview: new Uint8Array([137]) })
+              }
+            }
+          }),
+          kill: vi.fn(),
+          stderr: { on: vi.fn() }
+        }
+        emitExit[index] = (code) => {
+          for (const cb of handlers['exit'] ?? []) cb(code)
+        }
+        workers.push(worker)
+        return worker
+      })
+      service = createPdfTextService({ workerTimeoutMs: 50 })
+      const paths = [0, 1, 2, 3].map((index) => join(libraryFolder, `gen-${index}.pdf`))
+      for (const path of paths) writeFileSync(path, 'pdf')
+      const preview = (id: string, index: number) => service.getPreviewForDocument({
+        id,
+        filePath: paths[index],
+        fileName: `gen-${index}.pdf`,
+        fileHash: null
+      }, libraryFolder)
+
+      const first = preview('g1', 0)
+      const firstDone = expect(first).rejects.toThrow(/timed out/)
+      let firstFailed = false
+      void first.catch(() => {
+        firstFailed = true
+      })
+      for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1)
+      expect(workers).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(2)
+      const second = preview('g2', 1)
+      const secondDone = expect(second).rejects.toThrow(/timed out/)
+      const third = preview('g3', 2)
+      const thirdDone = expect(third).rejects.toThrow(/timed out/)
+      for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1)
+      expect(workers).toHaveLength(3)
+      expect(workers.map((worker) => worker.postMessage.mock.calls.length)).toEqual([1, 1, 1])
+
+      let guard = 0
+      while (!firstFailed && guard < 90) {
+        guard += 1
+        await vi.advanceTimersByTimeAsync(1)
+      }
+      expect(firstFailed).toBe(true)
+      await firstDone
+      expect(workers[0].kill).toHaveBeenCalledTimes(1)
+      expect(workers[1].kill).not.toHaveBeenCalled()
+      expect(workers[2].kill).not.toHaveBeenCalled()
+
+      emitExit[0]?.(1)
+
+      autoRespondFrom = 3
+      const fourth = preview('g4', 0)
+      for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1)
+      await expect(fourth).resolves.toBeInstanceOf(Uint8Array)
+      expect(mocks.fork).toHaveBeenCalledTimes(4)
+      expect(workers[3].postMessage).toHaveBeenCalledTimes(1)
+      expect(workers[0].kill).toHaveBeenCalledTimes(1)
+
+      for (let i = 0; i < 90; i += 1) await vi.advanceTimersByTimeAsync(1)
+      await secondDone
+      await thirdDone
+      expect(workers[1].kill).toHaveBeenCalledTimes(1)
+      expect(workers[2].kill).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

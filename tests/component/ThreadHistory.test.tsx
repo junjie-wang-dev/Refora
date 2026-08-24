@@ -102,6 +102,16 @@ describe('ThreadHistory', () => {
     expect(screen.getByRole('button', { name: 'Thread history' })).toBeDisabled()
   })
 
+  it('disables thread switching while streaming even when the menu is open', async () => {
+    renderHistory({ streaming: true })
+
+    const switchButton = screen.getByRole('button', { name: 'First conversation' })
+    expect(switchButton).toBeDisabled()
+    fireEvent.click(switchButton)
+    expect(mocks.setActiveThreadId).not.toHaveBeenCalled()
+    expect(mocks.onMenuOpenChange).not.toHaveBeenCalled()
+  })
+
   it('renders the empty state when there are no threads', () => {
     mocks.state.threads = []
     const { container } = renderHistory()

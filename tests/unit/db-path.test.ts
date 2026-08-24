@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { join } from 'node:path'
 
 const { mockExistsSync } = vi.hoisted(() => ({
-  mockExistsSync: vi.fn<[string], boolean>()
+  mockExistsSync: vi.fn<(path: string) => boolean>()
 }))
 
 vi.mock('node:fs', () => ({

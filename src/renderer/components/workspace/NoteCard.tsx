@@ -1,30 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Modal, Button, showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { Copy, Download, PencilSimple, Trash } from '@phosphor-icons/react'
+import { Download, PencilSimple, Trash } from '@phosphor-icons/react'
 import { motion, MotionConfig } from 'motion/react'
-import ReactMarkdown from 'react-markdown'
 import {
-  REMARK_PLUGINS,
+  MARKDOWN_COMPONENTS,
+  MarkdownCardModal,
   REHYPE_PLUGINS,
-  createReforaDocMarkdownComponents,
-  urlTransform
-} from '../../utils/markdown'
-import { useDocumentStore } from '../../store/documentStore'
+  REMARK_PLUGINS,
+  ReactMarkdown,
+  openMarkdownCardContextMenu,
+  urlTransform,
+  useMarkdownCardExport
+} from './noteReportShared'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
 import { Input as UiInput, Textarea as UiTextarea, cardClassName } from '../ui'
 import type { WorkspaceNote } from '../../../shared/ipc-types'
-import { openDocumentPdf } from '../../utils/openPdf'
-import i18n from '../../i18n'
-
-const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => openDocumentPdf(docId),
-  () => useDocumentStore.getState().showToast(
-    i18n.t('workspace.openDocFailed') as string
-  )
-)
 
 interface NoteCardProps {
   note: WorkspaceNote
@@ -56,12 +47,23 @@ export default function NoteCard({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const boardPreview = useMemo(() => boardCardPreview(note.contentMd), [note.contentMd])
+  const handleExportMarkdown = useMarkdownCardExport(note.title, note.contentMd, 'note')
 
   const enterEditMode = () => {
     setEditTitle(note.title)
     setEditContent(note.contentMd)
     setSaveError(null)
     setEditing(true)
+  }
+
+  const requestInternalEdit = () => {
+    setExpanded(true)
+    enterEditMode()
+  }
+
+  const requestDelete = () => {
+    setExpanded(true)
+    setConfirmDelete(true)
   }
 
   useEffect(() => {
@@ -71,56 +73,25 @@ export default function NoteCard({
     onAutoEditHandled?.()
   }, [autoEdit, onAutoEditHandled])
 
-  const handleExportMarkdown = () => {
-    const blob = new Blob([`# ${note.title}\n\n${note.contentMd}`], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${note.title.replace(/[^\w\u4e00-\u9fff\s-]/g, '').trim() || 'note'}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const items: ContextMenuItem[] = [
-      {
-        key: 'copy',
-        label: t('workspace.cardCopy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
-        onClick: () => onCopy?.()
+    openMarkdownCardContextMenu({
+      copyLabel: t('workspace.cardCopy'),
+      editLabel: t('workspace.noteEdit'),
+      exportLabel: t('workspace.noteExportMd'),
+      deleteLabel: t('workspace.noteDelete'),
+      onCopy: () => onCopy?.(),
+      onRequestEdit: () => {
+        if (onEdit) onEdit()
+        else requestInternalEdit()
       },
-      {
-        key: 'edit',
-        label: t('workspace.noteEdit'),
-        icon: <PencilSimple className="h-3.5 w-3.5" />,
-        onClick: () => {
-          if (onEdit) onEdit()
-          else {
-            setExpanded(true)
-            enterEditMode()
-          }
-        }
-      },
-      {
-        key: 'export',
-        label: t('workspace.noteExportMd'),
-        icon: <Download className="h-3.5 w-3.5" />,
-        onClick: handleExportMarkdown
-      },
-      {
-        key: 'delete',
-        label: t('workspace.noteDelete'),
-        icon: <Trash className="h-3.5 w-3.5" />,
-        onClick: () => {
-          setExpanded(true)
-          setConfirmDelete(true)
-        },
-        danger: true
+      onExport: handleExportMarkdown,
+      onDelete: () => {
+        setExpanded(true)
+        setConfirmDelete(true)
       }
-    ]
-    showContextMenu(items)
+    })
   }
 
   const closeModal = () => {
@@ -191,10 +162,7 @@ export default function NoteCard({
                 onClick={(e) => {
                   e.stopPropagation()
                   if (onEdit) onEdit()
-                  else {
-                    setExpanded(true)
-                    enterEditMode()
-                  }
+                  else requestInternalEdit()
                 }}
                 title={t('workspace.noteEdit')}
                 aria-label={t('workspace.noteEdit')}
@@ -218,8 +186,7 @@ export default function NoteCard({
                 className="rounded p-1 text-muted transition-colors duration-150 hover:text-error"
                 onClick={(e) => {
                   e.stopPropagation()
-                  setExpanded(true)
-                  setConfirmDelete(true)
+                  requestDelete()
                 }}
                 title={t('workspace.noteDelete')}
                 aria-label={t('workspace.noteDelete')}
@@ -251,59 +218,36 @@ export default function NoteCard({
         </motion.div>
       </MotionConfig>
 
-      <Modal
+      <MarkdownCardModal
         open={expanded}
         onCancel={closeModal}
         title={editing ? t('workspace.noteEdit') : note.title}
         width={720}
-        footer={
-          <div className="flex items-center justify-between">
-            <Button
-              danger
-              onClick={() => {
-                if (confirmDelete) {
-                  closeModal()
-                  onDelete()
-                } else {
-                  setConfirmDelete(true)
-                }
-              }}
-            >
-              <Trash className="mr-1.5 h-3.5 w-3.5" />
-              {confirmDelete ? t('common.confirm') : t('workspace.noteDelete')}
-            </Button>
-            <div className="flex gap-2">
-              <Button onClick={handleExportMarkdown}>
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                {t('workspace.noteExportMd')}
-              </Button>
-              {editing ? (
-                <>
-                  <Button onClick={handleCancelEdit}>{t('workspace.noteCancelEdit')}</Button>
-                  <Button type="primary" disabled={saving || !editTitle.trim()} onClick={() => void handleSave()}>
-                    {saving ? t('workspace.saving') : t('workspace.noteSave')}
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={enterEditMode}>
-                  <PencilSimple className="mr-1.5 h-3.5 w-3.5" />
-                  {t('workspace.noteEdit')}
-                </Button>
-              )}
-            </div>
-          </div>
-        }
+        editing={editing}
+        saving={saving}
+        canSave={editTitle.trim().length > 0}
+        confirmDelete={confirmDelete}
+        deleteConfirmMessage={t('workspace.noteDeleteConfirm')}
+        saveError={saveError}
+        labels={{
+          delete: t('workspace.noteDelete'),
+          confirm: t('common.confirm'),
+          exportMd: t('workspace.noteExportMd'),
+          edit: t('workspace.noteEdit'),
+          cancelEdit: t('workspace.noteCancelEdit'),
+          save: t('workspace.noteSave'),
+          saving: t('workspace.saving')
+        }}
+        onRequestDelete={() => setConfirmDelete(true)}
+        onConfirmDelete={() => {
+          closeModal()
+          onDelete()
+        }}
+        onExport={handleExportMarkdown}
+        onStartEdit={enterEditMode}
+        onCancelEdit={handleCancelEdit}
+        onSave={() => void handleSave()}
       >
-        {confirmDelete && (
-          <div className="mb-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error">
-            {t('workspace.noteDeleteConfirm')}
-          </div>
-        )}
-        {saveError && (
-          <div className="mb-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error">
-            {saveError}
-          </div>
-        )}
         {editing ? (
           <div className="grid min-h-[360px] grid-cols-2 gap-3">
             <div className="flex min-w-0 flex-col gap-3">
@@ -353,7 +297,7 @@ export default function NoteCard({
             </div>
           </>
         )}
-      </Modal>
+      </MarkdownCardModal>
     </>
   )
 }

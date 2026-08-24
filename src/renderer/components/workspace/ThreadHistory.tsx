@@ -98,7 +98,10 @@ export default function ThreadHistory({
                   ) : (
                     <button
                       type="button"
-                      className="min-w-0 flex-1 truncate text-left"
+                      className={`min-w-0 flex-1 truncate text-left ${
+                        streaming ? 'cursor-not-allowed opacity-50' : ''
+                      }`}
+                      disabled={streaming}
                       onClick={() => {
                         setActiveThreadId(th.id)
                         onMenuOpenChange(false)

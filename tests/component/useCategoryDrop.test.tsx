@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
 const { api } = vi.hoisted(() => ({
@@ -50,7 +50,7 @@ afterEach(() => {
 })
 
 describe('useCategoryDrop', () => {
-  let fetchDocuments: ReturnType<typeof vi.fn>
+  let fetchDocuments: Mock<() => void>
 
   beforeEach(() => {
     fetchDocuments = vi.fn()

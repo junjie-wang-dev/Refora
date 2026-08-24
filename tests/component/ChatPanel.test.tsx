@@ -111,6 +111,8 @@ function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
     id: 'run-1',
     threadId: 'thread-1',
     providerId: 'p1',
+    agentProfileId: null,
+    runtimeSessionId: null,
     modelId: 'gpt-4o',
     activeDocumentId: null,
     status: 'running',
@@ -513,7 +515,7 @@ describe('ChatPanel OCR progress placement', () => {
       'w-full',
       'max-w-[768px]',
       'border-accent',
-      'bg-white'
+      'bg-panel'
     )
     expect(approvalCard).toHaveTextContent('workspace.chat.approvalPrepareOcr')
     expect(approvalCard).toHaveTextContent('workspace.chat.approvalPrepareOcrDescription')
@@ -905,6 +907,7 @@ describe('ChatPanel provider restoration', () => {
         id: 'thread-1',
         workspaceId: 'ws-1',
         providerId: TEST_PROVIDER.id,
+        agentProfileId: null,
         createdAt: 1,
         title: 'Existing thread',
         headCheckpointId: null,
@@ -1418,6 +1421,25 @@ describe('ChatMessages presentation', () => {
     expect(container.querySelector('script')).toBeNull()
   })
 
+  it('resolves reference links across completed Markdown blocks', () => {
+    const messages: ChatMessage[] = [
+      {
+        id: 'a1',
+        threadId: 't1',
+        role: 'assistant',
+        content: 'See [site][1].\n\n[1]: https://example.com',
+        createdAt: 1
+      }
+    ]
+
+    renderMessages({ messages, streaming: false })
+
+    expect(screen.getByRole('link', { name: 'site' })).toHaveAttribute(
+      'href',
+      'https://example.com'
+    )
+  })
+
   it('renders live reasoning in a collapsible activity panel', () => {
     renderMessages({ streamingReasoning: 'Comparing the cited methods.' })
 
@@ -1491,7 +1513,12 @@ describe('ChatMessages presentation', () => {
       endedAt: 2,
       inputTokens: null,
       outputTokens: null,
-      totalTokens: null
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
     }
     const traceSteps: AgentTraceStep[] = [
       { ...base, id: 'llm', kind: 'llm', name: 'model_call', input: '{}', output: '', seq: 0 },
@@ -1539,18 +1566,21 @@ describe('ChatMessages presentation', () => {
       {
         id: 'failed-run', threadId: 't1', runId: 'run-failed', kind: 'run', name: 'agent_run',
         input: null, output: 'Provider failed', status: 'error', startedAt: 1, endedAt: 2,
-        seq: 0, inputTokens: null, outputTokens: null, totalTokens: null
+        seq: 0, inputTokens: null, outputTokens: null, totalTokens: null,
+        parentStepId: null, agentName: null, namespace: null, depth: 0, checkpointId: null
       },
       {
         id: 'success-run', threadId: 't1', runId: 'run-success', kind: 'run', name: 'agent_run',
         input: null, output: null, status: 'done', startedAt: 10, endedAt: 12,
-        seq: 0, inputTokens: null, outputTokens: null, totalTokens: null
+        seq: 0, inputTokens: null, outputTokens: null, totalTokens: null,
+        parentStepId: null, agentName: null, namespace: null, depth: 0, checkpointId: null
       },
       {
         id: 'success-message', threadId: 't1', runId: 'run-success', kind: 'message',
         name: 'assistant_message', input: null, output: 'Successful answer', status: 'done',
         startedAt: 11, endedAt: 12, seq: 1, inputTokens: null, outputTokens: null,
-        totalTokens: null
+        totalTokens: null, parentStepId: null, agentName: null, namespace: null,
+        depth: 0, checkpointId: null
       }
     ]
 
@@ -1611,7 +1641,12 @@ describe('ChatMessages presentation', () => {
       endedAt: 2,
       inputTokens: null,
       outputTokens: null,
-      totalTokens: null
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
     }
     const traceSteps: AgentTraceStep[] = [
       {
@@ -1779,7 +1814,6 @@ function renderChatStream(
       requestModel: '',
       deepThinking: reasoningEffort != null && reasoningEffort !== 'none',
       reasoningEffort,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     })
@@ -1800,7 +1834,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -1830,7 +1863,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming,
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -1861,7 +1893,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -1884,7 +1915,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -1906,7 +1936,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -1940,7 +1969,6 @@ describe('useChatStream lifecycle', () => {
         activeThreadId: 'thread-1',
         requestModel: '',
         deepThinking: false,
-        setActiveThreadId: vi.fn(),
         setChatStreaming: vi.fn(),
         fetchThreads: vi.fn().mockResolvedValue(undefined)
       }),
@@ -2225,7 +2253,7 @@ describe('useChatStream lifecycle', () => {
 
   it('keeps a new chat alive after the Strict Mode effect replay', async () => {
     setupApi([])
-    const setActiveThreadId = vi.fn()
+    useWorkspaceStore.setState({ activeThreadId: null })
     const { result } = renderHook(
       () => useChatStream({
         activeWorkspaceId: 'ws-1',
@@ -2234,7 +2262,6 @@ describe('useChatStream lifecycle', () => {
         activeThreadId: null,
         requestModel: '',
         deepThinking: false,
-        setActiveThreadId,
         setChatStreaming: vi.fn(),
         fetchThreads: vi.fn().mockResolvedValue(undefined)
       }),
@@ -2247,7 +2274,7 @@ describe('useChatStream lifecycle', () => {
     })
 
     expect(mockChatCancel).not.toHaveBeenCalled()
-    expect(setActiveThreadId).toHaveBeenCalledWith('thread-1')
+    expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
     expect(result.current.streaming).toBe(true)
   })
 
@@ -2288,7 +2315,12 @@ describe('useChatStream lifecycle', () => {
       seq: 0,
       inputTokens: null,
       outputTokens: null,
-      totalTokens: null
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
     }
     const messageStep: AgentTraceStep = {
       ...reasoningStep,
@@ -2433,7 +2465,6 @@ describe('useChatStream lifecycle', () => {
 
   it('does not hydrate history over a newly started live run', async () => {
     setupApi([])
-    const setActiveThreadId = vi.fn()
     const { result, rerender } = renderHook(
       ({ threadId }: { threadId: string | null }) => useChatStream({
         activeWorkspaceId: 'ws-1',
@@ -2442,7 +2473,6 @@ describe('useChatStream lifecycle', () => {
         activeThreadId: threadId,
         requestModel: '',
         deepThinking: false,
-        setActiveThreadId,
         setChatStreaming: vi.fn(),
         fetchThreads: vi.fn().mockResolvedValue(undefined)
       }),
@@ -2470,7 +2500,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming,
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -2793,7 +2822,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -2844,7 +2872,6 @@ describe('useChatStream lifecycle', () => {
       activeThreadId: 'thread-1',
       requestModel: '',
       deepThinking: false,
-      setActiveThreadId: vi.fn(),
       setChatStreaming: vi.fn(),
       fetchThreads: vi.fn().mockResolvedValue(undefined)
     }))
@@ -2879,7 +2906,12 @@ describe('AgentTracePanel structure', () => {
       seq: 0,
       inputTokens: null,
       outputTokens: null,
-      totalTokens: null
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
     }
     render(<AgentTracePanel steps={[traceStep]} streaming={false} />)
     const panelToggle = screen.getByRole('button', { name: /workspace.chat.trace/ })
@@ -2904,7 +2936,12 @@ describe('AgentTracePanel structure', () => {
       seq: 0,
       inputTokens: null,
       outputTokens: null,
-      totalTokens: null
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
     }
     render(<AgentTracePanel steps={[traceStep]} streaming={false} />)
 

@@ -135,7 +135,7 @@ let mockUpdateDoc: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   mockUpdateDoc = vi.fn().mockResolvedValue(mockDoc)
-  const winApi = (window as Record<string, unknown>).api as Record<string, unknown>
+  const winApi = (window as unknown as Record<string, unknown>).api as Record<string, unknown>
   if (winApi) {
     const docs = winApi.documents as Record<string, unknown>
     docs.update = mockUpdateDoc

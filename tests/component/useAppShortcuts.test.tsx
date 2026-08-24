@@ -9,8 +9,8 @@ function makeDoc(id: string): Document {
     id, filePath: `/x/${id}.pdf`, originalFolderPath: '/x', fileName: `${id}.pdf`,
     fileSize: 1, fileHash: id, title: id, authors: '', year: '', venue: '',
     volume: null, issue: null, pages: null, abstract: null, keywords: null,
-    url: null, doi: null, note: null, starred: 0, addedAt: 0, lastReadAt: null,
-    updatedAt: 0, metadataSource: null, metadataStatus: 'success', metadataAttempts: 0,
+    url: null, doi: null, arxivId: null, note: null, affiliations: null, starred: 0, addedAt: 0, lastReadAt: null,
+    updatedAt: 0, metadataSource: null, metadataStatus: 'done', metadataAttempts: 0,
     editedFields: [], remoteValues: null, fileMissing: 0
   }
 }

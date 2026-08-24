@@ -58,4 +58,52 @@ describe('ConfirmDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(action).toHaveBeenCalledTimes(1)
   })
+
+  it('passes an undefined input value for plain confirmation requests', () => {
+    const onConfirm = vi.fn()
+    useConfirmStore.getState().show({ title: 't', message: 'm', onConfirm })
+    render(<ConfirmDialog />)
+    expect(screen.queryByRole('textbox')).toBeNull()
+    fireEvent.click(screen.getByText('OK'))
+    expect(onConfirm).toHaveBeenCalledWith(undefined)
+  })
+
+  it('confirms an input request with the entered value on Enter', () => {
+    const onConfirm = vi.fn()
+    useConfirmStore.getState().show({
+      title: 'New category',
+      message: 'Name',
+      confirmText: 'Create',
+      cancelText: 'Cancel',
+      input: { defaultValue: '', placeholder: 'Name' },
+      onConfirm
+    })
+    render(<ConfirmDialog />)
+
+    const input = screen.getByPlaceholderText('Name')
+    expect(input).toHaveValue('')
+    fireEvent.change(input, { target: { value: ' Papers ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onConfirm).toHaveBeenCalledWith(' Papers ')
+    expect(useConfirmStore.getState().request).toBeNull()
+  })
+
+  it('dismisses an input request on Escape without confirming', () => {
+    const onConfirm = vi.fn()
+    useConfirmStore.getState().show({
+      title: 't',
+      message: 'm',
+      input: { defaultValue: 'draft', placeholder: 'Name' },
+      onConfirm
+    })
+    render(<ConfirmDialog />)
+
+    const input = screen.getByPlaceholderText('Name')
+    expect(input).toHaveValue('draft')
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(onConfirm).not.toHaveBeenCalled()
+    expect(useConfirmStore.getState().request).toBeNull()
+  })
 })

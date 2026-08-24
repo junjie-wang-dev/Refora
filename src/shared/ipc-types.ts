@@ -769,6 +769,11 @@ export interface ChatCancelResult {
 
 export type AgentInterruptDecision = 'approve' | 'reject' | 'edit'
 
+export interface AgentInterruptDecisionEntry {
+  type: AgentInterruptDecision
+  editedAction?: { name: string; args: Record<string, unknown> }
+}
+
 export interface AgentInterruptAction {
   name: string
   args: Record<string, unknown>
@@ -783,7 +788,7 @@ export interface AgentInterrupt {
   checkpointId: string | null
   actions: AgentInterruptAction[]
   status: 'pending' | 'resolved'
-  decision: AgentInterruptDecision[] | null
+  decision: AgentInterruptDecisionEntry[] | null
   createdAt: number
   resolvedAt: number | null
 }

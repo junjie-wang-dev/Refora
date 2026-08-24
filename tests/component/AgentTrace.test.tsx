@@ -18,6 +18,7 @@ function step(over: Partial<AgentTraceStep> = {}): AgentTraceStep {
     id: 's1', threadId: 't', runId: 'r', kind: 'llm', name: null,
     input: null, output: null, status: 'done', startedAt: 1000, endedAt: 2000,
     seq: 0, inputTokens: null, outputTokens: null, totalTokens: null,
+    parentStepId: null, agentName: null, namespace: null, depth: 0, checkpointId: null,
     ...over
   }
 }

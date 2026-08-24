@@ -46,7 +46,6 @@ export interface UseChatStreamParams {
   requestModel: string
   deepThinking: boolean
   reasoningEffort?: AiReasoningEffort
-  setActiveThreadId: (id: string) => void
   setChatStreaming: (streaming: boolean) => void
   fetchThreads: (options?: { selectLatestIfNone?: boolean }) => Promise<void>
 }

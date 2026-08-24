@@ -1,7 +1,7 @@
 import { inferModelCapabilities, type ModelCapabilityHints } from './providerCatalog'
-import type { AiReasoningEffort } from './ipc-types'
+import type { ModelVariantFormat, ProviderModelInfo } from './ipc-types'
 
-export type ModelVariantFormat = 'dash' | 'colon' | 'none'
+export type { ModelVariantFormat, ProviderModelInfo }
 
 export const COMMON_VARIANTS = ['high', 'xhigh', 'max', 'fast', 'thinking'] as const
 
@@ -59,17 +59,6 @@ export function composeModelId(
   if (!v || format === 'none') return base
   if (format === 'colon') return `${base}:${v}`
   return `${base}-${v}`
-}
-
-export interface ProviderModelInfo {
-  id: string
-  providerName?: string
-  supportsVariants: boolean
-  supportsReasoning: boolean
-  reasoningEfforts: AiReasoningEffort[]
-  supportsVision: boolean
-  supportsTools: boolean
-  supportedParameters: string[]
 }
 
 export function toProviderModelInfo(
