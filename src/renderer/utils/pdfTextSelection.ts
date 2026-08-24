@@ -1,4 +1,5 @@
 import type { PdfAnnotationRect } from '../../shared/ipc-types'
+import { pdfRectFromRotation } from './pdfAnnotationSelection'
 
 export interface PdfTextSelection {
   text: string
@@ -31,14 +32,20 @@ export function pdfTextPositionAtPoint(
   clientX: number,
   clientY: number
 ): PdfTextPosition | null {
-  if (typeof document.caretPositionFromPoint !== 'function') return null
-  const position = document.caretPositionFromPoint(clientX, clientY)
-  if (!position) return null
-  const element = position.offsetNode instanceof Element
-    ? position.offsetNode
-    : position.offsetNode.parentElement
+  const caretPosition = typeof document.caretPositionFromPoint === 'function'
+    ? document.caretPositionFromPoint(clientX, clientY)
+    : null
+  const caretRange = caretPosition
+    ? null
+    : (document as Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null
+      }).caretRangeFromPoint?.(clientX, clientY) ?? null
+  const node = caretPosition?.offsetNode ?? caretRange?.startContainer
+  const offset = caretPosition?.offset ?? caretRange?.startOffset
+  if (!node || offset === undefined) return null
+  const element = node instanceof Element ? node : node.parentElement
   if (!element?.closest('.textLayer') || !root.contains(element)) return null
-  return { node: position.offsetNode, offset: position.offset }
+  return { node, offset }
 }
 
 export function updateTextSelection(start: PdfTextPosition, end: PdfTextPosition): void {
@@ -103,12 +110,16 @@ export function textSelectionInReader(root: HTMLElement): PdfTextSelection | nul
         const right = Math.min(bounds.right, rect.right)
         const top = Math.max(bounds.top, rect.top)
         const bottom = Math.min(bounds.bottom, rect.bottom)
-        return {
+        const normalized = {
           x: (left - bounds.left) / bounds.width,
           y: (top - bounds.top) / bounds.height,
           width: (right - left) / bounds.width,
           height: (bottom - top) / bounds.height
         }
+        return pdfRectFromRotation(
+          normalized,
+          Number(element.dataset.pageRotation) || 0
+        )
       })
       .filter((rect) => rect.width > 0 && rect.height > 0)
     if (rects.length === 0) return []

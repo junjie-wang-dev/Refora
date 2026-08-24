@@ -15,7 +15,15 @@ export type PdfPoint = PdfAnnotationPoint
 export type PdfAnnotationDraft = Omit<PdfAnnotation, 'id' | 'createdAt'>
 type PdfAnnotationPatch = Partial<Pick<
   PdfAnnotation,
-  'comment' | 'color' | 'text' | 'fontSize' | 'strokeWidth'
+  | 'comment'
+  | 'color'
+  | 'text'
+  | 'fontSize'
+  | 'strokeWidth'
+  | 'point'
+  | 'size'
+  | 'points'
+  | 'rects'
 >>
 
 export type PdfTool =

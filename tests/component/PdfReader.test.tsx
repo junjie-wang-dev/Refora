@@ -24,22 +24,35 @@ const pdfMocks = vi.hoisted(() => {
     cancel: cancelRender
   }))
   const page = {
-    getViewport: vi.fn(({ scale, rotation }: { scale: number; rotation: number }) => ({
-      width: 612 * scale,
-      height: 792 * scale,
-      rotation
-    })),
+    getViewport: vi.fn(({ scale, rotation = 0 }: { scale: number; rotation?: number }) => {
+      const viewport = {
+        width: 612 * scale,
+        height: 792 * scale,
+        rotation,
+        clone: vi.fn(() => viewport)
+      }
+      return viewport
+    }),
     getTextContent: vi.fn(async () => ({ items: [] as Array<{ str: string }> })),
+    getAnnotations: vi.fn(async (): Promise<Array<{
+      url?: string
+      dest?: string | unknown[]
+    }>> => []),
     render: renderPage
   }
   const document = {
     numPages: 1,
     getPage: vi.fn(async () => page),
+    getDestination: vi.fn(async () => null),
+    getPageIndex: vi.fn(async () => 0),
+    cachedPageNumber: vi.fn(() => null),
+    getAttachmentContent: vi.fn(async () => null),
+    annotationStorage: {},
     cleanup: vi.fn()
   }
   const destroyDocument = vi.fn(async () => undefined)
   let loadGate: Promise<typeof document> | null = null
-  const getDocument = vi.fn(() => ({
+  const getDocument = vi.fn((_options?: Record<string, unknown>) => ({
     promise: loadGate ?? Promise.resolve(document),
     destroy: destroyDocument
   }))
@@ -113,8 +126,71 @@ vi.mock('pdfjs-dist', () => ({
   },
   getDocument: pdfMocks.getDocument,
   TextLayer: class {
-    render = vi.fn(async () => undefined)
+    textDivs: HTMLElement[]
+    textContentItemsStr: string[]
+    private readonly container: HTMLElement
+    constructor({
+      textContentSource,
+      container
+    }: {
+      textContentSource: { items: Array<{ str?: string }> }
+      container: HTMLElement
+    }) {
+      this.container = container
+      this.textContentItemsStr = textContentSource.items.map((item) => item.str ?? '')
+      this.textDivs = this.textContentItemsStr.map((text) => {
+        const span = window.document.createElement('span')
+        span.textContent = text
+        return span
+      })
+    }
+    render = vi.fn(async () => {
+      this.container.append(...this.textDivs)
+    })
     cancel = vi.fn()
+  },
+  AnnotationLayer: class {
+    private readonly div: HTMLDivElement
+    private readonly linkService: {
+      addLinkAttributes: (link: HTMLAnchorElement, url: string) => void
+      getDestinationHash: () => string
+      goToDestination: (destination: string | unknown[]) => void
+    }
+    constructor({
+      div,
+      linkService
+    }: {
+      div: HTMLDivElement
+      linkService: {
+        addLinkAttributes: (link: HTMLAnchorElement, url: string) => void
+        getDestinationHash: () => string
+        goToDestination: (destination: string | unknown[]) => void
+      }
+    }) {
+      this.div = div
+      this.linkService = linkService
+    }
+    render = vi.fn(async ({ annotations }: { annotations: Array<{
+      url?: string
+      dest?: string | unknown[]
+    }> }) => {
+      annotations.forEach((annotation) => {
+        const section = window.document.createElement('section')
+        section.className = 'linkAnnotation'
+        const link = window.document.createElement('a')
+        if (annotation.url) this.linkService.addLinkAttributes(link, annotation.url)
+        if (annotation.dest) {
+          link.href = this.linkService.getDestinationHash()
+          link.onclick = () => {
+            this.linkService.goToDestination(annotation.dest ?? [])
+            return false
+          }
+        }
+        section.append(link)
+        this.div.append(section)
+      })
+    })
+    destroy = vi.fn()
   }
 }))
 
@@ -226,6 +302,7 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.document.numPages = 1
     pdfMocks.document.getPage.mockReset().mockResolvedValue(pdfMocks.page)
     pdfMocks.page.getTextContent.mockReset().mockResolvedValue({ items: [] })
+    pdfMocks.page.getAnnotations.mockReset().mockResolvedValue([])
     pdfMocks.destroyDocument.mockClear()
     pdfMocks.getDocument.mockClear()
     pdfMocks.gateLoad(null)
@@ -267,25 +344,29 @@ describe('PdfReader rendering visibility', () => {
     const view = render(<PdfReader />)
 
     await waitFor(() => {
-      expect(observers.some((observer) => observer.target instanceof HTMLCanvasElement)).toBe(true)
+      expect(observers.some((observer) =>
+        (observer.target as HTMLElement | undefined)?.hasAttribute('data-pdf-canvas-tile')
+      )).toBe(true)
     })
-    expect(api.documents.readPdfRange).toHaveBeenCalledWith('paper', 0, 65536)
+    expect(api.documents.readPdfRange).toHaveBeenCalledWith('paper', 0, 262144)
     expect(pdfMocks.getDocument).toHaveBeenCalledWith({
       range: expect.anything(),
-      rangeChunkSize: 65536,
-      disableAutoFetch: true,
+      rangeChunkSize: 262144,
       disableStream: true
     })
 
     const canvasObserver = observers.find(
-      (observer) => observer.target instanceof HTMLCanvasElement
+      (observer) => (observer.target as HTMLElement | undefined)
+        ?.hasAttribute('data-pdf-canvas-tile')
     )
     const root = canvasObserver?.options?.root
     expect(root).toBeInstanceOf(HTMLDivElement)
     expect((root as HTMLDivElement).classList.contains('overflow-auto')).toBe(true)
     expect(canvasObserver?.options?.rootMargin).toBe('700px 0px')
 
-    const canvas = canvasObserver?.target as HTMLCanvasElement
+    const canvases = Array.from(
+      canvasObserver?.target?.querySelectorAll('canvas') ?? []
+    ) as HTMLCanvasElement[]
     act(() => {
       canvasObserver?.callback(
         [{ isIntersecting: true } as IntersectionObserverEntry],
@@ -293,8 +374,7 @@ describe('PdfReader rendering visibility', () => {
       )
     })
     await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(1))
-    expect(canvas.width).toBeGreaterThan(1)
-    expect(canvas.height).toBeGreaterThan(1)
+    expect(canvases.some((canvas) => canvas.width > 1 && canvas.height > 1)).toBe(true)
 
     act(() => {
       canvasObserver?.callback(
@@ -302,8 +382,8 @@ describe('PdfReader rendering visibility', () => {
         canvasObserver as unknown as IntersectionObserver
       )
     })
-    await waitFor(() => expect(canvas.width).toBe(1))
-    expect(canvas.height).toBe(1)
+    await waitFor(() => expect(canvases.every((canvas) => canvas.width === 1)).toBe(true))
+    expect(canvases.every((canvas) => canvas.height === 1)).toBe(true)
 
     act(() => {
       canvasObserver?.callback(
@@ -313,6 +393,41 @@ describe('PdfReader rendering visibility', () => {
     })
     await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(2))
     expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
+  })
+
+  it('retries a transient PDF range failure before delivering the complete chunk', async () => {
+    render(<PdfReader />)
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalled())
+    const options = pdfMocks.getDocument.mock.calls.at(0)?.[0]
+    expect(options).toBeDefined()
+    const range = options?.range as {
+      requestDataRange: (begin: number, end: number) => void
+      onDataRange: ReturnType<typeof vi.fn>
+    }
+    vi.mocked(api.documents.readPdfRange)
+      .mockRejectedValueOnce(new Error('transient IPC failure'))
+      .mockResolvedValueOnce({ begin: 0, fileSize: 1, data: new Uint8Array([1]) })
+
+    range.requestDataRange(0, 1)
+
+    await waitFor(() => expect(range.onDataRange).toHaveBeenCalledWith(
+      0,
+      new Uint8Array([1])
+    ))
+  })
+
+  it('retries transient page loading failures', async () => {
+    pdfMocks.document.getPage
+      .mockReset()
+      .mockRejectedValueOnce(new Error('page unavailable'))
+      .mockRejectedValueOnce(new Error('page unavailable'))
+      .mockResolvedValue(pdfMocks.page)
+
+    const view = render(<PdfReader />)
+
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).toBeVisible())
+    await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(3))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('bounds mounted pages and page observers for a long document', async () => {
@@ -478,6 +593,185 @@ describe('PdfReader rendering visibility', () => {
     expect(pdfMocks.page.getTextContent).toHaveBeenCalledTimes(1)
   })
 
+  it('highlights every PDF search match and marks the active result', async () => {
+    pdfMocks.page.getTextContent.mockResolvedValue({
+      items: [{ str: 'alpha beta alpha' }]
+    })
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(
+      view.container.querySelector('.textLayer span')
+    ).toHaveTextContent('alpha beta alpha'))
+    const input = screen.getByPlaceholderText('pdfReader.search')
+
+    fireEvent.change(input, { target: { value: 'alpha' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+
+    await screen.findByText('1/2')
+    await waitFor(() => expect(
+      view.container.querySelectorAll('.textLayer .highlight')
+    ).toHaveLength(2))
+    expect(view.container.querySelectorAll('.textLayer .highlight.selected')).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.nextResult' }))
+    await screen.findByText('2/2')
+    expect(view.container.querySelectorAll('.textLayer .highlight.selected')).toHaveLength(1)
+  })
+
+  it('lets an in-progress PDF search be stopped immediately', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).toBeVisible())
+    pdfMocks.document.getPage.mockReset().mockReturnValue(new Promise(() => undefined))
+    const input = screen.getByPlaceholderText('pdfReader.search')
+
+    fireEvent.change(input, { target: { value: 'pending' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    const stop = await screen.findByRole('button', { name: 'pdfReader.cancelSearch' })
+    fireEvent.click(stop)
+
+    await waitFor(() => expect(screen.queryByRole('button', {
+      name: 'pdfReader.cancelSearch'
+    })).not.toBeInTheDocument())
+  })
+
+  it('renders native PDF links and navigates internal destinations', async () => {
+    pdfMocks.document.numPages = 2
+    pdfMocks.page.getAnnotations.mockResolvedValue([
+      { url: 'https://example.com/paper' },
+      { dest: [1] }
+    ])
+    const view = render(<PdfReader />)
+
+    const links = await waitFor(() => {
+      const elements = view.container.querySelectorAll<HTMLAnchorElement>(
+        '[data-page-number="1"] .annotationLayer a'
+      )
+      expect(elements).toHaveLength(2)
+      return elements
+    })
+    expect(links[0]).toHaveAttribute('href', 'https://example.com/paper')
+    expect(links[0]).toHaveAttribute('target', '_blank')
+
+    fireEvent.click(links[1])
+    await waitFor(() => expect(pdfVirtualizerMocks.scrollToIndex).toHaveBeenCalledWith(1, {
+      behavior: 'smooth',
+      align: 'start'
+    }))
+  })
+
+  it('supports precise zoom input and trackpad pinch zoom', async () => {
+    const view = render(<PdfReader />)
+    const zoom = await screen.findByRole('textbox', { name: 'pdfReader.zoomPercentage' })
+
+    fireEvent.change(zoom, { target: { value: '137.5' } })
+    fireEvent.submit(zoom.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(zoom).toHaveValue('137.5'))
+    expect(view.container.querySelector<HTMLElement>('.pdf-reader-page'))
+      .toHaveStyle({ width: '841.5px' })
+
+    const scroller = view.container.querySelector<HTMLElement>(
+      '[data-pdf-page-virtualizer]'
+    )?.parentElement
+    expect(scroller).not.toBeNull()
+    fireEvent.wheel(scroller!, {
+      ctrlKey: true,
+      deltaY: -10,
+      clientX: 200,
+      clientY: 200
+    })
+    await waitFor(() => expect(Number((zoom as HTMLInputElement).value)).toBeGreaterThan(137.5))
+  })
+
+  it('moves a selected text mark with a pointer drag', async () => {
+    usePdfReaderStore.setState({
+      annotations: {
+        paper: [{
+          id: 'movable-highlight',
+          kind: 'highlight',
+          page: 1,
+          color: '#f2c94c',
+          text: 'Move me',
+          comment: '',
+          createdAt: 1,
+          rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.04 }]
+        }]
+      }
+    })
+    const view = render(<PdfReader />)
+    const pdfPage = await waitFor(() => {
+      const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    vi.spyOn(pdfPage, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 200,
+      top: 0,
+      bottom: 300,
+      width: 200,
+      height: 300,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    Object.defineProperties(pdfPage, {
+      clientWidth: { configurable: true, value: 200 },
+      clientHeight: { configurable: true, value: 300 }
+    })
+    pdfPage.setPointerCapture = vi.fn()
+    const highlight = await waitFor(() => {
+      const element = pdfPage.querySelector<HTMLButtonElement>(
+        'button[aria-label="pdfReader.tools.highlight"]'
+      )
+      expect(element).not.toBeNull()
+      return element!
+    })
+
+    fireEvent.pointerDown(highlight, { pointerId: 7, button: 0, clientX: 40, clientY: 30 })
+    fireEvent.pointerMove(pdfPage, { pointerId: 7, clientX: 60, clientY: 60 })
+    fireEvent.pointerUp(pdfPage, { pointerId: 7, clientX: 60, clientY: 60 })
+
+    const movedRect = usePdfReaderStore.getState().annotations.paper[0].rects?.[0]
+    expect(movedRect?.x).toBeCloseTo(0.2)
+    expect(movedRect?.y).toBeCloseTo(0.2)
+  })
+
+  it('fits an inline text annotation box to its content', async () => {
+    usePdfReaderStore.setState({ tool: 'text' })
+    const view = render(<PdfReader />)
+    const pdfPage = await waitFor(() => {
+      const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    vi.spyOn(pdfPage, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 612,
+      top: 0,
+      bottom: 792,
+      width: 612,
+      height: 792,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    const inputLayer = pdfPage.querySelector<HTMLElement>('[data-annotation-input-layer]')!
+    fireEvent.pointerDown(inputLayer, {
+      pointerId: 1,
+      button: 0,
+      clientX: 60,
+      clientY: 80
+    })
+    const editor = await screen.findByPlaceholderText('pdfReader.textPlaceholder')
+
+    fireEvent.change(editor, {
+      target: { value: 'A much longer inline PDF annotation that wraps onto another line.' }
+    })
+
+    const annotation = usePdfReaderStore.getState().annotations.paper[0]
+    expect(annotation.size?.width).toBeGreaterThan(0.16)
+    expect(annotation.size?.height).toBeGreaterThan(0.04)
+  })
+
   it('ignores PDF keyboard shortcuts while its workspace view is hidden', async () => {
     const view = render(<PdfReader active={false} />)
     await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
@@ -559,7 +853,7 @@ describe('PdfReader rendering visibility', () => {
       expect(element).not.toBeNull()
       return element!
     })
-    expect(markedText).toHaveClass('z-20', 'pointer-events-auto', 'cursor-pointer')
+    expect(markedText).toHaveClass('z-20', 'pointer-events-auto', 'cursor-move')
     expect(pdfPage.querySelector('svg[aria-label="pdfReader.annotations"]'))
       .toHaveStyle({ zIndex: '20' })
     fireEvent.click(markedText)
@@ -817,7 +1111,9 @@ describe('PdfReader rendering visibility', () => {
   it('destroys the superseded loading task when switching documents', async () => {
     render(<PdfReader />)
     await waitFor(() => {
-      expect(observers.some((observer) => observer.target instanceof HTMLCanvasElement)).toBe(true)
+      expect(observers.some((observer) =>
+        (observer.target as HTMLElement | undefined)?.hasAttribute('data-pdf-canvas-tile')
+      )).toBe(true)
     })
     pdfMocks.destroyDocument.mockClear()
 

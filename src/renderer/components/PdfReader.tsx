@@ -48,14 +48,18 @@ import { usePdfSearch } from '../hooks/usePdfSearch'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
-const MIN_SCALE = 0.5
-const MAX_SCALE = 3
-const PDF_RANGE_CHUNK_SIZE = 64 * 1024
+const MIN_SCALE = 0.25
+const MAX_SCALE = 5
+const PDF_RANGE_CHUNK_SIZE = 256 * 1024
 const PDF_PAGE_WIDTH = 612
 const PDF_PAGE_HEIGHT = 792
 const PDF_PAGE_GAP = 20
 const PDF_PAGE_PADDING = 24
 const PDF_PAGE_OVERSCAN = 2
+
+function zoomPercent(value: number): string {
+  return String(Number((value * 100).toFixed(1)))
+}
 
 interface PdfRuntime {
   getDocument: typeof import('pdfjs-dist').getDocument
@@ -78,6 +82,22 @@ function loadPdfRuntime(): Promise<PdfRuntime> {
     })
   }
   return runtimePromise
+}
+
+async function readPdfRangeWithRetry(
+  documentId: string,
+  begin: number,
+  end: number
+): Promise<Awaited<ReturnType<typeof api.documents.readPdfRange>>> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await api.documents.readPdfRange(documentId, begin, end)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
 }
 
 const TOOL_ICONS = {
@@ -184,6 +204,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [scale, setScale] = useState(1.15)
+  const [zoomInput, setZoomInput] = useState(() => zoomPercent(1.15))
   const [rotation, setRotation] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
@@ -194,6 +215,8 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   )
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scaleRef = useRef(scale)
+  const zoomFrameRef = useRef<number | null>(null)
   const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
   const rotated = Math.abs(rotation) % 180 !== 0
   const estimatedPageWidth = (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH) * scale
@@ -216,9 +239,70 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   })
   const virtualPages = pageVirtualizer.getVirtualItems()
 
+  const setScaleAnchored = useCallback((requestedScale: number, x?: number, y?: number) => {
+    const nextScale = Math.round(
+      Math.max(MIN_SCALE, Math.min(MAX_SCALE, requestedScale)) * 1000
+    ) / 1000
+    const previousScale = scaleRef.current
+    if (nextScale === previousScale) return
+    const root = scrollRef.current
+    const rootBounds = root?.getBoundingClientRect()
+    const clientX = x ?? (rootBounds ? rootBounds.left + rootBounds.width / 2 : 0)
+    const clientY = y ?? (rootBounds ? rootBounds.top + rootBounds.height / 2 : 0)
+    const pointedPage = document.elementFromPoint?.(clientX, clientY)
+      ?.closest<HTMLElement>('[data-page-number]')
+    const anchorPage = pointedPage && root?.contains(pointedPage)
+      ? pointedPage
+      : root?.querySelector<HTMLElement>(`[data-page-number="${currentPage}"]`) ?? null
+    const pageBounds = anchorPage?.getBoundingClientRect()
+    const anchor = anchorPage && pageBounds
+      ? {
+          page: Number(anchorPage.dataset.pageNumber),
+          x: pageBounds.width > 0 ? (clientX - pageBounds.left) / pageBounds.width : 0.5,
+          y: pageBounds.height > 0 ? (clientY - pageBounds.top) / pageBounds.height : 0.5,
+          clientX,
+          clientY
+        }
+      : null
+    scaleRef.current = nextScale
+    setScale(nextScale)
+    setZoomInput(zoomPercent(nextScale))
+    if (!root || !anchor) return
+    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = window.requestAnimationFrame(() => {
+      zoomFrameRef.current = window.requestAnimationFrame(() => {
+        zoomFrameRef.current = null
+        const nextPage = root.querySelector<HTMLElement>(
+          `[data-page-number="${anchor.page}"]`
+        )
+        const nextBounds = nextPage?.getBoundingClientRect()
+        if (!nextBounds) return
+        root.scrollLeft += nextBounds.left + nextBounds.width * anchor.x - anchor.clientX
+        root.scrollTop += nextBounds.top + nextBounds.height * anchor.y - anchor.clientY
+      })
+    })
+  }, [currentPage])
+
   useEffect(() => {
     pageVirtualizer.measure()
   }, [activeDocumentId, pageVirtualizer, rotation, scale])
+
+  useEffect(() => () => {
+    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current)
+  }, [])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root) return
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      const factor = Math.exp(-event.deltaY * 0.01)
+      setScaleAnchored(scaleRef.current * factor, event.clientX, event.clientY)
+    }
+    root.addEventListener('wheel', handleWheel, { passive: false })
+    return () => root.removeEventListener('wheel', handleWheel)
+  }, [setScaleAnchored])
 
   useEffect(() => {
     const updateDevicePixelRatio = () => {
@@ -273,7 +357,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       return
     }
     let cancelled = false
-    let document: PDFDocumentProxy | null = null
     let loadingTask: PDFDocumentLoadingTask | null = null
     setLoadingError(null)
     setPdf(null)
@@ -282,7 +365,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     visiblePagesRef.current.clear()
     void Promise.all([
       loadPdfRuntime(),
-      api.documents.readPdfRange(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
+      readPdfRangeWithRetry(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
     ]).then(([runtime, initial]) => {
       const requestedDocumentId = activeDocument.id
       class IpcPdfRangeTransport extends runtime.PDFDataRangeTransport {
@@ -294,13 +377,14 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
 
         requestDataRange(begin: number, end: number): void {
           if (this.aborted) return
-          void api.documents.readPdfRange(requestedDocumentId, begin, end).then((chunk) => {
+          void readPdfRangeWithRetry(requestedDocumentId, begin, end).then((chunk) => {
             if (this.aborted) return
+            const expectedLength = Math.min(end, initial.fileSize) - begin
             if (
               chunk.begin !== begin ||
               chunk.fileSize !== initial.fileSize ||
-              chunk.data.length === 0 ||
-              chunk.data.length > end - begin
+              expectedLength <= 0 ||
+              chunk.data.length !== expectedLength
             ) {
               this.abort()
               void loadingTask?.destroy().catch(() => undefined)
@@ -321,7 +405,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       const task = runtime.getDocument({
         range: new IpcPdfRangeTransport(),
         rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
-        disableAutoFetch: true,
         disableStream: true
       })
       loadingTask = task
@@ -329,14 +412,12 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       return task.promise
     }).then((nextDocument) => {
       if (cancelled) return
-      document = nextDocument
       setPdf(nextDocument)
     }).catch(() => {
       if (!cancelled) setLoadingError(t('pdfReader.loadFailed'))
     })
     return () => {
       cancelled = true
-      void document?.cleanup()?.catch(() => undefined)
       void loadingTask?.destroy()?.catch(() => undefined)
     }
   }, [activeDocument?.id, activeDocument?.fileHash, activeDocument?.fileMtimeNs, t])
@@ -361,6 +442,18 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     failureMessage: t('pdfReader.searchFailed'),
     navigateToPage
   })
+  const searchMatchesByPage = useMemo(() => {
+    const grouped = new Map<number, Array<{
+      match: (typeof pdfSearch.matches)[number]
+      selected: boolean
+    }>>()
+    pdfSearch.matches.forEach((match, index) => {
+      const pageMatches = grouped.get(match.page) ?? []
+      pageMatches.push({ match, selected: index === pdfSearch.index })
+      grouped.set(match.page, pageMatches)
+    })
+    return grouped
+  }, [pdfSearch.index, pdfSearch.matches])
 
   const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
     if (visibility.isVisible && visibility.visibleArea > 0) {
@@ -396,7 +489,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     const page = await pdf.getPage(1)
     const viewport = page.getViewport({ scale: 1, rotation })
     const available = Math.max(320, scrollRef.current.clientWidth - 64)
-    setScale(Math.max(MIN_SCALE, Math.min(MAX_SCALE, available / viewport.width)))
+    setScaleAnchored(available / viewport.width)
   }
 
   const changeFontSize = (delta: number) => {
@@ -407,7 +500,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     usePdfReaderStore.getState().updateAnnotations(
       activeDocumentId,
       selectedTextAnnotations.map((annotation) => annotation.id),
-      { fontSize: next }
+      { fontSize: next, size: undefined }
     )
   }
 
@@ -564,17 +657,36 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       <ReaderButton
         label={t('pdfReader.zoomOut')}
         disabled={scale <= MIN_SCALE}
-        onClick={() => setScale((value) => Math.max(MIN_SCALE, value - 0.15))}
+        onClick={() => setScaleAnchored(scaleRef.current - 0.1)}
       >
         <Minus className="h-4 w-4" />
       </ReaderButton>
-      <span className="min-w-11 text-center text-label text-muted">
-        {Math.round(scale * 100)}%
-      </span>
+      <form
+        className="relative flex h-7 w-14 items-center"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setScaleAnchored((Number(zoomInput) || 100) / 100)
+        }}
+      >
+        <input
+          value={zoomInput}
+          inputMode="decimal"
+          aria-label={t('pdfReader.zoomPercentage')}
+          className="h-7 w-full rounded-md border border-border bg-panel pl-1 pr-4 text-center text-xs text-foreground"
+          onChange={(event) => setZoomInput(
+            event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1')
+          )}
+          onBlur={() => {
+            setScaleAnchored((Number(zoomInput) || scaleRef.current * 100) / 100)
+            setZoomInput(zoomPercent(scaleRef.current))
+          }}
+        />
+        <span className="pointer-events-none absolute right-1 text-label text-muted">%</span>
+      </form>
       <ReaderButton
         label={t('pdfReader.zoomIn')}
         disabled={scale >= MAX_SCALE}
-        onClick={() => setScale((value) => Math.min(MAX_SCALE, value + 0.15))}
+        onClick={() => setScaleAnchored(scaleRef.current + 0.1)}
       >
         <Plus className="h-4 w-4" />
       </ReaderButton>
@@ -737,8 +849,9 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           aria-invalid={pdfSearch.error ? true : undefined}
           onChange={(event) => pdfSearch.updateQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key !== 'Escape' || !compactLayout) return
-            setSearchOpen(false)
+            if (event.key !== 'Escape') return
+            if (pdfSearch.searching) pdfSearch.cancel()
+            if (compactLayout) setSearchOpen(false)
             event.currentTarget.blur()
           }}
         />
@@ -748,20 +861,28 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           ? '…'
           : pdfSearch.error
             ? <span className="text-error" role="status">{pdfSearch.error}</span>
-          : pdfSearch.pages.length > 0
-            ? `${pdfSearch.index + 1}/${pdfSearch.pages.length}`
+          : pdfSearch.matches.length > 0
+            ? `${pdfSearch.index + 1}/${pdfSearch.matches.length}`
             : ''}
       </span>
+      {pdfSearch.searching && (
+        <ReaderButton
+          label={t('pdfReader.cancelSearch')}
+          onClick={pdfSearch.cancel}
+        >
+          <X className="h-3.5 w-3.5" />
+        </ReaderButton>
+      )}
       <ReaderButton
         label={t('pdfReader.previousResult')}
-        disabled={pdfSearch.pages.length === 0}
+        disabled={pdfSearch.matches.length === 0}
         onClick={() => pdfSearch.cycle(-1)}
       >
         <CaretLeft className="h-3.5 w-3.5" />
       </ReaderButton>
       <ReaderButton
         label={t('pdfReader.nextResult')}
-        disabled={pdfSearch.pages.length === 0}
+        disabled={pdfSearch.matches.length === 0}
         onClick={() => pdfSearch.cycle(1)}
       >
         <CaretRight className="h-3.5 w-3.5" />
@@ -938,8 +1059,10 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       color={displayedColor}
                       fontSize={fontSize}
                       strokeWidth={strokeWidth}
+                      searchMatches={searchMatchesByPage.get(pageNumber) ?? []}
                       onAddAnnotation={addAnnotation}
                       onPageVisible={handleVisiblePage}
+                      onNavigateToPage={navigateToPage}
                     />
                   </div>
                 )

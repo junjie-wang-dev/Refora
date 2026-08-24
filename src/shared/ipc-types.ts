@@ -162,6 +162,11 @@ export interface PdfAnnotationPoint {
   y: number
 }
 
+export interface PdfAnnotationSize {
+  width: number
+  height: number
+}
+
 export interface PdfAnnotation {
   id: string
   kind: PdfAnnotationKind
@@ -172,6 +177,7 @@ export interface PdfAnnotation {
   createdAt: number
   rects?: PdfAnnotationRect[]
   point?: PdfAnnotationPoint
+  size?: PdfAnnotationSize
   points?: PdfAnnotationPoint[]
   strokeWidth?: number
   fontSize?: number
