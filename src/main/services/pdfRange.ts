@@ -1,10 +1,11 @@
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import type { PdfRangeChunk } from '../../shared/ipc-types'
+import { MAX_PDF_RANGE_BYTES } from '../../shared/pdf-range'
 import { MainProcessError } from './errors'
 import { resolvePdfFilePath } from './pdfPath'
 
-export const MAX_PDF_RANGE_BYTES = 1024 * 1024
+export { MAX_PDF_RANGE_BYTES } from '../../shared/pdf-range'
 
 export async function readPdfFileRange(
   rawPath: string,

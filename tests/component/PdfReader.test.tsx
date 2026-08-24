@@ -15,6 +15,7 @@ import PdfReader from '../../src/renderer/components/PdfReader'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
+import { MAX_PDF_RANGE_BYTES } from '../../src/shared/pdf-range'
 
 const pdfMocks = vi.hoisted(() => {
   const translate = (key: string) => key
@@ -72,6 +73,8 @@ const pdfMocks = vi.hoisted(() => {
 
 const pdfVirtualizerMocks = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
+  getOffsetForIndex: vi.fn(),
+  resizeItem: vi.fn(),
   startIndex: 0
 }))
 
@@ -102,7 +105,12 @@ vi.mock('@tanstack/react-virtual', () => ({
         Math.max(0, options.count - 1) * gap + paddingEnd,
       measureElement: () => undefined,
       measure: () => undefined,
-      scrollToIndex: pdfVirtualizerMocks.scrollToIndex
+      scrollToIndex: pdfVirtualizerMocks.scrollToIndex,
+      getOffsetForIndex: (index: number, align: string) => {
+        pdfVirtualizerMocks.getOffsetForIndex(index, align)
+        return [paddingStart + index * (size + gap), align]
+      },
+      resizeItem: pdfVirtualizerMocks.resizeItem
     }
   }
 }))
@@ -297,7 +305,10 @@ describe('PdfReader rendering visibility', () => {
   beforeEach(() => {
     observers = []
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
-    pdfMocks.renderPage.mockClear()
+    pdfMocks.renderPage.mockReset().mockImplementation(() => ({
+      promise: Promise.resolve(),
+      cancel: pdfMocks.cancelRender
+    }))
     pdfMocks.cancelRender.mockClear()
     pdfMocks.document.numPages = 1
     pdfMocks.document.getPage.mockReset().mockResolvedValue(pdfMocks.page)
@@ -307,6 +318,8 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.getDocument.mockClear()
     pdfMocks.gateLoad(null)
     pdfVirtualizerMocks.scrollToIndex.mockReset()
+    pdfVirtualizerMocks.getOffsetForIndex.mockReset()
+    pdfVirtualizerMocks.resizeItem.mockReset()
     pdfVirtualizerMocks.startIndex = 0
     vi.spyOn(api.documents, 'readPdfRange').mockResolvedValue({
       begin: 0,
@@ -340,7 +353,7 @@ describe('PdfReader rendering visibility', () => {
     vi.unstubAllGlobals()
   })
 
-  it('preloads against the PDF scroller and rerenders a released tile', async () => {
+  it('preloads against the PDF scroller and retains the committed tile while offscreen', async () => {
     const view = render(<PdfReader />)
 
     await waitFor(() => {
@@ -382,8 +395,7 @@ describe('PdfReader rendering visibility', () => {
         canvasObserver as unknown as IntersectionObserver
       )
     })
-    await waitFor(() => expect(canvases.every((canvas) => canvas.width === 1)).toBe(true))
-    expect(canvases.every((canvas) => canvas.height === 1)).toBe(true)
+    expect(canvases.some((canvas) => canvas.width > 1 && canvas.height > 1)).toBe(true)
 
     act(() => {
       canvasObserver?.callback(
@@ -393,6 +405,96 @@ describe('PdfReader rendering visibility', () => {
     })
     await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(2))
     expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
+  })
+
+  it('finishes and commits an in-flight tile after a transient visibility change', async () => {
+    let finishRender!: () => void
+    const cancelRender = vi.fn()
+    pdfMocks.renderPage.mockImplementationOnce(() => ({
+      promise: new Promise<void>((resolve) => {
+        finishRender = resolve
+      }),
+      cancel: cancelRender
+    }))
+    const view = render(<PdfReader />)
+
+    const canvasObserver = await waitFor(() => {
+      const observer = observers.find(
+        (candidate) => (candidate.target as HTMLElement | undefined)
+          ?.hasAttribute('data-pdf-canvas-tile')
+      )
+      expect(observer).toBeDefined()
+      return observer
+    })
+    const canvases = Array.from(
+      canvasObserver?.target?.querySelectorAll('canvas') ?? []
+    ) as HTMLCanvasElement[]
+
+    act(() => {
+      canvasObserver?.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        canvasObserver as unknown as IntersectionObserver
+      )
+    })
+    await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      canvasObserver?.callback(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        canvasObserver as unknown as IntersectionObserver
+      )
+    })
+    expect(cancelRender).not.toHaveBeenCalled()
+
+    await act(async () => {
+      finishRender()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(canvases[1].style.visibility).toBe('visible'))
+    expect(canvases[1].width).toBeGreaterThan(1)
+    expect(canvases[1].height).toBeGreaterThan(1)
+    expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
+  })
+
+  it('retries a cancelled tile while it remains visible', async () => {
+    let cancelFirstRender!: (error: Error) => void
+    pdfMocks.renderPage
+      .mockImplementationOnce(() => ({
+        promise: new Promise<void>((_resolve, reject) => {
+          cancelFirstRender = reject
+        }),
+        cancel: vi.fn()
+      }))
+      .mockImplementationOnce(() => ({
+        promise: Promise.resolve(),
+        cancel: vi.fn()
+      }))
+    render(<PdfReader />)
+
+    const canvasObserver = await waitFor(() => {
+      const observer = observers.find(
+        (candidate) => (candidate.target as HTMLElement | undefined)
+          ?.hasAttribute('data-pdf-canvas-tile')
+      )
+      expect(observer).toBeDefined()
+      return observer
+    })
+    act(() => {
+      canvasObserver?.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        canvasObserver as unknown as IntersectionObserver
+      )
+    })
+    await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(1))
+
+    const cancellation = new Error('render cancelled')
+    cancellation.name = 'RenderingCancelledException'
+    await act(async () => {
+      cancelFirstRender(cancellation)
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(2))
   })
 
   it('retries a transient PDF range failure before delivering the complete chunk', async () => {
@@ -414,6 +516,50 @@ describe('PdfReader rendering visibility', () => {
       0,
       new Uint8Array([1])
     ))
+  })
+
+  it('splits a large PDF.js range request across the bounded IPC reader', async () => {
+    const fileSize = MAX_PDF_RANGE_BYTES * 2 + 17
+    vi.mocked(api.documents.readPdfRange).mockImplementation(async (_id, begin, end) => {
+      const data = new Uint8Array(end - begin)
+      data.fill(Math.floor(begin / MAX_PDF_RANGE_BYTES) + 1)
+      return { begin, fileSize, data }
+    })
+    render(<PdfReader />)
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalled())
+    const options = pdfMocks.getDocument.mock.calls.at(0)?.[0]
+    const range = options?.range as {
+      requestDataRange: (begin: number, end: number) => void
+      onDataRange: ReturnType<typeof vi.fn>
+    }
+    vi.mocked(api.documents.readPdfRange).mockClear()
+
+    range.requestDataRange(0, fileSize)
+
+    await waitFor(() => expect(range.onDataRange).toHaveBeenCalledTimes(1))
+    const delivered = range.onDataRange.mock.calls[0][1] as Uint8Array
+    expect(api.documents.readPdfRange).toHaveBeenNthCalledWith(
+      1,
+      'paper',
+      0,
+      MAX_PDF_RANGE_BYTES
+    )
+    expect(api.documents.readPdfRange).toHaveBeenNthCalledWith(
+      2,
+      'paper',
+      MAX_PDF_RANGE_BYTES,
+      MAX_PDF_RANGE_BYTES * 2
+    )
+    expect(api.documents.readPdfRange).toHaveBeenNthCalledWith(
+      3,
+      'paper',
+      MAX_PDF_RANGE_BYTES * 2,
+      fileSize
+    )
+    expect(delivered).toHaveLength(fileSize)
+    expect(delivered[0]).toBe(1)
+    expect(delivered[MAX_PDF_RANGE_BYTES]).toBe(2)
+    expect(delivered[MAX_PDF_RANGE_BYTES * 2]).toBe(3)
   })
 
   it('retries transient page loading failures', async () => {
@@ -451,10 +597,8 @@ describe('PdfReader rendering visibility', () => {
     fireEvent.change(input, { target: { value: '900' } })
     fireEvent.submit(input.closest('form') as HTMLFormElement)
 
-    expect(pdfVirtualizerMocks.scrollToIndex).toHaveBeenCalledWith(899, {
-      behavior: 'smooth',
-      align: 'start'
-    })
+    expect(pdfVirtualizerMocks.getOffsetForIndex).toHaveBeenCalledWith(899, 'start')
+    expect(pdfVirtualizerMocks.scrollToIndex).not.toHaveBeenCalled()
     expect(input).toHaveValue('900')
   })
 
@@ -604,33 +748,52 @@ describe('PdfReader rendering visibility', () => {
     const input = screen.getByPlaceholderText('pdfReader.search')
 
     fireEvent.change(input, { target: { value: 'alpha' } })
-    fireEvent.submit(input.closest('form') as HTMLFormElement)
 
     await screen.findByText('1/2')
     await waitFor(() => expect(
       view.container.querySelectorAll('.textLayer .highlight')
     ).toHaveLength(2))
-    expect(view.container.querySelectorAll('.textLayer .highlight.selected')).toHaveLength(1)
+    let highlights = view.container.querySelectorAll('.textLayer .highlight')
+    expect(highlights[0]).toHaveClass('selected')
+    expect(highlights[1]).not.toHaveClass('selected')
 
-    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.nextResult' }))
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
     await screen.findByText('2/2')
-    expect(view.container.querySelectorAll('.textLayer .highlight.selected')).toHaveLength(1)
+    highlights = view.container.querySelectorAll('.textLayer .highlight')
+    expect(highlights[0]).not.toHaveClass('selected')
+    expect(highlights[1]).toHaveClass('selected')
+
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await screen.findByText('1/2')
+    highlights = view.container.querySelectorAll('.textLayer .highlight')
+    expect(highlights[0]).toHaveClass('selected')
+    expect(highlights[1]).not.toHaveClass('selected')
+
+    const clear = screen.getByRole('button', { name: 'common.clearSearch' })
+    fireEvent.click(clear)
+    expect(input).toHaveValue('')
+    expect(input).toHaveFocus()
+    expect(screen.queryByRole('button', { name: 'common.clearSearch' })).not.toBeInTheDocument()
+    expect(view.container.querySelectorAll('.textLayer .highlight')).toHaveLength(0)
   })
 
-  it('lets an in-progress PDF search be stopped immediately', async () => {
+  it('lets an in-progress PDF search be cleared and stopped immediately', async () => {
     const view = render(<PdfReader />)
     await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).toBeVisible())
     pdfMocks.document.getPage.mockReset().mockReturnValue(new Promise(() => undefined))
     const input = screen.getByPlaceholderText('pdfReader.search')
 
     fireEvent.change(input, { target: { value: 'pending' } })
-    fireEvent.submit(input.closest('form') as HTMLFormElement)
-    const stop = await screen.findByRole('button', { name: 'pdfReader.cancelSearch' })
-    fireEvent.click(stop)
+    await waitFor(() => expect(
+      view.container.querySelector('[data-pdf-search-status]')
+    ).toHaveTextContent('…'))
+    const clear = screen.getByRole('button', { name: 'common.clearSearch' })
+    fireEvent.click(clear)
 
-    await waitFor(() => expect(screen.queryByRole('button', {
-      name: 'pdfReader.cancelSearch'
-    })).not.toBeInTheDocument())
+    expect(input).toHaveValue('')
+    expect(input).toHaveFocus()
+    expect(screen.queryByRole('button', { name: 'common.clearSearch' })).not.toBeInTheDocument()
+    expect(view.container.querySelector('[data-pdf-search-status]')).toHaveTextContent('')
   })
 
   it('renders native PDF links and navigates internal destinations', async () => {
@@ -652,10 +815,8 @@ describe('PdfReader rendering visibility', () => {
     expect(links[0]).toHaveAttribute('target', '_blank')
 
     fireEvent.click(links[1])
-    await waitFor(() => expect(pdfVirtualizerMocks.scrollToIndex).toHaveBeenCalledWith(1, {
-      behavior: 'smooth',
-      align: 'start'
-    }))
+    await waitFor(() => expect(pdfVirtualizerMocks.getOffsetForIndex)
+      .toHaveBeenCalledWith(1, 'start'))
   })
 
   it('supports precise zoom input and trackpad pinch zoom', async () => {

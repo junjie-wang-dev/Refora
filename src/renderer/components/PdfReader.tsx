@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,11 +31,13 @@ import {
   X
 } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
+import { flushSync } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy
 } from 'pdfjs-dist/types/src/display/api'
+import { MAX_PDF_RANGE_BYTES } from '../../shared/pdf-range'
 import {
   usePdfReaderStore,
   type PdfAnnotationDraft,
@@ -56,6 +59,9 @@ const PDF_PAGE_HEIGHT = 792
 const PDF_PAGE_GAP = 20
 const PDF_PAGE_PADDING = 24
 const PDF_PAGE_OVERSCAN = 2
+const PDF_ZOOM_GESTURE_SETTLE_MS = 400
+const PDF_NAVIGATION_SETTLE_MS = 250
+const PDF_SEARCH_DEBOUNCE_MS = 200
 
 function zoomPercent(value: number): string {
   return String(Number((value * 100).toFixed(1)))
@@ -64,6 +70,16 @@ function zoomPercent(value: number): string {
 interface PdfRuntime {
   getDocument: typeof import('pdfjs-dist').getDocument
   PDFDataRangeTransport: typeof import('pdfjs-dist').PDFDataRangeTransport
+}
+
+interface PdfZoomAnchor {
+  page: number
+  x: number
+  y: number
+  offsetX: number
+  offsetY: number
+  clientX: number
+  clientY: number
 }
 
 let runtimePromise: Promise<PdfRuntime> | null = null
@@ -89,15 +105,50 @@ async function readPdfRangeWithRetry(
   begin: number,
   end: number
 ): Promise<Awaited<ReturnType<typeof api.documents.readPdfRange>>> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await api.documents.readPdfRange(documentId, begin, end)
-    } catch (error) {
-      lastError = error
+  const readChunk = async (chunkBegin: number, chunkEnd: number) => {
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await api.documents.readPdfRange(documentId, chunkBegin, chunkEnd)
+      } catch (error) {
+        lastError = error
+      }
     }
+    throw lastError
   }
-  throw lastError
+
+  if (end - begin <= MAX_PDF_RANGE_BYTES) return readChunk(begin, end)
+
+  const chunks: Uint8Array[] = []
+  let fileSize: number | null = null
+  let totalLength = 0
+  for (let chunkBegin = begin; chunkBegin < end; chunkBegin += MAX_PDF_RANGE_BYTES) {
+    const chunkEnd = Math.min(end, chunkBegin + MAX_PDF_RANGE_BYTES)
+    const chunk = await readChunk(chunkBegin, chunkEnd)
+    const stableFileSize: number = fileSize ?? chunk.fileSize
+    const expectedLength = Math.min(chunkEnd, stableFileSize) - chunkBegin
+    if (
+      chunk.begin !== chunkBegin ||
+      chunk.fileSize !== stableFileSize ||
+      expectedLength <= 0 ||
+      chunk.data.length !== expectedLength
+    ) {
+      throw new Error('Invalid PDF byte range response')
+    }
+    fileSize = stableFileSize
+    chunks.push(chunk.data)
+    totalLength += chunk.data.length
+    if (chunkEnd >= stableFileSize) break
+  }
+
+  if (fileSize === null) throw new Error('Empty PDF byte range response')
+  const data = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    data.set(chunk, offset)
+    offset += chunk.length
+  }
+  return { begin, fileSize, data }
 }
 
 const TOOL_ICONS = {
@@ -216,12 +267,29 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const scaleRef = useRef(scale)
-  const zoomFrameRef = useRef<number | null>(null)
+  const zoomAnchorRef = useRef<PdfZoomAnchor | null>(null)
+  const zoomAnchorTimerRef = useRef<number | null>(null)
+  const zoomCorrectionFrameRef = useRef<number | null>(null)
+  const wheelZoomFrameRef = useRef<number | null>(null)
+  const wheelZoomAnchorRef = useRef<PdfZoomAnchor | null>(null)
+  const pendingWheelZoomRef = useRef<{
+    scale: number
+    anchor: PdfZoomAnchor | null
+  } | null>(null)
+  const pageBaseHeightsRef = useRef(new Map<number, number>())
+  const pageLayoutKeyRef = useRef('')
+  const navigationTargetRef = useRef<number | null>(null)
+  const navigationTimerRef = useRef<number | null>(null)
   const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchDebounceRef = useRef<number | null>(null)
+  const runPdfSearchRef = useRef<() => Promise<void>>(async () => undefined)
   const rotated = Math.abs(rotation) % 180 !== 0
+  const estimatedPageBaseHeight = rotated ? PDF_PAGE_WIDTH : PDF_PAGE_HEIGHT
   const estimatedPageWidth = (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH) * scale
-  const estimatedPageHeight = (rotated ? PDF_PAGE_WIDTH : PDF_PAGE_HEIGHT) * scale
-  const estimatePageSize = useCallback(() => estimatedPageHeight, [estimatedPageHeight])
+  const estimatePageSize = useCallback((index: number) =>
+    (pageBaseHeightsRef.current.get(index) ?? estimatedPageBaseHeight) * scale,
+  [estimatedPageBaseHeight, scale])
   const pageKey = useCallback(
     (index: number) => `${activeDocumentId ?? 'pdf'}-${index + 1}`,
     [activeDocumentId]
@@ -239,56 +307,141 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   })
   const virtualPages = pageVirtualizer.getVirtualItems()
 
-  const setScaleAnchored = useCallback((requestedScale: number, x?: number, y?: number) => {
+  const handlePageSize = useCallback((pageNumber: number, baseHeight: number) => {
+    pageBaseHeightsRef.current.set(pageNumber - 1, baseHeight)
+    pageVirtualizer.resizeItem(pageNumber - 1, baseHeight * scaleRef.current)
+  }, [pageVirtualizer])
+
+  const captureZoomAnchor = useCallback((x?: number, y?: number): PdfZoomAnchor | null => {
+    const root = scrollRef.current
+    const rootBounds = root?.getBoundingClientRect()
+    if (!root || !rootBounds) return null
+    const clientX = x ?? rootBounds.left + rootBounds.width / 2
+    const clientY = y ?? rootBounds.top + rootBounds.height / 2
+    const pointedPage = document.elementFromPoint?.(clientX, clientY)
+      ?.closest<HTMLElement>('[data-page-number]')
+    const mountedPages = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-page-number]')
+    )
+    const currentPageElement = root.querySelector<HTMLElement>(
+      `[data-page-number="${currentPage}"]`
+    )
+    const nearestPage = mountedPages.reduce<HTMLElement | null>((nearest, candidate) => {
+      if (!nearest) return candidate
+      const candidateBounds = candidate.getBoundingClientRect()
+      const nearestBounds = nearest.getBoundingClientRect()
+      const candidateDistance = clientY < candidateBounds.top
+        ? candidateBounds.top - clientY
+        : clientY > candidateBounds.bottom
+          ? clientY - candidateBounds.bottom
+          : 0
+      const nearestDistance = clientY < nearestBounds.top
+        ? nearestBounds.top - clientY
+        : clientY > nearestBounds.bottom
+          ? clientY - nearestBounds.bottom
+          : 0
+      return candidateDistance < nearestDistance ? candidate : nearest
+    }, null)
+    const anchorPage = pointedPage && root.contains(pointedPage)
+      ? pointedPage
+      : currentPageElement ?? nearestPage
+    const pageBounds = anchorPage?.getBoundingClientRect()
+    if (!anchorPage || !pageBounds) return null
+    const normalizedX = pageBounds.width > 0
+      ? Math.max(0, Math.min(1, (clientX - pageBounds.left) / pageBounds.width))
+      : 0.5
+    const normalizedY = pageBounds.height > 0
+      ? Math.max(0, Math.min(1, (clientY - pageBounds.top) / pageBounds.height))
+      : 0.5
+    const page = Number(anchorPage.dataset.pageNumber)
+    if (!Number.isFinite(page)) return null
+    return {
+      page,
+      x: normalizedX,
+      y: normalizedY,
+      offsetX: clientX - (pageBounds.left + pageBounds.width * normalizedX),
+      offsetY: clientY - (pageBounds.top + pageBounds.height * normalizedY),
+      clientX,
+      clientY
+    }
+  }, [currentPage])
+
+  const holdZoomAnchor = useCallback((anchor: PdfZoomAnchor | null) => {
+    zoomAnchorRef.current = anchor
+    if (zoomAnchorTimerRef.current !== null) {
+      window.clearTimeout(zoomAnchorTimerRef.current)
+    }
+    zoomAnchorTimerRef.current = window.setTimeout(() => {
+      zoomAnchorTimerRef.current = null
+      zoomAnchorRef.current = null
+      wheelZoomAnchorRef.current = null
+    }, PDF_ZOOM_GESTURE_SETTLE_MS)
+  }, [])
+
+  const correctZoomAnchor = useCallback(() => {
+    const root = scrollRef.current
+    const anchor = zoomAnchorRef.current
+    if (!root || !anchor) return
+    const pageElement = root.querySelector<HTMLElement>(
+      `[data-page-number="${anchor.page}"]`
+    )
+    const pageBounds = pageElement?.getBoundingClientRect()
+    if (!pageBounds) return
+    const deltaX = pageBounds.left + pageBounds.width * anchor.x +
+      anchor.offsetX - anchor.clientX
+    const deltaY = pageBounds.top + pageBounds.height * anchor.y +
+      anchor.offsetY - anchor.clientY
+    if (Math.abs(deltaX) > 0.25) root.scrollLeft += deltaX
+    if (Math.abs(deltaY) > 0.25) root.scrollTop += deltaY
+  }, [])
+
+  const setScaleAnchored = useCallback((
+    requestedScale: number,
+    x?: number,
+    y?: number,
+    preservedAnchor?: PdfZoomAnchor | null
+  ) => {
     const nextScale = Math.round(
       Math.max(MIN_SCALE, Math.min(MAX_SCALE, requestedScale)) * 1000
     ) / 1000
     const previousScale = scaleRef.current
     if (nextScale === previousScale) return
-    const root = scrollRef.current
-    const rootBounds = root?.getBoundingClientRect()
-    const clientX = x ?? (rootBounds ? rootBounds.left + rootBounds.width / 2 : 0)
-    const clientY = y ?? (rootBounds ? rootBounds.top + rootBounds.height / 2 : 0)
-    const pointedPage = document.elementFromPoint?.(clientX, clientY)
-      ?.closest<HTMLElement>('[data-page-number]')
-    const anchorPage = pointedPage && root?.contains(pointedPage)
-      ? pointedPage
-      : root?.querySelector<HTMLElement>(`[data-page-number="${currentPage}"]`) ?? null
-    const pageBounds = anchorPage?.getBoundingClientRect()
-    const anchor = anchorPage && pageBounds
-      ? {
-          page: Number(anchorPage.dataset.pageNumber),
-          x: pageBounds.width > 0 ? (clientX - pageBounds.left) / pageBounds.width : 0.5,
-          y: pageBounds.height > 0 ? (clientY - pageBounds.top) / pageBounds.height : 0.5,
-          clientX,
-          clientY
-        }
-      : null
+    if (preservedAnchor === undefined) wheelZoomAnchorRef.current = null
+    holdZoomAnchor(preservedAnchor ?? captureZoomAnchor(x, y))
     scaleRef.current = nextScale
-    setScale(nextScale)
-    setZoomInput(zoomPercent(nextScale))
-    if (!root || !anchor) return
-    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current)
-    zoomFrameRef.current = window.requestAnimationFrame(() => {
-      zoomFrameRef.current = window.requestAnimationFrame(() => {
-        zoomFrameRef.current = null
-        const nextPage = root.querySelector<HTMLElement>(
-          `[data-page-number="${anchor.page}"]`
-        )
-        const nextBounds = nextPage?.getBoundingClientRect()
-        if (!nextBounds) return
-        root.scrollLeft += nextBounds.left + nextBounds.width * anchor.x - anchor.clientX
-        root.scrollTop += nextBounds.top + nextBounds.height * anchor.y - anchor.clientY
-      })
+    flushSync(() => {
+      setScale(nextScale)
+      setZoomInput(zoomPercent(nextScale))
     })
-  }, [currentPage])
+  }, [captureZoomAnchor, holdZoomAnchor])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const layoutKey = `${activeDocumentId ?? ''}:${rotation}`
+    if (pageLayoutKeyRef.current !== layoutKey) {
+      pageLayoutKeyRef.current = layoutKey
+      pageBaseHeightsRef.current.clear()
+    }
     pageVirtualizer.measure()
   }, [activeDocumentId, pageVirtualizer, rotation, scale])
 
+  useLayoutEffect(() => {
+    correctZoomAnchor()
+    if (!zoomAnchorRef.current || zoomCorrectionFrameRef.current !== null) return
+    zoomCorrectionFrameRef.current = window.requestAnimationFrame(() => {
+      zoomCorrectionFrameRef.current = null
+      correctZoomAnchor()
+    })
+  })
+
   useEffect(() => () => {
-    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current)
+    if (zoomAnchorTimerRef.current !== null) window.clearTimeout(zoomAnchorTimerRef.current)
+    if (zoomCorrectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomCorrectionFrameRef.current)
+    }
+    if (wheelZoomFrameRef.current !== null) {
+      window.cancelAnimationFrame(wheelZoomFrameRef.current)
+    }
+    if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -298,11 +451,34 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       if (!event.ctrlKey) return
       event.preventDefault()
       const factor = Math.exp(-event.deltaY * 0.01)
-      setScaleAnchored(scaleRef.current * factor, event.clientX, event.clientY)
+      const pendingZoom = pendingWheelZoomRef.current
+      const existingAnchor = pendingZoom?.anchor ?? wheelZoomAnchorRef.current
+      if (!existingAnchor) {
+        root.scrollTo?.({
+          left: root.scrollLeft,
+          top: root.scrollTop,
+          behavior: 'instant' as ScrollBehavior
+        })
+      }
+      const anchor = existingAnchor
+        ? { ...existingAnchor, clientX: event.clientX, clientY: event.clientY }
+        : captureZoomAnchor(event.clientX, event.clientY)
+      wheelZoomAnchorRef.current = anchor
+      const nextScale = (pendingZoom?.scale ?? scaleRef.current) * factor
+      pendingWheelZoomRef.current = { scale: nextScale, anchor }
+      holdZoomAnchor(anchor)
+      if (wheelZoomFrameRef.current !== null) return
+      wheelZoomFrameRef.current = window.requestAnimationFrame(() => {
+        wheelZoomFrameRef.current = null
+        const nextZoom = pendingWheelZoomRef.current
+        pendingWheelZoomRef.current = null
+        if (!nextZoom) return
+        setScaleAnchored(nextZoom.scale, undefined, undefined, nextZoom.anchor)
+      })
     }
     root.addEventListener('wheel', handleWheel, { passive: false })
     return () => root.removeEventListener('wheel', handleWheel)
-  }, [setScaleAnchored])
+  }, [captureZoomAnchor, holdZoomAnchor, setScaleAnchored])
 
   useEffect(() => {
     const updateDevicePixelRatio = () => {
@@ -424,7 +600,33 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
 
   const navigateToPage = useCallback((page: number, annotationId?: string) => {
     const safePage = Math.max(1, Math.min(pdf?.numPages ?? 1, page))
-    pageVirtualizer.scrollToIndex(safePage - 1, { behavior: 'smooth', align: 'start' })
+    wheelZoomAnchorRef.current = null
+    zoomAnchorRef.current = null
+    if (zoomAnchorTimerRef.current !== null) {
+      window.clearTimeout(zoomAnchorTimerRef.current)
+      zoomAnchorTimerRef.current = null
+    }
+    navigationTargetRef.current = safePage
+    if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
+    navigationTimerRef.current = window.setTimeout(() => {
+      navigationTimerRef.current = null
+      navigationTargetRef.current = null
+    }, PDF_NAVIGATION_SETTLE_MS)
+    const root = scrollRef.current
+    const offset = pageVirtualizer.getOffsetForIndex(safePage - 1, 'start')?.[0]
+    if (root && offset !== undefined) {
+      if (root.scrollTo) {
+        root.scrollTo({
+          left: root.scrollLeft,
+          top: offset,
+          behavior: 'smooth'
+        })
+      } else {
+        root.scrollTop = offset
+      }
+    } else {
+      pageVirtualizer.scrollToIndex(safePage - 1, { behavior: 'auto', align: 'start' })
+    }
     visiblePagesRef.current.clear()
     setCurrentPage(safePage)
     setPageInput(String(safePage))
@@ -442,6 +644,33 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     failureMessage: t('pdfReader.searchFailed'),
     navigateToPage
   })
+  runPdfSearchRef.current = pdfSearch.run
+
+  const runPdfSearch = useCallback(() => {
+    if (searchDebounceRef.current !== null) {
+      window.clearTimeout(searchDebounceRef.current)
+      searchDebounceRef.current = null
+    }
+    void runPdfSearchRef.current()
+  }, [])
+
+  useEffect(() => {
+    if (searchDebounceRef.current !== null) {
+      window.clearTimeout(searchDebounceRef.current)
+      searchDebounceRef.current = null
+    }
+    if (!pdfSearch.query.trim()) return
+    searchDebounceRef.current = window.setTimeout(() => {
+      searchDebounceRef.current = null
+      void runPdfSearchRef.current()
+    }, PDF_SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (searchDebounceRef.current === null) return
+      window.clearTimeout(searchDebounceRef.current)
+      searchDebounceRef.current = null
+    }
+  }, [pdfSearch.query])
+
   const searchMatchesByPage = useMemo(() => {
     const grouped = new Map<number, Array<{
       match: (typeof pdfSearch.matches)[number]
@@ -461,6 +690,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     } else {
       visiblePagesRef.current.delete(visibility.page)
     }
+    if (navigationTargetRef.current !== null) return
     const primaryPage = [...visiblePagesRef.current.values()].sort((left, right) =>
       right.visibleArea - left.visibleArea ||
       left.viewportDistance - right.viewportDistance ||
@@ -836,16 +1066,22 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       }`}
       onSubmit={(event) => {
         event.preventDefault()
-        void pdfSearch.run()
+        if (pdfSearch.searching) return
+        if (pdfSearch.matches.length > 0) {
+          pdfSearch.cycle(1)
+          return
+        }
+        runPdfSearch()
       }}
     >
       <div className={`relative flex-1 ${compactLayout ? '' : 'min-w-28 max-w-52'}`}>
         <MagnifyingGlass className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-muted" />
         <input
+          ref={searchInputRef}
           value={pdfSearch.query}
           autoFocus={compactLayout && searchOpen}
           placeholder={t('pdfReader.search')}
-          className="h-7 w-full rounded-md border border-border bg-panel pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
+          className="h-7 w-full rounded-md border border-border bg-panel pl-7 pr-7 text-xs text-foreground outline-none focus:border-accent"
           aria-invalid={pdfSearch.error ? true : undefined}
           onChange={(event) => pdfSearch.updateQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -855,8 +1091,25 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
             event.currentTarget.blur()
           }}
         />
+        {pdfSearch.query.length > 0 && (
+          <button
+            type="button"
+            aria-label={t('common.clearSearch')}
+            className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted hover:bg-hover hover:text-foreground"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => {
+              pdfSearch.updateQuery('')
+              searchInputRef.current?.focus()
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
-      <span className="min-w-10 text-center text-label text-muted">
+      <span
+        data-pdf-search-status
+        className="min-w-10 text-center text-label text-muted"
+      >
         {pdfSearch.searching
           ? '…'
           : pdfSearch.error
@@ -865,14 +1118,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
             ? `${pdfSearch.index + 1}/${pdfSearch.matches.length}`
             : ''}
       </span>
-      {pdfSearch.searching && (
-        <ReaderButton
-          label={t('pdfReader.cancelSearch')}
-          onClick={pdfSearch.cancel}
-        >
-          <X className="h-3.5 w-3.5" />
-        </ReaderButton>
-      )}
       <ReaderButton
         label={t('pdfReader.previousResult')}
         disabled={pdfSearch.matches.length === 0}
@@ -1013,7 +1258,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div
           ref={scrollRef}
-          className="min-h-0 min-w-0 flex-1 overflow-auto bg-panel-2"
+          className="min-h-0 min-w-0 flex-1 overflow-auto bg-panel-2 [overflow-anchor:none]"
         >
           {loadingError ? (
             <div className="flex h-full items-center justify-center text-sm text-error">
@@ -1061,6 +1306,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       strokeWidth={strokeWidth}
                       searchMatches={searchMatchesByPage.get(pageNumber) ?? []}
                       onAddAnnotation={addAnnotation}
+                      onPageSize={handlePageSize}
                       onPageVisible={handleVisiblePage}
                       onNavigateToPage={navigateToPage}
                     />

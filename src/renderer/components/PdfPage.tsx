@@ -188,9 +188,14 @@ function PdfCanvasTileView({
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRefs = useRef<Array<HTMLCanvasElement | null>>([null, null])
   const renderTaskRef = useRef<RenderTask | null>(null)
+  const renderingCanvasRef = useRef<number | null>(null)
   const frontCanvasRef = useRef(0)
+  const mountedRef = useRef(true)
+  const visibleRef = useRef(false)
+  const cancelledRenderAttemptsRef = useRef(0)
   const [visible, setVisible] = useState(false)
   const [frontCanvas, setFrontCanvas] = useState(0)
+  const [renderAttempt, setRenderAttempt] = useState(0)
 
   useEffect(() => {
     const element = containerRef.current
@@ -204,23 +209,30 @@ function PdfCanvasTileView({
   }, [scrollRootRef])
 
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      const renderTask = renderTaskRef.current
+      renderTaskRef.current = null
+      renderingCanvasRef.current = null
+      renderTask?.cancel()
+    }
+  }, [])
+
+  useEffect(() => {
+    visibleRef.current = visible
     const canvases = canvasRefs.current
     if (!canvases[0] || !canvases[1]) return
-    if (!visible) {
-      renderTaskRef.current?.cancel()
-      canvases.forEach((canvas) => {
-        if (!canvas) return
-        canvas.width = 1
-        canvas.height = 1
-      })
-      return
-    }
+    if (!visible) return
     const nextFront = frontCanvasRef.current === 0 ? 1 : 0
     const canvas = canvases[nextFront]
     if (!canvas) return
     canvas.width = tile.pixelWidth
     canvas.height = tile.pixelHeight
-    renderTaskRef.current?.cancel()
+    const previousRenderTask = renderTaskRef.current
+    renderTaskRef.current = null
+    previousRenderTask?.cancel()
+    renderingCanvasRef.current = nextFront
     let renderTask: RenderTask
     try {
       renderTask = page.render({
@@ -230,28 +242,49 @@ function PdfCanvasTileView({
         background: '#ffffff'
       })
     } catch {
+      renderingCanvasRef.current = null
       onRenderError()
       return
     }
     renderTaskRef.current = renderTask
     void renderTask.promise.then(() => {
       if (renderTaskRef.current !== renderTask) return
-      const previousFront = frontCanvasRef.current
+      renderTaskRef.current = null
+      renderingCanvasRef.current = null
+      cancelledRenderAttemptsRef.current = 0
+      if (!mountedRef.current) return
       frontCanvasRef.current = nextFront
       setFrontCanvas(nextFront)
-      window.requestAnimationFrame(() => {
-        if (frontCanvasRef.current !== nextFront) return
-        const previousCanvas = canvasRefs.current[previousFront]
-        if (!previousCanvas) return
-        previousCanvas.width = 1
-        previousCanvas.height = 1
-      })
     }).catch((error: unknown) => {
-      if (error instanceof Error && error.name === 'RenderingCancelledException') return
+      if (renderTaskRef.current !== renderTask) return
+      renderTaskRef.current = null
+      renderingCanvasRef.current = null
+      if (error instanceof Error && error.name === 'RenderingCancelledException') {
+        if (!mountedRef.current || !visibleRef.current) return
+        if (cancelledRenderAttemptsRef.current >= 2) {
+          onRenderError()
+          return
+        }
+        cancelledRenderAttemptsRef.current += 1
+        setRenderAttempt((attempt) => attempt + 1)
+        return
+      }
       onRenderError()
     })
-    return () => renderTask.cancel()
-  }, [onRenderError, page, pixelRatio, tile, viewport, visible])
+  }, [onRenderError, page, pixelRatio, renderAttempt, tile, viewport, visible])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (frontCanvasRef.current !== frontCanvas) return
+      const hiddenCanvas = frontCanvas === 0 ? 1 : 0
+      if (renderingCanvasRef.current === hiddenCanvas) return
+      const canvas = canvasRefs.current[hiddenCanvas]
+      if (!canvas) return
+      canvas.width = 1
+      canvas.height = 1
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [frontCanvas])
 
   return (
     <div
@@ -296,6 +329,7 @@ export default function PdfPage({
   strokeWidth,
   searchMatches,
   onAddAnnotation,
+  onPageSize,
   onPageVisible,
   onNavigateToPage
 }: {
@@ -314,6 +348,7 @@ export default function PdfPage({
   strokeWidth: number
   searchMatches: Array<{ match: PdfSearchMatch; selected: boolean }>
   onAddAnnotation: (draft: PdfAnnotationDraft) => PdfAnnotation | null
+  onPageSize: (page: number, baseHeight: number) => void
   onPageVisible: (visibility: PdfPageVisibility) => void
   onNavigateToPage: (page: number) => void
 }) {
@@ -353,6 +388,10 @@ export default function PdfPage({
   const viewport = useMemo(
     () => page?.getViewport({ scale, rotation }) ?? null,
     [page, rotation, scale]
+  )
+  const layoutBaseHeight = useMemo(
+    () => page?.getViewport({ scale: 1, rotation }).height ?? null,
+    [page, rotation]
   )
   const size = viewport
     ? { width: viewport.width, height: viewport.height }
@@ -410,6 +449,10 @@ export default function PdfPage({
       cancelled = true
     }
   }, [pageLoadAttempt, pageNumber, pdf])
+
+  useEffect(() => {
+    if (layoutBaseHeight !== null) onPageSize(pageNumber, layoutBaseHeight)
+  }, [layoutBaseHeight, onPageSize, pageNumber])
 
   useEffect(() => {
     const element = pageElementRef.current
@@ -839,6 +882,7 @@ export default function PdfPage({
     const textSelectionStart = textSelectionStartRef.current
     const root = scrollRootRef.current
     if (textSelectionStart && root && textSelectionEnabled) {
+      event.preventDefault()
       const textPointer = textPointerRef.current
       if (
         textPointer &&

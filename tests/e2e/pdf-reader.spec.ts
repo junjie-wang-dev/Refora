@@ -171,6 +171,13 @@ test.describe('Built-in PDF reader', () => {
     await page.mouse.up()
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
       .not.toBe('')
+    const selectedTextBounds = await page.evaluate(() => {
+      const selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0) return null
+      const bounds = selection.getRangeAt(0).getBoundingClientRect()
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+    })
+    expect(selectedTextBounds).not.toBeNull()
     await page.evaluate(() => window.getSelection()?.removeAllRanges())
     await selectableText.dblclick({
       position: {
@@ -201,6 +208,12 @@ test.describe('Built-in PDF reader', () => {
     await page.mouse.up()
     const textMark = pdfPage.getByRole('button', { name: 'Highlight', exact: true })
     await expect(textMark).toBeVisible()
+    const createdTextMarkBounds = await textMark.boundingBox()
+    expect(createdTextMarkBounds).not.toBeNull()
+    expect(Math.abs(createdTextMarkBounds!.x - selectedTextBounds!.x)).toBeLessThan(4)
+    expect(Math.abs(createdTextMarkBounds!.y - selectedTextBounds!.y)).toBeLessThan(4)
+    expect(Math.abs(createdTextMarkBounds!.width - selectedTextBounds!.width)).toBeLessThan(6)
+    expect(Math.abs(createdTextMarkBounds!.height - selectedTextBounds!.height)).toBeLessThan(4)
     await highlightTool.click()
     await expect(textMark).toHaveCSS('pointer-events', 'auto')
     const textMarkBounds = await textMark.boundingBox()
@@ -215,6 +228,8 @@ test.describe('Built-in PDF reader', () => {
       textMarkBounds!.y + textMarkBounds!.height / 2
     )
     await page.mouse.up()
+    await expect.poll(async () => (await textMark.boundingBox())?.x ?? 0)
+      .toBeGreaterThan(textMarkBounds!.x + 2)
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
       .toBe('')
     const eraserTool = annotationToolbar.getByRole('button', {
@@ -238,6 +253,18 @@ test.describe('Built-in PDF reader', () => {
     await expect.poll(() => inlineText.evaluate((element) =>
       window.getComputedStyle(element, '::placeholder').color
     )).toBe('rgb(235, 87, 87)')
+    await inlineText.fill('Inline')
+    const singleLineBounds = await inlineText.boundingBox()
+    expect(singleLineBounds).not.toBeNull()
+    await inlineText.fill('Inline PDF annotation\nSecond line\nThird line')
+    await expect.poll(async () => (await inlineText.boundingBox())?.height ?? 0)
+      .toBeGreaterThan(singleLineBounds!.height * 2)
+    const annotationOverflow = await inlineText.evaluate((element) => ({
+      horizontal: element.scrollWidth - element.clientWidth,
+      vertical: element.scrollHeight - element.clientHeight
+    }))
+    expect(annotationOverflow.horizontal).toBeLessThanOrEqual(2)
+    expect(annotationOverflow.vertical).toBeLessThanOrEqual(2)
     await inlineText.fill('Inline PDF annotation')
     await expect(inlineText).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
     await expect(inlineText).toHaveCSS('border-top-width', '0px')
@@ -277,6 +304,21 @@ test.describe('Built-in PDF reader', () => {
     await addTextTool.click()
     await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
+    const movableTextBounds = await inlineText.boundingBox()
+    expect(movableTextBounds).not.toBeNull()
+    await page.mouse.move(
+      movableTextBounds!.x + movableTextBounds!.width / 2,
+      movableTextBounds!.y + movableTextBounds!.height / 2
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      movableTextBounds!.x + movableTextBounds!.width / 2 + 24,
+      movableTextBounds!.y + movableTextBounds!.height / 2 + 12,
+      { steps: 5 }
+    )
+    await page.mouse.up()
+    await expect.poll(async () => (await inlineText.boundingBox())?.x ?? 0)
+      .toBeGreaterThan(movableTextBounds!.x + 12)
     const annotationInput = pdfPage.locator('[data-annotation-input-layer]')
     const selectionBounds = await annotationInput.boundingBox()
     expect(selectionBounds).not.toBeNull()

@@ -1,0 +1,1 @@
+export const MAX_PDF_RANGE_BYTES = 1024 * 1024
