@@ -33,6 +33,7 @@ describe('OcrSection', () => {
     vi.spyOn(window.api.ocr, 'getState').mockImplementation(getState)
     vi.spyOn(window.api.events, 'onOcrProgress').mockImplementation((handler) => {
       progressHandler = handler
+      return vi.fn()
     })
     const job = {
       id: 'job-1',
@@ -76,6 +77,7 @@ describe('OcrSection', () => {
     vi.spyOn(window.api.ocr, 'getState').mockImplementation(getState)
     vi.spyOn(window.api.events, 'onOcrProgress').mockImplementation((handler) => {
       progressHandler = handler
+      return vi.fn()
     })
     const job = {
       id: 'job-late',

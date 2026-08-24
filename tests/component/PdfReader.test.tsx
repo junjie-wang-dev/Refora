@@ -29,7 +29,7 @@ const pdfMocks = vi.hoisted(() => {
       height: 792 * scale,
       rotation
     })),
-    getTextContent: vi.fn(async () => ({ items: [] })),
+    getTextContent: vi.fn(async () => ({ items: [] as Array<{ str: string }> })),
     render: renderPage
   }
   const document = {
@@ -457,6 +457,37 @@ describe('PdfReader rendering visibility', () => {
     expect(screen.getByText('1/1')).toBeInTheDocument()
     expect(newerPage.getTextContent).toHaveBeenCalledTimes(1)
     expect(olderPage.getTextContent).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses extracted page text across different searches', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    await waitFor(() => expect(pdfMocks.page.getTextContent).toHaveBeenCalled())
+    pdfMocks.page.getTextContent.mockReset().mockResolvedValue({
+      items: [{ str: 'alpha beta' }]
+    })
+    const input = screen.getByPlaceholderText('pdfReader.search')
+
+    fireEvent.change(input, { target: { value: 'alpha' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await screen.findByText('1/1')
+    fireEvent.change(input, { target: { value: 'beta' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(input).toHaveValue('beta'))
+
+    expect(pdfMocks.page.getTextContent).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores PDF keyboard shortcuts while its workspace view is hidden', async () => {
+    const view = render(<PdfReader active={false} />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+
+    fireEvent.keyDown(window, { key: 'h' })
+    expect(usePdfReaderStore.getState().tool).toBeNull()
+
+    view.rerender(<PdfReader active />)
+    fireEvent.keyDown(window, { key: 'h' })
+    expect(usePdfReaderStore.getState().tool).toBe('highlight')
   })
 
   it('uses text selection over text and annotation selection over page whitespace by default', async () => {

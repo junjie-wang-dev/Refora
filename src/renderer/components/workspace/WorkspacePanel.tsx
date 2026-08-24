@@ -384,7 +384,7 @@ export default function WorkspacePanel() {
         {activePdfDocumentId ? (
           <div className={panelView === 'pdf' ? 'h-full' : 'hidden'}>
             <Suspense fallback={<div className="h-full bg-background" />}>
-              <PdfReader embedded />
+              <PdfReader embedded active={panelView === 'pdf'} />
             </Suspense>
           </div>
         ) : null}

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Database, UserCircle, WarningCircle } from '@phosphor-icons/react'
-import { IpcChannel } from '../../shared/ipc-channels'
 import { api } from '../ipc'
 import { useSyncAccountStore } from '../store/syncAccountStore'
 import { AppThemeProvider } from '../hooks/useTheme'
@@ -18,8 +17,7 @@ export default function RecoveryApp() {
       setConfirmation(confirmation)
       setShowAccount(true)
     }
-    api.events.onSyncAuthConfirmation(callback)
-    return () => api.events.off(IpcChannel.EventSyncAuthConfirmation, callback)
+    return api.events.onSyncAuthConfirmation(callback)
   }, [setConfirmation])
 
   return (

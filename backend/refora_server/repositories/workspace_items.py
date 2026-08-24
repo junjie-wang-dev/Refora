@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.repositories.workspace_support import require_workspace, touch_workspace
 
 _KINDS = ("document", "report", "note", "asset")
 _KIND_TABLE = {
@@ -37,12 +38,6 @@ def _map_workspace_item(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def createWorkspaceItemsRepository(db):
-    def touchWorkspace(workspaceId: str) -> None:
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
-            [int(time.time() * 1000), workspaceId],
-        )
-
     def list(workspaceId: str) -> list[dict[str, Any]]:
         cur = db.execute(
             "SELECT * FROM workspace_items WHERE workspaceId = ? ORDER BY sortOrder, addedAt, id",
@@ -69,9 +64,7 @@ def createWorkspaceItemsRepository(db):
             return []
         if kind not in _KINDS:
             raise RepoError("invalid_kind", f"unsupported workspace item kind: {kind}")
-        cur = db.execute("SELECT id FROM workspaces WHERE id = ?", [workspaceId])
-        if cur.fetchone() is None:
-            raise RepoError("not_found", f"workspace not found: {workspaceId}")
+        require_workspace(db, workspaceId)
         table = _KIND_TABLE[kind]
         id_field = _kind_id_field(kind)
         for id_ in unique_ids:
@@ -133,7 +126,7 @@ def createWorkspaceItemsRepository(db):
             next_sort += 1
             next_z += 1
             created_count += 1
-        touchWorkspace(workspaceId)
+        touch_workspace(db, workspaceId)
         if len(created_ids) == 0:
             return []
         placeholders = ", ".join(["?"] * len(created_ids))
@@ -151,12 +144,10 @@ def createWorkspaceItemsRepository(db):
         cur = db.execute("DELETE FROM workspace_items WHERE id = ?", [id])
         if cur.rowcount == 0:
             raise RepoError("not_found", f"workspace item not found: {id}")
-        touchWorkspace(row["workspaceId"])
+        touch_workspace(db, row["workspaceId"])
 
     def reorder(workspaceId: str, orderedIds: list[str]) -> list[dict[str, Any]]:
-        cur = db.execute("SELECT id FROM workspaces WHERE id = ?", [workspaceId])
-        if cur.fetchone() is None:
-            raise RepoError("not_found", f"workspace not found: {workspaceId}")
+        require_workspace(db, workspaceId)
         cur = db.execute(
             "SELECT id FROM workspace_items WHERE workspaceId = ? ORDER BY sortOrder",
             [workspaceId],
@@ -174,7 +165,7 @@ def createWorkspaceItemsRepository(db):
                 "UPDATE workspace_items SET sortOrder = ? WHERE id = ? AND workspaceId = ?",
                 [i, id_, workspaceId],
             )
-        touchWorkspace(workspaceId)
+        touch_workspace(db, workspaceId)
         return list(workspaceId)
 
     def resize(id: str, width: int, height: int) -> dict[str, Any]:
@@ -195,7 +186,7 @@ def createWorkspaceItemsRepository(db):
             "UPDATE workspace_items SET width = ?, height = ? WHERE id = ?",
             [width, height, id],
         )
-        touchWorkspace(existing["workspaceId"])
+        touch_workspace(db, existing["workspaceId"])
         cur = db.execute("SELECT * FROM workspace_items WHERE id = ?", [id])
         return _map_workspace_item(cur.fetchone())
 
@@ -210,7 +201,7 @@ def createWorkspaceItemsRepository(db):
             "UPDATE workspace_items SET x = ?, y = ?, zIndex = ? WHERE id = ?",
             [float(x), float(y), zIndex, id],
         )
-        touchWorkspace(existing["workspaceId"])
+        touch_workspace(db, existing["workspaceId"])
         cur = db.execute("SELECT * FROM workspace_items WHERE id = ?", [id])
         return _map_workspace_item(cur.fetchone())
 

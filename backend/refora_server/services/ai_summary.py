@@ -4,9 +4,13 @@ import asyncio
 import inspect
 import json
 import re
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol, TypedDict
 
-from refora_server.repositories.errors import RepoError
+from refora_server.services.provider_config import (
+    ProviderConfigInput,
+    ProviderRuntimeConfig,
+    build_provider_config as _build_provider_config,
+)
 
 MAX_CONCURRENT = 2
 MAX_RETRIES = 3
@@ -44,6 +48,42 @@ _RETRYABLE_MESSAGE_PATTERNS = [
     re.compile(r"ETIMEDOUT", re.IGNORECASE),
     re.compile(r"ECONNRESET", re.IGNORECASE),
 ]
+
+
+class SummaryLogger(Protocol):
+    def info(self, message: str) -> Any: ...
+    def warning(self, message: str) -> Any: ...
+    def error(self, message: str) -> Any: ...
+
+
+class SummaryDocumentsRepository(TypedDict):
+    get: Callable[[str], dict[str, Any] | None]
+
+
+class SummaryContentRepository(TypedDict):
+    getFullText: Callable[[str], dict[str, Any] | None]
+    setSummary: Callable[[str, str, dict[str, Any] | None], Any]
+
+
+class AiSummaryRepositories(TypedDict):
+    documents: SummaryDocumentsRepository
+    aiSummaries: SummaryContentRepository
+
+
+class AiSummaryDependencies(TypedDict, total=False):
+    logger: SummaryLogger
+    generate_summary: Callable[[dict[str, Any]], Any]
+    emit_delta: Callable[[str, str | None], Any]
+    emit_error: Callable[[str, str], Any]
+    sleep: Callable[[float], Awaitable[None]]
+    load_text: Callable[[str], Any]
+
+
+class AiSummaryService(TypedDict):
+    summarize: Callable[[str, ProviderConfigInput], Awaitable[str | None]]
+    queueSummary: Callable[[str, ProviderConfigInput], str | None]
+    processSummary: Callable[[str, ProviderConfigInput], Awaitable[str | None]]
+    destroy: Callable[[], Awaitable[None]]
 
 
 def _extract_status(err: Any) -> int | None:
@@ -160,78 +200,10 @@ def toSummaryContent(parsed: Any) -> dict[str, Any] | None:
     return {"core": core, "keyPoints": key_points}
 
 
-def build_provider_reasoning_options(
-    provider: dict[str, Any], deep_thinking: bool | None
-) -> dict[str, Any]:
-    model_kwargs: dict[str, Any] = {}
-    extra_body: dict[str, Any] = {}
-    reasoning: dict[str, Any] | None = None
-    reasoning_effort = provider.get("reasoningEffort")
-    reasoning_control = provider.get("reasoningControl")
-    api_protocol = provider.get("apiProtocol")
-    preset_id = provider.get("presetId")
-
-    if deep_thinking is True and reasoning_effort != "none":
-        if reasoning_control == "openai":
-            if api_protocol == "openai-responses":
-                reasoning = {"effort": reasoning_effort, "summary": "auto"}
-            else:
-                model_kwargs["reasoning_effort"] = reasoning_effort
-        if reasoning_control == "thinking":
-            extra_body["thinking"] = {"type": "enabled"}
-            if preset_id != "kimi":
-                extra_body["reasoning_effort"] = reasoning_effort
-        if reasoning_control == "enable-thinking":
-            extra_body["enable_thinking"] = True
-            extra_body["reasoning_effort"] = reasoning_effort
-
-    if deep_thinking is False:
-        if reasoning_control == "thinking":
-            extra_body["thinking"] = {"type": "disabled"}
-        if reasoning_control == "enable-thinking":
-            extra_body["enable_thinking"] = False
-
-    result: dict[str, Any] = {
-        "useResponsesApi": api_protocol == "openai-responses",
-        "modelKwargs": model_kwargs,
-    }
-    if reasoning is not None:
-        result["reasoning"] = reasoning
-    if extra_body:
-        result["extraBody"] = extra_body
-    return result
-
-
-def build_provider_config(
-    provider: dict[str, Any],
-    *,
-    model_id: str | None = None,
-    deep_thinking: bool | None = None,
-    temperature: float | None | None = None,
-    max_tokens: int | None | None = None,
-) -> dict[str, Any]:
-    model = (model_id or "").strip() or (provider.get("model") or "")
-    reasoning_options = build_provider_reasoning_options(
-        provider, deep_thinking
-    )
-    final_max_tokens = max_tokens if max_tokens is not None else provider.get("maxTokens")
-    config: dict[str, Any] = {
-        "model": model,
-        "baseUrl": provider.get("baseUrl"),
-        "apiKey": provider.get("apiKey"),
-        "useResponsesApi": reasoning_options["useResponsesApi"],
-        "modelKwargs": reasoning_options["modelKwargs"],
-        "temperature": None,
-        "maxTokens": final_max_tokens,
-    }
-    if reasoning_options.get("extraBody") is not None:
-        config["extraBody"] = reasoning_options["extraBody"]
-    if reasoning_options.get("reasoning") is not None:
-        config["reasoning"] = reasoning_options["reasoning"]
-    return config
-
-
-def createAiSummaryService(repos: Any, deps: Any | None = None):
+def createAiSummaryService(
+    repos: AiSummaryRepositories,
+    deps: AiSummaryDependencies | None = None,
+) -> AiSummaryService:
     deps = deps or {}
     logger = deps.get("logger")
     generate_summary: Callable[..., Any] | None = deps.get("generate_summary")
@@ -239,12 +211,8 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
     emit_error: Callable[[str, str], Any] | None = deps.get("emit_error")
     sleep_fn: Callable[[float], Awaitable[None]] | None = deps.get("sleep")
     load_text: Callable[[str], Any] | None = deps.get("load_text")
-    loop = deps.get("loop")
 
     destroyed = {"value": False}
-    job_queue: list[Callable[..., Any]] = []
-    active = {"value": 0}
-    lock = asyncio.Lock() if loop is None else None
     semaphore: asyncio.Semaphore | None = None
     inflight: set[asyncio.Task[Any]] = set()
     queued: dict[str, asyncio.Task[Any]] = {}
@@ -286,28 +254,30 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
         _emit(doc_id)
 
     async def _invoke_summary(
-        provider_config: dict[str, Any], text: str, doc_id: str
+        provider_config: ProviderRuntimeConfig, text: str, doc_id: str
     ) -> dict[str, Any]:
+        async def invoke(payload: dict[str, Any]) -> Any:
+            if generate_summary is None:
+                raise RuntimeError("generate_summary dependency is not configured")
+            if inspect.iscoroutinefunction(generate_summary):
+                return await generate_summary(payload)
+            result = await asyncio.to_thread(generate_summary, payload)
+            return await result if inspect.isawaitable(result) else result
+
         chunks = splitText(text)
         chunk_summaries: list[str] = []
         for chunk in chunks:
             if destroyed["value"]:
                 raise RuntimeError("Summary service destroyed")
-            if generate_summary is None:
-                raise RuntimeError("generate_summary dependency is not configured")
-            result = await asyncio.to_thread(
-                generate_summary,
-                {"provider": provider_config, "text": chunk},
-            )
+            result = await invoke({"provider": provider_config, "text": chunk})
             chunk_summaries.append(_content_to_text(result))
         combined = "\n\n".join(chunk_summaries)
         if not combined.strip():
             return {"core": "", "keyPoints": []}
         if destroyed["value"]:
             raise RuntimeError("Summary service destroyed")
-        final_result = await asyncio.to_thread(
-            generate_summary,
-            {"provider": provider_config, "text": None, "combined": combined},
+        final_result = await invoke(
+            {"provider": provider_config, "text": None, "combined": combined}
         )
         final_text = _content_to_text(final_result)
         try:
@@ -322,7 +292,9 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
             "keyPoints": [],
         }
 
-    async def process_summary(doc_id: str, provider: dict[str, Any]) -> str | None:
+    async def process_summary(
+        doc_id: str, provider: ProviderConfigInput
+    ) -> str | None:
         doc = repos["documents"]["get"](doc_id)
         if doc is None:
             _warn(f"aiSummary:processJob doc-not-found id={doc_id}")
@@ -330,7 +302,7 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
             return None
         if destroyed["value"]:
             return None
-        provider_config = build_provider_config(
+        provider_config = _build_provider_config(
             provider, deep_thinking=False, max_tokens=SUMMARY_MAX_TOKENS
         )
         provider_config["streaming"] = False
@@ -376,13 +348,17 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
         _emit(doc_id, doc_id)
         return doc_id
 
-    async def summarize(documentId: str, provider: dict[str, Any]) -> str | None:
+    async def summarize(
+        documentId: str, provider: ProviderConfigInput
+    ) -> str | None:
         async def _job() -> str | None:
             return await process_summary(documentId, provider)
 
         return await _run_job(_job)
 
-    def queue_summary(documentId: str, provider: dict[str, Any]) -> str | None:
+    def queue_summary(
+        documentId: str, provider: ProviderConfigInput
+    ) -> str | None:
         if destroyed["value"]:
             return None
         existing = queued.get(documentId)
@@ -440,14 +416,19 @@ def createAiSummaryService(repos: Any, deps: Any | None = None):
             if acquired:
                 semaphore.release()
 
-    def destroy() -> None:
+    async def destroy() -> None:
         destroyed["value"] = True
-        job_queue.clear()
-        for task in list(queued.values()):
+        current = asyncio.current_task()
+        tasks = {
+            task
+            for task in (*queued.values(), *inflight)
+            if task is not current and not task.done()
+        }
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         queued.clear()
-        for task in list(inflight):
-            task.cancel()
         inflight.clear()
 
     return {

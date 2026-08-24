@@ -199,27 +199,35 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.documents.openPdf = mockOpenPdf
   w.api.events.onAiChatDone = (handler: (payload: ChatDoneEvent) => void) => {
     chatDoneHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatError = (handler: (payload: ChatErrorEvent) => void) => {
     chatErrorHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatToken = (handler: (payload: ChatTokenEvent) => void) => {
     chatTokenHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatReasoning = (handler: (payload: ChatReasoningEvent) => void) => {
     chatReasoningHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatTrace = (handler: (payload: ChatTraceEvent) => void) => {
     chatTraceHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatInterrupted = (handler: (payload: ChatInterruptedEvent) => void) => {
     chatInterruptedHandler = handler
+    return () => undefined
   }
   w.api.events.onAiChatRunStatus = (handler: (payload: ChatRunStatusEvent) => void) => {
     chatRunStatusHandler = handler
+    return () => undefined
   }
   w.api.events.onLibrarySwitched = (handler: () => void) => {
     librarySwitchedHandlers.push(handler)
+    return () => undefined
   }
   mockChatHistory.mockResolvedValue(messages)
   mockChatSend.mockImplementation(async (req: ChatSendRequest) => ({
@@ -1285,6 +1293,7 @@ describe('ChatMessages presentation', () => {
     w.api.ocr.getState = vi.fn(async () => ({ activeJob: null }))
     w.api.events.onOcrProgress = (handler: (payload: OcrProgressEvent) => void) => {
       onProgress = handler
+      return () => undefined
     }
     const now = Date.now()
     const job: OcrJob = {
@@ -1322,6 +1331,7 @@ describe('ChatMessages presentation', () => {
     }))
     w.api.events.onOcrProgress = (handler: (payload: OcrProgressEvent) => void) => {
       onProgress = handler
+      return () => undefined
     }
     const now = Date.now()
     const staleJob: OcrJob = {
@@ -1369,6 +1379,7 @@ describe('ChatMessages presentation', () => {
     }))
     w.api.events.onOcrCompleted = (handler: (payload: OcrCompletedEvent) => void) => {
       onCompleted = handler
+      return () => undefined
     }
     const now = Date.now()
     const staleJob: OcrJob = {
@@ -2741,6 +2752,31 @@ describe('useChatStream lifecycle', () => {
       expect(result.current.traceSteps).toEqual([completedRun, completedModel])
     })
     expect(mockChatTraces).toHaveBeenCalledWith('thread-1')
+  })
+
+  it('keeps equal assistant text produced by separate runs', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+
+    await act(async () => {
+      await result.current.sendText('First question', [], 'thread-1')
+    })
+    const firstRunId = result.current.activeRunId!
+    act(() => {
+      chatDoneHandler?.({ threadId: 'thread-1', runId: firstRunId, finalText: 'Same answer' })
+    })
+
+    await act(async () => {
+      await result.current.sendText('Second question', [], 'thread-1')
+    })
+    const secondRunId = result.current.activeRunId!
+    act(() => {
+      chatDoneHandler?.({ threadId: 'thread-1', runId: secondRunId, finalText: 'Same answer' })
+    })
+
+    expect(result.current.messages.filter(
+      (message) => message.role === 'assistant' && message.content === 'Same answer'
+    )).toHaveLength(2)
   })
 
   it('discards a completed trace refresh after regeneration starts', async () => {

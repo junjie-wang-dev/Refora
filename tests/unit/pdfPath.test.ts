@@ -1,25 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { existsSync, lstatSync, statSync } = vi.hoisted(() => ({
-  existsSync: vi.fn(),
+const { lstatSync, realpathSync } = vi.hoisted(() => ({
   lstatSync: vi.fn(),
-  statSync: vi.fn()
+  realpathSync: vi.fn()
 }))
 
 vi.mock('node:fs', () => ({
-  default: { existsSync, lstatSync, statSync },
-  existsSync,
+  default: { lstatSync, realpathSync },
   lstatSync,
-  statSync
+  realpathSync
 }))
 
 import { resolvePdfFilePath } from '../../src/main/services/pdfPath'
 
 describe('resolvePdfFilePath', () => {
   beforeEach(() => {
-    existsSync.mockReset().mockReturnValue(true)
-    lstatSync.mockReset().mockReturnValue({ isSymbolicLink: () => false })
-    statSync.mockReset().mockReturnValue({ isFile: () => true })
+    realpathSync.mockReset().mockImplementation((path) => path)
+    lstatSync.mockReset().mockReturnValue({
+      isSymbolicLink: () => false,
+      isFile: () => true,
+      isDirectory: () => false
+    })
   })
 
   it('returns a validated absolute PDF path', () => {
@@ -30,15 +31,23 @@ describe('resolvePdfFilePath', () => {
     expect(() => resolvePdfFilePath('../paper.pdf')).toThrow('absolute')
     expect(() => resolvePdfFilePath('/library/paper.txt')).toThrow('PDF')
 
-    existsSync.mockReturnValue(false)
+    lstatSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    })
     expect(() => resolvePdfFilePath('/library/missing.pdf')).toThrow('File not found')
 
-    existsSync.mockReturnValue(true)
-    lstatSync.mockReturnValue({ isSymbolicLink: () => true })
+    lstatSync.mockReturnValue({
+      isSymbolicLink: () => true,
+      isFile: () => true,
+      isDirectory: () => false
+    })
     expect(() => resolvePdfFilePath('/library/link.pdf')).toThrow('regular PDF')
 
-    lstatSync.mockReturnValue({ isSymbolicLink: () => false })
-    statSync.mockReturnValue({ isFile: () => false })
+    lstatSync.mockReturnValue({
+      isSymbolicLink: () => false,
+      isFile: () => false,
+      isDirectory: () => true
+    })
     expect(() => resolvePdfFilePath('/library/folder.pdf')).toThrow('regular PDF')
   })
 })

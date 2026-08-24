@@ -108,13 +108,11 @@ describe('Sidebar', () => {
     })
     api.events.onSyncAuthConfirmation = vi.fn((cb) => {
       authConfirmationCallback = cb
+      return vi.fn()
     })
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut',
       account: null
     })
   })
@@ -143,20 +141,17 @@ describe('Sidebar', () => {
     })
   })
 
-  it('shows the signed-in email and sync state in the sidebar footer', async () => {
+  it('shows the signed-in email and session state in the sidebar footer', async () => {
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
-      state: 'disabled',
       account: { id: 'user-1', email: 'reader@example.com' }
     })
 
     renderSidebar()
 
     expect(await screen.findByText('reader@example.com')).toBeInTheDocument()
-    expect(screen.getByText('sidebar.account.syncUnavailable')).toBeInTheDocument()
+    expect(screen.getByText('sidebar.account.signedIn')).toBeInTheDocument()
   })
 
   it('opens the account window when macOS delivers an auth confirmation link', () => {

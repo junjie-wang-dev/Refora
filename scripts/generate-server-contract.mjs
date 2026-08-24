@@ -4,6 +4,10 @@ import { promisify } from 'node:util'
 
 const runFile = promisify(execFile)
 const target = new URL('../src/shared/server-contract.ts', import.meta.url)
+const snapshotTarget = new URL(
+  '../backend/refora_server/server/contract_snapshot.json',
+  import.meta.url
+)
 const { stdout } = await runFile('python3', ['backend/export_contract.py'], {
   env: {
     ...process.env,
@@ -13,6 +17,7 @@ const { stdout } = await runFile('python3', ['backend/export_contract.py'], {
 })
 const contract = JSON.parse(stdout)
 const render = (value) => JSON.stringify(value, null, 2)
+const snapshotOutput = `${render(contract)}\n`
 const output = [
   `export const SERVER_PROTOCOL_VERSION = ${contract.protocolVersion} as const`,
   `export const SERVER_PROTOCOL_DIGEST = ${JSON.stringify(contract.protocolDigest)} as const`,
@@ -29,10 +34,18 @@ const output = [
 ].join('\n\n')
 
 if (process.argv.includes('--check')) {
-  const current = await readFile(target, 'utf8').catch(() => '')
-  if (current !== output) {
-    throw new Error('src/shared/server-contract.ts is stale; run npm run generate:server-contract')
+  const [current, currentSnapshot] = await Promise.all([
+    readFile(target, 'utf8').catch(() => ''),
+    readFile(snapshotTarget, 'utf8').catch(() => '')
+  ])
+  if (current !== output || currentSnapshot !== snapshotOutput) {
+    throw new Error(
+      'Generated server contract artifacts are stale; run npm run generate:server-contract'
+    )
   }
 } else {
-  await writeFile(target, output)
+  await Promise.all([
+    writeFile(target, output),
+    writeFile(snapshotTarget, snapshotOutput)
+  ])
 }

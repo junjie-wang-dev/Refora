@@ -12,7 +12,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
 import { useChatDraftStore } from '../../store/chatDraftStore'
 import { useDocumentStore } from '../../store/documentStore'
-import { useAgentCatalogStore } from '../../store/agentCatalogStore'
+import { deriveChatCatalog, useAgentCatalogStore } from '../../store/agentCatalogStore'
 import { Button as UiButton, PanelTabHeader } from '../ui'
 import { useChatStream } from '../../hooks/useChatStream'
 import { MAX_INPUT_LENGTH } from '../../utils/chatUtils'
@@ -99,8 +99,12 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const pendingChatDraft = useChatDraftStore((s) => s.pending)
   const consumeChatDraft = useChatDraftStore((s) => s.consume)
 
-  const providers = useAgentCatalogStore((state) => state.agents)
-  const agentProfiles = useAgentCatalogStore((state) => state.chatProfiles)
+  const catalogProviders = useAgentCatalogStore((state) => state.apiProviders)
+  const catalogProfiles = useAgentCatalogStore((state) => state.profiles)
+  const { agents: providers, chatProfiles: agentProfiles } = useMemo(
+    () => deriveChatCatalog(catalogProviders, catalogProfiles),
+    [catalogProfiles, catalogProviders]
+  )
   const providerModels = useAgentCatalogStore((state) => state.modelsByAgentId)
   const loadingModels = useAgentCatalogStore((state) => state.loadingModels)
   const catalogRevision = useAgentCatalogStore((state) => state.revision)
@@ -124,6 +128,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const inputAreaRef = useRef<HTMLDivElement | null>(null)
+  const modelSwitchHintTimerRef = useRef<number | null>(null)
   const handledChatDraftIdsRef = useRef(new Set<number>())
   const providerLoadVersionRef = useRef(0)
   const translationRef = useRef(t)
@@ -217,7 +222,11 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         api.settings.get<AiReasoningEffort | ''>('chatReasoningEffort', '')
       ])
       if (loadVersion !== providerLoadVersionRef.current) return
-      const { agents: list, chatProfiles: resolvedProfiles } = useAgentCatalogStore.getState()
+      const catalog = useAgentCatalogStore.getState()
+      const { agents: list, chatProfiles: resolvedProfiles } = deriveChatCatalog(
+        catalog.apiProviders,
+        catalog.profiles
+      )
       const providerIds = new Set(list.map((provider) => provider.id))
       const legacySavedProfileId = resolvedProfiles.find(
         (profile) => profile.apiProviderId === legacySavedProviderId
@@ -286,6 +295,23 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     }
   }, [])
 
+  useEffect(() => () => {
+    if (modelSwitchHintTimerRef.current !== null) {
+      window.clearTimeout(modelSwitchHintTimerRef.current)
+    }
+  }, [])
+
+  const showModelSwitchHint = useCallback((hint: 'model' | 'provider') => {
+    if (modelSwitchHintTimerRef.current !== null) {
+      window.clearTimeout(modelSwitchHintTimerRef.current)
+    }
+    setModelSwitchHint(hint)
+    modelSwitchHintTimerRef.current = window.setTimeout(() => {
+      modelSwitchHintTimerRef.current = null
+      setModelSwitchHint(null)
+    }, 3500)
+  }, [])
+
   useEffect(() => {
     void refreshAgentCatalogRef.current().catch((error) => {
       chatErrorRef.current(errorMessage(error, translationRef.current('workspace.chat.providersLoadFailed')))
@@ -296,10 +322,6 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     if (catalogRevision === 0) return
     void hydrateProviderSelection()
   }, [catalogRevision, hydrateProviderSelection])
-
-  useEffect(() => {
-    void fetchThreads({ selectLatestIfNone: true })
-  }, [activeWorkspaceId, fetchThreads])
 
   useEffect(() => {
     const reloadProviders = () => {
@@ -313,10 +335,10 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         chatErrorRef.current(errorMessage(error, translationRef.current('workspace.chat.providersLoadFailed')))
       })
     }
-    api.events.onLibrarySwitched(reloadProviders)
+    const dispose = api.events.onLibrarySwitched(reloadProviders)
     return () => {
       providerLoadVersionRef.current += 1
-      api.events.off('library:switched', reloadProviders)
+      dispose()
     }
   }, [])
 
@@ -392,11 +414,9 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       persistChatSetting('chatSelectedModel', baseModel)
       persistChatSetting('chatSelectedVariant', variant)
       if (providerChanged && (chat.hadMessagesRef.current || chat.messages.length > 0)) {
-        setModelSwitchHint('provider')
-        window.setTimeout(() => setModelSwitchHint(null), 3500)
+        showModelSwitchHint('provider')
       } else if (chat.hadMessagesRef.current || chat.messages.length > 0) {
-        setModelSwitchHint('model')
-        window.setTimeout(() => setModelSwitchHint(null), 3500)
+        showModelSwitchHint('model')
       }
     },
     [
@@ -406,7 +426,8 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       providerModels,
       providers,
       chat.hadMessagesRef,
-      selectedReasoningEffort
+      selectedReasoningEffort,
+      showModelSwitchHint
     ]
   )
 

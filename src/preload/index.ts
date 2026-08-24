@@ -34,7 +34,6 @@ import type {
   Document,
   DocumentCounts,
   DocumentPatch,
-  EventChannel,
   GlobalSearchResult,
   IdentifierImportResult,
   ImportProgress,
@@ -111,13 +110,17 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const subscriptions = new Map<string, Map<unknown, (...args: unknown[]) => void>>()
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
-let authConfirmationSubscriber: ((payload: SyncAuthConfirmation) => void) | null = null
-let rendererFlushSubscriber: (() => Promise<void>) | null = null
+let authConfirmationSubscription: {
+  callback: (payload: SyncAuthConfirmation) => void
+} | null = null
+let rendererFlushSubscription: {
+  callback: () => Promise<void>
+} | null = null
 
 ipcRenderer.on(IpcChannel.EventSyncAuthConfirmation, (...args: unknown[]) => {
   const payload = args[1] as SyncAuthConfirmation
-  if (authConfirmationSubscriber) {
-    authConfirmationSubscriber(payload)
+  if (authConfirmationSubscription) {
+    authConfirmationSubscription.callback(payload)
   } else {
     pendingAuthConfirmation = payload
   }
@@ -126,7 +129,7 @@ ipcRenderer.on(IpcChannel.EventSyncAuthConfirmation, (...args: unknown[]) => {
 ipcRenderer.on(IpcChannel.EventRendererFlushRequested, (...args: unknown[]) => {
   const requestId = args[1]
   if (typeof requestId !== 'string') return
-  const task = Promise.resolve().then(() => rendererFlushSubscriber?.())
+  const task = Promise.resolve().then(() => rendererFlushSubscription?.callback())
   void task.then(
     () => invoke<void>(IpcChannel.RendererFlushComplete, requestId),
     (error: unknown) => invoke<void>(
@@ -137,7 +140,7 @@ ipcRenderer.on(IpcChannel.EventRendererFlushRequested, (...args: unknown[]) => {
   ).catch(() => undefined)
 })
 
-function subscribe<T>(channel: string, cb: (payload: T) => void): void {
+function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   let listeners = subscriptions.get(channel)
   if (!listeners) {
     listeners = new Map()
@@ -150,23 +153,11 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): void {
   const ipcListener = (...args: unknown[]): void => cb(args[1] as T)
   listeners.set(cb, ipcListener)
   ipcRenderer.on(channel, ipcListener)
-}
-
-function unsubscribe(channel: string, cb: unknown): void {
-  if (channel === IpcChannel.EventRendererFlushRequested && rendererFlushSubscriber === cb) {
-    rendererFlushSubscriber = null
-    return
-  }
-  if (channel === IpcChannel.EventSyncAuthConfirmation && authConfirmationSubscriber === cb) {
-    authConfirmationSubscriber = null
-    return
-  }
-  const listeners = subscriptions.get(channel)
-  const listener = listeners?.get(cb)
-  if (listener) {
-    ipcRenderer.removeListener(channel, listener)
-    listeners?.delete(cb)
-    if (listeners?.size === 0) subscriptions.delete(channel)
+  return () => {
+    if (subscriptions.get(channel)?.get(cb) !== ipcListener) return
+    ipcRenderer.removeListener(channel, ipcListener)
+    listeners.delete(cb)
+    if (listeners.size === 0) subscriptions.delete(channel)
   }
 }
 
@@ -214,8 +205,6 @@ const api: ReforaApi = {
 
   import: {
     addFiles: (paths: string[]) => invoke<PdfImportResult>(IpcChannel.ImportAddFiles, paths),
-    addFolder: (dir: string) => invoke<PdfImportResult>(IpcChannel.ImportAddFolder, dir),
-    fromJson: (file: string) => invoke<number>(IpcChannel.ImportFromJson, file),
     fromZotero: () => invoke<BibImportResult>(IpcChannel.ImportFromZotero),
     fromMendeley: () => invoke<BibImportResult>(IpcChannel.ImportFromMendeley),
     fromIdentifier: (identifier: string) => invoke<IdentifierImportResult>(IpcChannel.ImportFromIdentifier, identifier)
@@ -254,9 +243,7 @@ const api: ReforaApi = {
       invoke<SyncSignUpResult>(IpcChannel.SyncSignUp, credentials),
     resendConfirmation: (request: SyncEmailRequest) =>
       invoke<void>(IpcChannel.SyncResendConfirmation, request),
-    signOut: () => invoke<SyncServiceStatus>(IpcChannel.SyncSignOut),
-    setEnabled: (enabled: boolean) =>
-      invoke<SyncServiceStatus>(IpcChannel.SyncSetEnabled, enabled)
+    signOut: () => invoke<SyncServiceStatus>(IpcChannel.SyncSignOut)
   },
 
   appearance: {
@@ -307,8 +294,7 @@ const api: ReforaApi = {
   },
 
   export: {
-    toJson: () => invoke<string>(IpcChannel.ExportToJson),
-    toBibtex: (ids: string[]) => invoke<string>(IpcChannel.ExportToBibtex, ids),
+    toBibtex: (ids: string[]) => invoke<void>(IpcChannel.ExportToBibtex, ids),
     toBibtexString: (ids: string[]) => invoke<string>(IpcChannel.ExportBibtexString, ids)
   },
 
@@ -462,7 +448,11 @@ const api: ReforaApi = {
 
   events: {
     onRendererFlushRequested: (cb: () => Promise<void>) => {
-      rendererFlushSubscriber = cb
+      const subscription = { callback: cb }
+      rendererFlushSubscription = subscription
+      return () => {
+        if (rendererFlushSubscription === subscription) rendererFlushSubscription = null
+      }
     },
     onDocumentUpdated: (cb: (doc: Document) => void) =>
       subscribe(IpcChannel.EventDocumentUpdated, cb),
@@ -480,16 +470,18 @@ const api: ReforaApi = {
       subscribe(IpcChannel.EventMenuImportMendeley, cb),
     onMenuImportIdentifier: (cb: () => void) =>
       subscribe(IpcChannel.EventMenuImportIdentifier, cb),
-    onLibraryScanning: (cb: (payload: ImportProgress) => void) =>
-      subscribe(IpcChannel.EventLibraryScanning, cb),
     onLibrarySwitched: (cb: (payload: LibrarySwitchResult) => void) =>
       subscribe(IpcChannel.EventLibrarySwitched, cb),
     onSyncAuthConfirmation: (cb: (payload: SyncAuthConfirmation) => void) => {
-      authConfirmationSubscriber = cb
+      const subscription = { callback: cb }
+      authConfirmationSubscription = subscription
       if (pendingAuthConfirmation) {
         const payload = pendingAuthConfirmation
         pendingAuthConfirmation = null
         cb(payload)
+      }
+      return () => {
+        if (authConfirmationSubscription === subscription) authConfirmationSubscription = null
       }
     },
     onAiSummaryUpdated: (cb: (docId: string) => void) =>
@@ -523,8 +515,7 @@ const api: ReforaApi = {
     onOcrCompleted: (cb: (payload: OcrCompletedEvent) => void) =>
       subscribe(IpcChannel.EventOcrCompleted, cb),
     onOcrError: (cb: (payload: OcrErrorEvent) => void) =>
-      subscribe(IpcChannel.EventOcrError, cb),
-    off: (channel: EventChannel, cb: unknown) => unsubscribe(channel, cb)
+      subscribe(IpcChannel.EventOcrError, cb)
   }
 }
 

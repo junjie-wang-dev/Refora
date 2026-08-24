@@ -18,13 +18,12 @@ import {
 import { resultify as wrap } from './result'
 
 export interface ServerWorkspaceHandlerDeps {
-  consumeFile?: (path: string, extensions?: readonly string[]) => string
-  consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
+  consumeFiles: (paths: readonly string[], extensions?: readonly string[]) => string[]
 }
 
 export function createServerWorkspaceHandlers(
   serverClient: ServerClient,
-  { consumeFile, consumeFiles }: ServerWorkspaceHandlerDeps = {}
+  { consumeFiles }: ServerWorkspaceHandlerDeps
 ) {
   const { http } = serverClient
 
@@ -97,11 +96,7 @@ export function createServerWorkspaceHandlers(
       paths: string[],
       placement?: WorkspaceItemPlacement
     ) => wrap(() => http.workspaceAssetsAddFiles(workspaceId, {
-      paths: consumeFiles
-        ? consumeFiles(paths)
-        : consumeFile
-          ? paths.map((path) => consumeFile(path))
-          : paths,
+      paths: consumeFiles(paths),
       placement
     })),
     [IpcChannel.WorkspaceAssetsTextPreview]: (assetId: string) =>
@@ -124,11 +119,7 @@ export function createServerWorkspaceHandlers(
       paths: string[],
       placement?: WorkspaceItemPlacement
     ) => wrap(() => http.workspaceFilesAdd(workspaceId, {
-      paths: consumeFiles
-        ? consumeFiles(paths)
-        : consumeFile
-          ? paths.map((path) => consumeFile(path))
-          : paths,
+      paths: consumeFiles(paths),
       placement
     })),
 

@@ -10,7 +10,8 @@ import {
   ReactMarkdown,
   openMarkdownCardContextMenu,
   urlTransform,
-  useMarkdownCardExport
+  useMarkdownCardExport,
+  useMarkdownCardEditor
 } from './noteReportShared'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
@@ -41,18 +42,19 @@ export default function ReportCard({
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [editTitle, setEditTitle] = useState(report.title)
-  const [editContent, setEditContent] = useState(report.contentMd)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const editor = useMarkdownCardEditor({
+    id: report.id,
+    title: report.title,
+    contentMd: report.contentMd,
+    titleRequiredMessage: t('workspace.titleRequired'),
+    saveFailedMessage: t('workspace.reportSaveFailed'),
+    onUpdate
+  })
   const boardPreview = useMemo(() => boardCardPreview(report.contentMd), [report.contentMd])
   const handleExportMarkdown = useMarkdownCardExport(report.title, report.contentMd, 'report')
 
   const enterEditMode = () => {
-    setEditTitle(report.title)
-    setEditContent(report.contentMd)
-    setEditing(true)
+    editor.start()
   }
 
   const requestInternalEdit = () => {
@@ -86,28 +88,7 @@ export default function ReportCard({
   const closeModal = () => {
     setExpanded(false)
     setConfirmDelete(false)
-    setEditing(false)
-    setSaveError(null)
-  }
-
-  const handleSave = async () => {
-    if (!editTitle.trim()) {
-      setSaveError(t('workspace.titleRequired'))
-      return
-    }
-    setSaving(true)
-    setSaveError(null)
-    const saved = await onUpdate(report.id, { title: editTitle.trim(), contentMd: editContent })
-    setSaving(false)
-    if (saved) setEditing(false)
-    else setSaveError(t('workspace.reportSaveFailed'))
-  }
-
-  const handleCancelEdit = () => {
-    setEditTitle(report.title)
-    setEditContent(report.contentMd)
-    setEditing(false)
-    setSaveError(null)
+    editor.cancel()
   }
 
   const openCard = () => {
@@ -205,14 +186,14 @@ export default function ReportCard({
       <MarkdownCardModal
         open={expanded}
         onCancel={closeModal}
-        title={editing ? t('workspace.reportEdit') : report.title}
+        title={editor.editing ? t('workspace.reportEdit') : report.title}
         width={640}
-        editing={editing}
-        saving={saving}
-        canSave={editTitle.trim().length > 0}
+        editing={editor.editing}
+        saving={editor.saving}
+        canSave={editor.draftTitle.trim().length > 0}
         confirmDelete={confirmDelete}
         deleteConfirmMessage={t('workspace.reportDeleteConfirm')}
-        saveError={saveError}
+        saveError={editor.saveError}
         labels={{
           delete: t('workspace.reportDelete'),
           confirm: t('common.confirm'),
@@ -229,18 +210,18 @@ export default function ReportCard({
         }}
         onExport={handleExportMarkdown}
         onStartEdit={enterEditMode}
-        onCancelEdit={handleCancelEdit}
-        onSave={() => void handleSave()}
+        onCancelEdit={editor.cancel}
+        onSave={() => void editor.save()}
       >
-        {editing ? (
+        {editor.editing ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted">{t('workspace.reportTitleLabel')}</label>
               <UiInput
                 variant="outlined"
                 inputSize="md"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
+                value={editor.draftTitle}
+                onChange={(e) => editor.setDraftTitle(e.target.value)}
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -249,8 +230,8 @@ export default function ReportCard({
                 variant="outlined"
                 textareaSize="md"
                 className="min-h-[300px] resize-y font-mono"
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
+                value={editor.draftContent}
+                onChange={(e) => editor.setDraftContent(e.target.value)}
               />
             </div>
           </div>

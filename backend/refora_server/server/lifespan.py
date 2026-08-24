@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -30,14 +31,14 @@ from refora_server.server.connector import create_connector_broker
 from refora_server.server.events import create_event_bus
 from refora_server.server.services.academic_runtime import create_academic_runtime
 from refora_server.server.services.lifespan_support import (
-    LazyAgentRuntime as _LazyAgentRuntime,
-    download_mineru_file as _download_mineru_file,
-    mineru_worker_path as _mineru_worker_path,
-    schedule_event as _schedule_event,
-    summary_prompt as _summary_prompt,
-    trash_mineru_path as _trash_mineru_path,
-    unavailable_agent_capability as _unavailable_agent_capability,
-    unavailable_ocr_service as _unavailable_ocr_service,
+    LazyAgentRuntime,
+    download_mineru_file,
+    mineru_worker_path,
+    schedule_event,
+    summary_prompt,
+    trash_mineru_path,
+    unavailable_agent_capability,
+    unavailable_ocr_service,
 )
 from refora_server.services.agent_runtime import createAgentRuntime
 from refora_server.services.agent_profiles import createAgentProfilesService
@@ -50,7 +51,6 @@ from refora_server.services.clipboard_temp import create_clipboard_temp_service
 from refora_server.services.document_text import createDocumentTextService
 from refora_server.services.document_presence import create_document_presence_service
 from refora_server.services.export import createExportService
-from refora_server.services.library import createLibraryService
 from refora_server.services.mineru import (
     MineruEngineManagerDeps,
     MineruWorkerProcessDeps,
@@ -214,7 +214,7 @@ def create_lifespan(
                         or os.path.dirname(os.path.abspath(db_path))
                     ),
                     downloadFile=lambda url, destination, cancel_event, on_progress: (
-                        _download_mineru_file(
+                        download_mineru_file(
                             url,
                             destination,
                             cancel_event,
@@ -222,8 +222,8 @@ def create_lifespan(
                             proxy=proxy_url() or None,
                         )
                     ),
-                    trashItem=lambda path: _trash_mineru_path(connector, path),
-                    emitProgress=lambda progress: _schedule_event(
+                    trashItem=lambda path: trash_mineru_path(connector, path),
+                    emitProgress=lambda progress: schedule_event(
                         events, "mineru.install-progress", progress.to_dict()
                     ),
                 )
@@ -233,15 +233,6 @@ def create_lifespan(
             importer = {}
             exporter = {}
             web_search = {}
-            library = createLibraryService(
-                repos,
-                {
-                    "emit": lambda event, data: _schedule_event(
-                        events, event, data, server_loop
-                    )
-                },
-            )
-
             if complete_repos:
                 async def confirm_duplicate(file_name: str) -> bool:
                     result = await connector.dialog_choose(
@@ -261,7 +252,7 @@ def create_lifespan(
                     {
                         "getLibraryFolder": lambda: app.state.library_folder,
                         "confirmDuplicate": confirm_duplicate,
-                        "emitProgress": lambda data: _schedule_event(
+                        "emitProgress": lambda data: schedule_event(
                             events, "import.progress", data, server_loop
                         ),
                     },
@@ -272,7 +263,7 @@ def create_lifespan(
                     if isinstance(errors, list):
                         for error in errors:
                             if isinstance(error, dict) and isinstance(error.get("message"), str):
-                                _schedule_event(
+                                schedule_event(
                                     events,
                                     "import.toast",
                                     error["message"],
@@ -298,6 +289,7 @@ def create_lifespan(
                     {
                         "getLibraryFolder": lambda: app.state.library_folder,
                         "onNewPdf": lambda paths: importer["importFiles"](paths, True),
+                        "logger": logging.getLogger("refora.watcher"),
                     },
                 )
                 exporter = createExportService(repos)
@@ -324,12 +316,11 @@ def create_lifespan(
                 web_search = createWebSearchService(
                     repos,
                     {
-                        "decryptKey": connector.decrypt_api_key_sync,
                         "decryptKeyAsync": decrypt_search_key,
                         "getProxy": proxy_url,
                     },
                 )
-            worker_path = _mineru_worker_path()
+            worker_path = mineru_worker_path()
             if ocr_repos_ready and os.path.isfile(worker_path):
                 worker = create_mineru_worker_process(
                     MineruWorkerProcessDeps(engineManager=mineru, workerScriptPath=worker_path)
@@ -340,25 +331,25 @@ def create_lifespan(
                         engineManager=mineru,
                         worker=worker,
                         getLibraryFolder=lambda: app.state.library_folder,
-                        emitProgress=lambda data: _schedule_event(events, "ocr.progress", data),
-                        emitCompleted=lambda data: _schedule_event(events, "ocr.completed", data),
-                        emitError=lambda data: _schedule_event(events, "ocr.error", data),
+                        emitProgress=lambda data: schedule_event(events, "ocr.progress", data),
+                        emitCompleted=lambda data: schedule_event(events, "ocr.completed", data),
+                        emitError=lambda data: schedule_event(events, "ocr.error", data),
                     ),
                 )
                 await ocr["initialize"]()
             elif not ocr_repos_ready:
-                ocr = _unavailable_ocr_service("OCR repositories are not available")
+                ocr = unavailable_ocr_service("OCR repositories are not available")
             else:
-                ocr = _unavailable_ocr_service("MinerU worker script is missing")
+                ocr = unavailable_ocr_service("MinerU worker script is missing")
 
             document_text = createDocumentTextService(repos)
 
-            def generate_summary(payload: dict[str, Any]) -> Any:
+            async def generate_summary(payload: dict[str, Any]) -> Any:
                 provider = payload.get("provider")
                 if not isinstance(provider, dict):
                     raise RuntimeError("AI summary provider is unavailable")
-                prompt = _summary_prompt(payload.get("text"), payload.get("combined"))
-                response = configured_model(provider).invoke(
+                prompt = summary_prompt(payload.get("text"), payload.get("combined"))
+                response = await configured_model(provider).ainvoke(
                     [{"role": "user", "content": prompt}]
                 )
                 return getattr(response, "content", response)
@@ -368,10 +359,10 @@ def create_lifespan(
                 {
                     "generate_summary": generate_summary,
                     "load_text": document_text["getOrExtract"],
-                    "emit_delta": lambda document_id, _summary_id: _schedule_event(
+                    "emit_delta": lambda document_id, _summary_id: schedule_event(
                         events, "ai.summary.updated", document_id, server_loop
                     ),
-                    "emit_error": lambda document_id, message: _schedule_event(
+                    "emit_error": lambda document_id, message: schedule_event(
                         events,
                         "ai.summary.error",
                         {"docId": document_id, "message": message},
@@ -496,7 +487,6 @@ def create_lifespan(
                 start_watcher()
             services = {
                 "repos": repos,
-                "library": library,
                 "importer": importer,
                 "watcher": watcher,
                 "export": exporter,
@@ -531,7 +521,7 @@ def create_lifespan(
                     {
                         "connector": connector,
                         "getSandboxPath": lambda workspace_id: f"{app.state.library_folder}/.refora/sandboxes/{workspace_id}",
-                        "agentRuntime": _LazyAgentRuntime(app),
+                        "agentRuntime": LazyAgentRuntime(app),
                         "academic": academic,
                         "importer": importer,
                     },
@@ -565,7 +555,7 @@ def create_lifespan(
                 def request_summary(document_id: str) -> Any:
                     provider = request.get("provider")
                     if not isinstance(provider, dict):
-                        return _unavailable_agent_capability()
+                        return unavailable_agent_capability()
                     server_loop.call_soon_threadsafe(
                         summary_service["queueSummary"], document_id, provider
                     )
@@ -651,7 +641,7 @@ def create_lifespan(
                     )
 
                 def workspace_changed(workspace_id: str, reason: str) -> None:
-                    _schedule_event(
+                    schedule_event(
                         events,
                         "workspace.items.changed",
                         {"workspaceId": workspace_id, "reason": reason},
@@ -659,7 +649,7 @@ def create_lifespan(
                     )
 
                 def report_created(report: dict[str, Any]) -> None:
-                    _schedule_event(
+                    schedule_event(
                         events,
                         "ai.report.created",
                         report,
@@ -685,7 +675,7 @@ def create_lifespan(
                         }
                     sandbox_root = request.get("sandboxRoot")
                     if not isinstance(sandbox_root, str) or not sandbox_root:
-                        return _unavailable_agent_capability()
+                        return unavailable_agent_capability()
                     outputs_root = os.path.realpath(os.path.join(sandbox_root, "outputs"))
                     resolved_paths: list[tuple[str, str]] = []
                     errors: list[dict[str, str]] = []
@@ -742,7 +732,7 @@ def create_lifespan(
                 ) -> Any:
                     installer = sandbox.get("install_runtime_packages")
                     if not callable(installer):
-                        return _unavailable_agent_capability()
+                        return unavailable_agent_capability()
                     return installer(
                         workspace_id,
                         {**(args or {}), "_sandboxRoot": sandbox_root},
@@ -829,7 +819,7 @@ def create_lifespan(
                         )
                     )
                     if callable(web_search.get("searchAsync"))
-                    else _unavailable_agent_capability,
+                    else unavailable_agent_capability,
                     "web_fetch": lambda value: run_on_server_loop(
                         fetchUrlAsync(
                             value,
@@ -998,7 +988,7 @@ def create_lifespan(
                 await asyncio.gather(recovery_task, return_exceptions=True)
             destroy_summary = summary_service.get("destroy")
             if callable(destroy_summary):
-                destroy_summary()
+                await destroy_summary()
             if agent_runtime is not None:
                 await agent_runtime["destroy"]()
             if cli_runtime is not None:

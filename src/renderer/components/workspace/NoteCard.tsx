@@ -10,7 +10,8 @@ import {
   ReactMarkdown,
   openMarkdownCardContextMenu,
   urlTransform,
-  useMarkdownCardExport
+  useMarkdownCardExport,
+  useMarkdownCardEditor
 } from './noteReportShared'
 import { formatDate } from '../../utils/format'
 import { boardCardPreview } from '../../utils/workspaceCardMarkdown'
@@ -41,19 +42,19 @@ export default function NoteCard({
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [editTitle, setEditTitle] = useState(note.title)
-  const [editContent, setEditContent] = useState(note.contentMd)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const editor = useMarkdownCardEditor({
+    id: note.id,
+    title: note.title,
+    contentMd: note.contentMd,
+    titleRequiredMessage: t('workspace.titleRequired'),
+    saveFailedMessage: t('workspace.noteSaveFailed'),
+    onUpdate
+  })
   const boardPreview = useMemo(() => boardCardPreview(note.contentMd), [note.contentMd])
   const handleExportMarkdown = useMarkdownCardExport(note.title, note.contentMd, 'note')
 
   const enterEditMode = () => {
-    setEditTitle(note.title)
-    setEditContent(note.contentMd)
-    setSaveError(null)
-    setEditing(true)
+    editor.start()
   }
 
   const requestInternalEdit = () => {
@@ -97,28 +98,7 @@ export default function NoteCard({
   const closeModal = () => {
     setExpanded(false)
     setConfirmDelete(false)
-    setEditing(false)
-    setSaveError(null)
-  }
-
-  const handleSave = async () => {
-    if (!editTitle.trim()) {
-      setSaveError(t('workspace.titleRequired'))
-      return
-    }
-    setSaving(true)
-    setSaveError(null)
-    const saved = await onUpdate(note.id, { title: editTitle.trim(), contentMd: editContent })
-    setSaving(false)
-    if (saved) setEditing(false)
-    else setSaveError(t('workspace.noteSaveFailed'))
-  }
-
-  const handleCancelEdit = () => {
-    setEditTitle(note.title)
-    setEditContent(note.contentMd)
-    setEditing(false)
-    setSaveError(null)
+    editor.cancel()
   }
 
   const openCard = () => {
@@ -221,14 +201,14 @@ export default function NoteCard({
       <MarkdownCardModal
         open={expanded}
         onCancel={closeModal}
-        title={editing ? t('workspace.noteEdit') : note.title}
+        title={editor.editing ? t('workspace.noteEdit') : note.title}
         width={720}
-        editing={editing}
-        saving={saving}
-        canSave={editTitle.trim().length > 0}
+        editing={editor.editing}
+        saving={editor.saving}
+        canSave={editor.draftTitle.trim().length > 0}
         confirmDelete={confirmDelete}
         deleteConfirmMessage={t('workspace.noteDeleteConfirm')}
-        saveError={saveError}
+        saveError={editor.saveError}
         labels={{
           delete: t('workspace.noteDelete'),
           confirm: t('common.confirm'),
@@ -245,37 +225,37 @@ export default function NoteCard({
         }}
         onExport={handleExportMarkdown}
         onStartEdit={enterEditMode}
-        onCancelEdit={handleCancelEdit}
-        onSave={() => void handleSave()}
+        onCancelEdit={editor.cancel}
+        onSave={() => void editor.save()}
       >
-        {editing ? (
+        {editor.editing ? (
           <div className="grid min-h-[360px] grid-cols-2 gap-3">
             <div className="flex min-w-0 flex-col gap-3">
               <UiInput
                 variant="outlined"
                 inputSize="md"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
+                value={editor.draftTitle}
+                onChange={(e) => editor.setDraftTitle(e.target.value)}
                 aria-label={t('workspace.noteTitleLabel')}
               />
               <UiTextarea
                 variant="outlined"
                 textareaSize="md"
                 className="min-h-[320px] flex-1 resize-none font-mono"
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
+                value={editor.draftContent}
+                onChange={(e) => editor.setDraftContent(e.target.value)}
                 aria-label={t('workspace.noteContentLabel')}
               />
             </div>
             <div className="min-w-0 overflow-y-auto rounded-lg border border-border bg-panel-2 p-3 text-sm text-foreground [&_p]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-background [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4">
-              {editContent ? (
+              {editor.draftContent ? (
                 <ReactMarkdown
                   remarkPlugins={REMARK_PLUGINS}
                   rehypePlugins={REHYPE_PLUGINS}
                   components={MARKDOWN_COMPONENTS}
                   urlTransform={urlTransform}
                 >
-                  {editContent}
+                  {editor.draftContent}
                 </ReactMarkdown>
               ) : (
                 <p className="italic text-muted">{t('workspace.notePreviewEmpty')}</p>

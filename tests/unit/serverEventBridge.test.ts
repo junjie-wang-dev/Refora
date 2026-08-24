@@ -37,14 +37,13 @@ describe('server event bridge', () => {
     bridge.start()
     bridge.start()
 
-    expect(on).toHaveBeenCalledTimes(22)
+    expect(on).toHaveBeenCalledTimes(19)
     expect(subscribe).toHaveBeenCalledTimes(1)
     expect(subscribe).toHaveBeenCalledWith(expect.arrayContaining([
       'ai.chat.token',
       'ai.summary.updated',
       'ai.report.created',
       'document.updated',
-      'library.scanning',
       'import.progress',
       'workspace.items.changed',
       'mineru.install-progress',
@@ -52,7 +51,6 @@ describe('server event bridge', () => {
       'connector.encrypt-api-key',
       'connector.decrypt-api-key'
     ]))
-
     const payload = { threadId: 'thread-1', token: 'Hello' }
     listeners.get('ai.chat.token')?.(payload)
     listeners.get('workspace.items.changed')?.({ workspaceId: 'workspace-1' })

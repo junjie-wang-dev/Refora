@@ -270,7 +270,7 @@ function actionCopy(
       ...additionalArgumentDetails(action.args, new Set(['paths', 'x', 'y']), t)
     )
     return {
-      name: t('workspace.chat.approvalPublishArtifacts', 'Publish workspace files'),
+      name: t('workspace.chat.approvalPublishArtifacts', 'Publish generated files'),
       description: activeWorkspaceId
         ? t('workspace.chat.approvalPublishArtifactsDescription', {
             count: paths.length,
@@ -513,7 +513,7 @@ export default function AgentApprovalCard({
             onClick={approve}
           >
             {hasEditedDraft
-              ? t('workspace.chat.applyEditAction', 'Apply and continue')
+              ? t('workspace.chat.applyEditAction', 'Save and approve')
               : t('workspace.chat.approveAction', 'Approve')}
           </UiButton>
         </div>

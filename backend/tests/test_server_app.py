@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from refora_server.server.app import _loopback_origins, create_app_with_token
-from refora_server.server.contract import source_contract
+from refora_server.server.contract import load_contract_snapshot
 
 
 def test_loopback_origins_reject_non_loopback_override(monkeypatch) -> None:
@@ -23,6 +23,7 @@ def test_loopback_origins_fall_back_to_defaults_when_nothing_valid(monkeypatch) 
 
 def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tmp_path: Path) -> None:
     app = create_app_with_token("test-token", str(tmp_path / "refora.db"), str(tmp_path))
+    contract = load_contract_snapshot()
     with TestClient(app) as client:
         assert client.get("/health").json() == {"ok": True, "data": {"status": "ok"}}
         unauthorized = client.get("/ready")
@@ -39,8 +40,8 @@ def test_assembled_app_serves_authenticated_routes_websocket_and_ocr_services(tm
             "ok": True,
             "data": {
                 "status": "ready",
-                "protocolVersion": source_contract()["protocolVersion"],
-                "protocolDigest": source_contract()["protocolDigest"],
+                "protocolVersion": contract["protocolVersion"],
+                "protocolDigest": contract["protocolDigest"],
             },
         }
         assert client.get("/documents", headers=headers).json() == {"ok": True, "data": []}

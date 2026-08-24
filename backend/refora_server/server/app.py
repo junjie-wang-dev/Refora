@@ -163,13 +163,6 @@ def _make_app(
             }
         )
 
-    @app.post("/shutdown")
-    async def shutdown(_: None = Depends(require_token)) -> JSONResponse:
-        request_shutdown = getattr(app.state, "request_shutdown", None)
-        if callable(request_shutdown):
-            request_shutdown()
-        return JSONResponse({"ok": True, "data": {"ack": True}})
-
     return app
 
 
@@ -193,7 +186,6 @@ def configure_app(app: FastAPI) -> None:
         "categories": repos["categories"],
         "importer": services["importer"],
         "watcher": services["watcher"],
-        "library": services["library"],
         "settings": repos["settings"],
         "services": services,
         "repos": repos,

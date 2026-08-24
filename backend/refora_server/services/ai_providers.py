@@ -10,7 +10,11 @@ from refora_server.providers.catalog import (
     getProviderPreset,
     providerRequiresApiKey,
 )
-from refora_server.services.ai_summary import build_provider_reasoning_options
+from refora_server.services.provider_config import (
+    ProviderConfigInput,
+    ProviderRuntimeConfig,
+    build_provider_config,
+)
 from refora_server.services.proxy import normalize_proxy_rules
 from refora_server.repositories.errors import RepoError
 
@@ -184,7 +188,7 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
         *,
         model_id: str | None = None,
         features: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ProviderRuntimeConfig:
         provider = resolveProvider(providerId, apiKey)
         key = provider["apiKey"]
         model = (model_id or "").strip() or (provider.get("model") or "")
@@ -205,26 +209,15 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
             deep_thinking = requested_effort != "none"
         else:
             deep_thinking = requested.get("deepThinking") is True
-        reasoning_options = build_provider_reasoning_options(
+        provider["baseUrl"] = normalize_base_url(provider["baseUrl"])
+        provider["apiKey"] = key
+        return build_provider_config(
             provider,
-            deep_thinking,
+            model_id=model,
+            deep_thinking=deep_thinking,
         )
-        config: dict[str, Any] = {
-            "model": model,
-            "baseUrl": normalize_base_url(provider["baseUrl"]),
-            "apiKey": key,
-            "useResponsesApi": reasoning_options["useResponsesApi"],
-            "modelKwargs": reasoning_options["modelKwargs"],
-            "temperature": None,
-            "maxTokens": provider.get("maxTokens"),
-        }
-        if reasoning_options.get("extraBody") is not None:
-            config["extraBody"] = reasoning_options["extraBody"]
-        if reasoning_options.get("reasoning") is not None:
-            config["reasoning"] = reasoning_options["reasoning"]
-        return config
 
-    def resolveProvider(providerId: str, apiKey: str) -> dict[str, Any]:
+    def resolveProvider(providerId: str, apiKey: str) -> ProviderConfigInput:
         raw = repos["aiProviders"]["getRaw"](providerId)
         if raw is None:
             raise RepoError("not_found", f"provider not found: {providerId}")
@@ -253,7 +246,7 @@ def createAiProvidersService(repos: Any, deps: Any | None = None):
     }
 
 
-def _map_raw_to_provider(raw: dict[str, Any]) -> dict[str, Any]:
+def _map_raw_to_provider(raw: dict[str, Any]) -> ProviderConfigInput:
     preset_id = raw.get("presetId") or "custom"
     return {
         "id": raw.get("id"),

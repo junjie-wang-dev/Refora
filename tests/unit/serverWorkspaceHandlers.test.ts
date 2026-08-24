@@ -93,6 +93,10 @@ const job = {
   updatedAt: 2
 }
 
+const pathDeps = {
+  consumeFiles: (paths: readonly string[]) => [...paths]
+}
+
 function makeClient(): { client: ServerClient; http: Record<string, ReturnType<typeof vi.fn>> } {
   const http = {
     workspacesList: vi.fn().mockResolvedValue([workspace]),
@@ -102,7 +106,6 @@ function makeClient(): { client: ServerClient; http: Record<string, ReturnType<t
     workspacesOpenSandbox: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemsList: vi.fn().mockResolvedValue([item]),
     workspaceItemGet: vi.fn().mockResolvedValue(item),
-    workspaceItemsCreate: vi.fn().mockResolvedValue(item),
     workspaceItemsCreateBatch: vi.fn().mockResolvedValue([item, item]),
     workspaceItemsDelete: vi.fn().mockResolvedValue({ ack: true }),
     workspaceItemsReorder: vi.fn().mockResolvedValue({ ack: true }),
@@ -147,7 +150,7 @@ describe('server workspace IPC handlers', () => {
   beforeEach(() => {
     const serverClient = makeClient()
     http = serverClient.http
-    handlers = createServerWorkspaceHandlers(serverClient.client)
+    handlers = createServerWorkspaceHandlers(serverClient.client, pathDeps)
   })
 
   it('forwards workspace operations through HTTP', async () => {

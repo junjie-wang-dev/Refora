@@ -12,8 +12,6 @@ export function createSyncHandlers(service: SyncAccountService) {
       forward(() => service.signUp(credentials)),
     [IpcChannel.SyncResendConfirmation]: (request: SyncEmailRequest) =>
       forward(() => service.resendConfirmation(request)),
-    [IpcChannel.SyncSignOut]: () => forward(() => service.signOut()),
-    [IpcChannel.SyncSetEnabled]: (enabled: boolean) =>
-      forward(() => service.setEnabled(enabled))
+    [IpcChannel.SyncSignOut]: () => forward(() => service.signOut())
   }
 }

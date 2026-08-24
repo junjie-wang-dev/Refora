@@ -741,9 +741,9 @@ async def test_install_health_check_wrong_version_raises(tmp_path, monkeypatch):
 
 
 def _worker_script_path() -> str:
-    from refora_server.server.lifespan import _mineru_worker_path
+    from refora_server.server.services.lifespan_support import mineru_worker_path
 
-    return _mineru_worker_path()
+    return mineru_worker_path()
 
 
 def test_mineru_worker_script_exists_and_resolves():

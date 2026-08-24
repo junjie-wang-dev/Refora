@@ -144,6 +144,29 @@ describe('serverLifecycle', () => {
     )
   })
 
+  it('passes the Electron parent PID to the sidecar', async () => {
+    const onChildSpawned = vi.fn()
+    const deps = makeDeps({ parentPid: 43210, onChildSpawned })
+    const lifecycle = createServerLifecycle(deps)
+
+    await lifecycle.start()
+
+    expect(deps.spawnChild).toHaveBeenCalledWith(
+      '/usr/bin/python3',
+      expect.arrayContaining(['--parent-pid', '43210']),
+      expect.any(Object)
+    )
+    expect(onChildSpawned).toHaveBeenCalledWith(expect.any(Number))
+  })
+
+  it('continues startup when recording child ownership fails', async () => {
+    const lifecycle = createServerLifecycle(makeDeps({
+      onChildSpawned: () => { throw new Error('owner file unavailable') }
+    }))
+
+    await expect(lifecycle.start()).resolves.toMatchObject({ port })
+  })
+
   it('returns cached connection without re-spawning on subsequent start calls', async () => {
     const deps = makeDeps()
     const lifecycle = createServerLifecycle(deps)

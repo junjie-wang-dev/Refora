@@ -28,6 +28,11 @@ export function createShutdownHandler(deps: ShutdownDeps) {
     state = 'running'
     deps.beginShutdown?.()
     void (async () => {
+      try {
+        await deps.waitForTransitions?.()
+      } catch (error) {
+        deps.reportError(error)
+      }
       let persistenceResult: 'saved' | 'cancelled' | 'discarded'
       try {
         persistenceResult = await runPersistenceGuard({
@@ -49,11 +54,6 @@ export function createShutdownHandler(deps: ShutdownDeps) {
         state = 'idle'
         deps.cancelShutdown?.()
         return
-      }
-      try {
-        await deps.waitForTransitions?.()
-      } catch (error) {
-        deps.reportError(error)
       }
       try {
         deps.unregisterHandlers()

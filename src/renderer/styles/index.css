@@ -169,32 +169,6 @@
     line-height: 1.5;
   }
 
-  /** @deprecated Use <Button variant="ghost" size="md"> from components/ui instead. */
-  .toolbar-btn,
-  .toolbar-btn-danger {
-    @apply inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-xs text-foreground hover:bg-hover active:bg-active disabled:opacity-40 disabled:cursor-default;
-    -webkit-app-region: no-drag;
-    transition: background-color 0.15s ease;
-  }
-
-  /** @deprecated Use <Button variant="ghost" size="md" className="text-error"> instead. */
-  .toolbar-btn-danger {
-    @apply text-error hover:bg-hover;
-  }
-
-  /** @deprecated Use <Input variant="outlined"> from components/ui instead. */
-  .search-input {
-    @apply h-8 rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
-    -webkit-app-region: no-drag;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  /** @deprecated Use <Textarea variant="filled"> from components/ui instead. */
-  .field-input {
-    @apply w-full rounded-lg border border-transparent bg-background px-3 py-1.5 text-sm text-foreground hover:border-border focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-
   .dialog-overlay {
     @apply fixed inset-0 z-50 flex items-center justify-center;
     background-color: var(--color-overlay);
@@ -205,12 +179,6 @@
   .dialog-panel {
     @apply rounded-xl border border-border bg-panel p-6;
     box-shadow: var(--shadow-lg);
-  }
-
-  /** @deprecated Use <Card> or cardClassName() from components/ui instead. */
-  .card {
-    @apply rounded-xl border border-border bg-panel;
-    box-shadow: var(--shadow-sm);
   }
 
   .workspace-content-card {
@@ -1216,10 +1184,6 @@
     left: 0;
     top: 50%;
     transform: translate(-50%, -50%);
-  }
-
-  .resizable-card > .card {
-    height: 100%;
   }
 
   .workspace-selection-marquee {

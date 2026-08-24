@@ -6,7 +6,6 @@ import type {
   OcrJob,
   OcrProgressEvent
 } from '../../../shared/mineru-types'
-import { IpcChannel } from '../../../shared/ipc-channels'
 import { api } from '../../ipc'
 import OcrProgressCard from '../OcrProgressCard'
 
@@ -42,9 +41,11 @@ export default function AgentOcrProgress({
       receivedLiveEvent = true
       setJob(null)
     }
-    api.events.onOcrProgress(onProgress)
-    api.events.onOcrCompleted(onCompleted)
-    api.events.onOcrError(onError)
+    const disposers = [
+      api.events.onOcrProgress(onProgress),
+      api.events.onOcrCompleted(onCompleted),
+      api.events.onOcrError(onError)
+    ]
     void api.ocr.getState(documentId).then((state) => {
       if (
         !disposed &&
@@ -56,9 +57,7 @@ export default function AgentOcrProgress({
     }).catch(() => undefined)
     return () => {
       disposed = true
-      api.events.off(IpcChannel.EventOcrProgress, onProgress)
-      api.events.off(IpcChannel.EventOcrCompleted, onCompleted)
-      api.events.off(IpcChannel.EventOcrError, onError)
+      disposers.forEach((dispose) => dispose())
     }
   }, [documentId])
 

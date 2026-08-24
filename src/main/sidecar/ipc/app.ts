@@ -5,13 +5,14 @@ import { resultify } from './result'
 
 export interface ServerAppHandlerDeps {
   setThemeSource: (theme: ThemeMode) => void
-  authorizeFile?: (path: string) => string
-  authorizeDirectory?: (path: string) => string
+  openDirectory: () => Promise<string | null>
+  authorizeFile: (path: string) => string
+  authorizeDirectory: (path: string) => string
 }
 
 export function createServerAppHandlers(
   serverClient: ServerClient,
-  { setThemeSource, authorizeFile, authorizeDirectory }: ServerAppHandlerDeps
+  { setThemeSource, openDirectory, authorizeFile, authorizeDirectory }: ServerAppHandlerDeps
 ) {
   const { http } = serverClient
 
@@ -20,12 +21,11 @@ export function createServerAppHandlers(
     [IpcChannel.GlobalSearch]: (query: string) => resultify(() => http.globalSearch(query)),
     [IpcChannel.DialogOpenDirectory]: () =>
       resultify(async () => {
-        const result = await http.dialogOpenDirectory('Select Folder')
-        if (result.canceled || !result.path) return null
-        return authorizeDirectory ? authorizeDirectory(result.path) : result.path
+        const path = await openDirectory()
+        return path ? authorizeDirectory(path) : null
       }),
     [IpcChannel.FileAuthorizeDropped]: (path: string) =>
-      resultify(async () => authorizeFile ? authorizeFile(path) : path),
+      resultify(async () => authorizeFile(path)),
     [IpcChannel.AppearanceSetThemeSource]: (theme: ThemeMode) =>
       resultify(async () => {
         if (theme !== 'system' && theme !== 'dark' && theme !== 'light') {

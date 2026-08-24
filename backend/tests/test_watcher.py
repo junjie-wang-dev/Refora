@@ -694,6 +694,57 @@ def test_event_driven_toggle_stops_and_starts_observer(tmp_path):
         db.close()
 
 
+def test_observer_start_failure_uses_polling_fallback_and_logs(tmp_path, monkeypatch):
+    class FailingObserver:
+        def schedule(self, *_args, **_kwargs):
+            return None
+
+        def start(self):
+            raise RuntimeError("observer unavailable")
+
+    class Logger:
+        def __init__(self):
+            self.messages: list[str] = []
+
+        def warning(self, message):
+            self.messages.append(str(message))
+
+    monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", True)
+    monkeypatch.setattr(watcher_module, "Observer", FailingObserver)
+    db = open_migrated_db()
+    try:
+        watch_folders = make_watch_folders_repo(db)
+        watched = watch_folders["add"](str(tmp_path))
+        captured: list[str] = []
+        logger = Logger()
+        service = watcher_module.createWatcherService(
+            {"watchFolders": watch_folders},
+            {
+                "onNewPdf": lambda paths: captured.extend(paths),
+                "pollInterval": 0.03,
+                "logger": logger,
+            },
+        )
+
+        async def run():
+            service["startScanning"]()
+            try:
+                await asyncio.sleep(0.08)
+                (tmp_path / "fallback.pdf").write_bytes(b"%PDF")
+                deadline = time.monotonic() + 1
+                while not captured and time.monotonic() < deadline:
+                    await asyncio.sleep(0.03)
+            finally:
+                service["stopScanning"]()
+
+        asyncio.run(run())
+        assert watched["id"] not in service["_state"]["observers"]
+        assert str(tmp_path / "fallback.pdf") in captured
+        assert any("observer unavailable" in message for message in logger.messages)
+    finally:
+        db.close()
+
+
 @pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
 def test_event_driven_library_reconcile_on_start(tmp_path):
     db = open_migrated_db()

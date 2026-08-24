@@ -36,18 +36,15 @@ function setup(initialSession: SupabaseSession | null = null) {
 }
 
 describe('sync account service', () => {
-  it('starts signed out and keeps sync disabled after sign-in', async () => {
+  it('starts signed out and reports the authenticated account after sign-in', async () => {
     const { service } = setup()
-    await expect(service.status()).resolves.toMatchObject({ state: 'signedOut', enabled: false })
+    await expect(service.status()).resolves.toMatchObject({ signedIn: false })
 
     await expect(service.signIn({
       email: ' reader@example.com ',
       password: 'password'
     })).resolves.toMatchObject({
-      state: 'disabled',
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
       account: session.user
     })
   })
@@ -79,39 +76,6 @@ describe('sync account service', () => {
       email: 'reader@example.com',
       password: 'password'
     })).rejects.toThrow('disk full')
-  })
-
-  it('requires an account before enabling metadata sync', async () => {
-    const { service } = setup()
-    await expect(service.setEnabled(true)).rejects.toMatchObject({
-      code: 'sync_sign_in_required'
-    })
-    await expect(service.status()).resolves.toMatchObject({ enabled: false })
-  })
-
-  it('cannot enable sync when the Supabase build configuration is unavailable', async () => {
-    const service = createSyncAccountService({
-      configured: false,
-      auth: null,
-      sessions: {
-        load: () => session,
-        save: vi.fn(),
-        clear: vi.fn()
-      }
-    })
-
-    await expect(service.setEnabled(true)).rejects.toMatchObject({ code: 'sync_unconfigured' })
-  })
-
-  it('does not claim synchronization is enabled before the data engine exists', async () => {
-    const { service } = setup(session)
-    await expect(service.setEnabled(true)).rejects.toMatchObject({
-      code: 'sync_engine_unavailable'
-    })
-    await expect(service.status()).resolves.toMatchObject({
-      enabled: false,
-      syncAvailable: false
-    })
   })
 
   it('refreshes an expiring session and saves rotated credentials', async () => {
@@ -164,8 +128,8 @@ describe('sync account service', () => {
       refreshToken: 'stale-refresh'
     })
 
-    await expect(refreshing).resolves.toMatchObject({ state: 'signedOut' })
-    await expect(service.status()).resolves.toMatchObject({ state: 'signedOut' })
+    await expect(refreshing).resolves.toMatchObject({ signedIn: false })
+    await expect(service.status()).resolves.toMatchObject({ signedIn: false })
     expect(sessions.save).not.toHaveBeenCalled()
   })
 
@@ -205,7 +169,7 @@ describe('sync account service', () => {
     await service.signOut()
     resolveSignIn(session)
 
-    await expect(signingIn).resolves.toMatchObject({ state: 'signedOut' })
+    await expect(signingIn).resolves.toMatchObject({ signedIn: false })
     expect(sessions.save).not.toHaveBeenCalled()
   })
 
@@ -239,11 +203,10 @@ describe('sync account service', () => {
     expect(auth.resendConfirmation).toHaveBeenCalledWith('reader@example.com')
   })
 
-  it('clears the session and disables sync when signing out', async () => {
+  it('clears the session when signing out', async () => {
     const { service, sessions, auth } = setup(session)
     await expect(service.signOut()).resolves.toMatchObject({
-      state: 'signedOut',
-      enabled: false
+      signedIn: false
     })
     expect(sessions.clear).toHaveBeenCalled()
     expect(auth.signOut).toHaveBeenCalledWith('access')

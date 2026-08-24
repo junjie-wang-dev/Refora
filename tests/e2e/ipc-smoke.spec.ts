@@ -24,8 +24,7 @@ type ElectronApi = Record<string, unknown> & {
     update(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>
   }
   events: {
-    onDocumentUpdated(cb: (doc: Record<string, unknown>) => void): void
-    off(channel: 'document:updated', cb: (doc: Record<string, unknown>) => void): void
+    onDocumentUpdated(cb: (doc: Record<string, unknown>) => void): () => void
   }
 }
 
@@ -111,20 +110,23 @@ test.describe('IPC Smoke', () => {
       return new Promise<Record<string, unknown>>((resolve, reject) => {
         const electronApi = (window as unknown as { api: ElectronApi }).api
         const timeout = setTimeout(
-          () => reject(new Error('Timeout waiting for document:updated')),
+          () => {
+            dispose()
+            reject(new Error('Timeout waiting for document:updated'))
+          },
           15000,
         )
         const onUpdated = (doc: Record<string, unknown>) => {
           if (doc.id === id && doc.title === 'E2E Test Title') {
             clearTimeout(timeout)
-            electronApi.events.off('document:updated', onUpdated)
+            dispose()
             resolve(doc)
           }
         }
-        electronApi.events.onDocumentUpdated(onUpdated)
+        const dispose = electronApi.events.onDocumentUpdated(onUpdated)
         void electronApi.documents.update(id, { title: 'E2E Test Title' }).catch((error) => {
           clearTimeout(timeout)
-          electronApi.events.off('document:updated', onUpdated)
+          dispose()
           reject(error)
         })
       })

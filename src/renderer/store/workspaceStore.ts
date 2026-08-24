@@ -79,10 +79,10 @@ interface WorkspaceState {
   addItem: (kind: WorkspaceItemKind, ids: string[], placement?: WorkspaceItemPlacement) => Promise<void>
 }
 
-const aiSummaryUpdatedCb: Array<null | ((docId: string) => void)> = [null]
 const aiReportCreatedCb: Array<null | ((report: AiReport) => void)> = [null]
 const workspaceItemsChangedCb: Array<null | ((payload: WorkspaceItemsChangedEvent) => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
+const eventDisposers: Array<() => void> = []
 const noteUpdateQueues = new Map<string, Promise<void>>()
 const noteUpdateRevisions = new Map<
   string,
@@ -100,6 +100,57 @@ let itemRequestVersion = 0
 let assetRequestVersion = 0
 let reportRequestVersion = 0
 let noteRequestVersion = 0
+let workspaceContentRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let workspaceContentRefreshId: string | null = null
+let workspaceContentRefreshKinds = new Set<'items' | 'reports' | 'notes' | 'assets'>()
+let workspaceContentRefreshWaiters: Array<() => void> = []
+
+function cancelWorkspaceContentRefresh(): void {
+  if (workspaceContentRefreshTimer) clearTimeout(workspaceContentRefreshTimer)
+  workspaceContentRefreshTimer = null
+  workspaceContentRefreshId = null
+  workspaceContentRefreshKinds.clear()
+  workspaceContentRefreshWaiters.splice(0).forEach((resolve) => resolve())
+}
+
+function scheduleWorkspaceContentRefresh(
+  workspaceId: string,
+  get: () => WorkspaceState,
+  kinds: Array<'items' | 'reports' | 'notes' | 'assets'>
+): Promise<void> {
+  if (workspaceContentRefreshId && workspaceContentRefreshId !== workspaceId) {
+    cancelWorkspaceContentRefresh()
+  }
+  workspaceContentRefreshId = workspaceId
+  kinds.forEach((kind) => workspaceContentRefreshKinds.add(kind))
+  if (workspaceContentRefreshTimer) clearTimeout(workspaceContentRefreshTimer)
+  const completion = new Promise<void>((resolve) => {
+    workspaceContentRefreshWaiters.push(resolve)
+  })
+  workspaceContentRefreshTimer = setTimeout(() => {
+    workspaceContentRefreshTimer = null
+    const refreshId = workspaceContentRefreshId
+    const refreshKinds = workspaceContentRefreshKinds
+    const waiters = workspaceContentRefreshWaiters
+    workspaceContentRefreshId = null
+    workspaceContentRefreshKinds = new Set()
+    workspaceContentRefreshWaiters = []
+    if (refreshId !== get().activeWorkspaceId) {
+      waiters.forEach((resolve) => resolve())
+      return
+    }
+    const refreshes = [...refreshKinds].map((kind) => {
+      if (kind === 'items') return get().fetchItems()
+      if (kind === 'reports') return get().fetchReports()
+      if (kind === 'notes') return get().fetchNotes()
+      return get().fetchAssets()
+    })
+    void Promise.all(refreshes).finally(() => {
+      waiters.forEach((resolve) => resolve())
+    })
+  }, 25)
+  return completion
+}
 
 function toast(message: string): void {
   useDocumentStore.getState().showToast(message)
@@ -146,32 +197,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (get().initialized) return
     set({ initialized: true })
 
-    aiSummaryUpdatedCb[0] = (_docId: string) => {
-      void get().fetchItems()
-    }
-    api.events.onAiSummaryUpdated(aiSummaryUpdatedCb[0])
-
     aiReportCreatedCb[0] = (report: AiReport) => {
       if (report.workspaceId === get().activeWorkspaceId) {
-        void Promise.all([get().fetchReports(), get().fetchItems()])
+        void scheduleWorkspaceContentRefresh(
+          report.workspaceId,
+          get,
+          ['items', 'reports', 'notes', 'assets']
+        )
       }
     }
-    api.events.onAiReportCreated(aiReportCreatedCb[0])
+    eventDisposers.push(api.events.onAiReportCreated(aiReportCreatedCb[0]))
 
     workspaceItemsChangedCb[0] = (payload: WorkspaceItemsChangedEvent) => {
       if (payload.workspaceId === get().activeWorkspaceId) {
-        void Promise.all([
-          get().fetchItems(),
-          get().fetchReports(),
-          get().fetchNotes(),
-          get().fetchAssets()
-        ])
+        void scheduleWorkspaceContentRefresh(
+          payload.workspaceId,
+          get,
+          ['items', 'reports', 'notes', 'assets']
+        )
       }
     }
-    api.events.onWorkspaceItemsChanged(workspaceItemsChangedCb[0])
+    eventDisposers.push(api.events.onWorkspaceItemsChanged(workspaceItemsChangedCb[0]))
 
     librarySwitchedCb[0] = () => {
       libraryGeneration++
+      cancelWorkspaceContentRefresh()
       noteUpdateQueues.clear()
       noteUpdateRevisions.clear()
       threadRenameRevisions.clear()
@@ -195,34 +245,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       })
       void get().fetchWorkspaces()
     }
-    api.events.onLibrarySwitched(librarySwitchedCb[0])
+    eventDisposers.push(api.events.onLibrarySwitched(librarySwitchedCb[0]))
 
     void get().fetchWorkspaces()
   },
 
   destroy: () => {
     libraryGeneration++
+    cancelWorkspaceContentRefresh()
     noteUpdateQueues.clear()
     noteUpdateRevisions.clear()
     threadRenameRevisions.clear()
     threadRenameQueues.clear()
     threadConfirmedTitles.clear()
-    if (aiSummaryUpdatedCb[0]) {
-      api.events.off('ai:summary:updated', aiSummaryUpdatedCb[0])
-      aiSummaryUpdatedCb[0] = null
-    }
-    if (aiReportCreatedCb[0]) {
-      api.events.off('ai:report:created', aiReportCreatedCb[0])
-      aiReportCreatedCb[0] = null
-    }
-    if (workspaceItemsChangedCb[0]) {
-      api.events.off('workspace:items:changed', workspaceItemsChangedCb[0])
-      workspaceItemsChangedCb[0] = null
-    }
-    if (librarySwitchedCb[0]) {
-      api.events.off('library:switched', librarySwitchedCb[0])
-      librarySwitchedCb[0] = null
-    }
+    eventDisposers.splice(0).forEach((dispose) => dispose())
+    aiReportCreatedCb[0] = null
+    workspaceItemsChangedCb[0] = null
+    librarySwitchedCb[0] = null
     set({ initialized: false })
   },
 
@@ -551,7 +590,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (placement) await api.workspaceItems.add(id, 'document', docIds, placement)
       else await api.workspaceItems.add(id, 'document', docIds)
       if (generation !== libraryGeneration) return
-      await get().fetchItems()
+      await scheduleWorkspaceContentRefresh(id, get, ['items'])
     } catch (e) {
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.addDocuments')))
@@ -597,7 +636,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         generation !== libraryGeneration ||
         get().activeWorkspaceId !== workspaceId
       ) return
-      await Promise.all([get().fetchItems(), get().fetchAssets()])
+      await scheduleWorkspaceContentRefresh(workspaceId, get, ['items', 'assets'])
       if (result.errors.length > 0) {
         toast(result.errors[0].message)
       }
@@ -620,7 +659,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         generation !== libraryGeneration ||
         get().activeWorkspaceId !== workspaceId
       ) return
-      await Promise.all([get().fetchItems(), get().fetchNotes(), get().fetchAssets()])
+      await scheduleWorkspaceContentRefresh(workspaceId, get, ['items', 'notes', 'assets'])
       if (result.errors.length > 0) toast(result.errors[0].message)
     } catch (e) {
       if (generation !== libraryGeneration) return
@@ -662,7 +701,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (placement) await api.workspaceItems.add(id, kind, ids, placement)
       else await api.workspaceItems.add(id, kind, ids)
       if (generation !== libraryGeneration) return
-      await get().fetchItems()
+      await scheduleWorkspaceContentRefresh(id, get, ['items'])
     } catch (e) {
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.addItems')))
@@ -674,7 +713,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await api.workspaceItems.remove(itemId)
       if (generation !== libraryGeneration) return
-      await get().fetchItems()
+      const workspaceId = get().activeWorkspaceId
+      if (workspaceId) await scheduleWorkspaceContentRefresh(workspaceId, get, ['items'])
     } catch (e) {
       if (generation !== libraryGeneration) return
       toast(errorMessage(e, i18n.t('workspaceErrors.removeItem')))
@@ -912,7 +952,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         get().activeWorkspaceId !== workspaceId
       ) return null
       set((s) => ({ notes: [...s.notes, note] }))
-      await get().fetchItems()
+      await scheduleWorkspaceContentRefresh(workspaceId, get, ['items'])
       return note
     } catch (e) {
       if (generation !== libraryGeneration) return null

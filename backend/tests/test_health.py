@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,10 +16,11 @@ def client_no_token():
 
 
 @pytest.fixture
-def client_with_token():
+def client_with_token(tmp_path: Path):
     token = secrets.token_urlsafe(16)
-    app = create_app_with_token(token)
-    return TestClient(app), token
+    app = create_app_with_token(token, str(tmp_path / "refora.db"), str(tmp_path))
+    with TestClient(app) as client:
+        yield client, token
 
 
 def test_health_ok_without_token(client_no_token):

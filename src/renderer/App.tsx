@@ -24,13 +24,13 @@ import { useWorkspaceStore } from './store/workspaceStore'
 import { useOcrReaderStore } from './store/ocrReaderStore'
 import { useChatDraftStore } from './store/chatDraftStore'
 import { usePdfReaderStore } from './store/pdfReaderStore'
+import { SidebarVisibilityProvider } from './store/sidebarVisibility'
 import { api } from './ipc'
 import i18n from './i18n'
 import { normalizeBootstrapData } from '../shared/bootstrap'
 import type { ListColumnState } from '../shared/ipc-types'
 import {
   cancelRendererSetting,
-  invalidateRendererSettingWrites,
   scheduleRendererSetting
 } from './persistence'
 
@@ -132,6 +132,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const panelResizingRef = useRef(false)
   const settingsHydrationVersionRef = useRef(0)
   const writableSettingKeysRef = useRef(new Set<string>())
+  const persistedLayoutValuesRef = useRef<Record<string, number>>({})
   const documentListPanelRef = useRef<HTMLDivElement>(null)
   const detailPanelRef = useRef<HTMLDivElement>(null)
   const workspacePanelRef = useRef<HTMLDivElement>(null)
@@ -215,8 +216,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
       useOcrReaderStore.getState().close()
       usePdfReaderStore.getState().resetForLibrarySwitch()
     }
-    api.events.onLibrarySwitched(reset)
-    return () => api.events.off('library:switched', reset)
+    return api.events.onLibrarySwitched(reset)
   }, [])
 
   useEffect(() => {
@@ -257,6 +257,10 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     if (bootstrapResult.status === 'fulfilled' && bootstrapResult.value) {
       setSidebarCollapsed(bootstrapResult.value.sidebarCollapsed)
       setShowWizard(bootstrapResult.value.firstRun)
+      useDocumentStore.setState({
+        listColumnState:
+          bootstrapResult.value.listColumnState ?? useDocumentStore.getState().listColumnState
+      })
       try {
         await i18n.changeLanguage(bootstrapResult.value.language)
       } catch {
@@ -305,13 +309,12 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   useEffect(() => {
     void hydrateLibrarySettings(false)
     const handleLibrarySwitched = () => {
-      invalidateRendererSettingWrites()
       void hydrateLibrarySettings(true)
     }
-    api.events.onLibrarySwitched(handleLibrarySwitched)
+    const dispose = api.events.onLibrarySwitched(handleLibrarySwitched)
     return () => {
       settingsHydrationVersionRef.current += 1
-      api.events.off('library:switched', handleLibrarySwitched)
+      dispose()
     }
   }, [hydrateLibrarySettings])
 
@@ -327,34 +330,46 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   }, [])
 
   useEffect(() => {
-    if (!settingsHydrated || !writableSettingKeysRef.current.has('sidebarWidth')) return
-    scheduleSettingWrite('sidebarWidth', sidebarWidth)
-    return () => cancelScheduledSettingWrite('sidebarWidth')
-  }, [cancelScheduledSettingWrite, scheduleSettingWrite, settingsHydrated, sidebarWidth])
+    if (!settingsHydrated) {
+      persistedLayoutValuesRef.current = {}
+      return
+    }
+    const values = {
+      sidebarWidth,
+      detailWidth,
+      workspaceWidth,
+      workspaceChatWidth: chatWidth,
+      documentListCompactWidth
+    }
+    for (const [key, value] of Object.entries(values)) {
+      if (
+        !writableSettingKeysRef.current.has(key) ||
+        persistedLayoutValuesRef.current[key] === value
+      ) continue
+      persistedLayoutValuesRef.current[key] = value
+      scheduleSettingWrite(key, value)
+    }
+  }, [
+    chatWidth,
+    detailWidth,
+    documentListCompactWidth,
+    scheduleSettingWrite,
+    settingsHydrated,
+    sidebarWidth,
+    workspaceWidth
+  ])
 
-  useEffect(() => {
-    if (!settingsHydrated || !writableSettingKeysRef.current.has('detailWidth')) return
-    scheduleSettingWrite('detailWidth', detailWidth)
-    return () => cancelScheduledSettingWrite('detailWidth')
-  }, [cancelScheduledSettingWrite, detailWidth, scheduleSettingWrite, settingsHydrated])
-
-  useEffect(() => {
-    if (!settingsHydrated || !writableSettingKeysRef.current.has('workspaceWidth')) return
-    scheduleSettingWrite('workspaceWidth', workspaceWidth)
-    return () => cancelScheduledSettingWrite('workspaceWidth')
-  }, [cancelScheduledSettingWrite, scheduleSettingWrite, settingsHydrated, workspaceWidth])
-
-  useEffect(() => {
-    if (!settingsHydrated || !writableSettingKeysRef.current.has('workspaceChatWidth')) return
-    scheduleSettingWrite('workspaceChatWidth', chatWidth)
-    return () => cancelScheduledSettingWrite('workspaceChatWidth')
-  }, [cancelScheduledSettingWrite, chatWidth, scheduleSettingWrite, settingsHydrated])
-
-  useEffect(() => {
-    if (!settingsHydrated || !writableSettingKeysRef.current.has('documentListCompactWidth')) return
-    scheduleSettingWrite('documentListCompactWidth', documentListCompactWidth)
-    return () => cancelScheduledSettingWrite('documentListCompactWidth')
-  }, [cancelScheduledSettingWrite, documentListCompactWidth, scheduleSettingWrite, settingsHydrated])
+  useEffect(() => () => {
+    for (const key of [
+      'sidebarWidth',
+      'detailWidth',
+      'workspaceWidth',
+      'workspaceChatWidth',
+      'documentListCompactWidth'
+    ]) {
+      cancelScheduledSettingWrite(key)
+    }
+  }, [cancelScheduledSettingWrite])
 
   const collapseDocumentListAtWidth = useCallback((width: number) => {
     if (!Number.isFinite(width) || width <= 0 || width > DOC_LIST_COLLAPSE_THRESHOLD) return
@@ -597,14 +612,17 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   ) : null
 
   return (
-    <IconContext.Provider value={{ weight: 'regular' }}>
-    <ThemeProvider
-      appearance={resolvedTheme}
-      themeMode={themeMode === 'system' ? 'auto' : themeMode}
-      theme={themeConfig}
-      enableGlobalStyle={false}
-      enableCustomFonts={false}
+    <SidebarVisibilityProvider
+      value={{ collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed }}
     >
+      <IconContext.Provider value={{ weight: 'regular' }}>
+        <ThemeProvider
+          appearance={resolvedTheme}
+          themeMode={themeMode === 'system' ? 'auto' : themeMode}
+          theme={themeConfig}
+          enableGlobalStyle={false}
+          enableCustomFonts={false}
+        >
       <ContextMenuHost />
       <SettingsModalHost />
       <div className="app-root relative isolate flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -768,7 +786,8 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
         <ConfirmDialog />
         <Toast />
       </div>
-    </ThemeProvider>
-    </IconContext.Provider>
+        </ThemeProvider>
+      </IconContext.Provider>
+    </SidebarVisibilityProvider>
   )
 }

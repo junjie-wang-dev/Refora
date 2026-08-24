@@ -15,7 +15,6 @@ import type {
   OcrProgressEvent,
   OcrResult
 } from '../../shared/mineru-types'
-import { IpcChannel } from '../../shared/ipc-channels'
 import { Button } from './ui'
 import OcrProgressCard from './OcrProgressCard'
 
@@ -122,19 +121,18 @@ export default function OcrSection({ doc }: { doc: Document }) {
     const onInstallProgress = (payload: MineruInstallProgress) => {
       if (payload.stage === 'completed') void refresh()
     }
-    api.events.onOcrProgress(onProgress)
-    api.events.onOcrCompleted(onCompleted)
-    api.events.onOcrError(onError)
-    api.events.onMineruInstallProgress(onInstallProgress)
+    const disposers = [
+      api.events.onOcrProgress(onProgress),
+      api.events.onOcrCompleted(onCompleted),
+      api.events.onOcrError(onError),
+      api.events.onMineruInstallProgress(onInstallProgress)
+    ]
     return () => {
       refreshGeneration.current += 1
       stateRef.current = null
       pendingEventRef.current = null
       eventRefreshPendingRef.current = false
-      api.events.off(IpcChannel.EventOcrProgress, onProgress)
-      api.events.off(IpcChannel.EventOcrCompleted, onCompleted)
-      api.events.off(IpcChannel.EventOcrError, onError)
-      api.events.off(IpcChannel.EventMineruInstallProgress, onInstallProgress)
+      disposers.forEach((dispose) => dispose())
     }
   }, [doc.id, refresh])
 

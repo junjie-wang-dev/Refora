@@ -24,11 +24,9 @@
       "open": "Open account",
       "signIn": "Sign in",
       "signedOut": "Account not connected",
+      "signedIn": "Account connected",
       "loading": "Checking account…",
-      "unavailable": "Account unavailable",
-      "syncUnavailable": "Sync engine not available yet",
-      "syncOn": "Metadata sync on",
-      "syncOff": "Metadata sync off"
+      "unavailable": "Account unavailable"
     }
   },
   "account": {
@@ -40,7 +38,7 @@
     "welcomeBack": "Welcome back",
     "signInDescription": "Sign in to continue with your Refora account.",
     "createTitle": "Create your Refora account",
-    "createDescription": "Use one account across your devices when you choose to sync.",
+    "createDescription": "Create an account for this Refora installation.",
     "authMode": "Account action",
     "signIn": "Sign in",
     "createAccount": "Create account",
@@ -51,7 +49,7 @@
     "passwordMismatch": "The passwords do not match.",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
-    "localFirstHint": "Signing in does not upload your library. Cloud sync stays off until you explicitly enable it.",
+    "localFirstHint": "Signing in keeps your library and source files on this Mac.",
     "authFailed": "Authentication failed",
     "confirmationTitle": "Check your inbox",
     "confirmationDescription": "We sent a confirmation link to {{email}}. Confirm the address, then return to sign in.",
@@ -67,12 +65,6 @@
     "backToAccount": "Back to account",
     "signedInTitle": "You’re signed in",
     "signedInDescription": "This device is connected to your Refora account.",
-    "syncOn": "Metadata sync is on",
-    "syncOff": "Metadata sync is off",
-    "syncUnavailable": "Metadata sync is not available yet",
-    "syncUnavailableDescription": "This build supports accounts, but the data synchronization engine has not been enabled.",
-    "syncDescription": "PDF files and rebuildable data always stay outside cloud sync.",
-    "manageSync": "Manage cloud sync",
     "signOut": "Sign out",
     "signOutFailed": "Failed to sign out"
   },
@@ -282,29 +274,19 @@
       "title": "Appearance",
       "desc": "Theme, language, and sidebar preferences"
     },
-    "sync": {
-      "title": "Cloud Sync",
-      "desc": "Control whether supported metadata can synchronize across devices",
+    "account": {
+      "title": "Account",
+      "desc": "Manage the account session on this device",
       "loading": "Loading account status…",
       "loadFailed": "Failed to load account status",
       "tryAgain": "Try again",
-      "unconfiguredTitle": "Cloud account unavailable",
-      "unconfigured": "Supabase sync is not configured in this build. Add the project URL and publishable key when building Refora.",
-      "accountRequiredTitle": "Sign in before enabling sync",
-      "accountRequiredDescription": "Account access is handled separately from settings. Sign in or create an account to continue.",
+      "unconfiguredTitle": "Account unavailable",
+      "unconfigured": "Supabase is not configured in this build. Add the project URL and publishable key when building Refora.",
+      "accountRequiredTitle": "Sign in to your account",
+      "accountRequiredDescription": "Sign in or create an account to connect this device.",
       "openAccount": "Open account",
       "accountConnected": "Account connected",
-      "manageAccount": "Manage account",
-      "engineUnavailableTitle": "Metadata sync is not available yet",
-      "engineUnavailableDescription": "Account registration and sign-in are ready. The data engine is intentionally disabled until library discovery, entity adapters, and conflict recovery are complete.",
-      "noUploadTitle": "No library data is being uploaded",
-      "noUploadDescription": "Your encrypted account session is stored locally. PDFs and metadata remain on this Mac in this version.",
-      "enable": "Enable metadata sync",
-      "disabledHint": "Off. Refora keeps the account session but sends no library data.",
-      "enabledHint": "On. Supported non-rebuildable metadata is allowed to synchronize.",
-      "privacyTitle": "Local-first by design",
-      "scopeHint": "PDF files, extracted text, OCR output, search indexes, thumbnails, AI credentials, and runtime traces are never included.",
-      "toggleFailed": "Failed to update sync permission"
+      "manageAccount": "Manage account"
     },
     "usage": {
       "title": "AI Usage",

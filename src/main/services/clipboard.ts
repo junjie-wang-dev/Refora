@@ -1,7 +1,6 @@
-import { existsSync, lstatSync, statSync } from 'node:fs'
-import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { clipboard } from 'electron'
 import { MainProcessError } from './errors'
+import { ExistingPathError, resolveExistingPath } from './existingPath'
 
 const CLIPBOARD_FILE_FORMAT = 'NSFilenamesPboardType'
 
@@ -15,20 +14,21 @@ function escapeXml(value: string): string {
 }
 
 function requireRegularFile(rawPath: string): string {
-  if (!rawPath || !isAbsolute(rawPath)) {
-    throw new MainProcessError('invalid_path', 'Clipboard file path must be absolute')
-  }
-  const filePath = resolvePath(rawPath)
-  if (!existsSync(filePath)) throw new MainProcessError('file_missing', `Clipboard file not found: ${filePath}`)
   try {
-    if (lstatSync(filePath).isSymbolicLink() || !statSync(filePath).isFile()) {
+    return resolveExistingPath(rawPath, 'file')
+  } catch (error) {
+    if (!(error instanceof ExistingPathError)) throw error
+    if (error.failure === 'not_absolute') {
+      throw new MainProcessError('invalid_path', 'Clipboard file path must be absolute')
+    }
+    if (error.failure === 'missing') {
+      throw new MainProcessError('file_missing', `Clipboard file not found: ${error.resolvedPath}`)
+    }
+    if (error.failure === 'symbolic_link' || error.failure === 'wrong_kind') {
       throw new MainProcessError('invalid_path', 'Clipboard target must be a regular file')
     }
-  } catch (error) {
-    if (error instanceof MainProcessError) throw error
-    throw new MainProcessError('invalid_path', `Unable to inspect clipboard file: ${filePath}`)
+    throw new MainProcessError('invalid_path', `Unable to inspect clipboard file: ${error.resolvedPath}`)
   }
-  return filePath
 }
 
 export function writeFileToClipboard(rawPath: string): void {

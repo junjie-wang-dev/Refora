@@ -41,13 +41,7 @@ The generated TypeScript protocol contract remains in `src/shared/server-contrac
 Run the application gate:
 
 ```sh
-npm run typecheck && npm run lint && npm run test
-```
-
-Run the backend suite separately:
-
-```sh
-npm run test:backend
+npm run verify
 ```
 
 Packaging and release changes also require `npm run package`.

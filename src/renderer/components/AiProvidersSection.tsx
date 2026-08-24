@@ -46,6 +46,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { Badge, Button, Input } from './ui'
 import { useModalDialog } from '../hooks/useModalDialog'
 import { useAgentCatalogStore } from '../store/agentCatalogStore'
+import { cleanupDeletedAgentSelections } from '../utils/agentCatalogSettings'
 
 interface ProviderForm {
   id: string | null
@@ -186,7 +187,7 @@ export function AiProvidersSection() {
 
   const load = useCallback(async () => {
     try {
-      await refreshAgentCatalog()
+      await refreshAgentCatalog({ loadModels: false })
     } catch (cause) {
       setError(errorMessage(cause, t('settings.aiProviders.loadFail')))
     }
@@ -438,33 +439,7 @@ export function AiProvidersSection() {
       deleted = true
       removeCatalogProvider(provider.id)
       if (formRef.current?.id === provider.id) closeForm()
-      const [
-        activeProviderId,
-        chatSelectedProviderId,
-        activeAgentProfileId,
-        chatSelectedAgentProfileId
-      ] = await Promise.all([
-        api.settings.get<string>('activeProviderId', ''),
-        api.settings.get<string>('chatSelectedProviderId', ''),
-        api.settings.get<string>('activeAgentProfileId', ''),
-        api.settings.get<string>('chatSelectedAgentProfileId', '')
-      ])
-      if (provider.id === activeProviderId) {
-        await api.settings.set('activeProviderId', '')
-      }
-      if (provider.id === chatSelectedProviderId) {
-        await api.settings.set('chatSelectedProviderId', '')
-        await api.settings.set('chatSelectedModel', '')
-        await api.settings.set('chatSelectedVariant', '')
-      }
-      if (profile?.id === activeAgentProfileId) {
-        await api.settings.set('activeAgentProfileId', '')
-      }
-      if (profile?.id === chatSelectedAgentProfileId) {
-        await api.settings.set('chatSelectedAgentProfileId', '')
-        await api.settings.set('chatSelectedModel', '')
-        await api.settings.set('chatSelectedVariant', '')
-      }
+      await cleanupDeletedAgentSelections({ providerId: provider.id, profileId: profile?.id })
       await load()
     } catch (cause) {
       if (deleted) {

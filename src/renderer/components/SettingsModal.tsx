@@ -1,22 +1,22 @@
 import { useTranslation } from 'react-i18next'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Modal, Button, Select } from '@lobehub/ui'
-import { Brain, ChartDonut, CloudArrowUp, FolderOpen, Globe, HardDrives, Palette, Sparkle } from '@phosphor-icons/react'
+import { Brain, ChartDonut, FolderOpen, Globe, HardDrives, Palette, Sparkle, UserCircle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
+import { useSidebarVisibility } from '../store/sidebarVisibility'
 import { api } from '../ipc'
 import { changeLanguage, type AppLanguage } from '../i18n'
 import { errorMessage, type WorkspaceAgentMemory } from '../../shared/ipc-types'
 import { Input as UiInput } from './ui'
 import { ModelSettingsSection } from './ModelSettingsSection'
 import type { MineruEngineStatus, MineruInstallProgress } from '../../shared/mineru-types'
-import { IpcChannel } from '../../shared/ipc-channels'
 import { formatElapsedClock } from '../utils/format'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { flushRendererPersistence } from '../persistence'
 import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
 import type { PdfOpenMode } from '../utils/openPdf'
-import { SyncSettings } from './SyncSettings'
+import { AccountSettings } from './AccountSettings'
 
 interface SettingsModalProps {
   open: boolean
@@ -43,7 +43,7 @@ const MINERU_INSTALL_STAGES = [
 export type SettingsPage =
   | 'general'
   | 'appearance'
-  | 'sync'
+  | 'account'
   | 'mineru'
   | 'aiProviders'
   | 'usage'
@@ -244,11 +244,11 @@ function MineruSettingsSection({ onError }: { onError: (message: string | null) 
       setProgress(payload)
       setStatus((current) => current ? { ...current, state: 'installing', progress: payload } : current)
     }
-    api.events.onMineruInstallProgress(onProgress)
+    const dispose = api.events.onMineruInstallProgress(onProgress)
     void api.mineru.status().then(setStatus).catch((error) => {
       onError(errorMessage(error, loadFailedMessage))
     })
-    return () => api.events.off(IpcChannel.EventMineruInstallProgress, onProgress)
+    return dispose
   }, [loadFailedMessage, onError])
 
   const run = async (operation: () => Promise<MineruEngineStatus>) => {
@@ -415,33 +415,35 @@ export default function SettingsModal({
 }: SettingsModalProps) {
   const { t, i18n } = useTranslation()
   const { mode: themeMode, setMode: setThemeMode } = useTheme()
+  const { collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed } = useSidebarVisibility()
   const [libraryFolderPath, setLibraryFolderPath] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [crossrefMailto, setCrossrefMailto] = useState('')
   const [pdfOpenMode, setPdfOpenMode] = useState<PdfOpenMode>('system')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
   const [activePage, setActivePage] = useState<SettingsPage>('general')
   const settingsLoadGenerationRef = useRef(0)
+  const savedProxyRef = useRef('')
+  const savedMailtoRef = useRef('')
   const translationRef = useRef(t)
   translationRef.current = t
 
   const loadSettings = useCallback(async () => {
     const generation = ++settingsLoadGenerationRef.current
     try {
-      const [lib, proxy, mailto, sc, openMode] = await Promise.all([
+      const [lib, proxy, mailto, openMode] = await Promise.all([
         api.settings.get<string>('libraryFolderPath', ''),
         api.settings.get<string>('proxyUrl', ''),
         api.settings.get<string>('crossrefMailto', ''),
-        api.settings.get<string>('sidebarCollapsed', '0'),
         api.settings.get<PdfOpenMode>('pdfOpenMode', 'system')
       ])
       if (settingsLoadGenerationRef.current !== generation) return
       setLibraryFolderPath(lib)
       setProxyUrl(proxy)
       setCrossrefMailto(mailto)
-      setSidebarCollapsed(sc === '1')
+      savedProxyRef.current = proxy
+      savedMailtoRef.current = mailto
       setPdfOpenMode(openMode === 'builtin' ? 'builtin' : 'system')
     } catch {
       if (settingsLoadGenerationRef.current === generation) {
@@ -480,19 +482,27 @@ export default function SettingsModal({
   }
 
   const saveProxy = async () => {
+    if (proxyUrl === savedProxyRef.current) return
+    const previous = savedProxyRef.current
+    savedProxyRef.current = proxyUrl
     setError(null)
     try {
       await api.settings.set('proxyUrl', proxyUrl)
     } catch (e) {
+      if (savedProxyRef.current === proxyUrl) savedProxyRef.current = previous
       setError(errorMessage(e, t('settings.proxySaveFailed')))
     }
   }
 
   const saveMailto = async () => {
+    if (crossrefMailto === savedMailtoRef.current) return
+    const previous = savedMailtoRef.current
+    savedMailtoRef.current = crossrefMailto
     setError(null)
     try {
       await api.settings.set('crossrefMailto', crossrefMailto)
     } catch (e) {
+      if (savedMailtoRef.current === crossrefMailto) savedMailtoRef.current = previous
       setError(errorMessage(e, t('settings.crossrefMailtoSaveFailed')))
     }
   }
@@ -551,10 +561,10 @@ export default function SettingsModal({
       icon: Palette
     },
     {
-      id: 'sync' as const,
-      label: t('settings.sync.title'),
-      description: t('settings.sync.desc'),
-      icon: CloudArrowUp
+      id: 'account' as const,
+      label: t('settings.account.title'),
+      description: t('settings.account.desc'),
+      icon: UserCircle
     },
     {
       id: 'mineru' as const,
@@ -747,15 +757,12 @@ export default function SettingsModal({
             </SettingsSection>
           )}
 
-          {activePage === 'sync' && (
+          {activePage === 'account' && (
             <SettingsSection
-              title={t('settings.sync.title')}
-              description={t('settings.sync.desc')}
+              title={t('settings.account.title')}
+              description={t('settings.account.desc')}
             >
-              <SyncSettings
-                onError={setError}
-                onOpenAccount={() => onOpenAccount?.()}
-              />
+              <AccountSettings onOpenAccount={() => onOpenAccount?.()} />
             </SettingsSection>
           )}
 

@@ -23,6 +23,7 @@ class ResizeObserverMock {
 ;(global as unknown as Record<string, unknown>).ResizeObserver = ResizeObserverMock
 
 const noop = async () => undefined
+const noopDisposer = () => undefined
 const mockResult = <T>(): T => undefined as T
 
 export const createMockReforaApi = (): ReforaApi => ({
@@ -69,8 +70,6 @@ export const createMockReforaApi = (): ReforaApi => ({
 
   import: {
     addFiles: async () => ({ added: [], skipped: [], errors: [] }),
-    addFolder: async () => ({ added: [], skipped: [], errors: [] }),
-    fromJson: async () => 0,
     fromZotero: async () => ({ added: 0, skipped: 0, errors: [] }),
     fromMendeley: async () => ({ added: 0, skipped: 0, errors: [] }),
     fromIdentifier: async () => ({ added: [] }),
@@ -100,47 +99,27 @@ export const createMockReforaApi = (): ReforaApi => ({
   sync: {
     status: async () => ({
       configured: false,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'unconfigured' as const,
       account: null,
     }),
     signIn: async () => ({
       configured: true,
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
-      state: 'disabled' as const,
       account: { id: 'user-1', email: 'user@example.com' },
     }),
     signUp: async () => ({
       confirmationRequired: true,
       status: {
         configured: true,
-        syncAvailable: false,
         signedIn: false,
-        enabled: false,
-        state: 'signedOut' as const,
         account: null,
       },
     }),
     resendConfirmation: noop,
     signOut: async () => ({
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut' as const,
       account: null,
-    }),
-    setEnabled: async (enabled: boolean) => ({
-      configured: true,
-      syncAvailable: false,
-      signedIn: true,
-      enabled,
-      state: enabled ? 'ready' as const : 'disabled' as const,
-      account: { id: 'user-1', email: 'user@example.com' },
     }),
   },
 
@@ -234,8 +213,7 @@ export const createMockReforaApi = (): ReforaApi => ({
   getPathForFile: async (_file: unknown) => '',
 
   export: {
-    toJson: async () => '',
-    toBibtex: async () => '',
+    toBibtex: async () => undefined,
     toBibtexString: async () => '',
   },
 
@@ -492,35 +470,33 @@ export const createMockReforaApi = (): ReforaApi => ({
   },
 
   events: {
-    onRendererFlushRequested: (_cb: unknown) => undefined,
-    onDocumentUpdated: (_cb: unknown) => undefined,
-    onWindowFocusChanged: (_cb: unknown) => undefined,
-    onImportProgress: (_cb: unknown) => undefined,
-    onImportToast: (_cb: unknown) => undefined,
-    onMenuExportBibtex: (_cb: unknown) => undefined,
-    onMenuImportZotero: (_cb: unknown) => undefined,
-    onMenuImportMendeley: (_cb: unknown) => undefined,
-    onMenuImportIdentifier: (_cb: unknown) => undefined,
-    onLibraryScanning: (_cb: unknown) => undefined,
-    onLibrarySwitched: (_cb: unknown) => undefined,
-    onSyncAuthConfirmation: (_cb: unknown) => undefined,
-    onAiSummaryUpdated: (_cb: unknown) => undefined,
-    onAiSummaryError: (_cb: unknown) => undefined,
-    onAiReportCreated: (_cb: unknown) => undefined,
-    onWorkspaceItemsChanged: (_cb: unknown) => undefined,
-    onAiChatToken: (_cb: unknown) => undefined,
-    onAiChatReasoning: (_cb: unknown) => undefined,
-    onAiChatDone: (_cb: unknown) => undefined,
-    onAiChatError: (_cb: unknown) => undefined,
-    onAiChatTrace: (_cb: unknown) => undefined,
-    onAiChatInterrupted: (_cb: unknown) => undefined,
-    onAiChatRunStatus: (_cb: unknown) => undefined,
-    onAiChatTitleUpdated: (_cb: unknown) => undefined,
-    onMineruInstallProgress: (_cb: unknown) => undefined,
-    onOcrProgress: (_cb: unknown) => undefined,
-    onOcrCompleted: (_cb: unknown) => undefined,
-    onOcrError: (_cb: unknown) => undefined,
-    off: (_channel: string, _cb: unknown) => undefined,
+    onRendererFlushRequested: (_cb: unknown) => noopDisposer,
+    onDocumentUpdated: (_cb: unknown) => noopDisposer,
+    onWindowFocusChanged: (_cb: unknown) => noopDisposer,
+    onImportProgress: (_cb: unknown) => noopDisposer,
+    onImportToast: (_cb: unknown) => noopDisposer,
+    onMenuExportBibtex: (_cb: unknown) => noopDisposer,
+    onMenuImportZotero: (_cb: unknown) => noopDisposer,
+    onMenuImportMendeley: (_cb: unknown) => noopDisposer,
+    onMenuImportIdentifier: (_cb: unknown) => noopDisposer,
+    onLibrarySwitched: (_cb: unknown) => noopDisposer,
+    onSyncAuthConfirmation: (_cb: unknown) => noopDisposer,
+    onAiSummaryUpdated: (_cb: unknown) => noopDisposer,
+    onAiSummaryError: (_cb: unknown) => noopDisposer,
+    onAiReportCreated: (_cb: unknown) => noopDisposer,
+    onWorkspaceItemsChanged: (_cb: unknown) => noopDisposer,
+    onAiChatToken: (_cb: unknown) => noopDisposer,
+    onAiChatReasoning: (_cb: unknown) => noopDisposer,
+    onAiChatDone: (_cb: unknown) => noopDisposer,
+    onAiChatError: (_cb: unknown) => noopDisposer,
+    onAiChatTrace: (_cb: unknown) => noopDisposer,
+    onAiChatInterrupted: (_cb: unknown) => noopDisposer,
+    onAiChatRunStatus: (_cb: unknown) => noopDisposer,
+    onAiChatTitleUpdated: (_cb: unknown) => noopDisposer,
+    onMineruInstallProgress: (_cb: unknown) => noopDisposer,
+    onOcrProgress: (_cb: unknown) => noopDisposer,
+    onOcrCompleted: (_cb: unknown) => noopDisposer,
+    onOcrError: (_cb: unknown) => noopDisposer,
   },
 } satisfies ReforaApi)
 

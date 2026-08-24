@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button, Modal, showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
@@ -32,6 +32,78 @@ export function useMarkdownCardExport(title: string, contentMd: string, fallback
     a.click()
     URL.revokeObjectURL(url)
   }, [title, contentMd, fallbackName])
+}
+
+interface MarkdownCardEditorOptions {
+  id: string
+  title: string
+  contentMd: string
+  titleRequiredMessage: string
+  saveFailedMessage: string
+  onUpdate: (id: string, patch: { title?: string; contentMd?: string }) => Promise<boolean>
+}
+
+export function useMarkdownCardEditor({
+  id,
+  title,
+  contentMd,
+  titleRequiredMessage,
+  saveFailedMessage,
+  onUpdate
+}: MarkdownCardEditorOptions) {
+  const [editing, setEditing] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(title)
+  const [draftContent, setDraftContent] = useState(contentMd)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const start = useCallback(() => {
+    setDraftTitle(title)
+    setDraftContent(contentMd)
+    setSaveError(null)
+    setEditing(true)
+  }, [contentMd, title])
+
+  const cancel = useCallback(() => {
+    setDraftTitle(title)
+    setDraftContent(contentMd)
+    setEditing(false)
+    setSaveError(null)
+  }, [contentMd, title])
+
+  const save = useCallback(async () => {
+    const nextTitle = draftTitle.trim()
+    if (!nextTitle) {
+      setSaveError(titleRequiredMessage)
+      return false
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const saved = await onUpdate(id, { title: nextTitle, contentMd: draftContent })
+      if (saved) setEditing(false)
+      else setSaveError(saveFailedMessage)
+      return saved
+    } catch {
+      setSaveError(saveFailedMessage)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }, [draftContent, draftTitle, id, onUpdate, saveFailedMessage, titleRequiredMessage])
+
+  return {
+    editing,
+    draftTitle,
+    draftContent,
+    saving,
+    saveError,
+    setDraftTitle,
+    setDraftContent,
+    start,
+    cancel,
+    save
+  }
 }
 
 interface MarkdownCardContextMenuOptions {

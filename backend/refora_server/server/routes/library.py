@@ -56,7 +56,6 @@ def create_library_router(deps: Any) -> APIRouter:
     categories = _dependency(deps, "categories")
     importer = _dependency(deps, "importer")
     watcher = _dependency(deps, "watcher")
-    library = _dependency(deps, "library")
     settings = _dependency(deps, "settings")
     services = _value(deps, "services", {})
     repos = _value(deps, "repos", _value(deps, "repositories", {}))
@@ -169,24 +168,6 @@ def create_library_router(deps: Any) -> APIRouter:
                 "workspaceContents": await call_off_loop(workspaces, "searchContent", query, 10),
                 "chats": await call_off_loop(chat, "search", query, 10),
             }
-        return await run(action)
-
-    @router.post("/dialog/open-directory")
-    async def open_directory_dialog(body: dict[str, Any]):
-        async def action():
-            title = _body_dict(body).get("title")
-            if title is not None and not isinstance(title, str):
-                raise ValueError("title must be a string")
-            result = await _connector(connector, "dialog_directory", title)
-            if not isinstance(result, Mapping):
-                raise _UnavailableError("Native directory dialog returned an invalid payload")
-            canceled = result.get("canceled") is True
-            path = result.get("path")
-            if canceled:
-                return {"canceled": True, "path": None}
-            if not isinstance(path, str):
-                raise _UnavailableError("Native directory dialog did not return a path")
-            return {"canceled": False, "path": _absolute_directory(path)}
         return await run(action)
 
     @router.get("/documents/count")
@@ -853,10 +834,6 @@ def create_library_router(deps: Any) -> APIRouter:
                 raise ValueError("enabled must be a boolean")
             return await _call(watcher, "toggle", watch_id, enabled)
         return await run(action)
-
-    @router.post("/library/switch")
-    async def switch_library(body: dict[str, Any]):
-        return await run(lambda: _call(library, "switchLibrary", _absolute_directory(_string(_body_dict(body), "path"))))
 
     export_target = exporter
     if isinstance(exporter, Mapping) and callable(exporter.get("exportJson")):

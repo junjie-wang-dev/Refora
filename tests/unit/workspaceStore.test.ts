@@ -91,11 +91,12 @@ const mockReportsUpdate = vi.fn()
 const mockChatThreads = vi.fn()
 const mockChatDeleteThread = vi.fn()
 const mockRenameThread = vi.fn()
-const mockEventsOff = vi.fn()
 const mockOnWorkspaceItemsChanged = vi.fn()
-const mockOnAiSummaryUpdated = vi.fn()
 const mockOnAiReportCreated = vi.fn()
 const mockOnLibrarySwitched = vi.fn()
+const mockDisposeWorkspaceItemsChanged = vi.fn()
+const mockDisposeAiReportCreated = vi.fn()
+const mockDisposeLibrarySwitched = vi.fn()
 const mockWorkspacesList = vi.fn()
 const mockWorkspacesCreate = vi.fn()
 const mockWorkspacesRename = vi.fn()
@@ -143,11 +144,12 @@ beforeEach(() => {
   mockChatThreads.mockReset()
   mockChatDeleteThread.mockReset()
   mockRenameThread.mockReset()
-  mockEventsOff.mockReset()
-  mockOnWorkspaceItemsChanged.mockReset()
-  mockOnAiSummaryUpdated.mockReset()
-  mockOnAiReportCreated.mockReset()
-  mockOnLibrarySwitched.mockReset()
+  mockOnWorkspaceItemsChanged.mockReset().mockReturnValue(mockDisposeWorkspaceItemsChanged)
+  mockOnAiReportCreated.mockReset().mockReturnValue(mockDisposeAiReportCreated)
+  mockOnLibrarySwitched.mockReset().mockReturnValue(mockDisposeLibrarySwitched)
+  mockDisposeWorkspaceItemsChanged.mockReset()
+  mockDisposeAiReportCreated.mockReset()
+  mockDisposeLibrarySwitched.mockReset()
   mockWorkspacesList.mockReset()
   mockWorkspacesCreate.mockReset()
   mockWorkspacesRename.mockReset()
@@ -214,9 +216,7 @@ beforeEach(() => {
   ai.renameThread = mockRenameThread
 
   const events = api.events as Record<string, unknown>
-  events.off = mockEventsOff
   events.onWorkspaceItemsChanged = mockOnWorkspaceItemsChanged
-  events.onAiSummaryUpdated = mockOnAiSummaryUpdated
   events.onAiReportCreated = mockOnAiReportCreated
   events.onLibrarySwitched = mockOnLibrarySwitched
 
@@ -802,14 +802,12 @@ describe('WorkspaceStore', () => {
       expect(mockShowToast).toHaveBeenCalledTimes(3)
     })
 
-    it('routes AI events and unregisters them on destroy', async () => {
+    it('routes workspace content events and unregisters them on destroy', async () => {
       useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
       useWorkspaceStore.getState().init()
 
-      const summaryUpdated = mockOnAiSummaryUpdated.mock.calls[0][0] as (docId: string) => void
       const reportCreated = mockOnAiReportCreated.mock.calls[0][0] as (report: AiReport) => void
       mockReportsList.mockResolvedValue([makeReport()])
-      summaryUpdated('doc-1')
       reportCreated(makeReport())
 
       await vi.waitFor(() => {
@@ -824,10 +822,9 @@ describe('WorkspaceStore', () => {
       })
 
       useWorkspaceStore.getState().destroy()
-      expect(mockEventsOff).toHaveBeenCalledWith('ai:summary:updated', summaryUpdated)
-      expect(mockEventsOff).toHaveBeenCalledWith('ai:report:created', reportCreated)
-      expect(mockEventsOff).toHaveBeenCalledWith('workspace:items:changed', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('library:switched', expect.any(Function))
+      expect(mockDisposeAiReportCreated).toHaveBeenCalledOnce()
+      expect(mockDisposeWorkspaceItemsChanged).toHaveBeenCalledOnce()
+      expect(mockDisposeLibrarySwitched).toHaveBeenCalledOnce()
       expect(useWorkspaceStore.getState().initialized).toBe(false)
     })
 
@@ -1308,6 +1305,31 @@ describe('WorkspaceStore', () => {
         expect(mockWorkspaceNotesList).toHaveBeenCalledWith('ws-1')
         expect(mockWorkspaceAssetsList).toHaveBeenCalledWith('ws-1')
       })
+    })
+
+    it('coalesces a local mutation and its workspace change event into one content refresh', async () => {
+      vi.useFakeTimers()
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+      useWorkspaceStore.getState().init()
+      mockWorkspaceItemsList.mockClear()
+      mockReportsList.mockClear()
+      mockWorkspaceNotesList.mockClear()
+      mockWorkspaceAssetsList.mockClear()
+      const itemsChanged = mockOnWorkspaceItemsChanged.mock.calls[0][0] as (
+        payload: WorkspaceItemsChangedEvent
+      ) => void
+
+      const mutation = useWorkspaceStore.getState().addItem('report', ['report-1'])
+      await Promise.resolve()
+      itemsChanged({ workspaceId: 'ws-1', reason: 'user' })
+      await vi.advanceTimersByTimeAsync(25)
+      await mutation
+
+      expect(mockWorkspaceItemsList).toHaveBeenCalledTimes(1)
+      expect(mockReportsList).toHaveBeenCalledTimes(1)
+      expect(mockWorkspaceNotesList).toHaveBeenCalledTimes(1)
+      expect(mockWorkspaceAssetsList).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
     })
 
     it('does not fetch items when workspaceId does not match', async () => {

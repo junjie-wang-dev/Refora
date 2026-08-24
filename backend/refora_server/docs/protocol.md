@@ -56,7 +56,6 @@ never raise across the transport.
 |---|---|---|---|---|
 | GET | `/health` | optional | — | `{status:"ok"}` |
 | GET | `/ready` | required | — | `{status:"ready"}` |
-| POST | `/shutdown` | required | — | `{ack:true}` (graceful shutdown) |
 
 ### Documents (literature management)
 | Method | Path | Token | Body | Returns |
@@ -114,7 +113,6 @@ never raise across the transport.
 ### Library
 | Method | Path | Token | Body | Returns |
 |---|---|---|---|---|
-| POST | `/library/switch` | required | `{path:string}` | `{ack:true}` |
 
 ### Settings
 | Method | Path | Token | Body | Returns |
@@ -273,9 +271,6 @@ All events are JSON: `{event:"<name>", data:<...>}`.
 | Event | data |
 |---|---|
 | `document.updated` | `{documentId, patch}` |
-| `library.scanning` | `{active:boolean}` |
-| `library.switched` | `{path}` |
-| `window.focus-changed` | `{focused:boolean}` |
 | `import.progress` | `{importId, current, total, path?}` |
 | `import.toast` | `{importId, kind, message}` |
 | `workspace.items.changed` | `{workspaceId}` |

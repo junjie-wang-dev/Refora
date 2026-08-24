@@ -6,6 +6,7 @@
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,6 +15,6 @@
     "outDir": "node_modules/.tmp/tsbuild/shared",
     "types": []
   },
-  "include": ["src/shared/**/*.ts"],
+  "include": ["src/shared/**/*.ts", "backend/refora_server/providers/catalog.json"],
   "exclude": ["src/**/*.test.ts", "tests/**"]
 }

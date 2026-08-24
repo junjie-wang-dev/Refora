@@ -35,7 +35,7 @@ describe('sync runtime', () => {
     expect(validSupabasePublishableKey('arbitrary-key')).toBe(false)
   })
 
-  it('configures accounts without advertising an unfinished sync engine', async () => {
+  it('configures account authentication without speculative sync-engine state', async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'refora-sync-runtime-'))
     const service = createSyncRuntime({
       userDataDir,
@@ -54,9 +54,7 @@ describe('sync runtime', () => {
 
     await expect(service.status()).resolves.toMatchObject({
       configured: true,
-      syncAvailable: false,
-      signedIn: false,
-      enabled: false
+      signedIn: false
     })
   })
 })

@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createPdfTextService } from '../../src/main/services/pdfText'
@@ -105,8 +113,9 @@ describe('PDF preview cache', () => {
     expect(preview).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1]))
     const worker = mocks.fork.mock.results[0].value as MockWorker
     expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({
-      filePath: pdfPath,
-      action: 'preview'
+      filePath: realpathSync(pdfPath),
+      action: 'preview',
+      correlationId: expect.any(String)
     }))
     const sourceStats = statSync(pdfPath)
     expect(existsSync(pdfPreviewCachePath(

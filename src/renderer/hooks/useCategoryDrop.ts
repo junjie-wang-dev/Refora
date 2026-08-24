@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
@@ -7,8 +7,16 @@ import { DOCUMENT_IDS_MIME } from '../utils/documentDrag'
 
 const DOC_MIME = DOCUMENT_IDS_MIME
 
-export function useCategoryDrop(fetchDocuments: () => void) {
-  const [pendingCatImports, setPendingCatImports] = useState<Set<string>>(new Set())
+export function useCategoryDrop(fetchDocuments: () => Promise<void> | void) {
+  const [pendingCatImportCounts, setPendingCatImportCounts] = useState<Record<string, number>>({})
+  const pendingCatImports = useMemo(
+    () => new Set(
+      Object.entries(pendingCatImportCounts)
+        .filter(([, count]) => count > 0)
+        .map(([categoryId]) => categoryId)
+    ),
+    [pendingCatImportCounts]
+  )
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (
@@ -57,7 +65,10 @@ export function useCategoryDrop(fetchDocuments: () => void) {
         }
         if (paths.length === 0) return
 
-        setPendingCatImports((prev) => new Set(prev).add(catId))
+        setPendingCatImportCounts((previous) => ({
+          ...previous,
+          [catId]: (previous[catId] ?? 0) + 1
+        }))
         try {
           const result = await api.import.addFiles(paths)
           await useDocumentStore.getState().assignDocumentsToCategory(result.added, catId)
@@ -65,13 +76,16 @@ export function useCategoryDrop(fetchDocuments: () => void) {
           useDocumentStore.getState().showToast(
             errorMessage(e, i18n.t('documentErrors.importToCategoryFailed'))
           )
+        } finally {
+          setPendingCatImportCounts((previous) => {
+            const nextCount = Math.max(0, (previous[catId] ?? 1) - 1)
+            if (nextCount > 0) return { ...previous, [catId]: nextCount }
+            const next = { ...previous }
+            delete next[catId]
+            return next
+          })
+          await Promise.resolve(fetchDocuments()).catch(() => undefined)
         }
-        setPendingCatImports((prev) => {
-          const next = new Set(prev)
-          next.delete(catId)
-          return next
-        })
-        void fetchDocuments()
       }
     },
     [fetchDocuments]

@@ -24,8 +24,6 @@ export const IpcChannel = {
   GlobalSearch: 'search:global',
 
   ImportAddFiles: 'import:addFiles',
-  ImportAddFolder: 'import:addFolder',
-  ImportFromJson: 'import:fromJson',
   ImportFromZotero: 'import:fromZotero',
   ImportFromMendeley: 'import:fromMendeley',
   ImportFromIdentifier: 'import:fromIdentifier',
@@ -56,7 +54,6 @@ export const IpcChannel = {
   SyncSignUp: 'sync:signUp',
   SyncResendConfirmation: 'sync:resendConfirmation',
   SyncSignOut: 'sync:signOut',
-  SyncSetEnabled: 'sync:setEnabled',
 
   WebSearchConfigGet: 'webSearch:config:get',
   WebSearchConfigUpdate: 'webSearch:config:update',
@@ -73,7 +70,6 @@ export const IpcChannel = {
   OcrCancel: 'ocr:cancel',
   OcrReadMarkdown: 'ocr:readMarkdown',
 
-  ExportToJson: 'export:toJson',
   ExportToBibtex: 'export:toBibtex',
   ExportBibtexString: 'export:bibtexString',
 
@@ -162,7 +158,6 @@ export const IpcChannel = {
   EventMenuImportZotero: 'menu:import-zotero',
   EventMenuImportMendeley: 'menu:import-mendeley',
   EventMenuImportIdentifier: 'menu:import-identifier',
-  EventLibraryScanning: 'library:scanning',
   EventLibrarySwitched: 'library:switched',
   EventSyncAuthConfirmation: 'sync:auth-confirmation',
   EventAiSummaryUpdated: 'ai:summary:updated',
@@ -249,13 +244,10 @@ export const SERVER_IPC_CHANNELS = [
   IpcChannel.DocumentsUpdate,
   IpcChannel.ExportBibtexString,
   IpcChannel.ExportToBibtex,
-  IpcChannel.ExportToJson,
   IpcChannel.FileAuthorizeDropped,
   IpcChannel.GlobalSearch,
   IpcChannel.ImportAddFiles,
-  IpcChannel.ImportAddFolder,
   IpcChannel.ImportFromIdentifier,
-  IpcChannel.ImportFromJson,
   IpcChannel.ImportFromMendeley,
   IpcChannel.ImportFromZotero,
   IpcChannel.LibrarySwitch,

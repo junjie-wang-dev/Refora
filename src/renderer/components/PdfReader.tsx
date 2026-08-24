@@ -44,6 +44,7 @@ import { api } from '../ipc'
 import { openDocumentPdf } from '../utils/openPdf'
 import PdfAnnotationSidebar from './PdfAnnotationSidebar'
 import PdfPage, { type PdfPageVisibility } from './PdfPage'
+import { usePdfSearch } from '../hooks/usePdfSearch'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -135,9 +136,10 @@ function ReaderButton({
 interface PdfReaderProps {
   onBack?: () => void
   embedded?: boolean
+  active?: boolean
 }
 
-export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) {
+export default function PdfReader({ onBack, embedded = false, active = true }: PdfReaderProps) {
   const { t } = useTranslation()
   const tabs = usePdfReaderStore((state) => state.tabs)
   const activeDocumentId = usePdfReaderStore((state) => state.activeDocumentId)
@@ -185,11 +187,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   const [rotation, setRotation] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [searchPages, setSearchPages] = useState<number[]>([])
-  const [searchIndex, setSearchIndex] = useState(0)
-  const [searchError, setSearchError] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [compactLayout, setCompactLayout] = useState(false)
   const [devicePixelRatio, setDevicePixelRatio] = useState(
@@ -197,7 +194,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   )
   const readerRootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const searchGenerationRef = useRef(0)
   const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
   const rotated = Math.abs(rotation) % 180 !== 0
   const estimatedPageWidth = (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH) * scale
@@ -284,9 +280,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     setCurrentPage(1)
     setPageInput('1')
     visiblePagesRef.current.clear()
-    searchGenerationRef.current += 1
-    setSearchPages([])
-    setSearchError(null)
     void Promise.all([
       loadPdfRuntime(),
       api.documents.readPdfRange(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
@@ -343,7 +336,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     })
     return () => {
       cancelled = true
-      searchGenerationRef.current += 1
       void document?.cleanup()?.catch(() => undefined)
       void loadingTask?.destroy()?.catch(() => undefined)
     }
@@ -360,6 +352,15 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       usePdfReaderStore.getState().selectAnnotation(annotationId)
     }
   }, [pageVirtualizer, pdf?.numPages])
+
+  const pdfSearch = usePdfSearch({
+    pdf,
+    cacheKey: activeDocument
+      ? `${activeDocument.id}:${activeDocument.fileHash ?? ''}:${activeDocument.fileMtimeNs ?? ''}`
+      : '',
+    failureMessage: t('pdfReader.searchFailed'),
+    navigateToPage
+  })
 
   const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
     if (visibility.isVisible && visibility.visibleArea > 0) {
@@ -389,49 +390,6 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     }
     return annotation
   }, [activeDocumentId, compactLayout])
-
-  const runSearch = useCallback(async () => {
-    const generation = ++searchGenerationRef.current
-    const query = searchQuery.trim().toLocaleLowerCase()
-    if (!pdf || !query) {
-      setSearchPages([])
-      setSearchError(null)
-      return
-    }
-    setSearching(true)
-    setSearchError(null)
-    const pages: number[] = []
-    try {
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        const page = await pdf.getPage(pageNumber)
-        const content = await page.getTextContent()
-        if (searchGenerationRef.current !== generation) return
-        const text = content.items
-          .map((item) => 'str' in item ? item.str : '')
-          .join(' ')
-          .toLocaleLowerCase()
-        if (text.includes(query)) pages.push(pageNumber)
-      }
-      if (searchGenerationRef.current !== generation) return
-      setSearchPages(pages)
-      setSearchIndex(0)
-      if (pages[0]) navigateToPage(pages[0])
-    } catch {
-      if (searchGenerationRef.current !== generation) return
-      setSearchPages([])
-      setSearchIndex(0)
-      setSearchError(t('pdfReader.searchFailed'))
-    } finally {
-      if (searchGenerationRef.current === generation) setSearching(false)
-    }
-  }, [navigateToPage, pdf, searchQuery, t])
-
-  const cycleSearch = (direction: number) => {
-    if (searchPages.length === 0) return
-    const index = (searchIndex + direction + searchPages.length) % searchPages.length
-    setSearchIndex(index)
-    navigateToPage(searchPages[index])
-  }
 
   const fitWidth = async () => {
     if (!pdf || !scrollRef.current) return
@@ -497,6 +455,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
   }, [lastDeletion])
 
   useEffect(() => {
+    if (!active) return
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target
       if (
@@ -558,7 +517,7 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [active])
 
   if (!activeDocument) return null
 
@@ -765,23 +724,18 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
       }`}
       onSubmit={(event) => {
         event.preventDefault()
-        void runSearch()
+        void pdfSearch.run()
       }}
     >
       <div className={`relative flex-1 ${compactLayout ? '' : 'min-w-28 max-w-52'}`}>
         <MagnifyingGlass className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-muted" />
         <input
-          value={searchQuery}
+          value={pdfSearch.query}
           autoFocus={compactLayout && searchOpen}
           placeholder={t('pdfReader.search')}
           className="h-7 w-full rounded-md border border-border bg-panel pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
-          aria-invalid={searchError ? true : undefined}
-          onChange={(event) => {
-            searchGenerationRef.current += 1
-            setSearchQuery(event.target.value)
-            setSearching(false)
-            setSearchError(null)
-          }}
+          aria-invalid={pdfSearch.error ? true : undefined}
+          onChange={(event) => pdfSearch.updateQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== 'Escape' || !compactLayout) return
             setSearchOpen(false)
@@ -790,25 +744,25 @@ export default function PdfReader({ onBack, embedded = false }: PdfReaderProps) 
         />
       </div>
       <span className="min-w-10 text-center text-label text-muted">
-        {searching
+        {pdfSearch.searching
           ? '…'
-          : searchError
-            ? <span className="text-error" role="status">{searchError}</span>
-          : searchPages.length > 0
-            ? `${searchIndex + 1}/${searchPages.length}`
+          : pdfSearch.error
+            ? <span className="text-error" role="status">{pdfSearch.error}</span>
+          : pdfSearch.pages.length > 0
+            ? `${pdfSearch.index + 1}/${pdfSearch.pages.length}`
             : ''}
       </span>
       <ReaderButton
         label={t('pdfReader.previousResult')}
-        disabled={searchPages.length === 0}
-        onClick={() => cycleSearch(-1)}
+        disabled={pdfSearch.pages.length === 0}
+        onClick={() => pdfSearch.cycle(-1)}
       >
         <CaretLeft className="h-3.5 w-3.5" />
       </ReaderButton>
       <ReaderButton
         label={t('pdfReader.nextResult')}
-        disabled={searchPages.length === 0}
-        onClick={() => cycleSearch(1)}
+        disabled={pdfSearch.pages.length === 0}
+        onClick={() => pdfSearch.cycle(1)}
       >
         <CaretRight className="h-3.5 w-3.5" />
       </ReaderButton>

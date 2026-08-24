@@ -15,7 +15,6 @@ import {
 import type {
   AiSummary,
   Document,
-  SummaryErrorEvent,
   WorkspaceCanvasViewport,
   WorkspaceConnection,
   WorkspaceConnectionAnchor,
@@ -46,33 +45,9 @@ import {
   workspaceDocumentIds
 } from './boardDrop'
 import useBoardSpacePan from './useBoardSpacePan'
+import { useBoardDocuments } from '../../hooks/useBoardDocuments'
 
 const EMPTY_NOTES: WorkspaceNote[] = []
-const BOARD_LOAD_CONCURRENCY = 4
-
-async function mapConcurrent<T, R>(
-  values: T[],
-  operation: (value: T) => Promise<R>
-): Promise<Array<PromiseSettledResult<R>>> {
-  const results = new Array<PromiseSettledResult<R>>(values.length)
-  let index = 0
-  const workers = Array.from(
-    { length: Math.min(BOARD_LOAD_CONCURRENCY, values.length) },
-    async () => {
-      while (index < values.length) {
-        const current = index
-        index += 1
-        try {
-          results[current] = { status: 'fulfilled', value: await operation(values[current]) }
-        } catch (reason) {
-          results[current] = { status: 'rejected', reason }
-        }
-      }
-    }
-  )
-  await Promise.all(workers)
-  return results
-}
 
 interface MarqueeSelection {
   left: number
@@ -126,11 +101,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const documents = useDocumentStore((s) => s.documents)
   const searchResults = useDocumentStore((s) => s.searchResults)
 
-  const [docs, setDocs] = useState<Map<string, Document>>(new Map())
-  const [summaries, setSummaries] = useState<Map<string, AiSummary>>(new Map())
-  const [loadedSummaryDocIds, setLoadedSummaryDocIds] = useState<Set<string>>(new Set())
-  const [summarizing, setSummarizing] = useState<Set<string>>(new Set())
-  const [summaryErrors, setSummaryErrors] = useState<Map<string, string>>(new Map())
+  const [dropError, setDropError] = useState<string | null>(null)
   const [dropActive, setDropActive] = useState(false)
   const [autoEditNoteId, setAutoEditNoteId] = useState<string | null>(null)
   const [autoEditStickyNoteId, setAutoEditStickyNoteId] = useState<string | null>(null)
@@ -188,14 +159,20 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     () => [...new Set([...workspaceDocIds, ...reports.flatMap((report) => report.sourceDocIds)])],
     [reports, workspaceDocIds]
   )
-  const allDocIdsKey = allDocIds.join('|')
-  const workspaceDocIdsKey = workspaceDocIds.join('|')
-  const knownDocuments = useMemo(
-    () => new Map(
-      [...documents, ...searchResults].map((document) => [document.id, document])
-    ),
-    [documents, searchResults]
-  )
+  const {
+    docs,
+    summaries,
+    loadedSummaryDocIds,
+    summarizing,
+    summaryErrors,
+    summarize: handleSummarize
+  } = useBoardDocuments({
+    activeWorkspaceId,
+    allDocIds,
+    workspaceDocIds,
+    documents,
+    searchResults
+  })
   const maxZIndex = useMemo(
     () => sortedItems.reduce((maximum, item) => Math.max(maximum, item.zIndex), -1),
     [sortedItems]
@@ -292,10 +269,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       clearTimeout(layoutAnimationTimerRef.current)
       layoutAnimationTimerRef.current = null
     }
-    setDocs(new Map())
-    setSummaries(new Map())
-    setSummarizing(new Set())
-    setSummaryErrors(new Map())
     previewPositionsRef.current.clear()
     previewSizesRef.current.clear()
     setAutoEditNoteId(null)
@@ -308,20 +281,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     setAnimatingItemIds(new Set())
     setMarqueeSelection(null)
   }, [activeWorkspaceId])
-
-  useEffect(() => {
-    const relevantIds = new Set(allDocIds)
-    setDocs((previous) => {
-      let changed = false
-      const next = new Map(previous)
-      for (const [docId, document] of knownDocuments) {
-        if (!relevantIds.has(docId) || !next.has(docId) || next.get(docId) === document) continue
-        next.set(docId, document)
-        changed = true
-      }
-      return changed ? next : previous
-    })
-  }, [allDocIdsKey, knownDocuments])
 
   useEffect(() => {
     setSelectedItemIds((current) => {
@@ -357,10 +316,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       if (payload.workspaceId === workspaceId) loadConnections()
     }
     loadConnections()
-    api.events.onWorkspaceItemsChanged(handleWorkspaceItemsChanged)
+    const dispose = api.events.onWorkspaceItemsChanged(handleWorkspaceItemsChanged)
     return () => {
       cancelled = true
-      api.events.off('workspace:items:changed', handleWorkspaceItemsChanged)
+      dispose()
     }
   }, [activeWorkspaceId, t])
 
@@ -410,141 +369,6 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       connectionCleanupRef.current?.()
     }
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    setLoadedSummaryDocIds((previous) => previous.size === 0 ? previous : new Set())
-    void (async () => {
-      const cachedDocuments = new Map(
-        allDocIds
-          .map((docId) => [docId, knownDocuments.get(docId)] as const)
-          .filter((entry): entry is readonly [string, Document] => entry[1] !== undefined)
-      )
-      if (!cancelled && cachedDocuments.size > 0) setDocs(cachedDocuments)
-      const missingDocIds = allDocIds.filter((docId) => !knownDocuments.has(docId))
-      const [documentResults, summaryResults] = await Promise.all([
-        mapConcurrent(missingDocIds, async (docId) => ({
-          docId,
-          document: await api.documents.get(docId)
-        })),
-        mapConcurrent(workspaceDocIds, async (docId) => ({
-          docId,
-          summary: await api.ai.summaryGet(docId)
-        }))
-      ])
-      if (cancelled) return
-      const nextDocuments = new Map(cachedDocuments)
-      let firstFailure: unknown = null
-      for (const result of documentResults) {
-        if (result.status === 'rejected') {
-          firstFailure ??= result.reason
-        } else if (result.value.document) {
-          nextDocuments.set(result.value.docId, result.value.document)
-        }
-      }
-      const latestDocuments = new Map(
-        [
-          ...useDocumentStore.getState().documents,
-          ...useDocumentStore.getState().searchResults
-        ].map((document) => [document.id, document])
-      )
-      for (const docId of allDocIds) {
-        const document = latestDocuments.get(docId)
-        if (document) nextDocuments.set(docId, document)
-      }
-      const nextSummaries = new Map<string, AiSummary>()
-      const loadedIds = new Set<string>()
-      const nextSummaryErrors = new Map<string, string>()
-      summaryResults.forEach((result, resultIndex) => {
-        const docId = workspaceDocIds[resultIndex]
-        if (result.status === 'rejected') {
-          firstFailure ??= result.reason
-          nextSummaryErrors.set(docId, t('workspace.openDocFailed'))
-          return
-        }
-        loadedIds.add(docId)
-        if (result.value.summary) nextSummaries.set(docId, result.value.summary)
-      })
-      setDocs(nextDocuments)
-      setSummaries(nextSummaries)
-      setLoadedSummaryDocIds(loadedIds)
-      setSummaryErrors(nextSummaryErrors)
-      if (firstFailure) {
-        useDocumentStore.getState().showToast(
-          errorMessage(firstFailure, t('workspace.openDocFailed'))
-        )
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [allDocIdsKey, t, workspaceDocIdsKey])
-
-  useEffect(() => {
-    const cb = (docId: string) => {
-      if (!workspaceDocIds.includes(docId)) return
-      void api.ai.summaryGet(docId).then((summary) => {
-        setSummaries((previous) => {
-          const next = new Map(previous)
-          if (summary) next.set(docId, summary)
-          else next.delete(docId)
-          return next
-        })
-        setSummarizing((previous) => {
-          if (!previous.has(docId)) return previous
-          const next = new Set(previous)
-          next.delete(docId)
-          return next
-        })
-      }).catch((e) => {
-        useDocumentStore.getState().showToast(
-          errorMessage(e, t('workspace.openDocFailed'))
-        )
-        setSummarizing((previous) => {
-          if (!previous.has(docId)) return previous
-          const next = new Set(previous)
-          next.delete(docId)
-          return next
-        })
-        setSummaryErrors((previous) =>
-          new Map(previous).set(docId, t('workspace.openDocFailed'))
-        )
-      })
-    }
-    const errCb = (payload: SummaryErrorEvent) => {
-      if (!workspaceDocIds.includes(payload.docId)) return
-      setSummarizing((previous) => {
-        if (!previous.has(payload.docId)) return previous
-        const next = new Set(previous)
-        next.delete(payload.docId)
-        return next
-      })
-      setSummaryErrors((previous) => new Map(previous).set(payload.docId, payload.message))
-    }
-    api.events.onAiSummaryUpdated(cb)
-    api.events.onAiSummaryError(errCb)
-    return () => {
-      api.events.off('ai:summary:updated', cb)
-      api.events.off('ai:summary:error', errCb)
-    }
-  }, [t, workspaceDocIdsKey])
-
-  const handleSummarize = useCallback((docId: string) => {
-    setSummaryErrors((previous) => {
-      const next = new Map(previous)
-      next.delete(docId)
-      return next
-    })
-    setSummarizing((previous) => new Set(previous).add(docId))
-    api.ai.summarize(docId).catch((e) => {
-      setSummarizing((previous) => {
-        const next = new Set(previous)
-        next.delete(docId)
-        return next
-      })
-      setSummaryErrors((previous) => new Map(previous).set(docId, errorMessage(e, t('workspace.summaryFailed'))))
-    })
-  }, [t])
 
   itemMapRef.current = itemMap
   connectionsRef.current = connections
@@ -1072,14 +896,10 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         await addFiles(paths, placement)
       }
     } catch (error) {
-      setSummaryErrors((previous) => new Map(previous).set('__drop__', errorMessage(error, t('workspace.addFailed'))))
+      setDropError(errorMessage(error, t('workspace.addFailed')))
       if (dropErrorTimerRef.current) clearTimeout(dropErrorTimerRef.current)
       dropErrorTimerRef.current = setTimeout(() => {
-        setSummaryErrors((previous) => {
-          const next = new Map(previous)
-          next.delete('__drop__')
-          return next
-        })
+        setDropError(null)
       }, 3500)
     }
   }
@@ -1115,6 +935,28 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const handleCopyText = useCallback((text: string) => {
     runClipboardAction(() => api.clipboard.writeText(text))
   }, [runClipboardAction])
+
+  const handleRemoveItem = useCallback((itemId: string) => {
+    void removeItem(itemId)
+  }, [removeItem])
+
+  const handleDeleteReport = useCallback((reportId: string) => {
+    void deleteReport(reportId)
+  }, [deleteReport])
+
+  const handleDeleteNote = useCallback((noteId: string) => {
+    void deleteNote(noteId)
+  }, [deleteNote])
+
+  const handleDeleteAsset = useCallback((assetId: string) => {
+    void deleteAsset(assetId)
+  }, [deleteAsset])
+
+  const handleAutoEditNoteHandled = useCallback(() => setAutoEditNoteId(null), [])
+  const handleAutoEditStickyNoteHandled = useCallback(
+    () => setAutoEditStickyNoteId(null),
+    []
+  )
 
   const handleCreateNote = useCallback(async (
     noteType: WorkspaceNoteType,
@@ -1218,19 +1060,19 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       selectedItemIds={selectedItemIds}
       animatingItemIds={animatingItemIds}
       onSummarize={handleSummarize}
-      onRemoveItem={(itemId) => void removeItem(itemId)}
-      onDeleteReport={(reportId) => void deleteReport(reportId)}
+      onRemoveItem={handleRemoveItem}
+      onDeleteReport={handleDeleteReport}
       onUpdateReport={updateReport}
-      onDeleteNote={(noteId) => void deleteNote(noteId)}
+      onDeleteNote={handleDeleteNote}
       onUpdateNote={updateNote}
-      onDeleteAsset={(assetId) => void deleteAsset(assetId)}
+      onDeleteAsset={handleDeleteAsset}
       onOpenAsset={handleOpenAsset}
       onRevealAsset={handleRevealAsset}
       onCopyAsset={handleCopyAsset}
       onCopyMarkdown={handleCopyMarkdown}
       onCopyText={handleCopyText}
-      onAutoEditNoteHandled={() => setAutoEditNoteId(null)}
-      onAutoEditStickyNoteHandled={() => setAutoEditStickyNoteId(null)}
+      onAutoEditNoteHandled={handleAutoEditNoteHandled}
+      onAutoEditStickyNoteHandled={handleAutoEditStickyNoteHandled}
       onOpenMarkdownCard={onOpenMarkdownCard}
     />
   )
@@ -1257,9 +1099,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       onDrop={(e) => void handleDrop(e)}
     >
       <div className="pointer-events-none absolute left-3 top-3 z-[200000]">
-        {summaryErrors.get('__drop__') && (
+        {dropError && (
           <div className="rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error shadow-sm">
-            {summaryErrors.get('__drop__')}
+            {dropError}
           </div>
         )}
       </div>

@@ -5,7 +5,6 @@ import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
 import { Button as UiButton, IconTooltip } from './ui'
 import { api } from '../ipc'
-import { IpcChannel } from '../../shared/ipc-channels'
 import SidebarSmartItems from './SidebarSmartItems'
 import SidebarWorkspaces from './SidebarWorkspaces'
 import SidebarCategories from './SidebarCategories'
@@ -50,8 +49,7 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
   useEffect(() => {
     const cb = () => setShowIdentifierImport(true)
-    api.events.onMenuImportIdentifier(cb)
-    return () => api.events.off(IpcChannel.EventMenuImportIdentifier, cb)
+    return api.events.onMenuImportIdentifier(cb)
   }, [])
 
   useEffect(() => {
@@ -59,8 +57,7 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       setAuthConfirmation(confirmation)
       openAccount()
     }
-    api.events.onSyncAuthConfirmation(cb)
-    return () => api.events.off(IpcChannel.EventSyncAuthConfirmation, cb)
+    return api.events.onSyncAuthConfirmation(cb)
   }, [openAccount, setAuthConfirmation])
 
   if (collapsed) {

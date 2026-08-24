@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 import type { AgentProfile, AiProvider, ReforaApi } from '../../src/shared/ipc-types'
 import type { MineruEngineStatus } from '../../src/shared/mineru-types'
 
@@ -12,25 +13,16 @@ vi.mock('react-i18next', () => ({
         'settings.sectionGeneral.desc': 'Library and network',
         'settings.sectionAppearance.title': 'Appearance',
         'settings.sectionAppearance.desc': 'Theme and language',
-        'settings.sync.title': 'Cloud Sync',
-        'settings.sync.desc': 'Metadata sync controls',
-        'settings.sync.loading': 'Loading account status',
-        'settings.sync.loadFailed': 'Failed to load account status',
-        'settings.sync.tryAgain': 'Try again',
-        'settings.sync.accountConnected': 'Account connected',
-        'settings.sync.engineUnavailableTitle': 'Metadata sync is not available yet',
-        'settings.sync.engineUnavailableDescription': 'The data engine is disabled.',
-        'settings.sync.noUploadTitle': 'No library data is being uploaded',
-        'settings.sync.noUploadDescription': 'PDFs and metadata remain on this Mac.',
-        'settings.sync.enable': 'Enable metadata sync',
-        'settings.sync.disabledHint': 'No library data is sent.',
-        'settings.sync.enabledHint': 'Metadata sync is allowed.',
-        'settings.sync.scopeHint': 'PDF files are excluded.',
-        'settings.sync.privacyTitle': 'Local-first by design',
-        'settings.sync.manageAccount': 'Manage account',
-        'settings.sync.accountRequiredTitle': 'Sign in before enabling sync',
-        'settings.sync.accountRequiredDescription': 'Open your account first.',
-        'settings.sync.openAccount': 'Open account',
+        'settings.account.title': 'Account',
+        'settings.account.desc': 'Account session controls',
+        'settings.account.loading': 'Loading account status',
+        'settings.account.loadFailed': 'Failed to load account status',
+        'settings.account.tryAgain': 'Try again',
+        'settings.account.accountConnected': 'Account connected',
+        'settings.account.manageAccount': 'Manage account',
+        'settings.account.accountRequiredTitle': 'Sign in to your account',
+        'settings.account.accountRequiredDescription': 'Open your account first.',
+        'settings.account.openAccount': 'Open account',
         'account.loading': 'Loading account',
         'account.welcomeBack': 'Welcome back',
         'account.signInDescription': 'Sign in on this device.',
@@ -135,6 +127,9 @@ const { useSyncAccountStore } = await import(
 const { useAgentCatalogStore } = await import(
   '../../src/renderer/store/agentCatalogStore'
 )
+const { SidebarVisibilityProvider } = await import(
+  '../../src/renderer/store/sidebarVisibility'
+)
 
 const api = (window as unknown as { api: ReforaApi }).api
 
@@ -187,10 +182,7 @@ describe('AiProvidersSection', () => {
     api.settings.set = set.mockResolvedValue(undefined)
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
-      state: 'disabled',
       account: { id: 'user-1', email: 'reader@example.com' }
     })
     api.mineru.status = vi.fn().mockResolvedValue({
@@ -208,7 +200,7 @@ describe('AiProvidersSection', () => {
     })
     api.mineru.install = vi.fn()
     api.mineru.cancelInstall = vi.fn()
-    api.events.onMineruInstallProgress = vi.fn()
+    api.events.onMineruInstallProgress = vi.fn(() => vi.fn())
     useSyncAccountStore.setState({
       status: null,
       loading: false,
@@ -250,6 +242,18 @@ describe('AiProvidersSection', () => {
     )
     expect(api.aiProviders.listModels).not.toHaveBeenCalled()
     expect(set).not.toHaveBeenCalledWith('activeProviderId', expect.anything())
+  })
+
+  it('deduplicates concurrent catalog loads and skips model discovery in settings', async () => {
+    const first = useAgentCatalogStore.getState().refresh({ loadModels: false })
+    const second = useAgentCatalogStore.getState().refresh({ loadModels: false })
+
+    expect(second).toBe(first)
+    await Promise.all([first, second])
+
+    expect(api.aiProviders.list).toHaveBeenCalledTimes(1)
+    expect(api.agentProfiles.list).toHaveBeenCalledTimes(1)
+    expect(api.aiProviders.listModels).not.toHaveBeenCalled()
   })
 
   it('traps focus in the provider dialog and closes it with Escape', async () => {
@@ -526,11 +530,30 @@ describe('AiProvidersSection', () => {
     expect(screen.getByText('Theme')).toBeInTheDocument()
     expect(screen.getByText('Language')).toBeInTheDocument()
 
-    fireEvent.click(within(navigation).getByRole('button', { name: 'Cloud Sync' }))
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Account' }))
 
-    expect(await screen.findByText('Metadata sync is not available yet')).toBeInTheDocument()
-    expect(screen.queryByRole('checkbox', { name: 'Enable metadata sync' })).not.toBeInTheDocument()
-    expect(screen.getByText('No library data is being uploaded')).toBeInTheDocument()
+    expect(await screen.findByText('Account connected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Manage account' })).toBeInTheDocument()
+  })
+
+  it('updates the app-owned sidebar visibility from appearance settings', async () => {
+    function SettingsWithSidebarState() {
+      const [collapsed, setCollapsed] = useState(false)
+      return (
+        <SidebarVisibilityProvider value={{ collapsed, setCollapsed }}>
+          <SettingsModal open onClose={vi.fn()} />
+          <output data-testid="sidebar-state">{collapsed ? 'collapsed' : 'expanded'}</output>
+        </SidebarVisibilityProvider>
+      )
+    }
+
+    render(<SettingsWithSidebarState />)
+    const navigation = await screen.findByRole('navigation', { name: 'Settings' })
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Appearance' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Collapse Sidebar' }))
+
+    expect(screen.getByTestId('sidebar-state')).toHaveTextContent('collapsed')
+    await waitFor(() => expect(set).toHaveBeenCalledWith('sidebarCollapsed', '1'))
   })
 
   it('does not let the initial settings load overwrite values after a library switch', async () => {
@@ -571,20 +594,14 @@ describe('AiProvidersSection', () => {
     api.sync.resendConfirmation = vi.fn().mockResolvedValue(undefined)
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut',
       account: null
     })
     api.sync.signUp = vi.fn().mockResolvedValue({
       confirmationRequired: true,
       status: {
         configured: true,
-        syncAvailable: false,
         signedIn: false,
-        enabled: false,
-        state: 'signedOut',
         account: null
       }
     })
@@ -593,7 +610,6 @@ describe('AiProvidersSection', () => {
       <AccountModal
         open
         onClose={vi.fn()}
-        onOpenSyncSettings={vi.fn()}
       />
     )
 
@@ -623,14 +639,11 @@ describe('AiProvidersSection', () => {
     expect(api.sync.resendConfirmation).toHaveBeenCalledWith({ email: 'reader@example.com' })
   })
 
-  it('keeps authentication out of Cloud Sync settings', async () => {
+  it('opens authentication from Account settings', async () => {
     const onOpenAccount = vi.fn()
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut',
       account: null
     })
     useSyncAccountStore.setState({
@@ -644,12 +657,12 @@ describe('AiProvidersSection', () => {
       <SettingsModal
         open
         onClose={vi.fn()}
-        initialPage="sync"
+        initialPage="account"
         onOpenAccount={onOpenAccount}
       />
     )
 
-    expect(await screen.findByText('Sign in before enabling sync')).toBeInTheDocument()
+    expect(await screen.findByText('Sign in to your account')).toBeInTheDocument()
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Open account' }))
     expect(onOpenAccount).toHaveBeenCalledTimes(1)
@@ -658,10 +671,7 @@ describe('AiProvidersSection', () => {
   it('turns a desktop auth callback into a clear confirmation result', async () => {
     const signedOutStatus = {
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut' as const,
       account: null
     }
     api.sync.status = vi.fn().mockResolvedValue(signedOutStatus)
@@ -676,7 +686,6 @@ describe('AiProvidersSection', () => {
       <AccountModal
         open
         onClose={vi.fn()}
-        onOpenSyncSettings={vi.fn()}
       />
     )
 
@@ -688,10 +697,7 @@ describe('AiProvidersSection', () => {
   it('shows a confirmation result even when another account session is already loaded', async () => {
     const signedInStatus = {
       configured: true,
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
-      state: 'disabled' as const,
       account: { id: 'user-1', email: 'reader@example.com' }
     }
     api.sync.status = vi.fn().mockResolvedValue(signedInStatus)
@@ -706,7 +712,6 @@ describe('AiProvidersSection', () => {
       <AccountModal
         open
         onClose={vi.fn()}
-        onOpenSyncSettings={vi.fn()}
       />
     )
 
@@ -796,6 +801,7 @@ describe('AiProvidersSection', () => {
     }) => void) | null = null
     api.events.onMineruInstallProgress = vi.fn((callback) => {
       emitProgress = callback
+      return vi.fn()
     })
     api.mineru.status = vi.fn()
       .mockResolvedValueOnce({
@@ -864,6 +870,7 @@ describe('AiProvidersSection', () => {
     let rejectInstall: (error: Error) => void = () => undefined
     api.events.onMineruInstallProgress = vi.fn((callback) => {
       emitProgress = callback
+      return vi.fn()
     })
     api.mineru.install = vi.fn(() => new Promise<MineruEngineStatus>((_resolve, reject) => {
       rejectInstall = reject

@@ -74,6 +74,12 @@ for (const distribution of [
     throw new Error(`Sidecar artifact check failed for ${distribution}`)
   }
 }
+if (
+  !Number.isInteger(artifact.protocolVersion) ||
+  !/^[a-f0-9]{64}$/.test(artifact.protocolDigest)
+) {
+  throw new Error('Sidecar artifact has an invalid packaged protocol contract')
+}
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'refora-sidecar-smoke-'))
 const stateDirectory = join(temporaryDirectory, 'state')
@@ -143,16 +149,20 @@ try {
   if (!ready?.ok) {
     throw new Error(`Sidecar did not become ready: ${ready?.status ?? 'connection refused'} ${stderr}`)
   }
-  const shutdown = await fetch(`http://127.0.0.1:${port}/shutdown`, {
-    method: 'POST',
-    headers: { 'X-Refora-Token': tokenFile.token }
-  })
-  if (!shutdown.ok) throw new Error(`Sidecar shutdown returned HTTP ${shutdown.status}`)
+  const readiness = await ready.json()
+  if (
+    !readiness.ok ||
+    readiness.data?.protocolVersion !== artifact.protocolVersion ||
+    readiness.data?.protocolDigest !== artifact.protocolDigest
+  ) {
+    throw new Error('Sidecar readiness contract does not match the packaged protocol snapshot')
+  }
+  child.kill('SIGTERM')
   const result = await Promise.race([
     exit,
     new Promise((_, reject) => setTimeout(() => reject(new Error('Sidecar did not stop')), 10000))
   ])
-  if (result.code !== 0) {
+  if (result.code !== 0 && result.signal !== 'SIGTERM') {
     throw new Error(`Sidecar exited with ${result.code ?? result.signal}: ${stderr}`)
   }
 } finally {

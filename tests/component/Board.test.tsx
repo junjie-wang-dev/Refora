@@ -143,8 +143,8 @@ beforeEach(() => {
   const events = api.events as Record<string, unknown>
   events.onWorkspaceItemsChanged = vi.fn((cb: (payload: WorkspaceItemsChangedEvent) => void) => {
     mockWorkspaceItemsChangedHandler = cb
+    return vi.fn()
   })
-  events.off = vi.fn()
   api.getPathForFile = vi.fn(async (file: { name?: string }) => file.name ? `/tmp/${file.name}` : '')
   const workspaceAssets = api.workspaceAssets as Record<string, unknown>
   workspaceAssets.textPreview = vi.fn().mockResolvedValue({ content: '', truncated: false })
@@ -380,6 +380,48 @@ describe('Board card clipboard actions', () => {
     expect(await screen.findByText('Updated title')).toBeInTheDocument()
   })
 
+  it('hydrates a previously missing card when the document store later receives it', async () => {
+    const document = {
+      id: 'doc-1',
+      fileName: 'paper.pdf',
+      title: 'Late metadata'
+    } as Document
+    mockItems = [makeItem('item-paper', document.id, 0)]
+    const api = window.api as unknown as Record<string, unknown>
+    const documents = api.documents as Record<string, unknown>
+    documents.get = vi.fn().mockResolvedValue(null)
+
+    const view = render(<Board />)
+    await waitFor(() => expect(documents.get).toHaveBeenCalledWith(document.id))
+
+    mockDocuments = [document]
+    view.rerender(<Board />)
+
+    expect(await screen.findByText('Late metadata')).toBeInTheDocument()
+  })
+
+  it('does not reload summaries when only card z-order changes', async () => {
+    const document = {
+      id: 'doc-1',
+      fileName: 'paper.pdf',
+      title: 'Paper title'
+    } as Document
+    mockDocuments = [document]
+    mockItems = [makeItem('item-paper', document.id, 0)]
+    const api = window.api as unknown as Record<string, unknown>
+    const ai = api.ai as Record<string, unknown>
+    ai.summaryGet = vi.fn().mockResolvedValue(null)
+
+    const view = render(<Board />)
+    await waitFor(() => expect(ai.summaryGet).toHaveBeenCalledTimes(1))
+
+    mockItems = [{ ...mockItems[0], zIndex: 99 }]
+    view.rerender(<Board />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(ai.summaryGet).toHaveBeenCalledTimes(1)
+  })
+
   it('waits for the stored summary lookup before allowing summary generation', async () => {
     const document = {
       id: 'doc-1',
@@ -435,6 +477,7 @@ describe('Board card clipboard actions', () => {
     ;(api.events as Record<string, unknown>).onAiSummaryUpdated = vi.fn(
       (cb: (docId: string) => void) => {
         summaryUpdated = cb
+        return vi.fn()
       }
     )
 

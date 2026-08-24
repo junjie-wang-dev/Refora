@@ -7,6 +7,16 @@ function clientWith(http: Record<string, ReturnType<typeof vi.fn>>): ServerClien
   return { http, ws: {} } as unknown as ServerClient
 }
 
+function appDeps(overrides: Partial<Parameters<typeof createServerAppHandlers>[1]> = {}) {
+  return {
+    setThemeSource: vi.fn(),
+    openDirectory: vi.fn().mockResolvedValue(null),
+    authorizeFile: (path: string) => path,
+    authorizeDirectory: (path: string) => path,
+    ...overrides
+  }
+}
+
 describe('createServerAppHandlers', () => {
   it('forwards bootstrap and global search through the server client', async () => {
     const bootstrap = {
@@ -26,11 +36,10 @@ describe('createServerAppHandlers', () => {
     }
     const http = {
       appBootstrap: vi.fn().mockResolvedValue(bootstrap),
-      globalSearch: vi.fn().mockResolvedValue(search),
-      dialogOpenDirectory: vi.fn()
+      globalSearch: vi.fn().mockResolvedValue(search)
     }
     const setThemeSource = vi.fn()
-    const handlers = createServerAppHandlers(clientWith(http), { setThemeSource })
+    const handlers = createServerAppHandlers(clientWith(http), appDeps({ setThemeSource }))
 
     await expect(handlers[IpcChannel.Bootstrap]()).resolves.toEqual({
       ok: true,
@@ -54,19 +63,19 @@ describe('createServerAppHandlers', () => {
     })
   })
 
-  it('maps directory dialog cancellation and server errors into Result envelopes', async () => {
+  it('maps direct main-process directory dialog cancellation and errors into Result envelopes', async () => {
     const http = {
       appBootstrap: vi.fn(),
-      globalSearch: vi.fn(),
-      dialogOpenDirectory: vi
-        .fn()
-        .mockResolvedValueOnce({ canceled: true, path: null })
-        .mockResolvedValueOnce({ canceled: false, path: '/tmp/library' })
+      globalSearch: vi.fn()
+    }
+    const openDirectory = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('/tmp/library')
         .mockRejectedValueOnce(Object.assign(new Error('Native unavailable'), {
           code: 'native_unavailable'
         }))
-    }
-    const handlers = createServerAppHandlers(clientWith(http), { setThemeSource: vi.fn() })
+    const handlers = createServerAppHandlers(clientWith(http), appDeps({ openDirectory }))
 
     await expect(handlers[IpcChannel.DialogOpenDirectory]()).resolves.toEqual({
       ok: true,
@@ -85,16 +94,15 @@ describe('createServerAppHandlers', () => {
   it('registers dropped files and selected directories before returning paths', async () => {
     const http = {
       appBootstrap: vi.fn(),
-      globalSearch: vi.fn(),
-      dialogOpenDirectory: vi.fn().mockResolvedValue({ canceled: false, path: '/tmp/library' })
+      globalSearch: vi.fn()
     }
     const authorizeFile = vi.fn(() => '/private/tmp/paper.pdf')
     const authorizeDirectory = vi.fn(() => '/private/tmp/library')
-    const handlers = createServerAppHandlers(clientWith(http), {
-      setThemeSource: vi.fn(),
+    const handlers = createServerAppHandlers(clientWith(http), appDeps({
+      openDirectory: vi.fn().mockResolvedValue('/tmp/library'),
       authorizeFile,
       authorizeDirectory
-    })
+    }))
 
     await expect(handlers[IpcChannel.FileAuthorizeDropped]('/tmp/paper.pdf')).resolves.toEqual({
       ok: true,

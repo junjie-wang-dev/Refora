@@ -3,9 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Modal } from '@lobehub/ui'
 import {
   CheckCircle,
-  CloudCheck,
   CloudSlash,
-  Gear,
   SignOut,
   WarningCircle
 } from '@phosphor-icons/react'
@@ -18,10 +16,9 @@ import { Button } from './ui'
 interface AccountModalProps {
   open: boolean
   onClose: () => void
-  onOpenSyncSettings?: () => void
 }
 
-export default function AccountModal({ open, onClose, onOpenSyncSettings }: AccountModalProps) {
+export default function AccountModal({ open, onClose }: AccountModalProps) {
   const { t } = useTranslation()
   const status = useSyncAccountStore((state) => state.status)
   const loading = useSyncAccountStore((state) => state.loading)
@@ -116,7 +113,6 @@ export default function AccountModal({ open, onClose, onOpenSyncSettings }: Acco
   } else {
     const email = status.account?.email ?? ''
     const initial = email.trim().slice(0, 1).toUpperCase() || '?'
-    const syncAvailable = status.syncAvailable
     content = (
       <div>
         <div className="flex flex-col items-center border-b border-border bg-panel-2/60 px-8 pb-6 pt-8 text-center">
@@ -134,43 +130,12 @@ export default function AccountModal({ open, onClose, onOpenSyncSettings }: Acco
             <div className="mt-1 truncate text-sm font-medium text-foreground">{email}</div>
           </div>
 
-          <div className="flex items-center gap-3 rounded-xl bg-panel-2 p-4">
-            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${status.enabled ? 'bg-success/10 text-success' : 'bg-background text-muted'}`}>
-              {status.enabled ? <CloudCheck className="h-5 w-5" /> : <CloudSlash className="h-5 w-5" />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-foreground">
-                {!syncAvailable
-                  ? t('account.syncUnavailable')
-                  : status.enabled
-                    ? t('account.syncOn')
-                    : t('account.syncOff')}
-              </div>
-              <div className="mt-0.5 text-label text-muted">
-                {syncAvailable
-                  ? t('account.syncDescription')
-                  : t('account.syncUnavailableDescription')}
-              </div>
-            </div>
-          </div>
-
           {actionError && (
             <div className="rounded-lg bg-error/10 px-3 py-2 text-label text-error" role="alert">
               {actionError}
             </div>
           )}
 
-          {onOpenSyncSettings && (
-            <Button
-              variant="primary"
-              size="lg"
-              className="w-full"
-              icon={<Gear className="h-4 w-4" />}
-              onClick={onOpenSyncSettings}
-            >
-              {t('account.manageSync')}
-            </Button>
-          )}
           <Button
             variant="link"
             className="mx-auto text-muted hover:text-error"

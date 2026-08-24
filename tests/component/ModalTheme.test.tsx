@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
   set: vi.fn(),
   setThemeSource: vi.fn(),
   onLibrarySwitched: vi.fn(),
-  off: vi.fn(),
   showToast: vi.fn()
 }))
 
@@ -20,8 +19,7 @@ vi.mock('@renderer/ipc', () => ({
       setThemeSource: mocks.setThemeSource
     },
     events: {
-      onLibrarySwitched: mocks.onLibrarySwitched,
-      off: mocks.off
+      onLibrarySwitched: mocks.onLibrarySwitched
     }
   }
 }))
@@ -83,8 +81,7 @@ describe('AppThemeProvider', () => {
     mocks.get.mockReset().mockResolvedValue('system')
     mocks.set.mockReset().mockResolvedValue(undefined)
     mocks.setThemeSource.mockReset().mockResolvedValue(undefined)
-    mocks.onLibrarySwitched.mockReset()
-    mocks.off.mockReset()
+    mocks.onLibrarySwitched.mockReset().mockReturnValue(vi.fn())
     mocks.showToast.mockReset()
     document.documentElement.removeAttribute('data-theme')
   })

@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.repositories.workspace_support import touch_workspace
 
 IMAGE_TYPES: dict[str, str] = {
     ".png": "image/png",
@@ -262,10 +263,7 @@ def createWorkspaceAssetsRepository(db: Any):
         cur = db.execute("DELETE FROM workspace_assets WHERE id = ?", [id])
         if cur.rowcount == 0:
             raise RepoError("not_found", f"workspace asset not found: {id}")
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
-            [now_ms(), asset["workspaceId"]],
-        )
+        touch_workspace(db, asset["workspaceId"])
 
     return {
         "list": list,

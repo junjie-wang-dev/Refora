@@ -21,7 +21,10 @@ import { createServerPythonRuntime } from './sidecar/runtime'
 import type { ServerPythonRuntime } from './sidecar/runtime'
 import { createServerLifecycle } from './sidecar/lifecycle'
 import { createServerAssembly, type ServerAssembly } from './sidecar/assembly'
-import { createServerStateDirectory } from './sidecar/stateDirectory'
+import {
+  cleanupStaleServerStateDirectories,
+  createServerStateDirectory
+} from './sidecar/stateDirectory'
 import { createSyncRuntime } from './services/syncRuntime'
 import type { SyncAccountService } from './services/syncAccount'
 import { createAuthConfirmationGuard } from './services/authDeepLink'
@@ -123,6 +126,8 @@ const MENU_COPY = {
     exportJson: 'Export JSON…',
     exportJsonTitle: 'Export JSON',
     exportBibtex: 'Export BibTeX…',
+    bibtexFiles: 'BibTeX files',
+    selectFolder: 'Select Folder',
     failed: 'Failed',
     persistenceFailedTitle: 'Unsaved changes',
     persistenceFailedMessage: 'Some local changes could not be saved.',
@@ -150,6 +155,8 @@ const MENU_COPY = {
     exportJson: '导出 JSON…',
     exportJsonTitle: '导出 JSON',
     exportBibtex: '导出 BibTeX…',
+    bibtexFiles: 'BibTeX 文件',
+    selectFolder: '选择文件夹',
     failed: '失败',
     persistenceFailedTitle: '存在未保存的更改',
     persistenceFailedMessage: '部分本地更改无法保存。',
@@ -384,7 +391,7 @@ function buildMenu(language: 'zh' | 'en' = menuLanguage): Menu {
           click: () => {
             const w = getWin()
             if (w && !w.isDestroyed()) {
-              w.webContents.send('menu:import-identifier')
+              w.webContents.send(IpcChannel.EventMenuImportIdentifier)
             }
           }
         },
@@ -444,14 +451,14 @@ function buildMenu(language: 'zh' | 'en' = menuLanguage): Menu {
           label: copy.importZotero,
           click: () => {
             const w = getWin()
-            if (w && !w.isDestroyed()) w.webContents.send('menu:import-zotero')
+            if (w && !w.isDestroyed()) w.webContents.send(IpcChannel.EventMenuImportZotero)
           }
         },
         {
           label: copy.importMendeley,
           click: () => {
             const w = getWin()
-            if (w && !w.isDestroyed()) w.webContents.send('menu:import-mendeley')
+            if (w && !w.isDestroyed()) w.webContents.send(IpcChannel.EventMenuImportMendeley)
           }
         },
         { type: 'separator' },
@@ -480,7 +487,7 @@ function buildMenu(language: 'zh' | 'en' = menuLanguage): Menu {
           click: () => {
             const w = getWin()
             if (w) {
-              w.webContents.send('menu:export-bibtex')
+              w.webContents.send(IpcChannel.EventMenuExportBibtex)
             }
           }
         }
@@ -619,25 +626,28 @@ function createWindow(bounds?: WindowBounds | null): BrowserWindow {
 
   return bw
 }
-function resolveStartupDbPath(): string {
+function resolveStartupLibrary(): { dbPath: string; libraryFolder: string } {
   const userDataDir = app.getPath('userData')
   const userDataDbPath = join(userDataDir, DB_FILE_NAME)
 
   const prefsLibrary = readLibraryFolderPath(userDataDir)
-  if (prefsLibrary && dbExistsInLibraryFolder(prefsLibrary)) {
-    logger.info(`db:startup using library db (prefs) at ${prefsLibrary}`)
-    return dbPathForLibraryFolder(prefsLibrary)
-  }
-  if (prefsLibrary && existsSync(prefsLibrary)) {
-    logger.info(`db:startup creating library db (prefs) at ${prefsLibrary}`)
-    return dbPathForLibraryFolder(prefsLibrary)
-  }
-  if (prefsLibrary && !existsSync(prefsLibrary)) {
-    logger.warn(`db:startup prefs library folder missing, clearing prefs: ${prefsLibrary}`)
+  if (prefsLibrary) {
+    try {
+      const libraryFolder = realpathSync(prefsLibrary)
+      if (!statSync(libraryFolder).isDirectory()) throw new Error('not a directory')
+      logger.info(
+        dbExistsInLibraryFolder(libraryFolder)
+          ? `db:startup using library db (prefs) at ${libraryFolder}`
+          : `db:startup creating library db (prefs) at ${libraryFolder}`
+      )
+      return { dbPath: dbPathForLibraryFolder(libraryFolder), libraryFolder }
+    } catch {
+      logger.warn(`db:startup prefs library folder invalid, clearing prefs: ${prefsLibrary}`)
+    }
     writeLibraryFolderPath(userDataDir, '')
   }
 
-  return userDataDbPath
+  return { dbPath: userDataDbPath, libraryFolder: '' }
 }
 async function createPythonServerAssembly(
   dbPath: string,
@@ -661,17 +671,21 @@ async function createPythonServerAssembly(
         return configured
       })()
   const serverSourceRoot = join(__dirname, '../../backend')
-  const serverState = createServerStateDirectory(app.getPath('userData'))
+  const userDataDir = app.getPath('userData')
+  cleanupStaleServerStateDirectories(userDataDir)
+  const serverState = createServerStateDirectory(userDataDir)
   const assembly = createServerAssembly({
     lifecycle: createServerLifecycle({
       pythonPath: serverPython,
       serverModule: app.isPackaged ? undefined : 'refora_server.server.run',
       executablePath: serverExecutable,
       stateDir: serverState.path,
-      userDataDir: app.getPath('userData'),
+      userDataDir,
       dbPath,
       libraryFolder,
       language: detectLanguage(),
+      parentPid: process.pid,
+      onChildSpawned: serverState.setChildPid,
       environment: {
         ...process.env,
         PYTHONNOUSERSITE: '1',
@@ -684,6 +698,30 @@ async function createPythonServerAssembly(
     getWin: () => win,
     nativeManagedRoots: [libraryFolder, app.getPath('userData')],
     rendererPathCapabilities,
+    openDirectory: async () => {
+      const target = win
+      const options = {
+        title: MENU_COPY[menuLanguage].selectFolder,
+        properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
+      }
+      const result = target && !target.isDestroyed()
+        ? await dialog.showOpenDialog(target, options)
+        : await dialog.showOpenDialog(options)
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    saveBibtex: async (bibtex) => {
+      const target = win
+      const copy = MENU_COPY[menuLanguage]
+      const options = {
+        title: copy.exportBibtex,
+        defaultPath: `refora-export-${new Date().toISOString().slice(0, 10)}.bib`,
+        filters: [{ name: copy.bibtexFiles, extensions: ['bib'] }]
+      }
+      const result = target && !target.isDestroyed()
+        ? await dialog.showSaveDialog(target, options)
+        : await dialog.showSaveDialog(options)
+      if (!result.canceled && result.filePath) writeFileSync(result.filePath, bibtex, 'utf8')
+    },
     removeDocumentPreviewCache: async (documentId) => {
       const currentLibraryFolder = libraryFolder || activeLibraryFolder
       if (!currentLibraryFolder) return
@@ -824,11 +862,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     }
   }
 
-  const dbPath = resolveStartupDbPath()
-  const preferredLibrary = readLibraryFolderPath(app.getPath('userData'))
-  const libraryFolder = preferredLibrary && existsSync(preferredLibrary)
-    ? realpathSync(preferredLibrary)
-    : ''
+  const { dbPath, libraryFolder } = resolveStartupLibrary()
   activeDbPath = dbPath
   activeLibraryFolder = libraryFolder
   registerWorkspaceAssetProtocol()
@@ -842,10 +876,16 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     )
     await serverAssembly.start()
     const bootstrap = await activatePythonServerAssembly(serverAssembly)
-    if (bootstrap.libraryFolderPath && existsSync(bootstrap.libraryFolderPath)) {
-      activeLibraryFolder = realpathSync(bootstrap.libraryFolderPath)
-      activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
-      writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
+    if (bootstrap.libraryFolderPath) {
+      try {
+        const resolvedLibraryFolder = realpathSync(bootstrap.libraryFolderPath)
+        if (!statSync(resolvedLibraryFolder).isDirectory()) throw new Error('not a directory')
+        activeLibraryFolder = resolvedLibraryFolder
+        activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
+        writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
+      } catch {
+        logger.warn(`db:bootstrap ignored invalid library folder: ${bootstrap.libraryFolderPath}`)
+      }
     }
     savedBounds = bootstrap.windowBounds
   } catch (error) {

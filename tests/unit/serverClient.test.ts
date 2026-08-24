@@ -289,6 +289,26 @@ describe('serverClient', () => {
       expect(captured.signal?.aborted).toBe(true)
     })
 
+    it('does not apply the default request timeout to imports', async () => {
+      vi.useFakeTimers()
+      const captured: { signal: AbortSignal | null } = { signal: null }
+      let resolveFetch: (response: Response) => void = () => undefined
+      const fetchFn = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        captured.signal = init?.signal ?? null
+        return new Promise<Response>((resolve) => { resolveFetch = resolve })
+      }) as unknown as typeof fetch
+      const client = createServerClient(lifecycle, nativeRpc, {
+        fetchImpl: fetchFn,
+        requestTimeoutMs: 20
+      })
+      const request = client.http.importFiles({ paths: ['/tmp/paper.pdf'] })
+      await vi.advanceTimersByTimeAsync(25)
+
+      expect(captured.signal?.aborted).toBe(false)
+      resolveFetch(makeResponse({ added: [], skipped: [], errors: [] }))
+      await expect(request).resolves.toEqual({ added: [], skipped: [], errors: [] })
+    })
+
     it('throws bad_response when body is not JSON', async () => {
       const fetchFn = vi.fn().mockResolvedValue({
         ok: true,
@@ -476,7 +496,6 @@ describe('serverClient', () => {
       const ws = await openWs(client)
       expect(ws.url).toBe(`ws://127.0.0.1:${PORT}/ws`)
       expect(ws.protocols).toEqual([`refora-token.${TOKEN}`])
-      expect(client.ws.isConnected()).toBe(true)
     })
 
     it('times out a stalled handshake and allows a fresh connection', async () => {
@@ -497,7 +516,6 @@ describe('serverClient', () => {
       expect(FakeWebSocket.instances).toHaveLength(2)
       FakeWebSocket.instances[1].open()
       await reconnected
-      expect(client.ws.isConnected()).toBe(true)
     })
 
     it('forwards every AI chat event payload unchanged', async () => {
@@ -538,15 +556,15 @@ describe('serverClient', () => {
       }
     })
 
-    it('off removes a listener', async () => {
+    it('the subscription disposer removes a listener', async () => {
       const client = createServerClient(lifecycle, nativeRpc, {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
       const ws = await openWs(client)
 
       const cb = vi.fn()
-      client.ws.on('document.updated', cb)
-      client.ws.off('document.updated', cb)
+      const dispose = client.ws.on('document.updated', cb)
+      dispose()
       ws.message({ event: 'document.updated', data: { documentId: 'd1' } })
       expect(cb).not.toHaveBeenCalled()
     })
@@ -591,15 +609,6 @@ describe('serverClient', () => {
       })
     })
 
-    it('ping sends the ping command', async () => {
-      const client = createServerClient(lifecycle, nativeRpc, {
-        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
-      })
-      const ws = await openWs(client)
-      client.ws.ping()
-      expect(JSON.parse(ws.sent[0])).toEqual({ event: 'ping' })
-    })
-
     it('disconnect closes the socket', async () => {
       const client = createServerClient(lifecycle, nativeRpc, {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
@@ -608,7 +617,6 @@ describe('serverClient', () => {
       const closeSpy = vi.spyOn(ws, 'close')
       client.ws.disconnect()
       expect(closeSpy).toHaveBeenCalled()
-      expect(client.ws.isConnected()).toBe(false)
     })
 
     it('ignores malformed message payloads', async () => {
@@ -849,7 +857,6 @@ describe('serverClient', () => {
       await vi.advanceTimersByTimeAsync(1_100)
       expect(FakeWebSocket.instances).toHaveLength(3)
       FakeWebSocket.instances[2].open()
-      expect(client.ws.isConnected()).toBe(true)
     })
 
     it('attempts to reconnect after close', async () => {
@@ -880,7 +887,6 @@ describe('serverClient', () => {
       await vi.advanceTimersByTimeAsync(600)
       expect(FakeWebSocket.instances).toHaveLength(2)
       FakeWebSocket.instances[1].open()
-      expect(client.ws.isConnected()).toBe(true)
       expect(JSON.parse(FakeWebSocket.instances[1].sent[0])).toEqual({
         event: 'subscribe',
         data: { topics }
@@ -917,7 +923,6 @@ describe('serverClient', () => {
       expect(FakeWebSocket.instances[1].url).toBe('ws://127.0.0.1:9988/ws')
       expect(FakeWebSocket.instances[1].protocols).toEqual(['refora-token.restarted-token'])
       FakeWebSocket.instances[1].open()
-      expect(client.ws.isConnected()).toBe(true)
       expect(getServerBaseUrl).toHaveBeenCalledTimes(2)
     })
 
@@ -980,17 +985,14 @@ describe('serverClient', () => {
 
       FakeWebSocket.instances[1].open()
       await Promise.all([firstRejection, secondConnect, duplicateConnect])
-      expect(client.ws.isConnected()).toBe(true)
     })
   })
 
   describe('http - full endpoint sweep', () => {
     const endpointInvocations: Array<[keyof ServerHttp, unknown[]]> = [
       ['systemReady', []],
-      ['systemShutdown', []],
       ['appBootstrap', []],
       ['globalSearch', ['attention']],
-      ['dialogOpenDirectory', ['Choose library']],
       ['documentsList', [{ q: 'x', limit: 5 }]],
       ['documentsCount', []],
       ['documentsSearch', ['q', { limit: 10 }]],
@@ -1024,7 +1026,6 @@ describe('serverClient', () => {
       ['watchAdd', [{ path: '/watched' }]],
       ['watchRemove', ['w1']],
       ['watchToggle', ['w1', { enabled: true }]],
-      ['librarySwitch', [{ path: '/library' }]],
       ['settingsGet', []],
       ['settingsUpdate', [{ theme: 'dark' }]],
       ['settingsWebSearchGet', []],
@@ -1077,7 +1078,6 @@ describe('serverClient', () => {
       ['workspacesOpenSandbox', ['ws1']],
       ['workspaceItemsList', ['ws1']],
       ['workspaceItemGet', ['i1']],
-      ['workspaceItemsCreate', ['ws1', { kind: 'document', docId: 'd1' }]],
       ['workspaceItemsCreateBatch', ['ws1', { kind: 'note', ids: ['n1'] }]],
       ['workspaceItemsDelete', ['ws1', 'i1']],
       ['workspaceItemsReorder', ['ws1', { ids: ['i2', 'i1'] }]],
@@ -1289,7 +1289,6 @@ describe('serverClient', () => {
       ws.error()
 
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('serverClient:ws-error'))
-      expect(client.ws.isConnected()).toBe(true)
     })
 
     it('drops sends while the socket is closed instead of throwing', async () => {
@@ -1297,7 +1296,6 @@ describe('serverClient', () => {
         WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket
       })
 
-      expect(() => client.ws.ping()).not.toThrow()
       expect(() => client.ws.subscribe(['ai.chat.token'])).not.toThrow()
       expect(logger.warn).toHaveBeenCalledWith('serverClient:send-failed ws not open')
 
@@ -1318,7 +1316,6 @@ describe('serverClient', () => {
       ws.close()
 
       await expect(connectPromise).rejects.toMatchObject({ code: 'ws_closed' })
-      expect(client.ws.isConnected()).toBe(false)
     })
 
     it('aborts a handshake whose connection resolves after a manual disconnect', async () => {
@@ -1347,7 +1344,6 @@ describe('serverClient', () => {
       await client.ws.connect()
 
       expect(FakeWebSocket.instances).toHaveLength(1)
-      expect(client.ws.isConnected()).toBe(true)
     })
 
     it('connects immediately when called while a reconnect is still pending', async () => {
@@ -1367,7 +1363,6 @@ describe('serverClient', () => {
       FakeWebSocket.instances[1].open()
       await immediateConnect
 
-      expect(client.ws.isConnected()).toBe(true)
       await vi.advanceTimersByTimeAsync(15_000)
       expect(FakeWebSocket.instances).toHaveLength(2)
     })
@@ -1438,6 +1433,35 @@ describe('serverClient', () => {
         ok: false,
         error: { code: 'connector_timeout', message: expect.stringContaining('/native/trash-item') }
       })
+    })
+
+    it('leaves user dialogs open until completion or websocket shutdown', async () => {
+      vi.useFakeTimers()
+      const captured: { signal: AbortSignal | null } = { signal: null }
+      nativeRpc.invoke = vi.fn((_route, _body, signal?: AbortSignal) =>
+        new Promise<Result<unknown>>(() => {
+          captured.signal = signal ?? null
+        }))
+      const client = createServerClient(lifecycle, nativeRpc, {
+        WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+        connectorTimeoutMs: 20
+      })
+      const connectPromise = client.ws.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = FakeWebSocket.instances[0]
+      ws.open()
+      await connectPromise
+
+      ws.message({
+        event: 'connector.dialog-open-directory',
+        data: { requestId: 'req-dialog', title: 'Choose folder' }
+      })
+      await vi.advanceTimersByTimeAsync(25)
+
+      expect(captured.signal?.aborted).toBe(false)
+      expect(ws.sent).toHaveLength(0)
+      client.ws.disconnect()
+      expect(captured.signal?.aborted).toBe(true)
     })
   })
 })

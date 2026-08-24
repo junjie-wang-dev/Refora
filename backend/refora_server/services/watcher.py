@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 import sys
 import threading
@@ -85,6 +86,7 @@ class WatcherServiceDeps(TypedDict, total=False):
     debounceMs: int
     onLibraryHealthCheck: OnLibraryHealthCheck
     libraryHealthInterval: float
+    logger: Any
 
 
 def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = None):
@@ -97,6 +99,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
     debounce_ms = int(deps.get("debounceMs", _DEBOUNCE_MS))
     on_library_health_check: OnLibraryHealthCheck | None = deps.get("onLibraryHealthCheck")
     library_health_interval = float(deps.get("libraryHealthInterval", 600.0))
+    logger = deps.get("logger") or logging.getLogger(__name__)
 
     state: dict[str, Any] = {
         "task": None,
@@ -112,10 +115,18 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "pending": set(),
         "reconcileTask": None,
         "startupTask": None,
+        "observerFallbackTask": None,
+        "failedObserverFolders": {},
         "skippedLibraryFiles": {},
         "libraryHealthCheck": on_library_health_check,
         "lastLibraryHealthCheckAt": 0.0,
     }
+
+    def _warning(message: str) -> None:
+        try:
+            logger.warning(message)
+        except Exception:
+            pass
 
     def _fileSignature(path: str) -> tuple[int, int, int, int] | None:
         try:
@@ -196,6 +207,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
 
     def remove(watchId: str) -> None:
         repos["watchFolders"]["remove"](watchId)
+        state["failedObserverFolders"].pop(watchId, None)
         _stopObserver(watchId)
 
     def toggle(watchId: str, enabled: bool) -> dict[str, Any]:
@@ -204,6 +216,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             if enabled:
                 _startObserverForFolder(wf["id"], wf["path"])
             else:
+                state["failedObserverFolders"].pop(wf["id"], None)
                 _stopObserver(wf["id"])
         return wf
 
@@ -371,18 +384,25 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
 
     def _startObserverForFolder(
         folderId: str, folderPath: str, *, isLibrary: bool = False
-    ) -> None:
+    ) -> bool:
         if not _WATCHDOG_AVAILABLE or not state["running"]:
-            return
+            return False
         observer_lock: threading.RLock = state["observerLock"]
         with _OBSERVER_LIFECYCLE_LOCK, observer_lock:
             observers: dict[str, Any] = state["observers"]
             if folderId in observers:
-                return
+                state["failedObserverFolders"].pop(folderId, None)
+                return True
             if not folderPath or not os.path.isdir(folderPath):
-                return
+                state["failedObserverFolders"][folderId] = (
+                    folderPath,
+                    isLibrary,
+                )
+                _warning(f"watcher observer path is unavailable: {folderPath}")
+                return False
             library_folder = get_library_folder()
             handler = _PdfHandler(folderPath, library_folder, isLibrary=isLibrary)
+            observer = None
             try:
                 observer = (
                     Observer(timeout=observer_poll_interval)
@@ -391,9 +411,23 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 )
                 observer.schedule(handler, folderPath, recursive=True)
                 observer.start()
-            except Exception:
-                return
+            except Exception as error:
+                state["failedObserverFolders"][folderId] = (
+                    folderPath,
+                    isLibrary,
+                )
+                if observer is not None:
+                    try:
+                        observer.stop()
+                        if getattr(observer, "is_alive", lambda: False)():
+                            observer.join()
+                    except Exception:
+                        pass
+                _warning(f"watcher observer failed for {folderPath}: {error}")
+                return False
             observers[folderId] = observer
+            state["failedObserverFolders"].pop(folderId, None)
+            return True
 
     def _stopObserver(folderId: str) -> None:
         observer_lock: threading.RLock = state["observerLock"]
@@ -482,8 +516,8 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             await _reconcileWatchFoldersAsync()
             await _reconcileLibraryAsync()
             await _maybeRunLibraryHealthCheck(force=True)
-        except Exception:
-            pass
+        except Exception as error:
+            _warning(f"watcher startup reconciliation failed: {error}")
 
     async def _maybeRunLibraryHealthCheck(*, force: bool = False) -> None:
         callback = state["libraryHealthCheck"]
@@ -505,8 +539,8 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             try:
                 await _reconcileLibraryAsync()
                 await _maybeRunLibraryHealthCheck()
-            except Exception:
-                pass
+            except Exception as error:
+                _warning(f"watcher library reconciliation failed: {error}")
 
     # ---- polling fallback ----
 
@@ -585,8 +619,29 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                         result = await result
                     _recordSkippedLibraryFiles(result)
                 await _maybeRunLibraryHealthCheck()
-            except Exception:
-                pass
+            except Exception as error:
+                _warning(f"watcher polling scan failed: {error}")
+            await asyncio.sleep(poll_interval)
+
+    async def _observerFallbackLoop() -> None:
+        while state["running"]:
+            try:
+                batch: list[str] = []
+                failed = list(state["failedObserverFolders"].values())
+                for path, is_library in failed:
+                    batch.extend(
+                        await _scanFolderOnceAsync(
+                            path,
+                            known=_knownLibraryFiles() if is_library else None,
+                        )
+                    )
+                if batch:
+                    result = on_new_pdf(batch)
+                    if inspect.isawaitable(result):
+                        result = await result
+                    _recordSkippedLibraryFiles(result)
+            except Exception as error:
+                _warning(f"watcher observer fallback scan failed: {error}")
             await asyncio.sleep(poll_interval)
 
     # ---- lifecycle ----
@@ -608,6 +663,9 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             _startLibraryObserver()
             state["startupTask"] = loop.create_task(_startupReconcile())
             state["reconcileTask"] = loop.create_task(_reconcileLoop())
+            state["observerFallbackTask"] = loop.create_task(
+                _observerFallbackLoop()
+            )
             return
         state["task"] = loop.create_task(_scanLoop())
 
@@ -625,6 +683,11 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         state["startupTask"] = None
         if startup_task is not None and not startup_task.done():
             startup_task.cancel()
+        observer_fallback_task = state["observerFallbackTask"]
+        state["observerFallbackTask"] = None
+        if observer_fallback_task is not None and not observer_fallback_task.done():
+            observer_fallback_task.cancel()
+        state["failedObserverFolders"] = {}
         for folderId in list(state["observers"].keys()):
             _stopObserver(folderId)
         lock = state["lock"]

@@ -51,7 +51,7 @@ function agentOption(profile: AgentProfile, provider?: AiProvider): AiProvider {
   }
 }
 
-function chatCatalog(apiProviders: AiProvider[], profiles: AgentProfile[]) {
+export function deriveChatCatalog(apiProviders: AiProvider[], profiles: AgentProfile[]) {
   const chatProfiles = profiles.length > 0 ? profiles : apiProviders.map(fallbackProfile)
   const providersById = new Map(apiProviders.map((provider) => [provider.id, provider]))
   const agents = chatProfiles.flatMap((profile) => {
@@ -67,13 +67,11 @@ function chatCatalog(apiProviders: AiProvider[], profiles: AgentProfile[]) {
 interface AgentCatalogState {
   apiProviders: AiProvider[]
   profiles: AgentProfile[]
-  chatProfiles: AgentProfile[]
-  agents: AiProvider[]
   modelsByAgentId: Record<string, ProviderModelInfo[]>
   revision: number
   loading: boolean
   loadingModels: boolean
-  refresh: () => Promise<void>
+  refresh: (options?: { loadModels?: boolean }) => Promise<void>
   refreshModels: () => Promise<void>
   removeProvider: (providerId: string) => void
   removeProfile: (profileId: string) => void
@@ -82,48 +80,57 @@ interface AgentCatalogState {
 
 let catalogGeneration = 0
 let modelsGeneration = 0
+let catalogRefreshTask: Promise<void> | null = null
+let catalogRefreshWantsModels = false
 
 export const useAgentCatalogStore = create<AgentCatalogState>((set, get) => ({
   apiProviders: [],
   profiles: [],
-  chatProfiles: [],
-  agents: [],
   modelsByAgentId: {},
   revision: 0,
   loading: false,
   loadingModels: false,
 
-  refresh: async () => {
+  refresh: (options) => {
+    catalogRefreshWantsModels ||= options?.loadModels !== false
+    if (catalogRefreshTask) return catalogRefreshTask
     const generation = ++catalogGeneration
     set({ loading: true })
-    try {
-      const [profiles, apiProviders] = await Promise.all([
-        api.agentProfiles.list(),
-        api.aiProviders.list()
-      ])
-      if (generation !== catalogGeneration) return
-      const { chatProfiles, agents } = chatCatalog(apiProviders, profiles)
-      set({
-        apiProviders,
-        profiles,
-        chatProfiles,
-        agents,
-        modelsByAgentId: {},
-        loading: false,
-        loadingModels: false,
-        revision: get().revision + 1
-      })
-      void get().refreshModels()
-    } catch (error) {
-      if (generation === catalogGeneration) set({ loading: false })
-      throw error
-    }
+    const task = (async () => {
+      try {
+        const [profiles, apiProviders] = await Promise.all([
+          api.agentProfiles.list(),
+          api.aiProviders.list()
+        ])
+        if (generation !== catalogGeneration) return
+        set({
+          apiProviders,
+          profiles,
+          modelsByAgentId: {},
+          loading: false,
+          loadingModels: false,
+          revision: get().revision + 1
+        })
+        if (catalogRefreshWantsModels) await get().refreshModels()
+      } catch (error) {
+        if (generation === catalogGeneration) set({ loading: false })
+        throw error
+      } finally {
+        if (generation === catalogGeneration) {
+          catalogRefreshTask = null
+          catalogRefreshWantsModels = false
+        }
+      }
+    })()
+    catalogRefreshTask = task
+    return task
   },
 
   refreshModels: async () => {
     const generation = ++modelsGeneration
     const catalogVersion = catalogGeneration
-    const { chatProfiles, apiProviders } = get()
+    const { profiles, apiProviders } = get()
+    const { chatProfiles } = deriveChatCatalog(apiProviders, profiles)
     if (chatProfiles.length === 0) {
       set({ modelsByAgentId: {}, loadingModels: false })
       return
@@ -151,25 +158,18 @@ export const useAgentCatalogStore = create<AgentCatalogState>((set, get) => ({
   removeProvider: (providerId) => {
     const apiProviders = get().apiProviders.filter((provider) => provider.id !== providerId)
     const profiles = get().profiles.filter((profile) => profile.apiProviderId !== providerId)
-    const { chatProfiles, agents } = chatCatalog(apiProviders, profiles)
     set({
       apiProviders,
       profiles,
-      chatProfiles,
-      agents,
       modelsByAgentId: {},
       revision: get().revision + 1
     })
   },
 
   removeProfile: (profileId) => {
-    const apiProviders = get().apiProviders
     const profiles = get().profiles.filter((profile) => profile.id !== profileId)
-    const { chatProfiles, agents } = chatCatalog(apiProviders, profiles)
     set({
       profiles,
-      chatProfiles,
-      agents,
       modelsByAgentId: {},
       revision: get().revision + 1
     })
@@ -178,11 +178,11 @@ export const useAgentCatalogStore = create<AgentCatalogState>((set, get) => ({
   reset: () => {
     catalogGeneration += 1
     modelsGeneration += 1
+    catalogRefreshTask = null
+    catalogRefreshWantsModels = false
     set({
       apiProviders: [],
       profiles: [],
-      chatProfiles: [],
-      agents: [],
       modelsByAgentId: {},
       loading: false,
       loadingModels: false,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -50,6 +49,9 @@ class FakeServices:
                 ),
             ),
             "importAssets": self._workspace("importAssets", {"imported": [], "errors": []}),
+            "importAssetsAsync": self._workspace_async(
+                "importAssets", {"imported": [], "errors": []}
+            ),
             "importWorkspaceFiles": self._workspace(
                 "importWorkspaceFiles",
                 {"documentIds": [], "notes": [], "assets": [], "errors": []},
@@ -93,6 +95,13 @@ class FakeServices:
 
         return invoke
 
+    def _workspace_async(self, name: str, result: Any):
+        async def invoke(*args: Any) -> Any:
+            self.calls.append((name, args))
+            return result
+
+        return invoke
+
     async def _install(self, install_root: str | None) -> None:
         self.calls.append(("install", (install_root,)))
         self.install_started = True
@@ -102,18 +111,6 @@ class FakeServices:
         self.calls.append(("startOcr", (document_id, profile)))
         await asyncio.sleep(0)
         return "job-1"
-
-
-@dataclass
-class FakeDeps:
-    workspaces: dict[str, Any]
-    mineru: dict[str, Any]
-    ocr: dict[str, Any]
-    connector: Any
-
-    async def require_token(self, request: Request) -> None:
-        if request.headers.get("X-Refora-Token") != "token":
-            raise HTTPException(status_code=401, detail="invalid token")
 
 
 @pytest.fixture
@@ -142,9 +139,20 @@ def client(services: FakeServices) -> TestClient:
             }
 
     app = FastAPI()
+
+    async def require_token(request: Request) -> None:
+        if request.headers.get("X-Refora-Token") != "token":
+            raise HTTPException(status_code=401, detail="invalid token")
+
     app.include_router(
         create_workspaces_router(
-            FakeDeps(services.workspaces, services.mineru, services.ocr, Connector())
+            {
+                "workspaces": services.workspaces,
+                "mineru": services.mineru,
+                "ocr": services.ocr,
+                "connector": Connector(),
+                "require_token": require_token,
+            }
         )
     )
     return TestClient(app)
@@ -163,7 +171,6 @@ HEADERS = {"X-Refora-Token": "token"}
         ("post", "/workspaces/workspace-1/open-sandbox", None, "openSandbox"),
         ("get", "/workspaces/workspace-1/items", None, "listItems"),
         ("get", "/workspace-items/item-1", None, "getItem"),
-        ("post", "/workspaces/workspace-1/items", {"kind": "document", "ids": ["doc-1"]}, "addItems"),
         ("post", "/workspaces/workspace-1/items/reorder", {"ids": ["item-1"]}, "reorderItems"),
         ("patch", "/workspaces/workspace-1/items/item-1/size", {"width": 320, "height": 240}, "resizeItem"),
         ("post", "/workspaces/workspace-1/items/move", {"itemId": "item-1", "x": 1, "y": 2, "zIndex": 3}, "moveItem"),
@@ -217,6 +224,31 @@ def test_workspace_and_ocr_endpoint_matrix(
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert services.calls[-1][0] == call
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": 123},
+        {"contentMd": ["invalid"]},
+        {"color": "orange"},
+        {"unknown": "value"},
+    ],
+)
+def test_update_note_rejects_invalid_patch_dto(
+    client: TestClient,
+    services: FakeServices,
+    payload: dict[str, Any],
+) -> None:
+    response = client.patch(
+        "/workspaces/workspace-1/notes/note-1",
+        headers=HEADERS,
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert not any(name == "updateNote" for name, _args in services.calls)
 
 
 def test_routes_require_token(client: TestClient) -> None:
@@ -275,11 +307,11 @@ def test_routes_preserve_scope_placement_and_ocr_identity(
     client: TestClient, services: FakeServices
 ) -> None:
     created = client.post(
-        "/workspaces/workspace-1/items",
+        "/workspaces/workspace-1/items/batch",
         headers=HEADERS,
         json={
             "kind": "document",
-            "docId": "document-1",
+            "ids": ["document-1"],
             "placement": {"x": 12, "y": 34},
         },
     )
@@ -292,7 +324,7 @@ def test_routes_preserve_scope_placement_and_ocr_identity(
         "/ocr/documents/document-1/results/result-1/markdown", headers=HEADERS
     )
 
-    assert created.json() == {"ok": True, "data": {"id": "item-1"}}
+    assert created.json() == {"ok": True, "data": [{"id": "item-1"}]}
     assert moved.status_code == 200
     assert markdown.json() == {"ok": True, "data": {"markdown": "# OCR"}}
     assert (

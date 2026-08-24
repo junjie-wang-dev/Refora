@@ -11,7 +11,7 @@ from refora_server.db.connection import _SqliteAdapter
 from refora_server.db.errors import RepoError
 from refora_server.db.migrations import run_migrations
 from refora_server.repositories import create_repositories
-from refora_server.services.web_fetch import fetchUrl, fetchUrlAsync
+from refora_server.services.web_fetch import fetchUrlAsync
 from refora_server.services.web_search import createWebSearchService
 
 DDG_HTML = """
@@ -38,7 +38,8 @@ def repos():
     return create_repositories(db)
 
 
-def test_search_parses_duckduckgo_html_and_filters_domains(repos) -> None:
+@pytest.mark.asyncio
+async def test_search_parses_duckduckgo_html_and_filters_domains(repos) -> None:
     repos["webSearchConfig"]["update"]({"provider": "ddgs"})
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -47,13 +48,13 @@ def test_search_parses_duckduckgo_html_and_filters_domains(repos) -> None:
         )
         return httpx.Response(200, text=DDG_HTML, request=request)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     service = createWebSearchService(
         repos,
-        {"getConfig": repos["webSearchConfig"]["get"], "httpClient": client},
+        {"getConfig": repos["webSearchConfig"]["get"], "asyncHttpClient": client},
     )
 
-    results = service["search"](
+    results = await service["searchAsync"](
         {"query": "neural retrieval", "allowedDomains": ["example.com"]}
     )
 
@@ -64,16 +65,17 @@ def test_search_parses_duckduckgo_html_and_filters_domains(repos) -> None:
             "snippet": "A concise result summary.",
         }
     ]
-    client.close()
+    await client.aclose()
 
 
-def test_search_uses_tavily_configured_in_repository(repos) -> None:
+@pytest.mark.asyncio
+async def test_search_uses_tavily_configured_in_repository(repos) -> None:
     repos["webSearchConfig"]["update"](
         {"provider": "tavily", "tavilyApiKeyEnc": b"encrypted-tavily"}
     )
     decrypted: list[tuple[bytes, str]] = []
 
-    def decrypt_key(value: bytes, provider: str) -> str:
+    async def decrypt_key(value: bytes, provider: str) -> str:
         decrypted.append((value, provider))
         return "tavily-secret"
 
@@ -104,17 +106,17 @@ def test_search_uses_tavily_configured_in_repository(repos) -> None:
             request=request,
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     service = createWebSearchService(
         repos,
         {
             "getConfig": repos["webSearchConfig"]["get"],
-            "httpClient": client,
-            "decryptKey": decrypt_key,
+            "asyncHttpClient": client,
+            "decryptKeyAsync": decrypt_key,
         },
     )
 
-    assert service["search"]({"query": "literature", "maxResults": 3}) == [
+    assert await service["searchAsync"]({"query": "literature", "maxResults": 3}) == [
         {
             "title": "Tavily result",
             "url": "https://example.com/tavily",
@@ -123,10 +125,11 @@ def test_search_uses_tavily_configured_in_repository(repos) -> None:
         }
     ]
     assert decrypted == [(b"encrypted-tavily", "tavily")]
-    client.close()
+    await client.aclose()
 
 
-def test_search_does_not_treat_ciphertext_as_a_plaintext_api_key(repos) -> None:
+@pytest.mark.asyncio
+async def test_search_does_not_treat_ciphertext_as_a_plaintext_api_key(repos) -> None:
     repos["webSearchConfig"]["update"](
         {"provider": "tavily", "tavilyApiKeyEnc": b"ciphertext"}
     )
@@ -135,7 +138,7 @@ def test_search_does_not_treat_ciphertext_as_a_plaintext_api_key(repos) -> None:
     )
 
     with pytest.raises(RepoError) as error:
-        service["search"]("literature")
+        await service["searchAsync"]("literature")
 
     assert error.value.code == "key_decryption_unavailable"
 
@@ -189,27 +192,28 @@ async def test_async_search_decrypts_on_the_server_loop_and_cancels_http(
     await client.aclose()
 
 
-def test_test_returns_a_single_probe_result(repos) -> None:
+@pytest.mark.asyncio
+async def test_test_returns_a_single_probe_result(repos) -> None:
     repos["webSearchConfig"]["update"]({"provider": "ddgs"})
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["q"] == "configured probe"
         return httpx.Response(200, text=DDG_HTML, request=request)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     service = createWebSearchService(
         repos,
-        {"getConfig": repos["webSearchConfig"]["get"], "httpClient": client},
+        {"getConfig": repos["webSearchConfig"]["get"], "asyncHttpClient": client},
     )
 
-    result = service["test"]("configured probe")
+    result = await service["test"]("configured probe")
 
     assert result == {
         "ok": True,
         "provider": "ddgs",
         "resultCount": 1,
     }
-    client.close()
+    await client.aclose()
 
 
 def test_get_config_reads_the_web_search_config_repository(repos) -> None:
@@ -227,16 +231,18 @@ def test_get_config_reads_the_web_search_config_repository(repos) -> None:
     }
 
 
-def test_search_rejects_disabled_provider(repos) -> None:
+@pytest.mark.asyncio
+async def test_search_rejects_disabled_provider(repos) -> None:
     repos["webSearchConfig"]["update"]({"provider": "disabled"})
     service = createWebSearchService(repos, {"getConfig": repos["webSearchConfig"]["get"]})
 
     with pytest.raises(RepoError, match="disabled") as error:
-        service["search"]("literature")
+        await service["searchAsync"]("literature")
     assert error.value.code == "web_search_disabled"
 
 
-def test_fetch_url_converts_local_html_fixture_to_markdown() -> None:
+@pytest.mark.asyncio
+async def test_fetch_url_converts_local_html_fixture_to_markdown() -> None:
     fixture = Path(__file__).parent / "fixtures" / "web_page.html"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -247,8 +253,8 @@ def test_fetch_url_converts_local_html_fixture_to_markdown() -> None:
             request=request,
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    result = fetchUrl(
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    result = await fetchUrlAsync(
         "https://example.test/read#section",
         httpClient=client,
         resolver=lambda _hostname, _port: ["93.184.216.34"],
@@ -264,7 +270,7 @@ def test_fetch_url_converts_local_html_fixture_to_markdown() -> None:
     assert "Navigation" not in result["text"]
     assert "shouldNotAppear" not in result["text"]
     assert result["truncated"] is False
-    client.close()
+    await client.aclose()
 
 
 @pytest.mark.parametrize(
@@ -278,16 +284,18 @@ def test_fetch_url_converts_local_html_fixture_to_markdown() -> None:
         "https://example.com:8443/",
     ],
 )
-def test_fetch_url_rejects_local_and_nonstandard_destinations(url: str) -> None:
+@pytest.mark.asyncio
+async def test_fetch_url_rejects_local_and_nonstandard_destinations(url: str) -> None:
     with pytest.raises(RepoError) as error:
-        fetchUrl(url, resolver=lambda _hostname, _port: ["93.184.216.34"])
+        await fetchUrlAsync(url, resolver=lambda _hostname, _port: ["93.184.216.34"])
 
     assert error.value.code == "unsafe_url"
 
 
-def test_fetch_url_rejects_hostnames_resolving_to_private_addresses() -> None:
+@pytest.mark.asyncio
+async def test_fetch_url_rejects_hostnames_resolving_to_private_addresses() -> None:
     with pytest.raises(RepoError) as error:
-        fetchUrl(
+        await fetchUrlAsync(
             "https://public-looking.example/",
             resolver=lambda _hostname, _port: ["10.0.0.8"],
         )
@@ -295,7 +303,8 @@ def test_fetch_url_rejects_hostnames_resolving_to_private_addresses() -> None:
     assert error.value.code == "unsafe_url"
 
 
-def test_fetch_url_validates_each_redirect_destination() -> None:
+@pytest.mark.asyncio
+async def test_fetch_url_validates_each_redirect_destination() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -306,9 +315,9 @@ def test_fetch_url_validates_each_redirect_destination() -> None:
             request=request,
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(RepoError) as error:
-        fetchUrl(
+        await fetchUrlAsync(
             "https://example.test/start",
             httpClient=client,
             resolver=lambda _hostname, _port: ["93.184.216.34"],
@@ -316,7 +325,7 @@ def test_fetch_url_validates_each_redirect_destination() -> None:
 
     assert error.value.code == "unsafe_url"
     assert calls == ["https://example.test/start"]
-    client.close()
+    await client.aclose()
 
 
 class _FakeNetworkStream:
@@ -327,17 +336,6 @@ class _FakeNetworkStream:
         if key == "server_addr":
             return self._server_addr
         return None
-
-
-class _PeerInjectingTransport(httpx.BaseTransport):
-    def __init__(self, handler, server_addr: tuple[str, int]) -> None:
-        self._handler = handler
-        self._server_addr = server_addr
-
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        response = self._handler(request)
-        response.extensions["network_stream"] = _FakeNetworkStream(self._server_addr)
-        return response
 
 
 class _AsyncPeerInjectingTransport(httpx.AsyncBaseTransport):
@@ -351,8 +349,9 @@ class _AsyncPeerInjectingTransport(httpx.AsyncBaseTransport):
         return response
 
 
-def test_fetch_url_rejects_rebound_connection_to_private_peer() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+@pytest.mark.asyncio
+async def test_fetch_url_rejects_rebound_connection_to_private_peer() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             headers={"content-type": "text/plain"},
@@ -360,21 +359,22 @@ def test_fetch_url_rejects_rebound_connection_to_private_peer() -> None:
             request=request,
         )
 
-    client = httpx.Client(
-        transport=_PeerInjectingTransport(handler, ("127.0.0.1", 80))
+    client = httpx.AsyncClient(
+        transport=_AsyncPeerInjectingTransport(handler, ("127.0.0.1", 80))
     )
     with pytest.raises(RepoError) as error:
-        fetchUrl(
+        await fetchUrlAsync(
             "https://public-looking.example/",
             httpClient=client,
             resolver=lambda _hostname, _port: ["93.184.216.34"],
         )
 
     assert error.value.code == "unsafe_url"
-    client.close()
+    await client.aclose()
 
 
-def test_fetch_url_rejects_rebound_redirect_from_private_peer() -> None:
+@pytest.mark.asyncio
+async def test_fetch_url_rejects_rebound_redirect_from_private_peer() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -389,9 +389,9 @@ def test_fetch_url_rejects_rebound_redirect_from_private_peer() -> None:
         )
         return response
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(RepoError) as error:
-        fetchUrl(
+        await fetchUrlAsync(
             "https://public-looking.example/",
             httpClient=client,
             resolver=lambda _hostname, _port: ["93.184.216.34"],
@@ -399,7 +399,7 @@ def test_fetch_url_rejects_rebound_redirect_from_private_peer() -> None:
 
     assert error.value.code == "unsafe_url"
     assert calls == ["https://public-looking.example/"]
-    client.close()
+    await client.aclose()
 
 
 @pytest.mark.asyncio

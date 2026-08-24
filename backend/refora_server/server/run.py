@@ -5,6 +5,8 @@ import os
 import socket
 import sqlite3
 import sys
+import tempfile
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -13,6 +15,82 @@ from refora_server.db.connection import close_database, open_database
 
 from .app import create_app, generate_token
 from .lifespan import create_lifespan
+
+
+def _database_has_user_content(path: str) -> bool:
+    ignored_tables = {
+        "legacy_author_repair_pending",
+        "legacy_chat_terminal_cleanup",
+        "legacy_document_id_repair_candidates",
+        "legacy_path_repair_candidates",
+        "sync_state",
+        "web_search_config",
+    }
+    try:
+        uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as database:
+            tables = database.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            for row in tables:
+                name = row[0]
+                if (
+                    not isinstance(name, str)
+                    or name in ignored_tables
+                    or name.startswith("docs_fts")
+                ):
+                    continue
+                quoted_name = name.replace('"', '""')
+                if name == "settings":
+                    found = database.execute(
+                        f'SELECT 1 FROM "{quoted_name}" '
+                        "WHERE key <> 'libraryFolderPath' LIMIT 1"
+                    ).fetchone()
+                else:
+                    found = database.execute(
+                        f'SELECT 1 FROM "{quoted_name}" LIMIT 1'
+                    ).fetchone()
+                if found is not None:
+                    return True
+        return False
+    except (OSError, sqlite3.Error):
+        return True
+
+
+def _migrate_legacy_database(source_path: str, destination_path: str) -> None:
+    destination_exists = os.path.isfile(destination_path)
+    if destination_exists and (
+        _database_has_user_content(destination_path)
+        or not _database_has_user_content(source_path)
+    ):
+        return
+    destination_directory = os.path.dirname(destination_path)
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(destination_path)}.",
+        suffix=".migration",
+        dir=destination_directory,
+    )
+    os.close(fd)
+    try:
+        source_uri = f"{Path(source_path).resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True) as source:
+            with sqlite3.connect(temporary_path) as destination:
+                source.backup(destination)
+                check = destination.execute("PRAGMA quick_check").fetchone()
+                if check is None or check[0] != "ok":
+                    raise sqlite3.DatabaseError("legacy database backup failed integrity check")
+        os.chmod(temporary_path, 0o600)
+        if os.path.isfile(destination_path) and _database_has_user_content(
+            destination_path
+        ):
+            return
+        os.replace(temporary_path, destination_path)
+    finally:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
 
 
 def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
@@ -36,7 +114,9 @@ def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
     resolved = os.path.realpath(os.path.abspath(value))
     if not os.path.isdir(resolved):
         return db_path, ""
-    return os.path.join(resolved, os.path.basename(db_path)), resolved
+    destination_path = os.path.join(resolved, os.path.basename(db_path))
+    _migrate_legacy_database(db_path, destination_path)
+    return destination_path, resolved
 
 
 def _bind_socket(host: str, port: int) -> socket.socket:
@@ -49,6 +129,28 @@ def _bind_socket(host: str, port: int) -> socket.socket:
     except Exception:
         sock.close()
         raise
+
+
+def _parent_process_alive(parent_pid: int) -> bool:
+    try:
+        os.kill(parent_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _watch_parent_process(
+    parent_pid: int,
+    request_shutdown,
+    stop_event: threading.Event,
+    interval_seconds: float = 1.0,
+) -> None:
+    while not stop_event.wait(interval_seconds):
+        if not _parent_process_alive(parent_pid):
+            request_shutdown()
+            return
 
 
 def _write_state_file(state_dir: Path, port: int, token: str) -> Path:
@@ -74,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     db_path: str | None = None
     library_folder = ""
     language = "en"
+    parent_pid: int | None = None
     i = 0
     while i < len(args):
         arg = args[i]
@@ -91,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
             library_folder = args[i + 1]; i += 2
         elif arg == "--language":
             language = args[i + 1]; i += 2
+        elif arg == "--parent-pid":
+            parent_pid = int(args[i + 1]); i += 2
         else:
             i += 1
 
@@ -106,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if user_data_dir is None:
         print("ERROR --user-data-dir is required", file=sys.stderr)
+        return 2
+    if parent_pid is not None and (parent_pid <= 0 or parent_pid == os.getpid()):
+        print("ERROR --parent-pid must identify another running process", file=sys.stderr)
         return 2
 
     db_path, library_folder = resolve_startup_paths(db_path, library_folder)
@@ -140,9 +248,22 @@ def main(argv: list[str] | None = None) -> int:
     config = uvicorn.Config(app, host=host, port=chosen_port, log_config=None)
     server = uvicorn.Server(config)
     app.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    parent_watchdog_stop = threading.Event()
+    parent_watchdog = None
+    if parent_pid is not None:
+        parent_watchdog = threading.Thread(
+            target=_watch_parent_process,
+            args=(parent_pid, app.state.request_shutdown, parent_watchdog_stop),
+            name="refora-parent-watchdog",
+            daemon=True,
+        )
+        parent_watchdog.start()
     try:
         server.run(sockets=[listener])
     finally:
+        parent_watchdog_stop.set()
+        if parent_watchdog is not None:
+            parent_watchdog.join(timeout=2)
         listener.close()
     return 0
 

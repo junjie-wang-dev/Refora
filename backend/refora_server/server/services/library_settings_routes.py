@@ -247,8 +247,7 @@ def register_library_settings_routes(
             query = parsed.get("query", "")
             if not isinstance(query, str):
                 raise ValueError("query must be a string")
-            test_search = method(web_search, "test")
-            return await asyncio.to_thread(test_search, query)
+            return await call(web_search, "test", query)
         return await run(action)
 
     @router.get("/ai/providers")

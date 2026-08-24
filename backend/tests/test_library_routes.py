@@ -78,7 +78,6 @@ class Fakes:
             "remove": lambda _id: None,
             "toggle": lambda watch_id, enabled: {"id": watch_id, "enabled": enabled},
         }
-        self.library = {"switchLibrary": lambda _path: {"ack": True}}
         settings_values = {
             "language": "en",
             "sidebarCollapsed": "0",
@@ -160,10 +159,6 @@ class Fakes:
             "showInFolder": lambda _path: None,
             "clipboardWrite": lambda _text: None,
             "clipboardWriteFile": self.copy_file_to_clipboard,
-            "dialogOpenDirectory": lambda _title: {
-                "ok": True,
-                "data": {"canceled": True, "path": None},
-            },
             "dialogOpenFile": lambda _title, _extensions, _multiple=False: {
                 "ok": True,
                 "data": {"canceled": True, "path": None, "paths": []},
@@ -346,7 +341,7 @@ def test_registers_every_library_domain_protocol_route():
         ("DELETE", "/categories/{category_id}"), ("POST", "/categories/{category_id}/assign"),
         ("POST", "/categories/{category_id}/unassign"), ("GET", "/watch"), ("POST", "/watch"),
         ("DELETE", "/watch/{watch_id}"), ("POST", "/watch/{watch_id}/toggle"),
-        ("POST", "/library/switch"), ("GET", "/settings"), ("PATCH", "/settings"),
+        ("GET", "/settings"), ("PATCH", "/settings"),
         ("GET", "/settings/web-search"), ("PATCH", "/settings/web-search"),
         ("POST", "/settings/web-search/test"), ("GET", "/ai/providers"), ("POST", "/ai/providers"),
         ("PATCH", "/ai/providers/{provider_id}"), ("DELETE", "/ai/providers/{provider_id}"),
@@ -356,7 +351,6 @@ def test_registers_every_library_domain_protocol_route():
         ("POST", "/clipboard/write-text"), ("POST", "/clipboard/copy-markdown"),
         ("POST", "/clipboard/copy-workspace-asset"),
         ("GET", "/app/bootstrap"), ("GET", "/search/global"),
-        ("POST", "/dialog/open-directory"),
     }
     assert expected <= routes
 
@@ -787,13 +781,12 @@ def test_document_list_preserves_mode_category_and_sort():
     }
 
 
-def test_bootstrap_global_search_and_directory_dialog_are_enveloped():
+def test_bootstrap_and_global_search_are_enveloped():
     client, _ = make_client()
     headers = {"X-Refora-Token": "test-token"}
 
     bootstrap = client.get("/app/bootstrap", headers=headers)
     search = client.get("/search/global?q=paper", headers=headers)
-    dialog = client.post("/dialog/open-directory", headers=headers, json={})
 
     assert bootstrap.json() == {
         "ok": True,
@@ -816,12 +809,6 @@ def test_bootstrap_global_search_and_directory_dialog_are_enveloped():
             "chats": [],
         },
     }
-    assert dialog.json() == {
-        "ok": True,
-        "data": {"canceled": True, "path": None},
-    }
-
-
 def test_bootstrap_rejects_malformed_window_and_column_settings():
     client, fakes = make_client()
     headers = {"X-Refora-Token": "test-token"}

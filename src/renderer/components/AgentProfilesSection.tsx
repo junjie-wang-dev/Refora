@@ -22,6 +22,7 @@ import { api } from '../ipc'
 import { Badge, Button, Input } from './ui'
 import { useModalDialog } from '../hooks/useModalDialog'
 import { useAgentCatalogStore } from '../store/agentCatalogStore'
+import { cleanupDeletedAgentSelections } from '../utils/agentCatalogSettings'
 
 interface AgentProfilesSectionProps {
   mode?: 'cli' | 'api'
@@ -139,7 +140,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
 
   const load = useCallback(async (surfaceError = true): Promise<unknown | null> => {
     try {
-      await refreshAgentCatalog()
+      await refreshAgentCatalog({ loadModels: false })
       return null
     } catch (cause) {
       if (surfaceError) {
@@ -240,15 +241,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
     removeCatalogProfile(profile.id)
     setForm((current) => current?.id === profile.id ? null : current)
     try {
-      const [active, selected] = await Promise.all([
-        api.settings.get<string>('activeAgentProfileId', ''),
-        api.settings.get<string>('chatSelectedAgentProfileId', '')
-      ])
-      if (active === profile.id) await api.settings.set('activeAgentProfileId', '')
-      if (selected === profile.id) {
-        await api.settings.set('chatSelectedAgentProfileId', '')
-        await api.settings.set('chatSelectedModel', '')
-      }
+      await cleanupDeletedAgentSelections({ profileId: profile.id })
       const loadFailure = await load(false)
       if (loadFailure) throw loadFailure
     } catch (cause) {

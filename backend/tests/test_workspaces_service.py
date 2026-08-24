@@ -1014,6 +1014,22 @@ class TestNotes:
         assert updated["title"] == "New"
         assert updated["contentMd"] == "x"
 
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            {"title": 123},
+            {"contentMd": ["invalid"]},
+            {"color": "orange"},
+            {"unknown": "value"},
+        ],
+    )
+    def test_update_note_rejects_invalid_patch(self, service, patch):
+        workspace = _make_workspace(service)
+        note = service["createNote"](workspace["id"], "Title", "body", "markdown")
+
+        with pytest.raises(RepoError):
+            service["updateNote"](workspace["id"], note["id"], patch)
+
     def test_delete_note_removes_item(self, service):
         w = _make_workspace(service)
         note = service["createNote"](w["id"], "Title", "body", "markdown")

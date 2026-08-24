@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import socket
 import sqlite3
+import threading
 
 import pytest
 
+from refora_server.server import run as server_run
 from refora_server.server.run import _bind_socket, resolve_startup_paths
 
 
@@ -19,6 +21,8 @@ def test_resolve_startup_paths_migrates_legacy_library_setting(tmp_path) -> None
         "INSERT INTO settings(key, value) VALUES (?, ?)",
         ("libraryFolderPath", json.dumps(str(library))),
     )
+    database.execute("CREATE TABLE sentinel(value TEXT NOT NULL)")
+    database.execute("INSERT INTO sentinel(value) VALUES ('preserved')")
     database.commit()
     database.close()
 
@@ -26,6 +30,86 @@ def test_resolve_startup_paths_migrates_legacy_library_setting(tmp_path) -> None
 
     assert db_path == str(library / "refora.db")
     assert library_folder == str(library)
+    assert bootstrap.is_file()
+    migrated = sqlite3.connect(db_path)
+    try:
+        assert migrated.execute("SELECT value FROM sentinel").fetchone() == ("preserved",)
+    finally:
+        migrated.close()
+
+
+def test_resolve_startup_paths_keeps_existing_library_database(tmp_path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    bootstrap = tmp_path / "refora.db"
+    database = sqlite3.connect(bootstrap)
+    database.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    database.execute(
+        "INSERT INTO settings(key, value) VALUES (?, ?)",
+        ("libraryFolderPath", json.dumps(str(library))),
+    )
+    database.commit()
+    database.close()
+    destination = library / "refora.db"
+    existing = sqlite3.connect(destination)
+    existing.execute("CREATE TABLE sentinel(value TEXT NOT NULL)")
+    existing.execute("INSERT INTO sentinel(value) VALUES ('existing')")
+    existing.commit()
+    existing.close()
+
+    assert resolve_startup_paths(str(bootstrap), "") == (
+        str(destination),
+        str(library),
+    )
+    preserved = sqlite3.connect(destination)
+    try:
+        assert preserved.execute("SELECT value FROM sentinel").fetchone() == ("existing",)
+    finally:
+        preserved.close()
+
+
+def test_resolve_startup_paths_replaces_empty_initialized_library_database(
+    tmp_path,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    bootstrap = tmp_path / "refora.db"
+    source = sqlite3.connect(bootstrap)
+    source.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    source.execute(
+        "INSERT INTO settings(key, value) VALUES (?, ?)",
+        ("libraryFolderPath", json.dumps(str(library))),
+    )
+    source.execute("CREATE TABLE documents(id TEXT PRIMARY KEY, title TEXT NOT NULL)")
+    source.execute("INSERT INTO documents(id, title) VALUES ('doc-1', 'Preserved')")
+    source.commit()
+    source.close()
+    destination = library / "refora.db"
+    empty = sqlite3.connect(destination)
+    empty.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    empty.execute(
+        "INSERT INTO settings(key, value) VALUES (?, ?)",
+        ("libraryFolderPath", json.dumps(str(library))),
+    )
+    empty.execute(
+        "CREATE TABLE web_search_config(id INTEGER PRIMARY KEY, provider TEXT NOT NULL)"
+    )
+    empty.execute("INSERT INTO web_search_config VALUES (1, 'disabled')")
+    empty.commit()
+    empty.close()
+
+    assert resolve_startup_paths(str(bootstrap), "") == (
+        str(destination),
+        str(library),
+    )
+
+    migrated = sqlite3.connect(destination)
+    try:
+        assert migrated.execute("SELECT title FROM documents").fetchone() == (
+            "Preserved",
+        )
+    finally:
+        migrated.close()
 
 
 def test_resolve_startup_paths_keeps_explicit_library(tmp_path) -> None:
@@ -81,3 +165,18 @@ def test_resolve_startup_paths_ignores_missing_legacy_library(tmp_path) -> None:
     database.close()
 
     assert resolve_startup_paths(str(bootstrap), "") == (str(bootstrap), "")
+
+
+def test_parent_watchdog_requests_shutdown_when_parent_exits(monkeypatch) -> None:
+    checks = iter([True, False])
+    requested = threading.Event()
+    stopped = threading.Event()
+    monkeypatch.setattr(
+        server_run,
+        "_parent_process_alive",
+        lambda _pid: next(checks),
+    )
+
+    server_run._watch_parent_process(123, requested.set, stopped, 0.001)
+
+    assert requested.is_set()

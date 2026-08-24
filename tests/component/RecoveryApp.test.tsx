@@ -20,16 +20,13 @@ describe('RecoveryApp', () => {
     confirmationCallback = null
     api.sync.status = vi.fn().mockResolvedValue({
       configured: true,
-      syncAvailable: false,
       signedIn: false,
-      enabled: false,
-      state: 'signedOut',
       account: null
     })
     api.events.onSyncAuthConfirmation = vi.fn((callback) => {
       confirmationCallback = callback
+      return vi.fn()
     })
-    api.events.off = vi.fn()
     useSyncAccountStore.setState({
       status: null,
       loading: false,

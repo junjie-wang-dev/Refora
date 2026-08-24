@@ -14,7 +14,6 @@ export default tseslint.config(
       'playwright-report/**',
       'test-results/**',
       '.kilo/**',
-      'ui-mocks/**',
       '*.tsbuildinfo'
     ]
   },

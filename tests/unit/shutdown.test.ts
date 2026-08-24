@@ -25,16 +25,16 @@ describe('shutdown handler', () => {
     })
 
     handler({ preventDefault: vi.fn() })
-    await vi.waitFor(() => expect(order).toEqual(['begin', 'flush', 'renderer', 'wait']))
+    await vi.waitFor(() => expect(order).toEqual(['begin', 'wait']))
     expect(quit).not.toHaveBeenCalled()
 
     releaseTransition()
     await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
     expect(order).toEqual([
       'begin',
+      'wait',
       'flush',
       'renderer',
-      'wait',
       'unregister',
       'stop',
       'destroy'

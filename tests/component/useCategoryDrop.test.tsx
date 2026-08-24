@@ -138,6 +138,60 @@ describe('useCategoryDrop', () => {
     expect(fetchDocuments).toHaveBeenCalled()
   })
 
+  it('keeps a category pending until every concurrent import finishes', async () => {
+    api.getPathForFile.mockResolvedValue('/path/paper.pdf')
+    let resolveFirst: ((value: { added: string[]; skipped: string[]; errors: string[] }) => void) | undefined
+    let resolveSecond: ((value: { added: string[]; skipped: string[]; errors: string[] }) => void) | undefined
+    api.import.addFiles
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+    api.categories.assign.mockResolvedValue(undefined)
+    const { result } = renderHook(() => useCategoryDrop(fetchDocuments))
+    let first: Promise<void>
+    let second: Promise<void>
+
+    await act(async () => {
+      first = result.current.handleDrop(
+        'cat1',
+        makeDataTransfer({}, [{ name: 'first.pdf' } as File])
+      )
+      second = result.current.handleDrop(
+        'cat1',
+        makeDataTransfer({}, [{ name: 'second.pdf' } as File])
+      )
+      await Promise.resolve()
+    })
+    expect(result.current.pendingCatImports.has('cat1')).toBe(true)
+
+    await act(async () => {
+      resolveFirst?.({ added: ['first'], skipped: [], errors: [] })
+      await first!
+    })
+    expect(result.current.pendingCatImports.has('cat1')).toBe(true)
+
+    await act(async () => {
+      resolveSecond?.({ added: ['second'], skipped: [], errors: [] })
+      await second!
+    })
+    expect(result.current.pendingCatImports.has('cat1')).toBe(false)
+  })
+
+  it('settles an import when the document refresh rejects', async () => {
+    api.getPathForFile.mockResolvedValue('/path/paper.pdf')
+    api.import.addFiles.mockResolvedValue({ added: [], skipped: [], errors: [] })
+    const rejectedRefresh = vi.fn().mockRejectedValue(new Error('refresh failed'))
+    const { result } = renderHook(() => useCategoryDrop(rejectedRefresh))
+
+    await act(async () => {
+      await expect(result.current.handleDrop(
+        'cat1',
+        makeDataTransfer({}, [{ name: 'paper.pdf' } as File])
+      )).resolves.toBeUndefined()
+    })
+
+    expect(result.current.pendingCatImports.has('cat1')).toBe(false)
+  })
+
   it('submits every imported document in one category assignment request', async () => {
     api.getPathForFile.mockResolvedValue('/path/paper.pdf')
     api.import.addFiles.mockResolvedValue({

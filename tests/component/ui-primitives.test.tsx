@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, cleanup, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, afterEach } from 'vitest'
+import { render, cleanup, screen } from '@testing-library/react'
 import { Toast } from '../../src/renderer/components/ui/Toast'
 import { Badge } from '../../src/renderer/components/ui/Badge'
-import { Card, cardClassName } from '../../src/renderer/components/ui/Card'
+import { cardClassName } from '../../src/renderer/components/ui/Card'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 
 afterEach(() => {
@@ -60,43 +60,7 @@ describe('Badge', () => {
   })
 })
 
-describe('Card', () => {
-  it('renders children and applies default variant class', () => {
-    render(<Card>content</Card>)
-    const el = screen.getByText('content')
-    expect(el.className).toContain('border')
-    expect(el.className).toContain('shadow-sm')
-  })
-
-  it('applies elevated variant with shadow-md', () => {
-    render(<Card variant="elevated">c</Card>)
-    expect(screen.getByText('c').className).toContain('shadow-md')
-  })
-
-  it('applies outlined variant without shadow', () => {
-    render(<Card variant="outlined">c</Card>)
-    const el = screen.getByText('c')
-    expect(el.className).not.toContain('shadow-sm')
-    expect(el.className).not.toContain('shadow-md')
-  })
-
-  it('adds hover class when hoverable', () => {
-    render(<Card hoverable>c</Card>)
-    expect(screen.getByText('c').className).toContain('hover:border-accent')
-  })
-
-  it('merges custom className', () => {
-    render(<Card className="custom">c</Card>)
-    expect(screen.getByText('c').className).toContain('custom')
-  })
-
-  it('forwards onClick', () => {
-    const onClick = vi.fn()
-    render(<Card onClick={onClick}>c</Card>)
-    fireEvent.click(screen.getByText('c'))
-    expect(onClick).toHaveBeenCalledTimes(1)
-  })
-
+describe('cardClassName', () => {
   it('cardClassName helper joins classes and filters falsy', () => {
     expect(cardClassName('elevated', true, 'extra')).toContain('shadow-md')
     expect(cardClassName('default', false)).not.toContain('hover:border-accent')

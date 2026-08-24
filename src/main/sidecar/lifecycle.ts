@@ -30,6 +30,7 @@ export interface ServerLifecycleDeps {
   dbPath: string
   libraryFolder: string
   language?: 'zh' | 'en'
+  parentPid?: number
   environment?: NodeJS.ProcessEnv
   maxRestarts?: number
   startupTimeoutMs?: number
@@ -40,6 +41,7 @@ export interface ServerLifecycleDeps {
   readFile?: (path: string) => Promise<string>
   fetchHealth?: (url: string, timeoutMs: number) => Promise<boolean>
   signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => boolean
+  onChildSpawned?: (pid: number) => void
 }
 
 export interface ServerLifecycle {
@@ -97,6 +99,10 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
   const healthIntervalMs = deps.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS
   const healthTimeoutMs = deps.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
   const restartStabilityMs = deps.restartStabilityMs ?? DEFAULT_RESTART_STABILITY_MS
+  const parentPid = deps.parentPid ?? process.pid
+  if (!Number.isInteger(parentPid) || parentPid <= 0) {
+    throw new Error('Server parent PID must be a positive integer')
+  }
   const spawnChild = deps.spawnChild ?? spawn
   const readFile = deps.readFile ?? defaultReadFile
   const fetchHealth = deps.fetchHealth ?? defaultFetchHealth
@@ -181,7 +187,9 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       '--library-folder',
       deps.libraryFolder,
       '--language',
-      deps.language ?? 'en'
+      deps.language ?? 'en',
+      '--parent-pid',
+      String(parentPid)
     ]
     const spawned = spawnChild(command, args, {
       cwd: deps.stateDir,
@@ -189,6 +197,15 @@ export function createServerLifecycle(deps: ServerLifecycleDeps): ServerLifecycl
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: useProcessGroup
     })
+    if (typeof spawned.pid === 'number' && spawned.pid > 0) {
+      try {
+        deps.onChildSpawned?.(spawned.pid)
+      } catch (error) {
+        logger.warn(
+          `serverLifecycle:record-child-pid failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    }
 
     let resolved = false
     const portPromise = new Promise<number>((resolve, reject) => {

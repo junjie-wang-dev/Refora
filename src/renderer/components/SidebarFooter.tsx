@@ -47,13 +47,9 @@ export default function SidebarFooter({ onOpenAccount, onOpenSettings }: Sidebar
     ? t('sidebar.account.loading')
     : loadFailed
       ? t('sidebar.account.unavailable')
-      : status?.signedIn && !status.syncAvailable
-        ? t('sidebar.account.syncUnavailable')
-        : status?.enabled
-          ? t('sidebar.account.syncOn')
-          : status?.signedIn
-            ? t('sidebar.account.syncOff')
-            : t('sidebar.account.signedOut')
+      : status?.signedIn
+        ? t('sidebar.account.signedIn')
+        : t('sidebar.account.signedOut')
 
   useEffect(() => {
     void loadAccount()
@@ -72,7 +68,7 @@ export default function SidebarFooter({ onOpenAccount, onOpenSettings }: Sidebar
             {initial ?? <User className="h-4 w-4" />}
             {status?.signedIn && (
               <span
-                className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-panel ${status.enabled ? 'bg-success' : 'bg-muted'}`}
+                className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-panel bg-success"
                 aria-hidden="true"
               />
             )}

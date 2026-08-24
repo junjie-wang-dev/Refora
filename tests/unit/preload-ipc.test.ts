@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel } from '../../src/shared/ipc-channels'
-import type { EventChannel, ReforaApi } from '../../src/shared/ipc-types'
+import type { ReforaApi } from '../../src/shared/ipc-types'
 
 const bridgeState = vi.hoisted(() => ({ api: undefined as unknown }))
 const electronMocks = vi.hoisted(() => ({
@@ -86,8 +86,6 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.DocumentsRestoreFile, args: ['doc-1'], invoke: (value) => value.documents.restoreFile('doc-1') },
       { channel: IpcChannel.GlobalSearch, args: ['query'], invoke: (value) => value.search.global('query') },
       { channel: IpcChannel.ImportAddFiles, args: [['/tmp/paper.pdf']], invoke: (value) => value.import.addFiles(['/tmp/paper.pdf']) },
-      { channel: IpcChannel.ImportAddFolder, args: ['/tmp'], invoke: (value) => value.import.addFolder('/tmp') },
-      { channel: IpcChannel.ImportFromJson, args: ['/tmp/export.json'], invoke: (value) => value.import.fromJson('/tmp/export.json') },
       { channel: IpcChannel.ImportFromZotero, args: [], invoke: (value) => value.import.fromZotero() },
       { channel: IpcChannel.ImportFromMendeley, args: [], invoke: (value) => value.import.fromMendeley() },
       { channel: IpcChannel.ImportFromIdentifier, args: ['10.1/test'], invoke: (value) => value.import.fromIdentifier('10.1/test') },
@@ -108,14 +106,12 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.SyncSignUp, args: [{ email: 'user@example.com', password: 'secret' }], invoke: (value) => value.sync.signUp({ email: 'user@example.com', password: 'secret' }) },
       { channel: IpcChannel.SyncResendConfirmation, args: [{ email: 'user@example.com' }], invoke: (value) => value.sync.resendConfirmation({ email: 'user@example.com' }) },
       { channel: IpcChannel.SyncSignOut, args: [], invoke: (value) => value.sync.signOut() },
-      { channel: IpcChannel.SyncSetEnabled, args: [true], invoke: (value) => value.sync.setEnabled(true) },
       { channel: IpcChannel.AppearanceSetThemeSource, args: ['dark'], invoke: (value) => value.appearance.setThemeSource('dark') },
       { channel: IpcChannel.WebSearchConfigGet, args: [], invoke: (value) => value.webSearch.getConfig() },
       { channel: IpcChannel.WebSearchConfigUpdate, args: [{ provider: 'ddgs' }], invoke: (value) => value.webSearch.updateConfig({ provider: 'ddgs' }) },
       { channel: IpcChannel.WebSearchTest, args: [], invoke: (value) => value.webSearch.test() },
       { channel: IpcChannel.DialogOpenDirectory, args: [], invoke: (value) => value.dialog.openDirectory() },
       { channel: IpcChannel.LibrarySwitch, args: ['/library'], invoke: (value) => value.library.switch('/library') },
-      { channel: IpcChannel.ExportToJson, args: [], invoke: (value) => value.export.toJson() },
       { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], invoke: (value) => value.export.toBibtex(['doc-1']) },
       { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], invoke: (value) => value.export.toBibtexString(['doc-1']) },
       { channel: IpcChannel.ClipboardWriteText, args: ['Sticky text'], invoke: (value) => value.clipboard.writeText('Sticky text') },
@@ -230,7 +226,7 @@ describe('preload IPC bridge', () => {
   })
 
   it('subscribes every event method and forwards only the payload', () => {
-    const eventCases: Array<[EventChannel, (cb: () => void) => void]> = [
+    const eventCases: Array<[string, (cb: () => void) => () => void]> = [
       [IpcChannel.EventDocumentUpdated, (cb) => api.events.onDocumentUpdated(cb)],
       [IpcChannel.EventWindowFocusChanged, (cb) => api.events.onWindowFocusChanged(cb)],
       [IpcChannel.EventImportProgress, (cb) => api.events.onImportProgress(cb)],
@@ -239,7 +235,6 @@ describe('preload IPC bridge', () => {
       [IpcChannel.EventMenuImportZotero, (cb) => api.events.onMenuImportZotero(cb)],
       [IpcChannel.EventMenuImportMendeley, (cb) => api.events.onMenuImportMendeley(cb)],
       [IpcChannel.EventMenuImportIdentifier, (cb) => api.events.onMenuImportIdentifier(cb)],
-      [IpcChannel.EventLibraryScanning, (cb) => api.events.onLibraryScanning(cb)],
       [IpcChannel.EventLibrarySwitched, (cb) => api.events.onLibrarySwitched(cb)],
       [IpcChannel.EventAiSummaryUpdated, (cb) => api.events.onAiSummaryUpdated(cb)],
       [IpcChannel.EventAiSummaryError, (cb) => api.events.onAiSummaryError(cb)],
@@ -258,14 +253,14 @@ describe('preload IPC bridge', () => {
     for (const [channel, subscribe] of eventCases) {
       const callback = vi.fn()
       const payload = { channel }
-      subscribe(callback)
+      const dispose = subscribe(callback)
       const listener = electronMocks.on.mock.calls.at(-1)?.[1] as
         | ((event: unknown, value: unknown) => void)
         | undefined
       expect(electronMocks.on).toHaveBeenLastCalledWith(channel, listener)
       listener?.({ sender: 'ignored' }, payload)
       expect(callback).toHaveBeenCalledWith(payload)
-      api.events.off(channel, callback)
+      dispose()
       expect(electronMocks.removeListener).toHaveBeenLastCalledWith(channel, listener)
     }
   })
@@ -275,17 +270,17 @@ describe('preload IPC bridge', () => {
     const payload = { status: 'confirmed', message: null }
 
     authConfirmationListener?.({ sender: 'ignored' }, payload)
-    api.events.onSyncAuthConfirmation(callback)
+    const dispose = api.events.onSyncAuthConfirmation(callback)
 
     expect(callback).toHaveBeenCalledWith(payload)
-    api.events.off(IpcChannel.EventSyncAuthConfirmation, callback)
+    dispose()
   })
 
   it('acknowledges renderer persistence only after the subscriber completes', async () => {
     let release: () => void = () => undefined
     const pending = new Promise<void>((resolve) => { release = resolve })
     const callback = vi.fn(() => pending)
-    api.events.onRendererFlushRequested(callback)
+    const dispose = api.events.onRendererFlushRequested(callback)
 
     rendererFlushListener?.({ sender: 'ignored' }, 'flush-1')
     await Promise.resolve()
@@ -297,12 +292,12 @@ describe('preload IPC bridge', () => {
       IpcChannel.RendererFlushComplete,
       'flush-1'
     ))
-    api.events.off(IpcChannel.EventRendererFlushRequested, callback)
+    dispose()
   })
 
   it('reports renderer persistence failures to main', async () => {
     const callback = vi.fn(async () => { throw new Error('disk full') })
-    api.events.onRendererFlushRequested(callback)
+    const dispose = api.events.onRendererFlushRequested(callback)
 
     rendererFlushListener?.({ sender: 'ignored' }, 'flush-2')
 
@@ -311,40 +306,34 @@ describe('preload IPC bridge', () => {
       'flush-2',
       'disk full'
     ))
-    api.events.off(IpcChannel.EventRendererFlushRequested, callback)
+    dispose()
   })
 
-  it('keeps callbacks isolated by channel and replaces only duplicate registrations', () => {
+  it('keeps callbacks isolated by channel and makes stale disposers harmless', () => {
     const shared = vi.fn()
-    api.events.onImportProgress(shared)
+    const disposeOldProgress = api.events.onImportProgress(shared)
     const progressListener = electronMocks.on.mock.calls.at(-1)?.[1]
-    api.events.onImportToast(shared)
+    const disposeToast = api.events.onImportToast(shared)
     expect(electronMocks.removeListener).not.toHaveBeenCalledWith(
       IpcChannel.EventImportProgress,
       progressListener
     )
 
-    api.events.onImportProgress(shared)
+    const disposeCurrentProgress = api.events.onImportProgress(shared)
+    const currentProgressListener = electronMocks.on.mock.calls.at(-1)?.[1]
     expect(electronMocks.removeListener).toHaveBeenCalledWith(
       IpcChannel.EventImportProgress,
       progressListener
     )
 
-    api.events.off(IpcChannel.EventImportToast, shared)
-    api.events.off(IpcChannel.EventImportProgress, shared)
-  })
-
-  it('does not leak a listener when off receives the wrong channel', () => {
-    const callback = vi.fn()
-    api.events.onImportProgress(callback)
-    const listener = electronMocks.on.mock.calls.at(-1)?.[1]
-
-    api.events.off(IpcChannel.EventImportToast, callback)
-    api.events.off(IpcChannel.EventImportProgress, callback)
-
+    electronMocks.removeListener.mockClear()
+    disposeOldProgress()
+    expect(electronMocks.removeListener).not.toHaveBeenCalled()
+    disposeToast()
+    disposeCurrentProgress()
     expect(electronMocks.removeListener).toHaveBeenCalledWith(
       IpcChannel.EventImportProgress,
-      listener
+      currentProgressListener
     )
   })
 })

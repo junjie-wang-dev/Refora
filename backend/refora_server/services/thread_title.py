@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from refora_server.services.ai_summary import build_provider_config
+from refora_server.services.provider_config import build_provider_config
 
 
 def derive_thread_title(text: str) -> str:

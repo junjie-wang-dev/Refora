@@ -113,19 +113,19 @@ export interface ServerClientDeps {
   wsHandshakeTimeoutMs?: number
 }
 
-export interface ConnectorResult {
+interface ConnectorResult {
   requestId: string
   ok: true
   data: unknown
 }
 
-export interface ConnectorErrorReply {
+interface ConnectorErrorReply {
   requestId: string
   ok: false
   error: IpcError
 }
 
-export interface ConnectorRequest {
+interface ConnectorRequest {
   requestId: string
   [key: string]: unknown
 }
@@ -165,10 +165,6 @@ export interface BulkCategorizePayload {
   categoryId: string | null
 }
 
-export interface BulkIdsPayload {
-  ids: string[]
-}
-
 export interface RelocatePayload {
   path: string
 }
@@ -195,10 +191,6 @@ export interface WatchTogglePayload {
   enabled: boolean
 }
 
-export interface LibrarySwitchPayload {
-  path: string
-}
-
 export interface ExportJsonPayload {
   documentIds?: string[]
   workspaceId?: string
@@ -219,14 +211,6 @@ export interface ClipboardCopyMarkdownPayload {
 
 export interface ClipboardCopyAssetPayload {
   assetId: string
-}
-
-export interface ProviderTestPayload {
-  apiKey: string
-}
-
-export interface ProviderModelsPayload {
-  apiKey: string
 }
 
 export interface SummarizePayload {
@@ -265,15 +249,6 @@ export interface ReportPatchPayload {
 
 export interface WorkspaceCreatePayload {
   name: string
-}
-
-export interface WorkspaceItemInput {
-  kind: WorkspaceItemKind
-  docId?: string | null
-  reportId?: string | null
-  noteId?: string | null
-  assetId?: string | null
-  placement?: WorkspaceItemPlacement
 }
 
 export interface WorkspaceItemsBatchInput {
@@ -349,10 +324,8 @@ export interface ServerHttp {
     protocolVersion: number
     protocolDigest: string
   }>
-  systemShutdown(): Promise<{ ack: boolean }>
   appBootstrap(): Promise<BootstrapData>
   globalSearch(query: string): Promise<GlobalSearchResult>
-  dialogOpenDirectory(title?: string): Promise<{ canceled: boolean; path: string | null }>
 
   documentsList(query?: DocumentsListQuery): Promise<Document[]>
   documentsCount(): Promise<DocumentCounts>
@@ -393,8 +366,6 @@ export interface ServerHttp {
   watchAdd(payload: WatchCreatePayload): Promise<WatchFolder>
   watchRemove(watchId: string): Promise<{ ack: boolean }>
   watchToggle(watchId: string, payload: WatchTogglePayload): Promise<WatchFolder>
-
-  librarySwitch(payload: LibrarySwitchPayload): Promise<{ ack: boolean }>
 
   settingsGet(): Promise<Record<string, unknown>>
   settingsUpdate(patch: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -448,7 +419,6 @@ export interface ServerHttp {
 
   workspaceItemsList(workspaceId: string): Promise<WorkspaceItem[]>
   workspaceItemGet(itemId: string): Promise<WorkspaceItem>
-  workspaceItemsCreate(workspaceId: string, input: WorkspaceItemInput): Promise<WorkspaceItem>
   workspaceItemsCreateBatch(workspaceId: string, input: WorkspaceItemsBatchInput): Promise<WorkspaceItem[]>
   workspaceItemsDelete(workspaceId: string, itemId: string): Promise<{ ack: boolean }>
   workspaceItemsReorder(workspaceId: string, payload: WorkspaceItemsReorderPayload): Promise<{ ack: boolean }>
@@ -498,14 +468,9 @@ export interface ServerHttp {
 export interface ServerWs {
   connect(): Promise<void>
   disconnect(): void
-  isConnected(): boolean
   on(event: WsEventName, cb: WsEventListener): () => void
-  off(event: WsEventName, cb: WsEventListener): void
   subscribe(topics: string[]): void
   unsubscribe(topics: string[]): void
-  ping(): void
-  sendConnectorResult(reply: ConnectorResult): void
-  sendConnectorError(reply: ConnectorErrorReply): void
 }
 
 export interface ServerClient {
@@ -566,56 +531,58 @@ export function createServerClient(
   async function request<T>(
     method: string,
     path: string,
-    options: { body?: unknown; query?: Record<string, string | number | boolean | undefined> } = {}
+    options: {
+      body?: unknown
+      query?: Record<string, string | number | boolean | undefined>
+      timeoutMs?: number | null
+    } = {}
   ): Promise<T> {
     assertServerRoute(method, path)
     const conn = await getConnection()
     const url = `${conn.baseUrl}${path}${buildQuery(options.query ?? {})}`
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`))
-      }, requestTimeoutMs)
-    })
+    const operationTimeoutMs = options.timeoutMs === undefined ? requestTimeoutMs : options.timeoutMs
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const timeout = operationTimeoutMs === null
+      ? null
+      : new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort()
+          reject(makeError('timeout', `Request timed out after ${operationTimeoutMs}ms: ${method} ${path}`))
+        }, operationTimeoutMs)
+      })
+    const wait = <U>(promise: Promise<U>): Promise<U> => timeout ? Promise.race([promise, timeout]) : promise
     let response: Response
     try {
-      response = await Promise.race([
-        fetchImpl(url, {
-          method,
-          headers: {
-            [TOKEN_HEADER]: conn.token,
-            ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {})
-          },
-          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-          signal: controller.signal
-        }),
-        timeout
-      ])
+      response = await wait(fetchImpl(url, {
+        method,
+        headers: {
+          [TOKEN_HEADER]: conn.token,
+          ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {})
+        },
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal
+      }))
     } catch (e) {
-      clearTimeout(timer!)
+      if (timer) clearTimeout(timer)
       if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'timeout') throw e
       if (e instanceof Error && e.name === 'AbortError') {
-        throw makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`)
+        throw makeError('timeout', `Request timed out after ${operationTimeoutMs ?? 0}ms: ${method} ${path}`)
       }
       throw makeError('network_error', e instanceof Error ? e.message : String(e))
     }
 
     let payload: unknown
     try {
-      payload = await Promise.race([
-        response.json(),
-        timeout
-      ])
+      payload = await wait(response.json())
     } catch (e) {
       if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'timeout') throw e
       if (e instanceof Error && e.name === 'AbortError') {
-        throw makeError('timeout', `Request timed out after ${requestTimeoutMs}ms: ${method} ${path}`)
+        throw makeError('timeout', `Request timed out after ${operationTimeoutMs ?? 0}ms: ${method} ${path}`)
       }
       throw makeError('bad_response', `Failed to parse response: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
-      clearTimeout(timer!)
+      if (timer) clearTimeout(timer)
     }
 
     if (!isResultEnvelope(payload)) {
@@ -629,8 +596,8 @@ export function createServerClient(
     return request<T>('GET', path, { query })
   }
 
-  function post<T>(path: string, body?: unknown): Promise<T> {
-    return request<T>('POST', path, { body })
+  function post<T>(path: string, body?: unknown, timeoutMs?: number | null): Promise<T> {
+    return request<T>('POST', path, { body, timeoutMs })
   }
 
   function patch<T>(path: string, body?: unknown): Promise<T> {
@@ -651,10 +618,8 @@ export function createServerClient(
       protocolVersion: number
       protocolDigest: string
     }>('/ready'),
-    systemShutdown: () => post<{ ack: boolean }>('/shutdown'),
     appBootstrap: () => get<BootstrapData>('/app/bootstrap'),
     globalSearch: (query) => get<GlobalSearchResult>('/search/global', { q: query }),
-    dialogOpenDirectory: (title) => post<{ canceled: boolean; path: string | null }>('/dialog/open-directory', { title }),
 
     documentsList: (query) => get<Document[]>('/documents', query),
     documentsCount: () => get<DocumentCounts>('/documents/count'),
@@ -681,12 +646,12 @@ export function createServerClient(
         body: { annotations }
       }),
 
-    importFiles: (payload) => post<PdfImportResult>('/import/files', payload),
-    importFolder: (payload) => post<PdfImportResult>('/import/folder', payload),
-    importJson: (payload) => post<{ imported: number }>('/import/json', payload),
-    importZotero: (payload) => post<BibImportResult>('/import/zotero', payload),
-    importMendeley: (payload) => post<BibImportResult>('/import/mendeley', payload),
-    importIdentifier: (payload) => post<{ documentId: string }>('/import/identifier', payload),
+    importFiles: (payload) => post<PdfImportResult>('/import/files', payload, null),
+    importFolder: (payload) => post<PdfImportResult>('/import/folder', payload, null),
+    importJson: (payload) => post<{ imported: number }>('/import/json', payload, null),
+    importZotero: (payload) => post<BibImportResult>('/import/zotero', payload, null),
+    importMendeley: (payload) => post<BibImportResult>('/import/mendeley', payload, null),
+    importIdentifier: (payload) => post<{ documentId: string }>('/import/identifier', payload, null),
 
     categoriesList: () => get<Category[]>('/categories'),
     categoriesCreate: (payload) => post<Category>('/categories', payload),
@@ -699,8 +664,6 @@ export function createServerClient(
     watchAdd: (payload) => post<WatchFolder>('/watch', payload),
     watchRemove: (id) => del<{ ack: boolean }>(`/watch/${pathSegment(id)}`),
     watchToggle: (id, payload) => post<WatchFolder>(`/watch/${pathSegment(id)}/toggle`, payload),
-
-    librarySwitch: (payload) => post<{ ack: boolean }>('/library/switch', payload),
 
     settingsGet: () => get<Record<string, unknown>>('/settings'),
     settingsUpdate: (changes) => patch('/settings', changes),
@@ -754,7 +717,6 @@ export function createServerClient(
 
     workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items`),
     workspaceItemGet: (id) => get<WorkspaceItem>(`/workspace-items/${pathSegment(id)}`),
-    workspaceItemsCreate: (id, input) => post<WorkspaceItem>(`/workspaces/${pathSegment(id)}/items`, input),
     workspaceItemsCreateBatch: (id, input) => post<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items/batch`, input),
     workspaceItemsDelete: (id, itemId) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/items/${pathSegment(itemId)}`),
     workspaceItemsReorder: (id, payload) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/items/reorder`, payload),
@@ -808,7 +770,6 @@ export function createServerClient(
   let reconnectAttempts = 0
   let manualClose = false
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let connectorGeneration = 0
   const connectorControllers = new Set<AbortController>()
   const subscribedTopics = new Set<string>()
 
@@ -851,22 +812,18 @@ export function createServerClient(
 
   async function forwardToNative(
     route: string,
-    body: unknown
+    body: unknown,
+    timeoutMs: number | null = connectorTimeoutMs
   ): Promise<Result<unknown>> {
-    const generation = connectorGeneration
-    if (generation !== connectorGeneration) {
-      return {
-        ok: false,
-        error: { code: 'connector_cancelled', message: `Native RPC was cancelled: ${route}` }
-      }
-    }
     const controller = new AbortController()
     connectorControllers.add(controller)
     let timedOut = false
-    const timer = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, connectorTimeoutMs)
+    const timer = timeoutMs === null
+      ? null
+      : setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, timeoutMs)
     try {
       const cancelled = new Promise<Result<unknown>>((resolve) => {
         controller.signal.addEventListener('abort', () => {
@@ -898,7 +855,7 @@ export function createServerClient(
         error: { code: 'native_error', message: e instanceof Error ? e.message : String(e) }
       }
     } finally {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       connectorControllers.delete(controller)
     }
   }
@@ -966,7 +923,11 @@ export function createServerClient(
         sendConnectorErrorImpl({ requestId, ok: false, error: { code: 'unknown_connector', message: `Unknown connector event: ${event}` } })
         return
     }
-    const result = await forwardToNative(route, body)
+    const result = await forwardToNative(
+      route,
+      body,
+      route.startsWith('/native/dialog-') ? null : connectorTimeoutMs
+    )
     if (result.ok) {
       sendConnectorResultImpl({ requestId, ok: true, data: result.data })
     } else {
@@ -1113,7 +1074,6 @@ export function createServerClient(
     },
     disconnect(): void {
       manualClose = true
-      connectorGeneration += 1
       for (const controller of connectorControllers) controller.abort()
       connectorControllers.clear()
       if (reconnectTimer) {
@@ -1131,19 +1091,12 @@ export function createServerClient(
         ws = null
       }
     },
-    isConnected(): boolean {
-      return ws !== null && ws.readyState === WebSocket.OPEN
-    },
     on(event, cb): () => void {
       const set = ensureListeners(event)
       set.add(cb)
       return () => {
         set.delete(cb)
       }
-    },
-    off(event, cb): void {
-      const set = listeners.get(event)
-      if (set) set.delete(cb)
     },
     subscribe(topics): void {
       for (const topic of topics) subscribedTopics.add(topic)
@@ -1153,11 +1106,6 @@ export function createServerClient(
       for (const topic of topics) subscribedTopics.delete(topic)
       sendRaw({ event: 'unsubscribe', data: { topics } })
     },
-    ping(): void {
-      sendRaw({ event: 'ping' })
-    },
-    sendConnectorResult: sendConnectorResultImpl,
-    sendConnectorError: sendConnectorErrorImpl
   }
 
   return { http, ws: wsApi }

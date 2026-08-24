@@ -9,7 +9,8 @@ from pypdf import PdfWriter
 import pytest
 
 from refora_server.server.connector import ConnectorBroker
-from refora_server.server.lifespan import _download_mineru_file, create_lifespan
+from refora_server.server.lifespan import create_lifespan
+from refora_server.server.services.lifespan_support import download_mineru_file
 
 
 class EventSocket:
@@ -59,7 +60,7 @@ async def test_mineru_download_uses_proxy_and_closes_client(
     monkeypatch.setattr("httpx.AsyncClient", Client)
     destination = tmp_path / "engine.bin"
 
-    await _download_mineru_file(
+    await download_mineru_file(
         "https://example.test/engine.bin",
         str(destination),
         asyncio.Event(),
@@ -167,7 +168,6 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch) -> None:
     monkeypatch.setattr("refora_server.server.lifespan.create_repositories", create_repositories)
     monkeypatch.setattr("refora_server.server.lifespan.create_event_bus", Mock(return_value=events))
     monkeypatch.setattr("refora_server.server.lifespan.create_connector_broker", Mock(return_value=connector))
-    monkeypatch.setattr("refora_server.server.lifespan.createLibraryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiProvidersService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiSummaryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createChatHistoryService", Mock(return_value={}))
@@ -201,7 +201,6 @@ async def test_lifespan_closes_runner_owned_database(monkeypatch) -> None:
     connector = Mock(cancel_pending=AsyncMock())
     monkeypatch.setattr("refora_server.server.lifespan.create_event_bus", Mock(return_value=events))
     monkeypatch.setattr("refora_server.server.lifespan.create_connector_broker", Mock(return_value=connector))
-    monkeypatch.setattr("refora_server.server.lifespan.createLibraryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiProvidersService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiSummaryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createChatHistoryService", Mock(return_value={}))
@@ -270,10 +269,6 @@ async def test_lifespan_recovers_active_runs_after_connector_subscription(
         Mock(return_value=connector),
     )
     monkeypatch.setattr(
-        "refora_server.server.lifespan.createLibraryService",
-        Mock(return_value={}),
-    )
-    monkeypatch.setattr(
         "refora_server.server.lifespan.createAiProvidersService",
         Mock(return_value={}),
     )
@@ -336,11 +331,12 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         ]
     )
     model = SimpleNamespace(
-        invoke=Mock(return_value=SimpleNamespace(content="Generated title"))
+        invoke=Mock(return_value=SimpleNamespace(content="Generated title")),
+        ainvoke=AsyncMock(return_value=SimpleNamespace(content="Generated title")),
     )
     model_factory = Mock(return_value=model)
     agent_factory = Mock(return_value="agent")
-    destroy_summary = Mock()
+    destroy_summary = AsyncMock()
     summary_factory = Mock(return_value={"destroy": destroy_summary})
     title_factory = Mock(return_value={"generateThreadTitle": Mock()})
     execute_sandbox = Mock(return_value={"status": "ok"})
@@ -377,7 +373,6 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
     monkeypatch.setattr("refora_server.server.lifespan.create_repositories", Mock(return_value=repos))
     monkeypatch.setattr("refora_server.server.lifespan.create_event_bus", Mock(return_value=events))
     monkeypatch.setattr("refora_server.server.lifespan.create_connector_broker", Mock(return_value=connector))
-    monkeypatch.setattr("refora_server.server.lifespan.createLibraryService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiProvidersService", Mock(return_value={}))
     monkeypatch.setattr("refora_server.server.lifespan.createAiSummaryService", summary_factory)
     monkeypatch.setattr("refora_server.server.lifespan.createChatHistoryService", Mock(return_value={}))
@@ -503,7 +498,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             "temperature": 0.2,
             "maxTokens": 123,
         }
-        assert summary_dependencies["generate_summary"](
+        assert await summary_dependencies["generate_summary"](
             {"provider": provider, "text": "Paper body"}
         ) == "Generated title"
         assert title_factory.call_args.args[1]["generate_title"](
@@ -556,7 +551,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
         }
 
     runtime["destroy"].assert_awaited_once()
-    destroy_summary.assert_called_once_with()
+    destroy_summary.assert_awaited_once_with()
 
 
 async def test_connector_cancels_pending_requests() -> None:
@@ -615,15 +610,11 @@ async def test_lifespan_startup_failure_cleans_created_resources_without_name_er
         Mock(return_value=connector),
     )
     monkeypatch.setattr(
-        "refora_server.server.lifespan.createLibraryService",
-        Mock(return_value={}),
-    )
-    monkeypatch.setattr(
         "refora_server.server.lifespan.create_mineru_engine_manager",
         Mock(return_value={"destroy": destroy_mineru}),
     )
     monkeypatch.setattr(
-        "refora_server.server.lifespan._mineru_worker_path",
+        "refora_server.server.lifespan.mineru_worker_path",
         lambda: str(worker_script),
     )
     monkeypatch.setattr(

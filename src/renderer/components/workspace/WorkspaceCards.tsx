@@ -17,12 +17,6 @@ import ReportCard from './ReportCard'
 import ResizableCard, { clampCardSize } from './ResizableCard'
 import StickyNoteCard from './StickyNoteCard'
 
-const MemoizedPaperCard = memo(PaperCard)
-const MemoizedReportCard = memo(ReportCard)
-const MemoizedNoteCard = memo(NoteCard)
-const MemoizedStickyNoteCard = memo(StickyNoteCard)
-const MemoizedAssetCard = memo(AssetCard)
-
 type CardShellProps = Omit<
   ComponentProps<typeof ResizableCard>,
   'children' | 'sizeKey' | 'size' | 'position' | 'selected' | 'animatePosition' | 'className'
@@ -81,7 +75,7 @@ const DocumentCard = memo(function DocumentCard({
       animatePosition={animatePosition}
       className="workspace-connection-accent--document"
     >
-      <MemoizedPaperCard
+      <PaperCard
         doc={doc}
         summary={summary}
         summaryLoading={summaryLoading}
@@ -132,7 +126,7 @@ const ReportCardItem = memo(function ReportCardItem({
       animatePosition={animatePosition}
       className="workspace-connection-accent--report"
     >
-      <MemoizedReportCard
+      <ReportCard
         report={report}
         sourceDocuments={documents}
         onOpenSource={(docId) => void openDocumentPdf(docId)}
@@ -184,7 +178,7 @@ const StickyNoteCardItem = memo(function StickyNoteCardItem({
       animatePosition={animatePosition}
       className="workspace-connection-accent--sticky"
     >
-      <MemoizedStickyNoteCard
+      <StickyNoteCard
         note={note}
         autoFocus={autoFocus}
         onAutoFocusHandled={onAutoFocusHandled}
@@ -229,7 +223,7 @@ const NoteCardItem = memo(function NoteCardItem({
       animatePosition={animatePosition}
       className="workspace-connection-accent--note"
     >
-      <MemoizedNoteCard
+      <NoteCard
         note={note}
         autoEdit={autoEdit}
         onAutoEditHandled={onAutoEditHandled}
@@ -279,7 +273,7 @@ const AssetCardItem = memo(function AssetCardItem({
       animatePosition={animatePosition}
       className="workspace-connection-accent--asset"
     >
-      <MemoizedAssetCard
+      <AssetCard
         asset={asset}
         onOpen={() => onOpenAsset(asset.id)}
         onReveal={() => onRevealAsset(asset.id)}

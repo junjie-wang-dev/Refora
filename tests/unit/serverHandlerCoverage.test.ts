@@ -14,9 +14,29 @@ describe('server IPC handler coverage', () => {
     const serverClient = { http: {} } as ServerClient
     const syncAccountService = {} as SyncAccountService
     const handlers = {
-      ...createServerAppHandlers(serverClient, { setThemeSource: () => undefined }),
-      ...createServerLibraryHandlers({ serverClient }),
-      ...createServerWorkspaceHandlers(serverClient),
+      ...createServerAppHandlers(serverClient, {
+        setThemeSource: () => undefined,
+        openDirectory: async () => null,
+        authorizeFile: (path) => path,
+        authorizeDirectory: (path) => path
+      }),
+      ...createServerLibraryHandlers({
+        serverClient,
+        switchLibraryFolder: async (path) => ({
+          libraryFolderPath: path,
+          dbExisted: false,
+          scanned: 0,
+          imported: 0,
+          skipped: 0,
+          errors: []
+        }),
+        consumeFile: (path) => path,
+        consumeFiles: (paths) => [...paths],
+        consumeDirectory: (path) => path,
+        removeDocumentPreviewCache: async () => undefined,
+        saveBibtex: async () => undefined
+      }),
+      ...createServerWorkspaceHandlers(serverClient, { consumeFiles: (paths) => [...paths] }),
       ...createServerAiHandlers({ serverClient }),
       ...createSyncHandlers(syncAccountService),
       ...createAppLifecycleIpcHandlers({ completeRendererFlush: () => true })

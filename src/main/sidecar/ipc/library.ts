@@ -26,13 +26,14 @@ import { resultify as forward } from './result'
 
 export interface ServerLibraryHandlerDeps {
   serverClient: ServerClient
-  switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  switchLibraryFolder: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
   readPdfRange?: (filePath: string, begin: number, end: number) => Promise<PdfRangeChunk>
-  consumeFile?: (path: string, extensions?: readonly string[]) => string
-  consumeFiles?: (paths: readonly string[], extensions?: readonly string[]) => string[]
-  consumeDirectory?: (path: string) => string
-  removeDocumentPreviewCache?: (documentId: string) => Promise<void>
+  consumeFile: (path: string, extensions?: readonly string[]) => string
+  consumeFiles: (paths: readonly string[], extensions?: readonly string[]) => string[]
+  consumeDirectory: (path: string) => string
+  removeDocumentPreviewCache: (documentId: string) => Promise<void>
+  saveBibtex: (bibtex: string) => Promise<void>
 }
 
 export function createServerLibraryHandlers({
@@ -43,7 +44,8 @@ export function createServerLibraryHandlers({
   consumeFile,
   consumeFiles,
   consumeDirectory,
-  removeDocumentPreviewCache
+  removeDocumentPreviewCache,
+  saveBibtex
 }: ServerLibraryHandlerDeps) {
   const { http } = serverClient
 
@@ -73,14 +75,14 @@ export function createServerLibraryHandlers({
     [IpcChannel.DocumentsDelete]: (documentId: string) =>
       forward(async () => {
         const result = await http.documentsDelete(documentId)
-        await removeDocumentPreviewCache?.(documentId)
+        await removeDocumentPreviewCache(documentId)
         return result
       }),
     [IpcChannel.DocumentsBulkDelete]: (documentIds: string[]) =>
       forward(async () => {
         const result = await http.documentsBulkDelete(documentIds)
         await Promise.all(documentIds.map(async (documentId) => {
-          await removeDocumentPreviewCache?.(documentId)
+          await removeDocumentPreviewCache(documentId)
         }))
         return result
       }),
@@ -109,25 +111,14 @@ export function createServerLibraryHandlers({
       forward(() => http.documentsRefreshMetadata(documentId)),
     [IpcChannel.DocumentsRelocateFile]: (documentId: string, path: string) =>
       forward(() => http.documentsRelocate(documentId, {
-        path: path && consumeFile ? consumeFile(path, ['.pdf']) : path
+        path: path ? consumeFile(path, ['.pdf']) : path
       })),
     [IpcChannel.DocumentsRestoreFile]: (documentId: string) =>
       forward(() => http.documentsRestoreFile(documentId)),
 
     [IpcChannel.ImportAddFiles]: (paths: string[]) => forward(() => http.importFiles({
-      paths: consumeFiles
-        ? consumeFiles(paths, ['.pdf'])
-        : consumeFile
-          ? paths.map((path) => consumeFile(path, ['.pdf']))
-          : paths
+      paths: consumeFiles(paths, ['.pdf'])
     })),
-    [IpcChannel.ImportAddFolder]: (path: string) => forward(() => http.importFolder({
-      path: consumeDirectory ? consumeDirectory(path) : path
-    })),
-    [IpcChannel.ImportFromJson]: (file: string) =>
-      forward(async () => (await http.importJson(
-        consumeFile ? consumeFile(file, ['.json']) : file
-      )).imported),
     [IpcChannel.ImportFromZotero]: (payload: ImportBibPayload = { paths: [] }) =>
       forward(() => http.importZotero(payload)),
     [IpcChannel.ImportFromMendeley]: (payload: ImportBibPayload = { paths: [] }) =>
@@ -152,22 +143,14 @@ export function createServerLibraryHandlers({
 
     [IpcChannel.WatchList]: () => forward(() => http.watchList()),
     [IpcChannel.WatchAdd]: (path: string) => forward(() => http.watchAdd({
-      path: consumeDirectory ? consumeDirectory(path) : path
+      path: consumeDirectory(path)
     })),
     [IpcChannel.WatchRemove]: (watchId: string) => forward(() => http.watchRemove(watchId)),
     [IpcChannel.WatchToggle]: (watchId: string, enabled: boolean) =>
       forward(() => http.watchToggle(watchId, { enabled })),
 
-    [IpcChannel.LibrarySwitch]: (path: string) => {
-      if (switchLibraryFolder) {
-        return forward<LibrarySwitchResult>(() => switchLibraryFolder(
-          consumeDirectory ? consumeDirectory(path) : path
-        ))
-      }
-      return forward(() => http.librarySwitch({
-        path: consumeDirectory ? consumeDirectory(path) : path
-      }))
-    },
+    [IpcChannel.LibrarySwitch]: (path: string) =>
+      forward<LibrarySwitchResult>(() => switchLibraryFolder(consumeDirectory(path))),
 
     [IpcChannel.SettingsGet]: (key: string, defaultValue: unknown) =>
       forward(async () => {
@@ -245,12 +228,10 @@ export function createServerLibraryHandlers({
     [IpcChannel.AgentProfilesScanRuntimes]: () =>
       forward<CliRuntimeInfo[]>(() => http.agentProfilesScanRuntimes()),
 
-    [IpcChannel.ExportToJson]: (payload: { documentIds?: string[]; workspaceId?: string } = {}) =>
-      forward(async () => JSON.stringify(await http.exportJson(payload), null, 2)),
     [IpcChannel.ExportToBibtex]: (documentIds: string[]) =>
       forward(async () => {
         const result = await http.exportBibtex({ documentIds })
-        return result.bibtex
+        await saveBibtex(result.bibtex)
       }),
     [IpcChannel.ExportBibtexString]: (documentIds: string[]) =>
       forward(async () => (await http.exportBibtexString(documentIds)).bibtex),

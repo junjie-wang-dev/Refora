@@ -272,6 +272,7 @@ def test_build_provider_config_uses_request_key_without_persisting_it(db):
 
     assert config["apiKey"] == "request-only-secret"
     assert config["model"] == "gpt-5.6-terra"
+    assert config["temperature"] == 0.7
     assert config["reasoning"] == {"effort": "high", "summary": "auto"}
     assert repo["getRaw"](provider["id"])["apiKeyEnc"] == b"enc"
     assert "request-only-secret" not in repr(repo["getRaw"](provider["id"]))

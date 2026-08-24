@@ -20,10 +20,12 @@ export interface ServerAssemblyDeps {
   lifecycle: ServerLifecycle
   getWin: () => BrowserWindow | null
   nativeManagedRoots?: string[]
-  switchLibraryFolder?: (path: string) => Promise<LibrarySwitchResult>
+  switchLibraryFolder: (path: string) => Promise<LibrarySwitchResult>
   onSettingUpdated?: (key: string, value: unknown) => void
-  rendererPathCapabilities?: RendererPathCapabilities
-  removeDocumentPreviewCache?: (documentId: string) => Promise<void>
+  rendererPathCapabilities: RendererPathCapabilities
+  removeDocumentPreviewCache: (documentId: string) => Promise<void>
+  openDirectory: () => Promise<string | null>
+  saveBibtex: (bibtex: string) => Promise<void>
 }
 
 export interface ServerAssembly {
@@ -48,15 +50,24 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     ipcMain.handle(channel, handler)
   }
 
+  function registerTrustedHandler(
+    channel: string,
+    handler: (...args: unknown[]) => unknown
+  ): void {
+    registerHandler(channel, (event, ...args) => {
+      if (!isTrustedIpcSender(event, deps.getWin)) {
+        return {
+          ok: false,
+          error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
+        }
+      }
+      return handler(...args)
+    })
+  }
+
   function registerUnavailableHandlers(channels: readonly string[]): void {
     for (const channel of channels) {
-      registerHandler(channel, (event) => {
-        if (!isTrustedIpcSender(event, deps.getWin)) {
-          return {
-            ok: false,
-            error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
-          }
-        }
+      registerTrustedHandler(channel, () => {
         return {
           ok: false,
           error: { code: 'service_unavailable', message: 'Local library is temporarily unavailable' }
@@ -96,21 +107,22 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
           setThemeSource: (theme) => {
             nativeTheme.themeSource = theme
           },
-          authorizeFile: deps.rendererPathCapabilities?.authorizeFile,
-          authorizeDirectory: deps.rendererPathCapabilities?.authorizeDirectory
+          openDirectory: deps.openDirectory,
+          authorizeFile: deps.rendererPathCapabilities.authorizeFile,
+          authorizeDirectory: deps.rendererPathCapabilities.authorizeDirectory
         }),
         ...createServerLibraryHandlers({
           serverClient,
           switchLibraryFolder: deps.switchLibraryFolder,
           onSettingUpdated: deps.onSettingUpdated,
-          consumeFile: deps.rendererPathCapabilities?.consumeFile,
-          consumeFiles: deps.rendererPathCapabilities?.consumeFiles,
-          consumeDirectory: deps.rendererPathCapabilities?.consumeDirectory,
-          removeDocumentPreviewCache: deps.removeDocumentPreviewCache
+          consumeFile: deps.rendererPathCapabilities.consumeFile,
+          consumeFiles: deps.rendererPathCapabilities.consumeFiles,
+          consumeDirectory: deps.rendererPathCapabilities.consumeDirectory,
+          removeDocumentPreviewCache: deps.removeDocumentPreviewCache,
+          saveBibtex: deps.saveBibtex
         }),
         ...createServerWorkspaceHandlers(serverClient, {
-          consumeFile: deps.rendererPathCapabilities?.consumeFile,
-          consumeFiles: deps.rendererPathCapabilities?.consumeFiles
+          consumeFiles: deps.rendererPathCapabilities.consumeFiles
         }),
         ...createServerAiHandlers({ serverClient })
       }
@@ -123,15 +135,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         throw new Error('Server IPC channel registry does not match the handler maps')
       }
       for (const [channel, handler] of Object.entries(handlers)) {
-        registerHandler(channel, (event, ...args) => {
-          if (!isTrustedIpcSender(event, deps.getWin)) {
-            return {
-              ok: false,
-              error: { code: 'unauthorized_sender', message: 'IPC request did not originate from the main window' }
-            }
-          }
-          return (handler as (...handlerArgs: unknown[]) => unknown)(...args)
-        })
+        registerTrustedHandler(channel, handler as (...handlerArgs: unknown[]) => unknown)
       }
     } catch (error) {
       registerUnavailableHandlers(handlerChannels)
@@ -150,7 +154,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
     serverClient?.ws.disconnect()
     registerUnavailableHandlers(handlerChannels)
     await deps.lifecycle.stop()
-    deps.rendererPathCapabilities?.clear()
+    deps.rendererPathCapabilities.clear()
   }
 
   function getClient(): ServerClient {

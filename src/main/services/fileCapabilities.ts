@@ -1,5 +1,5 @@
-import { lstatSync, realpathSync } from 'node:fs'
-import { extname, isAbsolute } from 'node:path'
+import { extname } from 'node:path'
+import { ExistingPathError, resolveExistingPath } from './existingPath'
 
 export type RendererPathKind = 'file' | 'directory'
 
@@ -23,22 +23,20 @@ function pathError(code: string, message: string): Error {
 }
 
 function resolveExisting(path: string, kind: RendererPathKind): string {
-  if (typeof path !== 'string' || !isAbsolute(path)) {
-    throw pathError('invalid_path', 'Path must be absolute')
+  try {
+    return resolveExistingPath(path, kind)
+  } catch (error) {
+    if (!(error instanceof ExistingPathError)) throw error
+    if (error.failure === 'not_absolute') throw pathError('invalid_path', 'Path must be absolute')
+    if (error.failure === 'symbolic_link') throw pathError('invalid_path', 'Symbolic links are not allowed')
+    if (error.failure === 'wrong_kind') {
+      throw pathError(
+        'invalid_path',
+        kind === 'file' ? 'Path must reference a regular file' : 'Path must reference a directory'
+      )
+    }
+    throw pathError('invalid_path', `Unable to inspect path: ${error.resolvedPath}`)
   }
-  const requested = lstatSync(path)
-  if (requested.isSymbolicLink()) {
-    throw pathError('invalid_path', 'Symbolic links are not allowed')
-  }
-  const resolved = realpathSync(path)
-  const stats = lstatSync(resolved)
-  if (kind === 'file' && !stats.isFile()) {
-    throw pathError('invalid_path', 'Path must reference a regular file')
-  }
-  if (kind === 'directory' && !stats.isDirectory()) {
-    throw pathError('invalid_path', 'Path must reference a directory')
-  }
-  return resolved
 }
 
 export function createRendererPathCapabilities(

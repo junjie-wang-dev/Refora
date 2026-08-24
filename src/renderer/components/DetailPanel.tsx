@@ -11,6 +11,7 @@ import type { ContextMenuItem } from '@lobehub/ui'
 import { useDocumentStore } from '../store/documentStore'
 import { api } from '../ipc'
 import { formatAuthorName, formatDate, formatFilePath } from '../utils/format'
+import { isPathWithinDirectory } from '../utils/filePath'
 import type {
   Document,
   EditableField,
@@ -558,7 +559,7 @@ function SingleDetail({ doc }: { doc: Document }) {
   const remoteValues: Record<string, RemoteValue> = doc.remoteValues ?? {}
   const isMoved =
     doc.originalFolderPath && doc.filePath &&
-    !doc.filePath.startsWith(doc.originalFolderPath)
+    !isPathWithinDirectory(doc.filePath, doc.originalFolderPath)
 
   return (
     <div className="-mt-4 flex flex-col">
@@ -783,12 +784,7 @@ function BulkBar({
   const bulkRefreshMetadata = useDocumentStore((s) => s.bulkRefreshMetadata)
   const bulkCategorize = useDocumentStore((s) => s.bulkCategorize)
   const allCategories = useDocumentStore((s) => s.categories)
-  const fetchCategories = useDocumentStore((s) => s.fetchCategories)
   const [bulkCategory, setBulkCategory] = useState<string>()
-
-  useEffect(() => {
-    void fetchCategories()
-  }, [])
 
   return (
     <div className="flex flex-col gap-4 px-5 py-4">

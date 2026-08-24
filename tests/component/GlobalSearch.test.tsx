@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
     previousState: { isSearching: boolean }
   ) => void),
   documentStoreSubscribe: vi.fn(),
+  documentSearchState: {
+    isSearching: false,
+    searchQuery: ''
+  },
   workspaceState: {
     activeWorkspaceId: 'ws-current',
     chatStreaming: false
@@ -47,6 +51,7 @@ vi.mock('@renderer/store/documentStore', () => ({
     {
       subscribe: mocks.documentStoreSubscribe,
       getState: () => ({
+        ...mocks.documentSearchState,
         setSearchResults: mocks.setSearchResults,
         setFocusedDoc: mocks.setFocusedDoc,
         clearSearch: mocks.clearSearch,
@@ -121,7 +126,6 @@ const api = window.api as ReforaApi
 const originalGlobalSearch = api.search.global
 const originalOpenAsset = api.workspaceAssets.open
 const originalOnLibrarySwitched = api.events.onLibrarySwitched
-const originalEventsOff = api.events.off
 let librarySwitchedCallback: ((payload: LibrarySwitchResult) => void) | null = null
 
 describe('GlobalSearch', () => {
@@ -129,6 +133,16 @@ describe('GlobalSearch', () => {
     vi.clearAllMocks()
     mocks.workspaceState.activeWorkspaceId = 'ws-current'
     mocks.workspaceState.chatStreaming = false
+    mocks.documentSearchState.isSearching = false
+    mocks.documentSearchState.searchQuery = ''
+    mocks.setSearchResults.mockImplementation((query: string) => {
+      mocks.documentSearchState.isSearching = true
+      mocks.documentSearchState.searchQuery = query
+    })
+    mocks.clearSearch.mockImplementation(() => {
+      mocks.documentSearchState.isSearching = false
+      mocks.documentSearchState.searchQuery = ''
+    })
     mocks.requestActiveWorkspace.mockResolvedValue(true)
     mocks.documentStoreSubscriber = null
     mocks.documentStoreSubscribe.mockImplementation((callback) => {
@@ -140,8 +154,8 @@ describe('GlobalSearch', () => {
     api.workspaceAssets.open = vi.fn().mockResolvedValue(undefined)
     api.events.onLibrarySwitched = vi.fn((callback) => {
       librarySwitchedCallback = callback
+      return vi.fn()
     })
-    api.events.off = vi.fn()
   })
 
   afterEach(() => {
@@ -149,7 +163,6 @@ describe('GlobalSearch', () => {
     api.search.global = originalGlobalSearch
     api.workspaceAssets.open = originalOpenAsset
     api.events.onLibrarySwitched = originalOnLibrarySwitched
-    api.events.off = originalEventsOff
   })
 
   it('renders above every panel and groups every result type', async () => {

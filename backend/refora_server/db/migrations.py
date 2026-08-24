@@ -14,6 +14,9 @@ from refora_server.library.document_ids import is_safe_document_id
 SCHEMA_DIR = Path(__file__).resolve().parent
 SCHEMA_FILE = SCHEMA_DIR / "schema.sql"
 MIGRATIONS_DIR = SCHEMA_DIR / "migrations"
+SCHEMA_PRESENT_DATA_MIGRATION_VERSIONS = frozenset(
+    {13, 14, 15, 25, 31, 32, 33, 34, 39}
+)
 
 FTS_COLUMNS: tuple[str, ...] = (
     "title",
@@ -622,6 +625,200 @@ def _normalize_document_authors(db: SqliteLike) -> None:
         raise
 
 
+def _backfill_schema_present_data(db: SqliteLike, version: int) -> None:
+    if version == 33 and not db.has_object("table", "sync_outbox"):
+        return
+    db.exec("BEGIN")
+    try:
+        if version == 13:
+            db.execute(
+                """
+                UPDATE ai_providers
+                SET presetId = CASE
+                  WHEN lower(baseUrl) LIKE '%api.openai.com%' THEN 'openai'
+                  WHEN lower(baseUrl) LIKE '%api.deepseek.com%' THEN 'deepseek'
+                  WHEN lower(baseUrl) LIKE '%moonshot%' THEN 'kimi'
+                  WHEN lower(baseUrl) LIKE '%localhost:11434%' OR lower(baseUrl) LIKE '%127.0.0.1:11434%' THEN 'ollama-local'
+                  WHEN lower(baseUrl) LIKE '%bigmodel%' THEN 'glm'
+                  WHEN lower(baseUrl) LIKE '%openrouter%' THEN 'openrouter'
+                  WHEN lower(baseUrl) LIKE '%dashscope%' THEN 'qwen'
+                  WHEN lower(baseUrl) LIKE '%siliconflow%' THEN 'siliconflow'
+                  WHEN lower(baseUrl) LIKE '%together%' THEN 'together'
+                  WHEN lower(baseUrl) LIKE '%groq.com%' THEN 'groq'
+                  WHEN lower(baseUrl) LIKE '%mistral.ai%' THEN 'mistral'
+                  ELSE 'custom'
+                END
+                WHERE presetId = 'custom'
+                  AND apiProtocol = 'openai-compatible'
+                  AND reasoningControl = 'openai'
+                  AND reasoningEffort = 'medium'
+                """,
+                [],
+            )
+            db.execute(
+                """
+                UPDATE ai_providers
+                SET apiProtocol = CASE WHEN presetId = 'openai' THEN 'openai-responses' ELSE 'openai-compatible' END,
+                    reasoningControl = CASE
+                      WHEN presetId IN ('deepseek', 'kimi', 'glm') THEN 'thinking'
+                      WHEN presetId = 'qwen' THEN 'enable-thinking'
+                      WHEN presetId = 'mistral' THEN 'none'
+                      ELSE 'openai'
+                    END,
+                    reasoningEffort = CASE
+                      WHEN presetId IN ('deepseek', 'kimi', 'glm', 'qwen', 'siliconflow') THEN 'high'
+                      WHEN presetId = 'mistral' THEN 'none'
+                      ELSE 'medium'
+                    END
+                WHERE apiProtocol = 'openai-compatible'
+                  AND reasoningControl = 'openai'
+                  AND reasoningEffort = 'medium'
+                  AND presetId <> 'custom'
+                """,
+                [],
+            )
+        elif version == 14:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO workspace_items(
+                  id, workspaceId, kind, docId, reportId, noteId,
+                  sortOrder, width, height, addedAt
+                )
+                SELECT
+                  lower(hex(randomblob(16))),
+                  r.workspaceId,
+                  'report',
+                  NULL,
+                  r.id,
+                  NULL,
+                  COALESCE((
+                    SELECT MAX(wi.sortOrder) FROM workspace_items wi
+                    WHERE wi.workspaceId = r.workspaceId
+                  ), -1) + ROW_NUMBER() OVER (
+                    PARTITION BY r.workspaceId ORDER BY r.createdAt, r.id
+                  ),
+                  300,
+                  200,
+                  r.createdAt
+                FROM ai_reports r
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM workspace_items wi
+                  WHERE wi.kind = 'report' AND wi.reportId = r.id
+                )
+                """,
+                [],
+            )
+        elif version == 15:
+            db.execute(
+                """
+                UPDATE workspace_items
+                SET x = (sortOrder % 4) * 332,
+                    y = CAST(sortOrder / 4 AS INTEGER) * 232,
+                    zIndex = sortOrder
+                WHERE x = 0 AND y = 0 AND zIndex = 0 AND sortOrder > 0
+                """,
+                [],
+            )
+        elif version == 25:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO web_search_config(
+                  id, provider, tavilyApiKeyEnc, braveApiKeyEnc, updatedAt
+                ) VALUES (1, 'disabled', NULL, NULL, 0)
+                """,
+                [],
+            )
+        elif version == 26:
+            db.execute(
+                "UPDATE web_search_config SET provider = 'ddgs' "
+                "WHERE id = 1 AND provider = 'disabled' AND updatedAt = 0",
+                [],
+            )
+        elif version == 31:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO agent_profiles(
+                  id, name, kind, apiProviderId, cliRuntimeId, executablePath, model,
+                  reasoningEffort, nativeWebSearch, webSearchPolicy, createdAt, updatedAt
+                )
+                SELECT
+                  'api-' || id, name, 'api', id, NULL, NULL, model,
+                  reasoningEffort, 0, 'auto', createdAt, createdAt
+                FROM ai_providers
+                """,
+                [],
+            )
+            db.execute(
+                """
+                UPDATE chat_threads
+                SET agentProfileId = 'api-' || providerId
+                WHERE agentProfileId IS NULL
+                  AND providerId IS NOT NULL
+                  AND EXISTS(
+                    SELECT 1 FROM agent_profiles
+                    WHERE agent_profiles.id = 'api-' || chat_threads.providerId
+                  )
+                """,
+                [],
+            )
+            db.execute(
+                """
+                UPDATE agent_runs
+                SET agentProfileId = 'api-' || providerId
+                WHERE agentProfileId IS NULL
+                  AND providerId IS NOT NULL
+                  AND EXISTS(
+                    SELECT 1 FROM agent_profiles
+                    WHERE agent_profiles.id = 'api-' || agent_runs.providerId
+                  )
+                """,
+                [],
+            )
+        elif version in {32, 34}:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO sync_state(id, libraryId)
+                VALUES(
+                  1,
+                  lower(hex(randomblob(4))) || '-' ||
+                  lower(hex(randomblob(2))) || '-' ||
+                  lower(hex(randomblob(2))) || '-' ||
+                  lower(hex(randomblob(2))) || '-' ||
+                  lower(hex(randomblob(6)))
+                )
+                """,
+                [],
+            )
+        elif version == 33 and db.has_object("table", "sync_outbox"):
+            db.execute(
+                """
+                UPDATE sync_outbox
+                SET status = 'pending',
+                    updatedAt = MAX(updatedAt, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+                WHERE status = 'sending'
+                """,
+                [],
+            )
+        elif version == 35:
+            db.execute(
+                "UPDATE web_search_config SET provider = 'disabled' "
+                "WHERE id = 1 AND provider = 'ddgs' AND updatedAt = 0",
+                [],
+            )
+        elif version == 39:
+            db.execute(
+                "DELETE FROM ai_summaries "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM documents WHERE documents.id = ai_summaries.docId"
+                ")",
+                [],
+            )
+        db.exec("COMMIT")
+    except Exception:
+        db.exec("ROLLBACK")
+        raise
+
+
 def run_migrations(db: SqliteLike) -> MigrationResult:
     from_version = db.get_user_version()
     use_trigram = trigram_available(db)
@@ -644,6 +841,8 @@ def run_migrations(db: SqliteLike) -> MigrationResult:
             continue
         if migration.version >= 12 and migration_schema_present(db, migration.version):
             if current_version < migration.version:
+                if migration.version in SCHEMA_PRESENT_DATA_MIGRATION_VERSIONS:
+                    _backfill_schema_present_data(db, migration.version)
                 db.set_user_version(migration.version)
             continue
         try:

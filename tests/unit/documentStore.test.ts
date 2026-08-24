@@ -70,7 +70,13 @@ const mockOnMenuExportBibtex = vi.fn()
 const mockOnMenuImportZotero = vi.fn()
 const mockOnMenuImportMendeley = vi.fn()
 const mockOnLibrarySwitched = vi.fn()
-const mockEventsOff = vi.fn()
+const mockDisposeDocUpdated = vi.fn()
+const mockDisposeImportProgress = vi.fn()
+const mockDisposeImportToast = vi.fn()
+const mockDisposeMenuExportBibtex = vi.fn()
+const mockDisposeMenuImportZotero = vi.fn()
+const mockDisposeMenuImportMendeley = vi.fn()
+const mockDisposeLibrarySwitched = vi.fn()
 
 const defaultListColumnState: ListColumnState = {
   columns: [
@@ -108,6 +114,7 @@ function resetStoreState(): void {
 }
 
 beforeEach(() => {
+  useDocumentStore.getState().destroy()
   initI18n('en')
   mockList.mockReset()
   mockCounts.mockReset()
@@ -137,7 +144,21 @@ beforeEach(() => {
   mockOnMenuImportZotero.mockReset()
   mockOnMenuImportMendeley.mockReset()
   mockOnLibrarySwitched.mockReset()
-  mockEventsOff.mockReset()
+  mockDisposeDocUpdated.mockReset()
+  mockDisposeImportProgress.mockReset()
+  mockDisposeImportToast.mockReset()
+  mockDisposeMenuExportBibtex.mockReset()
+  mockDisposeMenuImportZotero.mockReset()
+  mockDisposeMenuImportMendeley.mockReset()
+  mockDisposeLibrarySwitched.mockReset()
+
+  mockOnDocUpdated.mockReturnValue(mockDisposeDocUpdated)
+  mockOnImportProgress.mockReturnValue(mockDisposeImportProgress)
+  mockOnImportToast.mockReturnValue(mockDisposeImportToast)
+  mockOnMenuExportBibtex.mockReturnValue(mockDisposeMenuExportBibtex)
+  mockOnMenuImportZotero.mockReturnValue(mockDisposeMenuImportZotero)
+  mockOnMenuImportMendeley.mockReturnValue(mockDisposeMenuImportMendeley)
+  mockOnLibrarySwitched.mockReturnValue(mockDisposeLibrarySwitched)
 
   mockList.mockResolvedValue([])
   mockCounts.mockResolvedValue({ all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 })
@@ -218,7 +239,6 @@ beforeEach(() => {
   events.onMenuImportZotero = mockOnMenuImportZotero
   events.onMenuImportMendeley = mockOnMenuImportMendeley
   events.onLibrarySwitched = mockOnLibrarySwitched
-  events.off = mockEventsOff
 
   resetStoreState()
   useConfirmStore.setState({ request: null })
@@ -369,33 +389,19 @@ describe('DocumentStore', () => {
       useDocumentStore.getState().init(null)
       useDocumentStore.getState().destroy()
 
-      expect(mockEventsOff).toHaveBeenCalledWith('document:updated', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('import:progress', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('import:toast', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('menu:export-bibtex', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('menu:import-zotero', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('menu:import-mendeley', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledWith('library:switched', expect.any(Function))
-      expect(mockEventsOff).toHaveBeenCalledTimes(7)
+      expect(mockDisposeDocUpdated).toHaveBeenCalledOnce()
+      expect(mockDisposeImportProgress).toHaveBeenCalledOnce()
+      expect(mockDisposeImportToast).toHaveBeenCalledOnce()
+      expect(mockDisposeMenuExportBibtex).toHaveBeenCalledOnce()
+      expect(mockDisposeMenuImportZotero).toHaveBeenCalledOnce()
+      expect(mockDisposeMenuImportMendeley).toHaveBeenCalledOnce()
+      expect(mockDisposeLibrarySwitched).toHaveBeenCalledOnce()
       expect(useDocumentStore.getState().initialized).toBe(false)
     })
 
     it('library:switched event refetches documents and clears selection', async () => {
       const fetchedDocs = [makeDoc({ id: 'a1' }), makeDoc({ id: 'a2' })]
-      const targetColumns: ListColumnState = {
-        ...defaultListColumnState,
-        sort: { field: 'year', dir: 'asc' }
-      }
       mockList.mockResolvedValue(fetchedDocs)
-      mockGetBootstrap.mockResolvedValue({
-        language: 'zh',
-        theme: 'light',
-        windowBounds: null,
-        listColumnState: targetColumns,
-        sidebarCollapsed: true,
-        firstRun: false,
-        libraryFolderPath: '/new/library'
-      })
       useDocumentStore.setState({
         selectedIds: ['old'],
         focusedDocId: 'old',
@@ -413,7 +419,8 @@ describe('DocumentStore', () => {
       await Promise.resolve()
       await Promise.resolve()
       expect(mockList).toHaveBeenCalled()
-      expect(useDocumentStore.getState().listColumnState).toEqual(targetColumns)
+      expect(useDocumentStore.getState().listColumnState).toEqual(defaultListColumnState)
+      expect(mockGetBootstrap).not.toHaveBeenCalled()
     })
 
     it('drops a stale debounced column write after an external library switch', async () => {
@@ -470,7 +477,6 @@ describe('DocumentStore', () => {
       })
 
       useDocumentStore.getState().init(null)
-      const oldCategories = useDocumentStore.getState().fetchCategories()
       const cb = mockOnLibrarySwitched.mock.calls[0]?.[0] as (() => void)
       cb()
 
@@ -513,7 +519,6 @@ describe('DocumentStore', () => {
         { id: 'stale-category', name: 'Stale', sortOrder: 0, createdAt: 0, count: 9 }
       ])
       resolveOldCounts({ all: 99, recentlyRead: 99, recentlyAdded: 99, starred: 99 })
-      await oldCategories
       await Promise.resolve()
 
       expect(useDocumentStore.getState().documents).toEqual(newDocuments)
@@ -1104,10 +1109,19 @@ describe('DocumentStore', () => {
       expect(created?.name).toBe('New')
       expect(useDocumentStore.getState().categories.at(-1)).toMatchObject({ name: 'New', count: 0 })
 
+      const categorizedDocument = makeDoc({ categories: [category] })
+      useDocumentStore.setState({
+        documents: [categorizedDocument],
+        searchResults: [categorizedDocument]
+      })
       await useDocumentStore.getState().renameCategory('cat-1', 'Renamed')
-      expect(useDocumentStore.getState().categories[0].name).toBe('Renamed')
+      expect(useDocumentStore.getState().categories[0]?.name).toBe('Renamed')
+      expect(useDocumentStore.getState().documents[0]?.categories?.[0]?.name).toBe('Renamed')
+      expect(useDocumentStore.getState().searchResults[0]?.categories?.[0]?.name).toBe('Renamed')
       await useDocumentStore.getState().deleteCategory('cat-1')
       expect(useDocumentStore.getState().categories.some((item) => item.id === 'cat-1')).toBe(false)
+      expect(useDocumentStore.getState().documents[0].categories).toEqual([])
+      expect(useDocumentStore.getState().searchResults[0].categories).toEqual([])
     })
 
     it('returns null and shows errors when category mutations fail', async () => {

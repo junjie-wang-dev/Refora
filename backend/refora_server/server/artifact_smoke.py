@@ -14,6 +14,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from refora_server.agent.sandbox_backend import ReforaFilesystemBackend
 from refora_server.db.migrations import MIGRATIONS_DIR, SCHEMA_FILE
+from refora_server.server.contract import load_contract_snapshot
 from refora_server.services.mineru import _runtime_resource_path
 
 REQUIRED_MODULES: Final[tuple[str, ...]] = (
@@ -65,6 +66,7 @@ def verify_artifact() -> dict[str, Any]:
         "model_installer.py",
     ):
         _runtime_resource_path(resource)
+    contract = load_contract_snapshot()
 
     async def verify_checkpointer() -> None:
         connection = await aiosqlite.connect(":memory:")
@@ -109,5 +111,7 @@ def verify_artifact() -> dict[str, Any]:
     return {
         "ok": True,
         "modules": list(REQUIRED_MODULES),
+        "protocolVersion": contract["protocolVersion"],
+        "protocolDigest": contract["protocolDigest"],
         "versions": versions,
     }

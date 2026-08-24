@@ -6,7 +6,6 @@ import pytest
 from conftest import insert_doc, make_docs_repo, open_migrated_db
 from refora_server.repositories.ai_summaries import createAiSummariesRepository
 from refora_server.services.ai_summary import (
-    build_provider_config,
     compactText,
     createAiSummaryService,
     isRetryableError,
@@ -14,6 +13,7 @@ from refora_server.services.ai_summary import (
     stripCodeFences,
     toSummaryContent,
 )
+from refora_server.services.provider_config import build_provider_config
 
 
 @pytest.fixture
@@ -124,10 +124,13 @@ def test_is_retryable_auth_not_retryable():
 
 
 def test_build_provider_config_basic():
-    config = build_provider_config(_provider(), deep_thinking=False)
+    config = build_provider_config(
+        _provider(temperature=0.35), deep_thinking=False
+    )
     assert config["model"] == "gpt-5.6-terra"
     assert config["baseUrl"] == "https://api.openai.com/v1"
     assert config["apiKey"] == "sk-test"
+    assert config["temperature"] == 0.35
     assert "reasoning" not in config
 
 
@@ -385,9 +388,33 @@ async def test_summarize_destroy_prevents_persistence(db):
 
     deps = {"generate_summary": gen}
     svc = createAiSummaryService(repos, deps)
-    svc["destroy"]()
+    await svc["destroy"]()
     result = await svc["summarize"]("doc-1", _provider(text="text"))
     assert result is None
+    assert repos["aiSummaries"]["getSummary"]("doc-1") is None
+
+
+async def test_destroy_awaits_inflight_async_generation(db):
+    insert_doc(db, id="doc-1")
+    repos = _repos(db)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def gen(_req):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    service = createAiSummaryService(repos, {"generate_summary": gen})
+    service["queueSummary"]("doc-1", _provider(text="document text"))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await asyncio.wait_for(service["destroy"](), timeout=1)
+
+    assert cancelled.is_set()
     assert repos["aiSummaries"]["getSummary"]("doc-1") is None
 
 
@@ -491,18 +518,18 @@ async def test_summarize_third_job_waits_for_slot(db):
 
 
 def test_summary_chunk_prompt_carries_word_limit():
-    from refora_server.server.lifespan import _summary_prompt
+    from refora_server.server.services.lifespan_support import summary_prompt
 
-    prompt = _summary_prompt("excerpt text here", None)
+    prompt = summary_prompt("excerpt text here", None)
     assert "60 words" in prompt
     assert "two essential facts" in prompt
     assert "Extracted PDF text:\nexcerpt text here" in prompt
 
 
 def test_summary_final_prompt_carries_constraints():
-    from refora_server.server.lifespan import _summary_prompt
+    from refora_server.server.services.lifespan_support import summary_prompt
 
-    prompt = _summary_prompt(None, "combined notes here")
+    prompt = summary_prompt(None, "combined notes here")
     assert "3 to 5" in prompt
     assert "20 words" in prompt
     assert "primary language" in prompt
@@ -512,7 +539,7 @@ def test_summary_final_prompt_carries_constraints():
 
 
 def test_summary_prompt_raises_without_input():
-    from refora_server.server.lifespan import _summary_prompt
+    from refora_server.server.services.lifespan_support import summary_prompt
 
     with pytest.raises(RuntimeError):
-        _summary_prompt(None, None)
+        summary_prompt(None, None)

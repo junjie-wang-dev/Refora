@@ -3,14 +3,9 @@ export interface SyncAccount {
   email: string
 }
 
-export type SyncServiceState = 'unconfigured' | 'signedOut' | 'disabled' | 'ready'
-
 export interface SyncServiceStatus {
   configured: boolean
-  syncAvailable: boolean
   signedIn: boolean
-  enabled: boolean
-  state: SyncServiceState
   account: SyncAccount | null
 }
 

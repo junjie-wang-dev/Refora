@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, PencilSimple, Trash, CircleNotch } from '@phosphor-icons/react'
 import { showContextMenu } from '@lobehub/ui'
@@ -9,33 +9,43 @@ import type { Category } from '../../shared/ipc-types'
 import { Button as UiButton, Input as UiInput } from './ui'
 import { SidebarItem, SidebarSection } from './sidebarShared'
 import { useCategoryDrop } from '../hooks/useCategoryDrop'
+import { useInlineNamedEntityEditor } from '../hooks/useInlineNamedEntityEditor'
+
+const categoryName = (category: Category) => category.name
 
 export default function SidebarCategories() {
   const { t } = useTranslation()
   const showConfirm = useConfirmStore((s) => s.show)
 
   const categories = useDocumentStore((s) => s.categories)
-  const fetchCategories = useDocumentStore((s) => s.fetchCategories)
   const fetchDocuments = useDocumentStore((s) => s.fetchDocuments)
   const createCategory = useDocumentStore((s) => s.createCategory)
   const renameCategory = useDocumentStore((s) => s.renameCategory)
   const deleteCategory = useDocumentStore((s) => s.deleteCategory)
   const listMode = useDocumentStore((s) => s.listMode)
   const setListMode = useDocumentStore((s) => s.setListMode)
-  const focusedDocId = useDocumentStore((s) => s.focusedDocId)
 
   const { pendingCatImports, handleDragOver, handleDrop } = useCategoryDrop(fetchDocuments)
 
-  const [creatingNew, setCreatingNew] = useState(false)
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [draftName, setDraftName] = useState('')
-  const newInputRef = useRef<HTMLInputElement>(null)
-  const renameInputRef = useRef<HTMLInputElement>(null)
-  const submittingRef = useRef(false)
-
-  useEffect(() => {
-    void fetchCategories()
-  }, [fetchCategories])
+  const editor = useInlineNamedEntityEditor({
+    nameOf: categoryName,
+    onCreate: createCategory,
+    onRename: renameCategory
+  })
+  const {
+    creating: creatingNew,
+    renamingId,
+    draftName,
+    setDraftName,
+    newInputRef,
+    renameInputRef,
+    startCreate,
+    startRename,
+    commitCreate,
+    commitRename,
+    cancelCreate,
+    cancelRename
+  } = editor
 
   const handleCategoryClick = useCallback(
     (cat: Category) => {
@@ -44,77 +54,12 @@ export default function SidebarCategories() {
     [setListMode]
   )
 
-  const startCreate = useCallback(() => {
-    setDraftName('')
-    setRenamingId(null)
-    setCreatingNew(true)
-  }, [])
-
-  const commitCreate = useCallback(async () => {
-    if (submittingRef.current) return
-    const trimmed = draftName.trim()
-    if (!trimmed) {
-      setCreatingNew(false)
-      setDraftName('')
-      return
-    }
-    submittingRef.current = true
-    await createCategory(trimmed)
-    setCreatingNew(false)
-    setDraftName('')
-    submittingRef.current = false
-  }, [draftName, createCategory])
-
-  const cancelCreate = useCallback(() => {
-    setCreatingNew(false)
-    setDraftName('')
-  }, [])
-
-  const startRename = useCallback((cat: Category) => {
-    setDraftName(cat.name)
-    setCreatingNew(false)
-    setRenamingId(cat.id)
-  }, [])
-
-  const commitRename = useCallback(async (cat: Category) => {
-    if (submittingRef.current) return
-    const trimmed = draftName.trim()
-    if (trimmed && trimmed !== cat.name) {
-      submittingRef.current = true
-      await renameCategory(cat.id, trimmed)
-      submittingRef.current = false
-    }
-    setRenamingId(null)
-    setDraftName('')
-  }, [draftName, renameCategory])
-
-  const cancelRename = useCallback(() => {
-    setRenamingId(null)
-    setDraftName('')
-  }, [])
-
-  useEffect(() => {
-    if (creatingNew) {
-      newInputRef.current?.focus()
-    }
-  }, [creatingNew])
-
-  useEffect(() => {
-    if (renamingId) {
-      renameInputRef.current?.focus()
-      renameInputRef.current?.select()
-    }
-  }, [renamingId])
-
   const confirmDeleteCategory = useCallback(async (cat: Category) => {
     await deleteCategory(cat.id)
     if (listMode.mode === 'category' && listMode.categoryId === cat.id) {
       setListMode({ mode: 'all' })
     }
-    if (focusedDocId) {
-      useDocumentStore.getState().setFocusedDoc(null)
-    }
-  }, [deleteCategory, listMode, focusedDocId, setListMode])
+  }, [deleteCategory, listMode, setListMode])
 
   const handleDelete = useCallback(
     (cat: Category) => {

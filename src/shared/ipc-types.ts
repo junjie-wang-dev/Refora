@@ -1,4 +1,3 @@
-import { IpcChannel } from './ipc-channels'
 import type {
   MineruEngineStatus,
   MineruInstallProgress,
@@ -877,39 +876,34 @@ export interface WorkspaceItemsChangedEvent {
   docIds?: string[]
 }
 
-export type EventChannelKey = keyof typeof IpcChannel & `Event${string}`
-export type EventChannel = (typeof IpcChannel)[EventChannelKey]
-
 export interface DocumentEvents {
-  onRendererFlushRequested(cb: () => Promise<void>): void
-  onDocumentUpdated(cb: (doc: Document) => void): void
-  onWindowFocusChanged(cb: (focused: boolean) => void): void
-  onImportProgress(cb: (payload: ImportProgress) => void): void
-  onImportToast(cb: (message: string) => void): void
-  onMenuExportBibtex(cb: () => void): void
-  onMenuImportZotero(cb: () => void): void
-  onMenuImportMendeley(cb: () => void): void
-  onMenuImportIdentifier(cb: () => void): void
-  onLibraryScanning(cb: (payload: ImportProgress) => void): void
-  onLibrarySwitched(cb: (payload: LibrarySwitchResult) => void): void
-  onSyncAuthConfirmation(cb: (payload: SyncAuthConfirmation) => void): void
-  onAiSummaryUpdated(cb: (docId: string) => void): void
-  onAiSummaryError(cb: (payload: SummaryErrorEvent) => void): void
-  onAiChatToken(cb: (payload: ChatTokenEvent) => void): void
-  onAiChatReasoning(cb: (payload: ChatReasoningEvent) => void): void
-  onAiChatDone(cb: (payload: ChatDoneEvent) => void): void
-  onAiChatError(cb: (payload: ChatErrorEvent) => void): void
-  onAiChatTrace(cb: (payload: ChatTraceEvent) => void): void
-  onAiChatInterrupted(cb: (payload: ChatInterruptedEvent) => void): void
-  onAiChatRunStatus(cb: (payload: ChatRunStatusEvent) => void): void
-  onAiChatTitleUpdated(cb: (payload: ChatTitleUpdatedEvent) => void): void
-  onAiReportCreated(cb: (report: AiReport) => void): void
-  onWorkspaceItemsChanged(cb: (payload: WorkspaceItemsChangedEvent) => void): void
-  onMineruInstallProgress(cb: (payload: MineruInstallProgress) => void): void
-  onOcrProgress(cb: (payload: OcrProgressEvent) => void): void
-  onOcrCompleted(cb: (payload: OcrCompletedEvent) => void): void
-  onOcrError(cb: (payload: OcrErrorEvent) => void): void
-  off(channel: EventChannel, cb: unknown): void
+  onRendererFlushRequested(cb: () => Promise<void>): () => void
+  onDocumentUpdated(cb: (doc: Document) => void): () => void
+  onWindowFocusChanged(cb: (focused: boolean) => void): () => void
+  onImportProgress(cb: (payload: ImportProgress) => void): () => void
+  onImportToast(cb: (message: string) => void): () => void
+  onMenuExportBibtex(cb: () => void): () => void
+  onMenuImportZotero(cb: () => void): () => void
+  onMenuImportMendeley(cb: () => void): () => void
+  onMenuImportIdentifier(cb: () => void): () => void
+  onLibrarySwitched(cb: (payload: LibrarySwitchResult) => void): () => void
+  onSyncAuthConfirmation(cb: (payload: SyncAuthConfirmation) => void): () => void
+  onAiSummaryUpdated(cb: (docId: string) => void): () => void
+  onAiSummaryError(cb: (payload: SummaryErrorEvent) => void): () => void
+  onAiChatToken(cb: (payload: ChatTokenEvent) => void): () => void
+  onAiChatReasoning(cb: (payload: ChatReasoningEvent) => void): () => void
+  onAiChatDone(cb: (payload: ChatDoneEvent) => void): () => void
+  onAiChatError(cb: (payload: ChatErrorEvent) => void): () => void
+  onAiChatTrace(cb: (payload: ChatTraceEvent) => void): () => void
+  onAiChatInterrupted(cb: (payload: ChatInterruptedEvent) => void): () => void
+  onAiChatRunStatus(cb: (payload: ChatRunStatusEvent) => void): () => void
+  onAiChatTitleUpdated(cb: (payload: ChatTitleUpdatedEvent) => void): () => void
+  onAiReportCreated(cb: (report: AiReport) => void): () => void
+  onWorkspaceItemsChanged(cb: (payload: WorkspaceItemsChangedEvent) => void): () => void
+  onMineruInstallProgress(cb: (payload: MineruInstallProgress) => void): () => void
+  onOcrProgress(cb: (payload: OcrProgressEvent) => void): () => void
+  onOcrCompleted(cb: (payload: OcrCompletedEvent) => void): () => void
+  onOcrError(cb: (payload: OcrErrorEvent) => void): () => void
 }
 
 export interface ReforaApi {
@@ -940,8 +934,6 @@ export interface ReforaApi {
   }
   import: {
     addFiles(paths: string[]): Promise<PdfImportResult>
-    addFolder(dir: string): Promise<PdfImportResult>
-    fromJson(file: string): Promise<number>
     fromZotero(): Promise<BibImportResult>
     fromMendeley(): Promise<BibImportResult>
     fromIdentifier(identifier: string): Promise<IdentifierImportResult>
@@ -970,7 +962,6 @@ export interface ReforaApi {
     signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
     resendConfirmation(request: SyncEmailRequest): Promise<void>
     signOut(): Promise<SyncServiceStatus>
-    setEnabled(enabled: boolean): Promise<SyncServiceStatus>
   }
   appearance: {
     setThemeSource(theme: ThemeMode): Promise<void>
@@ -1002,8 +993,7 @@ export interface ReforaApi {
   }
   getPathForFile(file: unknown): Promise<string>
   export: {
-    toJson(): Promise<string>
-    toBibtex(ids: string[]): Promise<string>
+    toBibtex(ids: string[]): Promise<void>
     toBibtexString(ids: string[]): Promise<string>
   }
   clipboard: {

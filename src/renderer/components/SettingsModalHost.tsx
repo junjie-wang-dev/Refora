@@ -9,7 +9,6 @@ export default function SettingsModalHost() {
   const settingsPage = useSettingsModalStore((state) => state.settingsPage)
   const accountOpen = useSettingsModalStore((state) => state.accountOpen)
   const closeSettings = useSettingsModalStore((state) => state.closeSettings)
-  const openSettings = useSettingsModalStore((state) => state.openSettings)
   const openAccount = useSettingsModalStore((state) => state.openAccount)
   const closeAccount = useSettingsModalStore((state) => state.closeAccount)
 
@@ -27,7 +26,6 @@ export default function SettingsModalHost() {
         <AccountModal
           open
           onClose={closeAccount}
-          onOpenSyncSettings={() => openSettings('sync')}
         />
       ) : null}
     </Suspense>

@@ -61,7 +61,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   const rootRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const requestVersionRef = useRef(0)
-  const documentSearchSyncedRef = useRef(false)
   const translationRef = useRef(t)
   translationRef.current = t
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId)
@@ -93,11 +92,9 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
 
   useEffect(() => {
     const handleLibrarySwitched = () => {
-      documentSearchSyncedRef.current = false
       resetLocalSearch()
     }
-    api.events.onLibrarySwitched(handleLibrarySwitched)
-    return () => api.events.off('library:switched', handleLibrarySwitched)
+    return api.events.onLibrarySwitched(handleLibrarySwitched)
   }, [resetLocalSearch])
 
   useEffect(() => {
@@ -140,36 +137,27 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
 
   useEffect(() => {
     if (!documentListOpen) {
-      documentSearchSyncedRef.current = false
       return
     }
     const unsubscribe = useDocumentStore.subscribe((state, previousState) => {
-      if (
-        documentSearchSyncedRef.current &&
-        previousState.isSearching &&
-        !state.isSearching
-      ) {
-        documentSearchSyncedRef.current = false
+      if (previousState.isSearching && !state.isSearching) {
         resetLocalSearch()
       }
     })
-    return () => {
-      documentSearchSyncedRef.current = false
-      unsubscribe()
-    }
+    return unsubscribe
   }, [documentListOpen, resetLocalSearch])
 
   useEffect(() => {
     if (!documentListOpen) return
     const trimmed = query.trim()
     if (!trimmed) {
-      documentSearchSyncedRef.current = false
-      useDocumentStore.getState().clearSearch()
+      if (useDocumentStore.getState().isSearching) {
+        useDocumentStore.getState().clearSearch()
+      }
       return
     }
     if (resolvedQuery !== trimmed) return
     setSearchResults(query, results.documents)
-    documentSearchSyncedRef.current = true
   }, [documentListOpen, query, resolvedQuery, results.documents, setSearchResults])
 
   const selectResult = useCallback(async (selection: SearchSelection) => {
@@ -213,9 +201,9 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   }, [onOpenChat, query, results.documents, setFocusedDoc, setSearchResults, t])
 
   const clear = useCallback(() => {
-    documentSearchSyncedRef.current = false
+    const shouldClearDocumentSearch = useDocumentStore.getState().isSearching
     resetLocalSearch()
-    clearSearch()
+    if (shouldClearDocumentSearch) clearSearch()
   }, [clearSearch, resetLocalSearch])
 
   const total = selections.length

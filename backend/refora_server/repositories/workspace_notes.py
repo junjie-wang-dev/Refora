@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.repositories.workspace_support import require_workspace, touch_workspace
 
 
 def _map_note(row: sqlite3.Row) -> dict[str, Any]:
@@ -40,11 +41,7 @@ def createWorkspaceNotesRepository(db):
         normalized_title = title.strip()
         if not normalized_title:
             raise RepoError("invalid_title", "note title cannot be empty")
-        workspace = db.execute(
-            "SELECT id FROM workspaces WHERE id = ?", [workspaceId]
-        ).fetchone()
-        if workspace is None:
-            raise RepoError("not_found", f"workspace not found: {workspaceId}")
+        require_workspace(db, workspaceId)
         id = str(uuid.uuid4())
         now = int(time.time() * 1000)
         db.execute(
@@ -53,9 +50,7 @@ def createWorkspaceNotesRepository(db):
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [id, workspaceId, noteType, normalized_title, contentMd, now, now],
         )
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?", [now, workspaceId]
-        )
+        touch_workspace(db, workspaceId, now)
         row = db.execute(
             "SELECT * FROM workspace_notes WHERE id = ?", [id]
         ).fetchone()
@@ -85,10 +80,7 @@ def createWorkspaceNotesRepository(db):
             "UPDATE workspace_notes SET title = ?, contentMd = ?, color = ?, updatedAt = ? WHERE id = ?",
             [title, contentMd, color, now, id],
         )
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
-            [now, existing["workspaceId"]],
-        )
+        touch_workspace(db, existing["workspaceId"], now)
         row = db.execute(
             "SELECT * FROM workspace_notes WHERE id = ?", [id]
         ).fetchone()
@@ -102,10 +94,7 @@ def createWorkspaceNotesRepository(db):
             raise RepoError("not_found", f"workspace note not found: {id}")
         db.execute("DELETE FROM workspace_notes WHERE id = ?", [id])
         now = int(time.time() * 1000)
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
-            [now, existing["workspaceId"]],
-        )
+        touch_workspace(db, existing["workspaceId"], now)
 
     def get(id: str) -> dict[str, Any] | None:
         row = db.execute(

@@ -43,7 +43,8 @@ describe('Python server packaging', () => {
 
     expect(script).toContain("['--verify-artifact']")
     expect(script).toContain('/ready')
-    expect(script).toContain('/shutdown')
+    expect(script).toContain("child.kill('SIGTERM')")
+    expect(script).toContain("result.signal !== 'SIGTERM'")
     expect(script).toContain("'langchain-openai'")
     expect(script).toContain("'langgraph-checkpoint-sqlite'")
   })

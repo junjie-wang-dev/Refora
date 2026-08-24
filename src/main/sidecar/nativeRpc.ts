@@ -1,11 +1,12 @@
 import { tmpdir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, relative, resolve as resolvePath } from 'node:path'
-import { lstatSync, realpathSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, relative } from 'node:path'
+import { lstatSync } from 'node:fs'
 import { shell, dialog, clipboard, session as electronSession, type BrowserWindow } from 'electron'
 import type { Result } from '../../shared/ipc-types'
 import { createSafeStorageProxy, type SafeStorageProxy } from '../services/safeStorageProxy'
 import { logger } from '../services/logger'
 import { writeFileToClipboard } from '../services/clipboard'
+import { ExistingPathError, resolveExistingPath } from '../services/existingPath'
 
 export interface NativeRpcDeps {
   getWin?: () => BrowserWindow | null
@@ -48,10 +49,7 @@ function asString(value: unknown): string | null {
 
 function normalizeRoot(path: string): string | null {
   try {
-    if (!isAbsolute(path)) return null
-    const resolved = resolvePath(path)
-    const real = realpathSync(resolved)
-    return lstatSync(real).isDirectory() ? real : null
+    return resolveExistingPath(path, 'directory')
   } catch {
     return null
   }
@@ -67,36 +65,42 @@ export function validateNativePath(
   kind: NativePathKind,
   policy?: NativePathPolicy
 ): string {
-  if (!isAbsolute(path)) throw new Error('path must be absolute')
-  const resolvedPath = resolvePath(path)
-  const requestedStats = lstatSync(resolvedPath)
-  if (requestedStats.isSymbolicLink()) throw new Error('symbolic links are not allowed')
-  const realPath = realpathSync(resolvedPath)
-  const stats = lstatSync(realPath)
-  if (kind === 'file' && !stats.isFile()) throw new Error('path must reference a file')
-  if (kind === 'item' && !stats.isFile() && !stats.isDirectory()) {
-    throw new Error('path must reference a file or directory')
+  let realPath: string
+  try {
+    realPath = resolveExistingPath(path, kind)
+  } catch (error) {
+    if (!(error instanceof ExistingPathError)) throw error
+    if (error.failure === 'not_absolute') throw new Error('path must be absolute', { cause: error })
+    if (error.failure === 'symbolic_link') throw new Error('symbolic links are not allowed', { cause: error })
+    if (error.failure === 'wrong_kind') {
+      throw new Error(
+        kind === 'file' ? 'path must reference a file' : 'path must reference a file or directory',
+        { cause: error }
+      )
+    }
+    throw new Error(`unable to inspect path: ${error.resolvedPath}`, { cause: error })
   }
   if (!policy?.capability) return realPath
+  const isDirectory = lstatSync(realPath).isDirectory()
   const managedRoots = (policy.managedRoots ?? [])
     .map(normalizeRoot)
     .filter((root): root is string => root !== null)
   const isManaged = managedRoots.some((root) => isWithinRoot(realPath, root))
   if (
     isManaged &&
-    (policy.capability !== 'managed-directory-or-pdf' || stats.isDirectory())
+    (policy.capability !== 'managed-directory-or-pdf' || isDirectory)
   ) {
     return realPath
   }
   if (
     (policy.capability === 'managed-or-pdf' ||
       policy.capability === 'managed-directory-or-pdf') &&
-    stats.isFile() &&
+    !isDirectory &&
     extname(realPath).toLowerCase() === '.pdf'
   ) {
     return realPath
   }
-  if (policy.capability === 'managed-or-temporary-clipboard' && stats.isFile()) {
+  if (policy.capability === 'managed-or-temporary-clipboard' && !isDirectory) {
     const temporaryRoot = normalizeRoot(policy.temporaryRoot ?? tmpdir())
     const parent = dirname(realPath)
     if (

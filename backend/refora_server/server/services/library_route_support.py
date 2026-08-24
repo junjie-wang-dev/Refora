@@ -122,7 +122,6 @@ async def connector_call(connector: Any, operation: str, *args: Any) -> Any:
         "reveal": ("showInFolder", "show_in_folder"),
         "clipboard": ("clipboardWrite", "clipboard_write", "writeText", "write_text"),
         "clipboard_file": ("clipboardWriteFile", "clipboard_write_file"),
-        "dialog_directory": ("dialogOpenDirectory", "dialog_open_directory"),
         "dialog_file": ("dialogOpenFile", "dialog_open_file"),
         "dialog_choose": ("dialogChoose", "dialog_choose"),
         "encrypt_api_key": ("encryptApiKey", "encrypt_api_key"),

@@ -78,6 +78,35 @@ import {
   SERVER_PROTOCOL_VERSION
 } from '../../src/shared/server-contract'
 
+type AssemblyDeps = Parameters<typeof createServerAssembly>[0]
+
+function createTestAssembly(
+  deps: Pick<AssemblyDeps, 'lifecycle' | 'getWin'> & Partial<Omit<AssemblyDeps, 'lifecycle' | 'getWin'>>
+) {
+  return createServerAssembly({
+    switchLibraryFolder: async (path) => ({
+      libraryFolderPath: path,
+      dbExisted: false,
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      errors: []
+    }),
+    rendererPathCapabilities: {
+      authorizeFile: (path) => path,
+      authorizeDirectory: (path) => path,
+      consumeFile: (path) => path,
+      consumeFiles: (paths) => [...paths],
+      consumeDirectory: (path) => path,
+      clear: vi.fn()
+    },
+    removeDocumentPreviewCache: async () => undefined,
+    openDirectory: async () => null,
+    saveBibtex: async () => undefined,
+    ...deps
+  })
+}
+
 describe('main process server assembly', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -122,7 +151,7 @@ describe('main process server assembly', () => {
         mocks.calls.push('lifecycle.stop')
       })
     }
-    const assembly = createServerAssembly({
+    const assembly = createTestAssembly({
       lifecycle,
       getWin: () => null
     })
@@ -171,7 +200,7 @@ describe('main process server assembly', () => {
         mocks.calls.push('lifecycle.stop')
       })
     }
-    const assembly = createServerAssembly({
+    const assembly = createTestAssembly({
       lifecycle,
       getWin: () => null
     })
@@ -210,7 +239,7 @@ describe('main process server assembly', () => {
       getServerBaseUrl: vi.fn(),
       stop: vi.fn()
     }
-    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+    const assembly = createTestAssembly({ lifecycle, getWin: () => window })
     await assembly.start()
 
     await assembly.stop()
@@ -237,7 +266,7 @@ describe('main process server assembly', () => {
       getServerBaseUrl: vi.fn(),
       stop: vi.fn()
     }
-    const assembly = createServerAssembly({ lifecycle, getWin: () => null })
+    const assembly = createTestAssembly({ lifecycle, getWin: () => null })
     await assembly.start()
 
     expect(assembly.addNativeManagedRoot('/library/discovered')).toBe(true)
@@ -259,7 +288,7 @@ describe('main process server assembly', () => {
       getServerBaseUrl: vi.fn(),
       stop: vi.fn()
     }
-    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+    const assembly = createTestAssembly({ lifecycle, getWin: () => window })
     await assembly.start()
     const invokeHandler = mocks.ipcHandle.mock.calls
       .filter(([channel]) => channel === 'app')
@@ -294,7 +323,7 @@ describe('main process server assembly', () => {
         mocks.calls.push('lifecycle.stop')
       })
     }
-    const assembly = createServerAssembly({
+    const assembly = createTestAssembly({
       lifecycle,
       getWin: () => null
     })
@@ -321,7 +350,7 @@ describe('main process server assembly', () => {
       getServerBaseUrl: vi.fn(),
       stop: vi.fn()
     }
-    const assembly = createServerAssembly({ lifecycle, getWin: () => window })
+    const assembly = createTestAssembly({ lifecycle, getWin: () => window })
 
     await expect(assembly.start()).rejects.toThrow('spawn failed')
 

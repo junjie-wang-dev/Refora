@@ -34,7 +34,7 @@ macOS only.
 ## Verification gate
 After **any** code change, before declaring work done, run:
 ```
-npm run typecheck && npm run lint && npm run test
+npm run verify
 ```
 - Smoke a feature with `npm run dev`.
 - Before claiming a build works: `npm run package`.
@@ -63,7 +63,7 @@ A task's own Verification assertions must also pass. Do not mark a task done unt
 - `tsc -b` (typecheck) uses project references and **excludes test files**; tests are run by vitest only.
 
 ## CI and release automation
-- `.github/workflows/ci.yml` runs the verification gate and an unsigned macOS package build for every branch push and pull request.
+- `.github/workflows/ci.yml` runs the verification gate and an unsigned macOS package build for main-branch pushes and pull requests.
 - `.github/workflows/release.yml` runs the same gate and publishes the DMG plus a SHA-256 checksum when a `v*` tag is pushed.
 - A release tag must exactly match the package version, for example package version `0.2.0` uses tag `v0.2.0`.
 - Never weaken or bypass the verification steps to make a workflow pass.

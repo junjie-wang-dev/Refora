@@ -12,7 +12,7 @@ For new UI/UX work, start from the live renderer and its focused component tests
 - Visual or interaction changes include focused tests and the project verification gate.
 
 ```sh
-npm run typecheck && npm run lint && npm run test
+npm run verify
 ```
 
 This concise status document replaces the obsolete task list so historical findings are not mistaken for unfinished work.

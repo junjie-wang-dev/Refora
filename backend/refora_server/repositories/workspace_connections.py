@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.repositories.workspace_support import require_workspace, touch_workspace
 
 _ANCHORS = ("top", "right", "bottom", "left")
 
@@ -23,19 +24,8 @@ def _map_connection(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def createWorkspaceConnectionsRepository(db):
-    def touchWorkspace(workspaceId: str) -> None:
-        db.execute(
-            "UPDATE workspaces SET updatedAt = ? WHERE id = ?",
-            [int(time.time() * 1000), workspaceId],
-        )
-
-    def ensureWorkspace(workspaceId: str) -> None:
-        cur = db.execute("SELECT id FROM workspaces WHERE id = ?", [workspaceId])
-        if cur.fetchone() is None:
-            raise RepoError("not_found", f"workspace not found: {workspaceId}")
-
     def list(workspaceId: str) -> list[dict[str, Any]]:
-        ensureWorkspace(workspaceId)
+        require_workspace(db, workspaceId)
         cur = db.execute(
             "SELECT * FROM workspace_connections WHERE workspaceId = ? ORDER BY createdAt, id",
             [workspaceId],
@@ -54,7 +44,7 @@ def createWorkspaceConnectionsRepository(db):
         sourceAnchor: str,
         targetAnchor: str,
     ) -> dict[str, Any]:
-        ensureWorkspace(workspaceId)
+        require_workspace(db, workspaceId)
         if sourceAnchor not in _ANCHORS or targetAnchor not in _ANCHORS:
             raise RepoError("invalid_anchor", "workspace connection anchor is invalid")
         if sourceItemId == targetItemId:
@@ -83,7 +73,7 @@ def createWorkspaceConnectionsRepository(db):
             "targetAnchor = excluded.targetAnchor",
             [conn_id, workspaceId, sourceItemId, targetItemId, sourceAnchor, targetAnchor, created_at],
         )
-        touchWorkspace(workspaceId)
+        touch_workspace(db, workspaceId)
         cur = db.execute("SELECT * FROM workspace_connections WHERE id = ?", [conn_id])
         return _map_connection(cur.fetchone())
 
@@ -93,6 +83,6 @@ def createWorkspaceConnectionsRepository(db):
         if existing is None:
             raise RepoError("not_found", f"workspace connection not found: {id}")
         db.execute("DELETE FROM workspace_connections WHERE id = ?", [id])
-        touchWorkspace(existing["workspaceId"])
+        touch_workspace(db, existing["workspaceId"])
 
     return {"list": list, "get": get, "create": create, "delete": remove}

@@ -13,7 +13,7 @@ import i18n from '../i18n'
 import { useDocumentStore } from '../store/documentStore'
 import { injectThemeCssVars } from '../theme/tokens'
 import type { ThemeMode } from '../../shared/ipc-types'
-import { invalidateRendererSettingWrites, scheduleRendererSetting } from '../persistence'
+import { scheduleRendererSetting } from '../persistence'
 
 export type { ThemeMode } from '../../shared/ipc-types'
 export type ResolvedTheme = 'dark' | 'light'
@@ -78,13 +78,12 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void loadTheme(true)
     const handleLibrarySwitched = () => {
-      invalidateRendererSettingWrites()
       void loadTheme(true)
     }
-    api.events.onLibrarySwitched(handleLibrarySwitched)
+    const dispose = api.events.onLibrarySwitched(handleLibrarySwitched)
     return () => {
       loadVersionRef.current += 1
-      api.events.off('library:switched', handleLibrarySwitched)
+      dispose()
     }
   }, [loadTheme])
 

@@ -150,7 +150,7 @@ beforeEach(() => {
     activeJob: null,
     result: null
   } satisfies OcrDocumentState)
-  api.events.onMineruInstallProgress = vi.fn()
+  api.events.onMineruInstallProgress = vi.fn(() => vi.fn())
   resetStore()
 })
 
@@ -257,6 +257,7 @@ describe('DetailPanel', () => {
       }) => void) | null = null
       api.events.onMineruInstallProgress = vi.fn((callback) => {
         installProgress = callback
+        return vi.fn()
       })
       api.ocr.getState = vi.fn()
         .mockResolvedValueOnce({ engine: notInstalledEngine, activeJob: null, result: null })

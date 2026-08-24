@@ -18,6 +18,8 @@ def test_artifact_smoke_imports_runtime_modules_and_initializes_components():
     assert result["ok"] is True
     assert result["modules"] == list(REQUIRED_MODULES)
     assert set(result["versions"]) == set(REQUIRED_DISTRIBUTIONS)
+    assert isinstance(result["protocolVersion"], int)
+    assert len(result["protocolDigest"]) == 64
 
 
 def test_sidecar_entry_exposes_offline_artifact_check():
@@ -34,3 +36,5 @@ def test_sidecar_entry_exposes_offline_artifact_check():
 
     assert result["ok"] is True
     assert set(result["versions"]) == set(REQUIRED_DISTRIBUTIONS)
+    assert isinstance(result["protocolVersion"], int)
+    assert len(result["protocolDigest"]) == 64

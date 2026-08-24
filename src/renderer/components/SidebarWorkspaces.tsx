@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, PencilSimple, Trash, SquaresFour } from '@phosphor-icons/react'
 import { showContextMenu } from '@lobehub/ui'
@@ -8,6 +8,9 @@ import { useConfirmStore } from '../store/confirmStore'
 import type { Workspace } from '../../shared/ipc-types'
 import { Button as UiButton, Input as UiInput } from './ui'
 import { SidebarItem, SidebarSection } from './sidebarShared'
+import { useInlineNamedEntityEditor } from '../hooks/useInlineNamedEntityEditor'
+
+const workspaceName = (workspace: Workspace) => workspace.name
 
 export default function SidebarWorkspaces() {
   const { t } = useTranslation()
@@ -17,83 +20,29 @@ export default function SidebarWorkspaces() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const requestActiveWorkspace = useWorkspaceStore((s) => s.requestActiveWorkspace)
   const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
-  const fetchWorkspaces = useWorkspaceStore((s) => s.fetchWorkspaces)
   const createWorkspace = useWorkspaceStore((s) => s.createWorkspace)
   const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace)
   const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace)
 
-  const [wsCreating, setWsCreating] = useState(false)
-  const [wsRenamingId, setWsRenamingId] = useState<string | null>(null)
-  const [wsDraftName, setWsDraftName] = useState('')
-  const wsNewInputRef = useRef<HTMLInputElement>(null)
-  const wsRenameInputRef = useRef<HTMLInputElement>(null)
-  const wsSubmittingRef = useRef(false)
-
-  useEffect(() => {
-    void fetchWorkspaces()
-  }, [fetchWorkspaces])
-
-  const startWsCreate = useCallback(() => {
-    setWsDraftName('')
-    setWsRenamingId(null)
-    setWsCreating(true)
-  }, [])
-
-  const commitWsCreate = useCallback(async () => {
-    if (wsSubmittingRef.current) return
-    const trimmed = wsDraftName.trim()
-    if (!trimmed) {
-      setWsCreating(false)
-      setWsDraftName('')
-      return
-    }
-    wsSubmittingRef.current = true
-    await createWorkspace(trimmed)
-    setWsCreating(false)
-    setWsDraftName('')
-    wsSubmittingRef.current = false
-  }, [wsDraftName, createWorkspace])
-
-  const cancelWsCreate = useCallback(() => {
-    setWsCreating(false)
-    setWsDraftName('')
-  }, [])
-
-  const startWsRename = useCallback((ws: Workspace) => {
-    setWsDraftName(ws.name)
-    setWsCreating(false)
-    setWsRenamingId(ws.id)
-  }, [])
-
-  const commitWsRename = useCallback(async (ws: Workspace) => {
-    if (wsSubmittingRef.current) return
-    const trimmed = wsDraftName.trim()
-    if (trimmed && trimmed !== ws.name) {
-      wsSubmittingRef.current = true
-      await renameWorkspace(ws.id, trimmed)
-      wsSubmittingRef.current = false
-    }
-    setWsRenamingId(null)
-    setWsDraftName('')
-  }, [wsDraftName, renameWorkspace])
-
-  const cancelWsRename = useCallback(() => {
-    setWsRenamingId(null)
-    setWsDraftName('')
-  }, [])
-
-  useEffect(() => {
-    if (wsCreating) {
-      wsNewInputRef.current?.focus()
-    }
-  }, [wsCreating])
-
-  useEffect(() => {
-    if (wsRenamingId) {
-      wsRenameInputRef.current?.focus()
-      wsRenameInputRef.current?.select()
-    }
-  }, [wsRenamingId])
+  const editor = useInlineNamedEntityEditor({
+    nameOf: workspaceName,
+    onCreate: createWorkspace,
+    onRename: renameWorkspace
+  })
+  const {
+    creating: wsCreating,
+    renamingId: wsRenamingId,
+    draftName: wsDraftName,
+    setDraftName: setWsDraftName,
+    newInputRef: wsNewInputRef,
+    renameInputRef: wsRenameInputRef,
+    startCreate: startWsCreate,
+    startRename: startWsRename,
+    commitCreate: commitWsCreate,
+    commitRename: commitWsRename,
+    cancelCreate: cancelWsCreate,
+    cancelRename: cancelWsRename
+  } = editor
 
   const confirmDeleteWorkspace = useCallback(async (ws: Workspace) => {
     await deleteWorkspace(ws.id)

@@ -14,6 +14,7 @@ from typing import Any, Callable
 from refora_server.library.importer import hashPdf, validatePdfPath
 from refora_server.repositories.errors import RepoError
 from refora_server.repositories.workspace_assets import workspace_asset_media_type
+from refora_server.services.workspace_note_input import parse_workspace_note_patch
 
 WORKSPACE_ASSET_TEXT_PREVIEW_LIMIT = 256 * 1024
 WORKSPACE_ASSET_DIRECTORY = "refora-assets"
@@ -850,7 +851,9 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         workspace_id: str, note_id: str, patch: dict[str, Any]
     ) -> dict[str, Any]:
         _require_scoped("workspaceNotes", "workspace note", note_id, workspace_id)
-        return repos["workspaceNotes"]["update"](note_id, patch)
+        return repos["workspaceNotes"]["update"](
+            note_id, parse_workspace_note_patch(patch)
+        )
 
     def delete_note(workspace_id: str, note_id: str) -> None:
         _require_scoped("workspaceNotes", "workspace note", note_id, workspace_id)

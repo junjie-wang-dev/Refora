@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, NotRequired, TypedDict
 
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import FileResponse, JSONResponse
@@ -12,22 +12,73 @@ from refora_server.server.services.result import (
     failure as _failure,
     success as _result,
 )
+from refora_server.services.workspace_note_input import parse_workspace_note_patch
 
 
 class RequestError(Exception):
     code = "validation"
 
 
-def _dependency(deps: Any, name: str) -> Any:
-    if isinstance(deps, dict):
-        return deps[name]
-    return getattr(deps, name)
+class WorkspacesService(TypedDict):
+    listWorkspaces: Callable[..., Any]
+    createWorkspace: Callable[..., Any]
+    createWorkspaceWithSandbox: Callable[..., Any]
+    updateWorkspace: Callable[..., Any]
+    deleteWorkspace: Callable[..., Any]
+    openSandbox: Callable[..., Any]
+    listItems: Callable[..., Any]
+    getItem: Callable[..., Any]
+    addItems: Callable[..., Any]
+    reorderItems: Callable[..., Any]
+    resizeItem: Callable[..., Any]
+    moveItem: Callable[..., Any]
+    deleteItem: Callable[..., Any]
+    listAssets: Callable[..., Any]
+    getAsset: Callable[..., Any]
+    importAssetsAsync: Callable[..., Awaitable[Any]]
+    importWorkspaceFiles: Callable[..., Any]
+    previewAsset: Callable[..., Any]
+    resolveAssetFile: Callable[..., Any]
+    openAsset: Callable[..., Any]
+    revealAsset: Callable[..., Any]
+    deleteAsset: Callable[..., Any]
+    getCanvas: Callable[..., Any]
+    putCanvas: Callable[..., Any]
+    listConnections: Callable[..., Any]
+    getConnection: Callable[..., Any]
+    createConnection: Callable[..., Any]
+    deleteConnection: Callable[..., Any]
+    listNotes: Callable[..., Any]
+    getNote: Callable[..., Any]
+    createNote: Callable[..., Any]
+    updateNote: Callable[..., Any]
+    deleteNote: Callable[..., Any]
 
 
-def _optional_dependency(deps: Any, name: str) -> Any:
-    if isinstance(deps, dict):
-        return deps.get(name)
-    return getattr(deps, name, None)
+class MineruService(TypedDict):
+    getStatus: Callable[..., Any]
+    setInstallRoot: Callable[..., Any]
+    install: Callable[..., Any]
+    cancelInstall: Callable[..., Any]
+    uninstall: Callable[..., Any]
+
+
+class OcrService(TypedDict, total=False):
+    startOcr: Callable[..., Any]
+    cancelOcr: Callable[..., Any]
+    getOcrState: Callable[..., Any]
+    getState: Callable[..., Any]
+    readMarkdown: Callable[..., Any]
+    resolveAsset: Callable[..., Any]
+    stopWorker: Callable[..., Any]
+
+
+class WorkspacesRouteDependencies(TypedDict):
+    workspaces: WorkspacesService
+    mineru: MineruService
+    ocr: OcrService
+    require_token: Callable[..., Any]
+    connector: NotRequired[Any]
 
 
 async def _invoke(operation: Callable[[], Any]) -> JSONResponse:
@@ -90,20 +141,6 @@ def _placement(value: dict[str, Any]) -> dict[str, Any] | None:
     return {"x": _number(placement, "x"), "y": _number(placement, "y")}
 
 
-def _item_ids(value: dict[str, Any], kind: str) -> tuple[list[str], bool]:
-    if "ids" in value:
-        return _string_list(value, "ids"), False
-    field = {
-        "document": "docId",
-        "report": "reportId",
-        "note": "noteId",
-        "asset": "assetId",
-    }.get(kind)
-    if field is None:
-        raise RequestError("kind must be document, report, note, or asset")
-    return [_string(value, field)], True
-
-
 def _status(value: Any) -> Any:
     return value.to_dict() if hasattr(value, "to_dict") else value
 
@@ -144,12 +181,12 @@ async def _select_workspace_files(connector: Any) -> list[str]:
     return paths
 
 
-def create_workspaces_router(deps: Any) -> APIRouter:
-    workspaces = _dependency(deps, "workspaces")
-    mineru = _dependency(deps, "mineru")
-    ocr = _dependency(deps, "ocr")
-    connector = _optional_dependency(deps, "connector")
-    require_token = _dependency(deps, "require_token")
+def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
+    workspaces = deps["workspaces"]
+    mineru = deps["mineru"]
+    ocr = deps["ocr"]
+    connector = deps.get("connector")
+    require_token = deps["require_token"]
     router = APIRouter(dependencies=[Depends(require_token)])
 
     @router.get("/workspaces")
@@ -203,25 +240,6 @@ def create_workspaces_router(deps: Any) -> APIRouter:
     @router.get("/workspace-items/{item_id}")
     async def get_item(item_id: str) -> JSONResponse:
         return await _invoke(lambda: workspaces["getItem"](item_id))
-
-    @router.post("/workspaces/{workspace_id}/items")
-    async def add_items(
-        workspace_id: str, body: dict[str, Any] | None = Body(default=None)
-    ) -> JSONResponse:
-        def operation() -> Any:
-            payload = _body(body)
-            kind = _string(payload, "kind")
-            ids, singular = _item_ids(payload, kind)
-            result = workspaces["addItems"](
-                workspace_id, kind, ids, _placement(payload)
-            )
-            if not singular:
-                return result
-            if not isinstance(result, list) or len(result) != 1:
-                raise RuntimeError("Workspace item creation returned an invalid result")
-            return result[0]
-
-        return await _invoke(operation)
 
     @router.post("/workspaces/{workspace_id}/items/batch")
     async def add_items_batch(
@@ -308,14 +326,7 @@ def create_workspaces_router(deps: Any) -> APIRouter:
                 paths = await _select_workspace_files(connector)
             if not paths:
                 return {"imported": [], "errors": []}
-            import_operation = workspaces.get("importAssetsAsync")
-            if import_operation is None:
-                return await asyncio.to_thread(
-                    workspaces["importAssets"],
-                    workspace_id,
-                    paths,
-                    _placement(payload),
-                )
+            import_operation = workspaces["importAssetsAsync"]
             result = import_operation(workspace_id, paths, _placement(payload))
             if inspect.isawaitable(result):
                 result = await result
@@ -461,7 +472,11 @@ def create_workspaces_router(deps: Any) -> APIRouter:
         workspace_id: str, note_id: str, body: dict[str, Any] | None = Body(default=None)
     ) -> JSONResponse:
         return await _invoke(
-            lambda: workspaces["updateNote"](workspace_id, note_id, _body(body))
+            lambda: workspaces["updateNote"](
+                workspace_id,
+                note_id,
+                parse_workspace_note_patch(_body(body)),
+            )
         )
 
     @router.delete("/workspaces/{workspace_id}/notes/{note_id}")

@@ -215,7 +215,7 @@ function RunTimeline({
       : null
   const hasError = terminalStatus === 'failed' || steps.some((step) => step.status === 'error')
   const runLabel = streaming
-    ? t('workspace.chat.traceRunningLabel', 'Running…')
+    ? t('workspace.chat.traceRunningLabel', 'running…')
     : hasError
       ? t('workspace.chat.traceCompletedError', 'Completed with an error')
       : terminalStatus === 'cancelled'
@@ -443,7 +443,7 @@ export default function ChatMessages({
                     {t('workspace.chat.noProviderTitle', 'No AI Provider')}
                   </p>
                   <p className="text-xs text-muted">
-                    {t('workspace.chat.noProvider', 'No AI provider configured. Add one in Gear.')}
+                    {t('workspace.chat.noProvider', 'No AI provider configured. Add one in Settings.')}
                   </p>
                 </div>
                 <UiButton
@@ -451,7 +451,7 @@ export default function ChatMessages({
                   size="md"
                   onClick={() => useSettingsModalStore.getState().openSettings('aiProviders')}
                 >
-                  {t('topbar.settings', 'Gear')}
+                  {t('topbar.settings', 'Settings')}
                 </UiButton>
               </>
             ) : (

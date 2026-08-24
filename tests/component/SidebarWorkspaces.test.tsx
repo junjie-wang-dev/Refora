@@ -66,10 +66,10 @@ describe('SidebarWorkspaces', () => {
 
   afterEach(cleanup)
 
-  it('fetches workspaces and renders the empty state', () => {
+  it('renders the store-owned empty state without fetching again', () => {
     mocks.state.workspaces = []
     render(<SidebarWorkspaces />)
-    expect(mocks.fetchWorkspaces).toHaveBeenCalledOnce()
+    expect(mocks.fetchWorkspaces).not.toHaveBeenCalled()
     expect(screen.getByText('sidebar.emptyWorkspaces')).toBeInTheDocument()
   })
 

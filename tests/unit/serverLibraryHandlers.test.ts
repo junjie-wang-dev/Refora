@@ -35,6 +35,31 @@ function createClient() {
   return { client, methods }
 }
 
+type LibraryHandlerDeps = Parameters<typeof createServerLibraryHandlers>[0]
+
+function createHandlers(
+  serverClient: ServerClient,
+  overrides: Partial<Omit<LibraryHandlerDeps, 'serverClient'>> = {}
+) {
+  return createServerLibraryHandlers({
+    serverClient,
+    switchLibraryFolder: vi.fn().mockResolvedValue({
+      libraryFolderPath: '/library',
+      dbExisted: false,
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      errors: []
+    }),
+    consumeFile: (path) => path,
+    consumeFiles: (paths) => [...paths],
+    consumeDirectory: (path) => path,
+    removeDocumentPreviewCache: vi.fn().mockResolvedValue(undefined),
+    saveBibtex: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  })
+}
+
 type Invocation = {
   channel: string
   args: unknown[]
@@ -47,10 +72,10 @@ describe('createServerLibraryHandlers', () => {
   it('notifies the main process after a setting is persisted', async () => {
     const { client } = createClient()
     const onSettingUpdated = vi.fn()
-    const handlers = createServerLibraryHandlers({
-      serverClient: client,
-      onSettingUpdated
-    }) as Record<string, (...args: unknown[]) => Promise<unknown>>
+    const handlers = createHandlers(client, { onSettingUpdated }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
 
     await handlers[IpcChannel.SettingsSet]('language', 'zh')
 
@@ -59,24 +84,20 @@ describe('createServerLibraryHandlers', () => {
 
   it('forwards every library IPC channel to the matching HTTP client method', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >
-    void client.http.importJson
     void client.http.importZotero
     void client.http.importMendeley
     void client.http.importIdentifier
     void client.http.aiProvidersModels
-    void client.http.exportJson
     void client.http.exportBibtex
     void client.http.exportBibtexString
-    methods.get('importJson')?.mockResolvedValue({ imported: 3 })
     methods.get('importZotero')?.mockResolvedValue({ added: 2, skipped: 1, errors: [] })
     methods.get('importMendeley')?.mockResolvedValue({ added: 1, skipped: 0, errors: [] })
     methods.get('importIdentifier')?.mockResolvedValue({ documentId: 'doc-new' })
     methods.get('aiProvidersModels')?.mockResolvedValue({ ok: true, models: ['gpt-5'] })
-    methods.get('exportJson')?.mockResolvedValue({ version: 1 })
     methods.get('exportBibtex')?.mockResolvedValue({ bibtex: '@article{one}' })
     methods.get('exportBibtexString')?.mockResolvedValue({ bibtex: '@article{two}' })
     const invocations: Invocation[] = [
@@ -121,8 +142,6 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.DocumentsRelocateFile, args: ['doc-1', '/tmp/paper.pdf'], method: 'documentsRelocate', forwarded: ['doc-1', { path: '/tmp/paper.pdf' }] },
       { channel: IpcChannel.DocumentsRestoreFile, args: ['doc-1'], method: 'documentsRestoreFile', forwarded: ['doc-1'] },
       { channel: IpcChannel.ImportAddFiles, args: [['/tmp/paper.pdf']], method: 'importFiles', forwarded: [{ paths: ['/tmp/paper.pdf'] }] },
-      { channel: IpcChannel.ImportAddFolder, args: ['/tmp'], method: 'importFolder', forwarded: [{ path: '/tmp' }] },
-      { channel: IpcChannel.ImportFromJson, args: ['/tmp/data.json'], method: 'importJson', forwarded: ['/tmp/data.json'], data: 3 },
       { channel: IpcChannel.ImportFromZotero, args: [{ paths: ['/tmp/zotero.bib'] }], method: 'importZotero', forwarded: [{ paths: ['/tmp/zotero.bib'] }], data: { added: 2, skipped: 1, errors: [] } },
       { channel: IpcChannel.ImportFromMendeley, args: [{ paths: ['/tmp/mendeley.bib'] }], method: 'importMendeley', forwarded: [{ paths: ['/tmp/mendeley.bib'] }], data: { added: 1, skipped: 0, errors: [] } },
       { channel: IpcChannel.ImportFromIdentifier, args: ['10.1000/test'], method: 'importIdentifier', forwarded: [{ identifier: '10.1000/test' }], data: { added: ['doc-new'] } },
@@ -136,7 +155,6 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.WatchAdd, args: ['/tmp/watch'], method: 'watchAdd', forwarded: [{ path: '/tmp/watch' }] },
       { channel: IpcChannel.WatchRemove, args: ['watch-1'], method: 'watchRemove', forwarded: ['watch-1'] },
       { channel: IpcChannel.WatchToggle, args: ['watch-1', true], method: 'watchToggle', forwarded: ['watch-1', { enabled: true }] },
-      { channel: IpcChannel.LibrarySwitch, args: ['/tmp/library'], method: 'librarySwitch', forwarded: [{ path: '/tmp/library' }] },
       { channel: IpcChannel.SettingsGet, args: ['language', 'en'], method: 'settingsGet', forwarded: [] },
       { channel: IpcChannel.SettingsSet, args: ['language', 'zh'], method: 'settingsUpdate', forwarded: [{ language: 'zh' }] },
       { channel: IpcChannel.WebSearchConfigGet, args: [], method: 'settingsWebSearchGet', forwarded: [] },
@@ -149,8 +167,6 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.AiProvidersTest, args: ['provider-1'], method: 'aiProvidersTest', forwarded: ['provider-1'] },
       { channel: IpcChannel.AiProvidersListModels, args: [{ providerId: 'provider-1', presetId: 'openai' }], method: 'aiProvidersModels', forwarded: [{ providerId: 'provider-1', presetId: 'openai' }], data: { ok: true, models: [expect.objectContaining({ id: 'gpt-5' })] } },
       { channel: IpcChannel.AgentProfilesScanRuntimes, args: [], method: 'agentProfilesScanRuntimes', forwarded: [] },
-      { channel: IpcChannel.ExportToJson, args: [{ documentIds: ['doc-1'] }], method: 'exportJson', forwarded: [{ documentIds: ['doc-1'] }], data: '{\n  "version": 1\n}' },
-      { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], method: 'exportBibtex', forwarded: [{ documentIds: ['doc-1'] }], data: '@article{one}' },
       { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], method: 'exportBibtexString', forwarded: [['doc-1']], data: '@article{two}' },
       { channel: IpcChannel.ClipboardWriteText, args: ['text'], method: 'clipboardWriteText', forwarded: [{ text: 'text' }] },
       { channel: IpcChannel.ClipboardCopyMarkdown, args: ['title', 'markdown'], method: 'clipboardCopyMarkdown', forwarded: [{ title: 'title', markdown: 'markdown' }] },
@@ -172,7 +188,7 @@ describe('createServerLibraryHandlers', () => {
 
   it('uses server error codes and does not access legacy dependencies', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >
@@ -193,10 +209,7 @@ describe('createServerLibraryHandlers', () => {
     void client.http.documentsDelete
     void client.http.documentsBulkDelete
     const removeDocumentPreviewCache = vi.fn().mockResolvedValue(undefined)
-    const handlers = createServerLibraryHandlers({
-      serverClient: client,
-      removeDocumentPreviewCache
-    })
+    const handlers = createHandlers(client, { removeDocumentPreviewCache })
 
     await handlers[IpcChannel.DocumentsDelete]('doc-1')
     await handlers[IpcChannel.DocumentsBulkDelete](['doc-2', 'doc-3'])
@@ -218,32 +231,54 @@ describe('createServerLibraryHandlers', () => {
     const consumeFile = vi.fn((path: string) => `/approved${path}`)
     const consumeFiles = vi.fn((paths: readonly string[]) => paths.map((path) => `/approved${path}`))
     const consumeDirectory = vi.fn((path: string) => `/approved${path}`)
-    const handlers = createServerLibraryHandlers({
-      serverClient: client,
+    const switchLibraryFolder = vi.fn().mockResolvedValue({
+      libraryFolderPath: '/approved/tmp/library',
+      dbExisted: false,
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      errors: []
+    })
+    const handlers = createHandlers(client, {
       consumeFile,
       consumeFiles,
-      consumeDirectory
+      consumeDirectory,
+      switchLibraryFolder
     })
 
     await handlers[IpcChannel.ImportAddFiles](['/tmp/paper.pdf'])
-    await handlers[IpcChannel.ImportFromJson]('/tmp/data.json')
+    await handlers[IpcChannel.DocumentsRelocateFile]('doc-1', '/tmp/paper.pdf')
     await handlers[IpcChannel.LibrarySwitch]('/tmp/library')
 
     expect(consumeFiles).toHaveBeenCalledWith(['/tmp/paper.pdf'], ['.pdf'])
-    expect(consumeFile).toHaveBeenCalledWith('/tmp/data.json', ['.json'])
+    expect(consumeFile).toHaveBeenCalledWith('/tmp/paper.pdf', ['.pdf'])
     expect(consumeDirectory).toHaveBeenCalledWith('/tmp/library')
     expect(methods.get('importFiles')).toHaveBeenCalledWith({
       paths: ['/approved/tmp/paper.pdf']
     })
-    expect(methods.get('importJson')).toHaveBeenCalledWith('/approved/tmp/data.json')
-    expect(methods.get('librarySwitch')).toHaveBeenCalledWith({
-      path: '/approved/tmp/library'
+    expect(methods.get('documentsRelocate')).toHaveBeenCalledWith('doc-1', {
+      path: '/approved/tmp/paper.pdf'
     })
+    expect(switchLibraryFolder).toHaveBeenCalledWith('/approved/tmp/library')
+  })
+
+  it('saves exported BibTeX before reporting success', async () => {
+    const { client, methods } = createClient()
+    void client.http.exportBibtex
+    methods.get('exportBibtex')?.mockResolvedValue({ bibtex: '@article{one}' })
+    const saveBibtex = vi.fn().mockResolvedValue(undefined)
+    const handlers = createHandlers(client, { saveBibtex })
+
+    await expect(handlers[IpcChannel.ExportToBibtex](['doc-1'])).resolves.toEqual({
+      ok: true,
+      data: undefined
+    })
+    expect(saveBibtex).toHaveBeenCalledWith('@article{one}')
   })
 
   it('forwards the built-in PDF reader flag to the server', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >
@@ -262,10 +297,10 @@ describe('createServerLibraryHandlers', () => {
       fileSize: 4096,
       data: new Uint8Array([1, 2])
     })
-    const handlers = createServerLibraryHandlers({
-      serverClient: client,
-      readPdfRange
-    }) as Record<string, (...args: unknown[]) => Promise<unknown>>
+    const handlers = createHandlers(client, { readPdfRange }) as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >
 
     await expect(
       handlers[IpcChannel.DocumentsReadPdfRange]('doc-1', 1024, 2048)
@@ -283,7 +318,7 @@ describe('createServerLibraryHandlers', () => {
 
   it('validates provider updates and strips unknown fields before forwarding', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >
@@ -306,7 +341,7 @@ describe('createServerLibraryHandlers', () => {
 
   it('uses the saved provider preset when normalizing dynamically listed models', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >
@@ -338,7 +373,7 @@ describe('createServerLibraryHandlers', () => {
 
   it('routes metadata refresh and arxiv verification to Python', async () => {
     const { client, methods } = createClient()
-    const handlers = createServerLibraryHandlers({ serverClient: client }) as Record<
+    const handlers = createHandlers(client) as Record<
       string,
       (...args: unknown[]) => Promise<unknown>
     >

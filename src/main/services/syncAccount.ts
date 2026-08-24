@@ -15,7 +15,6 @@ export interface SyncAccountService {
   signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
   resendConfirmation(request: SyncEmailRequest): Promise<void>
   signOut(): Promise<SyncServiceStatus>
-  setEnabled(enabled: boolean): Promise<SyncServiceStatus>
 }
 
 export interface SyncAccountServiceDeps {
@@ -59,29 +58,20 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
     if (!deps.configured) {
       return {
         configured: false,
-        syncAvailable: false,
         signedIn: false,
-        enabled: false,
-        state: 'unconfigured',
         account: null
       }
     }
     if (!session) {
       return {
         configured: true,
-        syncAvailable: false,
         signedIn: false,
-        enabled: false,
-        state: 'signedOut',
         account: null
       }
     }
     return {
       configured: true,
-      syncAvailable: false,
       signedIn: true,
-      enabled: false,
-      state: 'disabled',
       account: session.user
     }
   }
@@ -182,23 +172,6 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
         }
       }
       return currentStatus(generation === sessionGeneration ? null : deps.sessions.load())
-    },
-    async setEnabled(enabled) {
-      if (typeof enabled !== 'boolean') {
-        throw new MainProcessError('invalid_argument', 'Sync enabled must be a boolean')
-      }
-      if (!enabled) {
-        return currentStatus(await activeSession())
-      }
-      requireAuth()
-      const session = await activeSession()
-      if (!session) {
-        throw new MainProcessError('sync_sign_in_required', 'Sign in before enabling sync')
-      }
-      throw new MainProcessError(
-        'sync_engine_unavailable',
-        'Metadata sync is not available in this version of Refora'
-      )
     }
   }
 }

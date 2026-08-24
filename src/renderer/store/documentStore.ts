@@ -15,7 +15,6 @@ import { errorMessage } from '../../shared/ipc-types'
 import { api } from '../ipc'
 import i18n from '../i18n'
 import { openDocumentPdf } from '../utils/openPdf'
-import { normalizeBootstrapData } from '../../shared/bootstrap'
 import { useConfirmStore } from './confirmStore'
 import {
   flushRendererSettingWrites,
@@ -118,6 +117,7 @@ const menuExportBibtexCb: Array<null | (() => void)> = [null]
 const menuImportZoteroCb: Array<null | (() => void)> = [null]
 const menuImportMendeleyCb: Array<null | (() => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
+const documentEventDisposers: Array<() => void> = []
 
 let toastTimeout: ReturnType<typeof setTimeout> | null = null
 let documentRequestVersion = 0
@@ -186,6 +186,22 @@ function removeCategoryFromDocuments(
     const categories = document.categories ?? []
     if (!categories.some((item) => item.id === categoryId)) return document
     return { ...document, categories: categories.filter((item) => item.id !== categoryId) }
+  })
+}
+
+function renameCategoryInDocuments(
+  documents: Document[],
+  categoryId: string,
+  name: string
+): Document[] {
+  return documents.map((document) => {
+    if (!document.categories?.some((category) => category.id === categoryId)) return document
+    return {
+      ...document,
+      categories: document.categories.map((category) =>
+        category.id === categoryId ? { ...category, name } : category
+      )
+    }
   })
 }
 
@@ -704,7 +720,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         }
       })
     }
-    api.events.onDocumentUpdated(docUpdatedCb[0])
+    documentEventDisposers.push(api.events.onDocumentUpdated(docUpdatedCb[0]))
 
     importProgressCb[0] = (payload: ImportProgress) => {
       if (!get().isImporting) {
@@ -712,12 +728,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
       get().updateImportProgress(payload)
     }
-    api.events.onImportProgress(importProgressCb[0])
+    documentEventDisposers.push(api.events.onImportProgress(importProgressCb[0]))
 
     importToastCb[0] = (message: string) => {
       get().showToast(message)
     }
-    api.events.onImportToast(importToastCb[0])
+    documentEventDisposers.push(api.events.onImportToast(importToastCb[0]))
 
     menuExportBibtexCb[0] = () => {
       const ids = get().selectedIds
@@ -726,17 +742,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         get().showToast(errorMessage(e, i18n.t('topbar.exportBibtexFailed') as string))
       })
     }
-    api.events.onMenuExportBibtex(menuExportBibtexCb[0])
+    documentEventDisposers.push(api.events.onMenuExportBibtex(menuExportBibtexCb[0]))
 
     menuImportZoteroCb[0] = () => {
       void get().importFromZotero()
     }
-    api.events.onMenuImportZotero(menuImportZoteroCb[0])
+    documentEventDisposers.push(api.events.onMenuImportZotero(menuImportZoteroCb[0]))
 
     menuImportMendeleyCb[0] = () => {
       void get().importFromMendeley()
     }
-    api.events.onMenuImportMendeley(menuImportMendeleyCb[0])
+    documentEventDisposers.push(api.events.onMenuImportMendeley(menuImportMendeleyCb[0]))
 
     librarySwitchedCb[0] = () => {
       columnPersistenceGeneration += 1
@@ -771,20 +787,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         void get().fetchCategories()
         void get().fetchDocumentCounts()
       })
-      void api.getBootstrap()
-        .then(normalizeBootstrapData)
-        .then((bootstrap) => {
-          if (generation !== columnPersistenceGeneration) return
-          set({ listColumnState: bootstrap.listColumnState ?? defaultColumnState() })
-        })
-        .catch(() => {
-          if (generation !== columnPersistenceGeneration) return
-          get().showToast(i18n.t('common.settingsLoadFailed'))
-        })
     }
-    api.events.onLibrarySwitched(librarySwitchedCb[0])
+    documentEventDisposers.push(api.events.onLibrarySwitched(librarySwitchedCb[0]))
 
     void get().fetchDocuments().catch(() => undefined)
+    void get().fetchCategories()
     void get().fetchDocumentCounts()
   },
 
@@ -817,7 +824,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       await api.categories.rename(id, name)
       set((s) => ({
-        categories: s.categories.map((c) => (c.id === id ? { ...c, name } : c))
+        categories: s.categories.map((c) => (c.id === id ? { ...c, name } : c)),
+        documents: renameCategoryInDocuments(s.documents, id, name),
+        searchResults: renameCategoryInDocuments(s.searchResults, id, name)
       }))
     } catch (e) {
       get().showToast(errorMessage(e, i18n.t('documentErrors.categoryRenameFailed')))
@@ -828,7 +837,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       await api.categories.delete(id)
       set((s) => ({
-        categories: s.categories.filter((c) => c.id !== id)
+        categories: s.categories.filter((c) => c.id !== id),
+        documents: removeCategoryFromDocuments(
+          s.documents,
+          new Set(s.documents.map((document) => document.id)),
+          id
+        ),
+        searchResults: removeCategoryFromDocuments(
+          s.searchResults,
+          new Set(s.searchResults.map((document) => document.id)),
+          id
+        )
       }))
     } catch (e) {
       get().showToast(errorMessage(e, i18n.t('documentErrors.categoryDeleteFailed')))
@@ -922,34 +941,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     documentRequestVersion++
     documentCountsRequestVersion++
     categoriesRequestVersion++
-    if (docUpdatedCb[0]) {
-      api.events.off('document:updated', docUpdatedCb[0])
-      docUpdatedCb[0] = null
-    }
-    if (importProgressCb[0]) {
-      api.events.off('import:progress', importProgressCb[0])
-      importProgressCb[0] = null
-    }
-    if (importToastCb[0]) {
-      api.events.off('import:toast', importToastCb[0])
-      importToastCb[0] = null
-    }
-    if (menuExportBibtexCb[0]) {
-      api.events.off('menu:export-bibtex', menuExportBibtexCb[0])
-      menuExportBibtexCb[0] = null
-    }
-    if (menuImportZoteroCb[0]) {
-      api.events.off('menu:import-zotero', menuImportZoteroCb[0])
-      menuImportZoteroCb[0] = null
-    }
-    if (menuImportMendeleyCb[0]) {
-      api.events.off('menu:import-mendeley', menuImportMendeleyCb[0])
-      menuImportMendeleyCb[0] = null
-    }
-    if (librarySwitchedCb[0]) {
-      api.events.off('library:switched', librarySwitchedCb[0])
-      librarySwitchedCb[0] = null
-    }
+    documentEventDisposers.splice(0).forEach((dispose) => dispose())
+    docUpdatedCb[0] = null
+    importProgressCb[0] = null
+    importToastCb[0] = null
+    menuExportBibtexCb[0] = null
+    menuImportZoteroCb[0] = null
+    menuImportMendeleyCb[0] = null
+    librarySwitchedCb[0] = null
     if (toastTimeout) clearTimeout(toastTimeout)
     set({ initialized: false })
   }

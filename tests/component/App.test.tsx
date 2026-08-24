@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     focusedDocId: null as string | null,
     selectedIds: [] as string[],
     listMode: { mode: 'all' } as { mode: string },
+    listColumnState: null as unknown,
     init: vi.fn(),
     destroy: vi.fn(),
     showToast: vi.fn(),
@@ -30,7 +31,6 @@ const mocks = vi.hoisted(() => ({
   workspacePanelRender: vi.fn(),
   resizeObserverCallback: null as ResizeObserverCallback | null,
   onLibrarySwitched: vi.fn(),
-  eventsOff: vi.fn(),
   getBootstrap: vi.fn(),
   changeLanguage: vi.fn()
 }))
@@ -86,7 +86,12 @@ vi.mock('@renderer/theme/tokens', () => ({
 vi.mock('@renderer/store/documentStore', () => ({
   useDocumentStore: Object.assign(
     (selector: (state: typeof mocks.documentState) => unknown) => selector(mocks.documentState),
-    { getState: () => mocks.documentState }
+    {
+      getState: () => mocks.documentState,
+      setState: (patch: Partial<typeof mocks.documentState>) => {
+        Object.assign(mocks.documentState, patch)
+      }
+    }
   )
 }))
 
@@ -112,8 +117,7 @@ vi.mock('@renderer/ipc', () => ({
       set: mocks.settingsSet
     },
     events: {
-      onLibrarySwitched: mocks.onLibrarySwitched,
-      off: mocks.eventsOff
+      onLibrarySwitched: mocks.onLibrarySwitched
     }
   }
 }))
@@ -235,6 +239,7 @@ describe('App root layout', () => {
     mocks.documentState.focusedDocId = null
     mocks.documentState.selectedIds = []
     mocks.documentState.listMode = { mode: 'all' }
+    mocks.documentState.listColumnState = null
     mocks.workspaceState.activeWorkspaceId = 'ws-1'
     mocks.workspaceState.panelOpen = true
     mocks.workspaceState.fullscreen = false
@@ -243,6 +248,7 @@ describe('App root layout', () => {
     mocks.resizeObserverCallback = null
     mocks.settingsGet.mockImplementation((_key: string, fallback: unknown) => Promise.resolve(fallback))
     mocks.settingsSet.mockResolvedValue(undefined)
+    mocks.onLibrarySwitched.mockReturnValue(vi.fn())
     mocks.getBootstrap.mockResolvedValue({
       language: 'en',
       theme: 'system',
