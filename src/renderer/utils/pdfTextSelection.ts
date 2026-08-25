@@ -27,6 +27,83 @@ export interface PdfTextClick {
   clientY: number
 }
 
+function validTextPosition(
+  root: HTMLElement,
+  node: Node | null | undefined,
+  offset: number | null | undefined
+): PdfTextPosition | null {
+  if (
+    !node ||
+    node.nodeType !== Node.TEXT_NODE ||
+    offset === null ||
+    offset === undefined ||
+    offset < 0 ||
+    offset > (node.textContent?.length ?? 0)
+  ) return null
+  const element = node.parentElement
+  if (!element?.closest('.textLayer') || !root.contains(element)) return null
+  return { node, offset }
+}
+
+function distanceToRect(clientX: number, clientY: number, rect: DOMRect): number {
+  const dx = clientX < rect.left
+    ? rect.left - clientX
+    : clientX > rect.right
+      ? clientX - rect.right
+      : 0
+  const dy = clientY < rect.top
+    ? rect.top - clientY
+    : clientY > rect.bottom
+      ? clientY - rect.bottom
+      : 0
+  return dx * dx + dy * dy
+}
+
+function fallbackTextPositionAtPoint(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number
+): PdfTextPosition | null {
+  const layers = Array.from(root.querySelectorAll<HTMLElement>('.textLayer'))
+    .filter((layer) => distanceToRect(clientX, clientY, layer.getBoundingClientRect()) === 0)
+  let best: { position: PdfTextPosition; distance: number } | null = null
+  for (const layer of layers) {
+    for (const span of layer.querySelectorAll<HTMLElement>('span')) {
+      const spanBounds = span.getBoundingClientRect()
+      if (distanceToRect(clientX, clientY, spanBounds) > 4) continue
+      const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
+      let node = walker.nextNode()
+      while (node) {
+        const length = node.textContent?.length ?? 0
+        for (let offset = 0; offset < length; offset += 1) {
+          const range = document.createRange()
+          range.setStart(node, offset)
+          range.setEnd(node, offset + 1)
+          for (const rect of Array.from(range.getClientRects())) {
+            const distance = distanceToRect(clientX, clientY, rect)
+            const position = {
+              node,
+              offset: clientX < rect.left + rect.width / 2 ? offset : offset + 1
+            }
+            if (!best || distance < best.distance) best = { position, distance }
+          }
+        }
+        if (length > 0 && !best) {
+          const ratio = spanBounds.width > 0
+            ? Math.max(0, Math.min(1, (clientX - spanBounds.left) / spanBounds.width))
+            : 0
+          best = {
+            position: { node, offset: Math.round(length * ratio) },
+            distance: distanceToRect(clientX, clientY, spanBounds)
+          }
+        }
+        node = walker.nextNode()
+      }
+    }
+  }
+  return best?.position ?? null
+}
+
 export function pdfTextPositionAtPoint(
   root: HTMLElement,
   clientX: number,
@@ -42,22 +119,28 @@ export function pdfTextPositionAtPoint(
       }).caretRangeFromPoint?.(clientX, clientY) ?? null
   const node = caretPosition?.offsetNode ?? caretRange?.startContainer
   const offset = caretPosition?.offset ?? caretRange?.startOffset
-  if (!node || offset === undefined) return null
-  const element = node instanceof Element ? node : node.parentElement
-  if (!element?.closest('.textLayer') || !root.contains(element)) return null
-  return { node, offset }
+  return validTextPosition(root, node, offset) ??
+    fallbackTextPositionAtPoint(root, clientX, clientY)
 }
 
 export function updateTextSelection(start: PdfTextPosition, end: PdfTextPosition): void {
   const selection = window.getSelection()
   if (!selection) return
-  const range = document.createRange()
   try {
-    range.setStart(start.node, start.offset)
-    range.collapse(true)
+    const startRange = document.createRange()
+    startRange.setStart(start.node, start.offset)
+    startRange.collapse(true)
+    const endRange = document.createRange()
+    endRange.setStart(end.node, end.offset)
+    endRange.collapse(true)
+    const forward = startRange.compareBoundaryPoints(Range.START_TO_START, endRange) <= 0
+    const range = document.createRange()
+    const rangeStart = forward ? start : end
+    const rangeEnd = forward ? end : start
+    range.setStart(rangeStart.node, rangeStart.offset)
+    range.setEnd(rangeEnd.node, rangeEnd.offset)
     selection.removeAllRanges()
     selection.addRange(range)
-    selection.extend(end.node, end.offset)
   } catch {
     selection.removeAllRanges()
   }
