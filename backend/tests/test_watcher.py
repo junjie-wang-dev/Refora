@@ -611,15 +611,25 @@ def test_event_driven_suppresses_unchanged_late_event(tmp_path, monkeypatch):
         svc["add"](str(tmp_path))
 
         async def run():
+            async def wait_until(predicate):
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + 1
+                while not predicate():
+                    if loop.time() >= deadline:
+                        raise AssertionError("watcher state transition timed out")
+                    await asyncio.sleep(0.01)
+
             svc["startScanning"]()
             try:
+                await wait_until(lambda: len(captured) == 1)
                 svc["_markStabilizing"](str(pdf))
-                await asyncio.sleep(0.08)
-                svc["_markStabilizing"](str(pdf))
-                await asyncio.sleep(0.08)
+                await wait_until(
+                    lambda: str(pdf) not in svc["_state"]["stabilizers"]
+                )
+                assert captured == [str(pdf)]
                 pdf.write_bytes(b"%PDF changed")
                 svc["_markStabilizing"](str(pdf))
-                await asyncio.sleep(0.08)
+                await wait_until(lambda: len(captured) == 2)
             finally:
                 svc["stopScanning"]()
 
