@@ -375,6 +375,7 @@ def test_fallback_scan_loop_runs_library_health_check(monkeypatch):
         async def run():
             def on_library_health_check():
                 checks.append(None)
+                svc["_state"]["running"] = False
 
             svc = watcher_module.createWatcherService(
                 {"watchFolders": make_watch_folders_repo(db)},
@@ -388,7 +389,9 @@ def test_fallback_scan_loop_runs_library_health_check(monkeypatch):
             )
             svc["startScanning"]()
             try:
-                await asyncio.sleep(0)
+                task = svc["_state"]["task"]
+                assert task is not None
+                await asyncio.wait_for(task, timeout=1)
             finally:
                 svc["stopScanning"]()
 
