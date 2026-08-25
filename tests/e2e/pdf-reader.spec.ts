@@ -131,11 +131,18 @@ test.describe('Built-in PDF reader', () => {
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(5)
     await page.getByRole('button', { name: 'Increase drawing line width' }).click()
     await expect(annotationInput).toHaveClass(/pointer-events-auto/)
-    await annotationInput.hover({ position: { x: 80, y: 310 } })
     const drawingBounds = await annotationInput.boundingBox()
     expect(drawingBounds).not.toBeNull()
+    await page.mouse.move(
+      drawingBounds!.x + drawingBounds!.width * 0.15,
+      drawingBounds!.y + drawingBounds!.height * 0.45
+    )
     await page.mouse.down()
-    await page.mouse.move(drawingBounds!.x + 150, drawingBounds!.y + 350, { steps: 6 })
+    await page.mouse.move(
+      drawingBounds!.x + drawingBounds!.width * 0.3,
+      drawingBounds!.y + drawingBounds!.height * 0.55,
+      { steps: 6 }
+    )
     await page.mouse.up()
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
       .toBe('')
@@ -323,9 +330,39 @@ test.describe('Built-in PDF reader', () => {
       .toBeGreaterThan(movableTextBounds!.x + 12)
     const selectionBounds = await annotationInput.boundingBox()
     expect(selectionBounds).not.toBeNull()
-    await page.mouse.move(selectionBounds!.x + 10, selectionBounds!.y + 10)
+    const persistedInkBounds = await ink.boundingBox()
+    const persistedTextBounds = await inlineText.boundingBox()
+    expect(persistedInkBounds).not.toBeNull()
+    expect(persistedTextBounds).not.toBeNull()
+    const selectionStart = {
+      x: Math.max(
+        selectionBounds!.x + 1,
+        Math.min(persistedInkBounds!.x, persistedTextBounds!.x) - 10
+      ),
+      y: Math.max(
+        selectionBounds!.y + 1,
+        Math.min(persistedInkBounds!.y, persistedTextBounds!.y) - 10
+      )
+    }
+    const selectionEnd = {
+      x: Math.min(
+        selectionBounds!.x + selectionBounds!.width - 1,
+        Math.max(
+          persistedInkBounds!.x + persistedInkBounds!.width,
+          persistedTextBounds!.x + persistedTextBounds!.width
+        ) + 10
+      ),
+      y: Math.min(
+        selectionBounds!.y + selectionBounds!.height - 1,
+        Math.max(
+          persistedInkBounds!.y + persistedInkBounds!.height,
+          persistedTextBounds!.y + persistedTextBounds!.height
+        ) + 10
+      )
+    }
+    await page.mouse.move(selectionStart.x, selectionStart.y)
     await page.mouse.down()
-    await page.mouse.move(selectionBounds!.x + 260, selectionBounds!.y + 380, { steps: 6 })
+    await page.mouse.move(selectionEnd.x, selectionEnd.y, { steps: 6 })
     await expect(pdfPage.locator('[data-annotation-selection]')).toBeVisible()
     await page.mouse.up()
     const selectedAnnotations = pdfPage.locator('[data-selected-annotation]')

@@ -69,6 +69,59 @@ describe('PDF text selection', () => {
     }
   })
 
+  it('uses proportional span geometry when character rectangles are degenerate', () => {
+    const root = document.createElement('div')
+    const layer = document.createElement('div')
+    const staleSpan = document.createElement('span')
+    const span = document.createElement('span')
+    staleSpan.textContent = 'Stale'
+    span.textContent = 'Selectable'
+    layer.className = 'textLayer'
+    layer.append(staleSpan, span)
+    root.append(layer)
+    document.body.append(root)
+    const layerBounds = DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 40 })
+    const staleBounds = DOMRect.fromRect({ x: 10, y: 10, width: 40, height: 20 })
+    const bounds = DOMRect.fromRect({ x: 60, y: 10, width: 100, height: 20 })
+    layer.getBoundingClientRect = () => layerBounds
+    staleSpan.getBoundingClientRect = () => staleBounds
+    span.getBoundingClientRect = () => bounds
+    const caretDescriptor = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint')
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: staleSpan.firstChild, offset: 0 })
+    })
+    const rectsDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value() {
+        return [bounds]
+      }
+    })
+
+    try {
+      const start = pdfTextPositionAtPoint(root, 70, 20)
+      const end = pdfTextPositionAtPoint(root, 135, 20)
+      expect(start?.node).toBe(span.firstChild)
+      expect(start?.offset).toBe(1)
+      expect(end?.node).toBe(span.firstChild)
+      expect(end?.offset).toBe(8)
+      updateTextSelection(start!, end!)
+      expect(window.getSelection()?.toString()).toBe('electab')
+    } finally {
+      if (caretDescriptor) {
+        Object.defineProperty(document, 'caretPositionFromPoint', caretDescriptor)
+      } else {
+        Reflect.deleteProperty(document, 'caretPositionFromPoint')
+      }
+      if (rectsDescriptor) {
+        Object.defineProperty(Range.prototype, 'getClientRects', rectsDescriptor)
+      } else {
+        Reflect.deleteProperty(Range.prototype, 'getClientRects')
+      }
+    }
+  })
+
   it('creates forward and reverse ranges without Selection.extend', () => {
     const text = document.createTextNode('Selectable PDF text')
     document.body.append(text)

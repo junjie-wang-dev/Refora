@@ -66,36 +66,82 @@ function textPositionInSpan(
 ): { position: PdfTextPosition; distance: number } | null {
   const spanBounds = span.getBoundingClientRect()
   if (distanceToRect(clientX, clientY, spanBounds) > 4) return null
-  let best: { position: PdfTextPosition; distance: number } | null = null
+  const textNodes: Array<{ node: Node; start: number; length: number }> = []
+  let textLength = 0
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
   let node = walker.nextNode()
   while (node) {
     const length = node.textContent?.length ?? 0
-    for (let offset = 0; offset < length; offset += 1) {
-      const range = document.createRange()
-      range.setStart(node, offset)
-      range.setEnd(node, offset + 1)
-      for (const rect of Array.from(range.getClientRects())) {
-        const distance = distanceToRect(clientX, clientY, rect)
-        const position = {
-          node,
-          offset: clientX < rect.left + rect.width / 2 ? offset : offset + 1
-        }
-        if (!best || distance < best.distance) best = { position, distance }
-      }
-    }
-    if (length > 0 && !best) {
-      const ratio = spanBounds.width > 0
-        ? Math.max(0, Math.min(1, (clientX - spanBounds.left) / spanBounds.width))
-        : 0
-      best = {
-        position: { node, offset: Math.round(length * ratio) },
-        distance: distanceToRect(clientX, clientY, spanBounds)
-      }
+    if (length > 0) {
+      textNodes.push({ node, start: textLength, length })
+      textLength += length
     }
     node = walker.nextNode()
   }
-  return best
+  if (textLength === 0) return null
+  const horizontal = spanBounds.width >= spanBounds.height
+  const spanStart = horizontal ? spanBounds.left : spanBounds.top
+  const spanSize = horizontal ? spanBounds.width : spanBounds.height
+  const pointer = horizontal ? clientX : clientY
+  const ratio = spanSize > 0
+    ? Math.max(0, Math.min(1, (pointer - spanStart) / spanSize))
+    : 0
+  const proportionalOffset = Math.round(textLength * ratio)
+  let best: {
+    position: PdfTextPosition
+    absoluteOffset: number
+    distance: number
+  } | null = null
+  let firstCharacterMiddle = Number.POSITIVE_INFINITY
+  let lastCharacterMiddle = Number.NEGATIVE_INFINITY
+  for (const textNode of textNodes) {
+    const { length } = textNode
+    for (let offset = 0; offset < length; offset += 1) {
+      const range = document.createRange()
+      range.setStart(textNode.node, offset)
+      range.setEnd(textNode.node, offset + 1)
+      for (const rect of Array.from(range.getClientRects())) {
+        const distance = distanceToRect(clientX, clientY, rect)
+        const rectMiddle = horizontal
+          ? rect.left + rect.width / 2
+          : rect.top + rect.height / 2
+        firstCharacterMiddle = Math.min(firstCharacterMiddle, rectMiddle)
+        lastCharacterMiddle = Math.max(lastCharacterMiddle, rectMiddle)
+        const localOffset = pointer < rectMiddle ? offset : offset + 1
+        const absoluteOffset = textNode.start + localOffset
+        if (!best || distance < best.distance) {
+          best = {
+            position: { node: textNode.node, offset: localOffset },
+            absoluteOffset,
+            distance
+          }
+        }
+      }
+    }
+  }
+  const maximumGeometryDrift = Math.max(2, Math.ceil(textLength * 0.15))
+  const characterGeometrySpan = lastCharacterMiddle - firstCharacterMiddle
+  const geometryIsDistinct = textLength <= 1 || characterGeometrySpan >= spanSize * 0.25
+  if (
+    best &&
+    geometryIsDistinct &&
+    Math.abs(best.absoluteOffset - proportionalOffset) <= maximumGeometryDrift
+  ) {
+    return { position: best.position, distance: best.distance }
+  }
+  const targetNode = textNodes.find(({ start, length }) => (
+    proportionalOffset >= start && proportionalOffset <= start + length
+  )) ?? textNodes[textNodes.length - 1]
+  return {
+    position: {
+      node: targetNode.node,
+      offset: Math.max(0, Math.min(
+        targetNode.length,
+        proportionalOffset - targetNode.start
+      ))
+    },
+    distance: distanceToRect(clientX, clientY, spanBounds)
+  }
 }
 
 function fallbackTextPositionAtPoint(
@@ -136,8 +182,8 @@ export function pdfTextPositionAtPoint(
   const nativeGeometry = nativeSpan
     ? textPositionInSpan(nativeSpan, clientX, clientY)?.position ?? null
     : null
-  return nativeGeometry ??
-    fallbackTextPositionAtPoint(root, clientX, clientY) ??
+  return fallbackTextPositionAtPoint(root, clientX, clientY) ??
+    nativeGeometry ??
     nativePosition
 }
 
