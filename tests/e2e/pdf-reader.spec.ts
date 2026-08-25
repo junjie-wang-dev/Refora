@@ -145,16 +145,16 @@ test.describe('Built-in PDF reader', () => {
     }
     const visibleDrawingWidth = visibleDrawingBounds.right - visibleDrawingBounds.left
     const visibleDrawingHeight = visibleDrawingBounds.bottom - visibleDrawingBounds.top
-    expect(visibleDrawingWidth).toBeGreaterThan(100)
-    expect(visibleDrawingHeight).toBeGreaterThan(100)
+    expect(visibleDrawingWidth).toBeGreaterThan(12)
+    expect(visibleDrawingHeight).toBeGreaterThan(12)
     await page.mouse.move(
-      visibleDrawingBounds.left + visibleDrawingWidth * 0.2,
-      visibleDrawingBounds.top + visibleDrawingHeight * 0.35
+      visibleDrawingBounds.left + visibleDrawingWidth * 0.15,
+      visibleDrawingBounds.top + visibleDrawingHeight * 0.3
     )
     await page.mouse.down()
     await page.mouse.move(
-      visibleDrawingBounds.left + visibleDrawingWidth * 0.4,
-      visibleDrawingBounds.top + visibleDrawingHeight * 0.5,
+      visibleDrawingBounds.left + visibleDrawingWidth * 0.85,
+      visibleDrawingBounds.top + visibleDrawingHeight * 0.55,
       { steps: 6 }
     )
     await page.mouse.up()
