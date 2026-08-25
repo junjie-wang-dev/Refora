@@ -581,6 +581,54 @@ def test_event_driven_debounces_burst(tmp_path):
         db.close()
 
 
+def test_event_driven_suppresses_unchanged_late_event(tmp_path, monkeypatch):
+    class ObserverStub:
+        def schedule(self, *_args, **_kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", True)
+    monkeypatch.setattr(watcher_module, "Observer", ObserverStub)
+    db = open_migrated_db()
+    try:
+        captured: list[str] = []
+        svc = _make_watcher(
+            {"watchFolders": make_watch_folders_repo(db)},
+            captured=captured,
+            stability_threshold_ms=20,
+            debounce_ms=20,
+        )
+        pdf = tmp_path / "late.pdf"
+        pdf.write_bytes(b"%PDF")
+        svc["add"](str(tmp_path))
+
+        async def run():
+            svc["startScanning"]()
+            try:
+                svc["_markStabilizing"](str(pdf))
+                await asyncio.sleep(0.08)
+                svc["_markStabilizing"](str(pdf))
+                await asyncio.sleep(0.08)
+                pdf.write_bytes(b"%PDF changed")
+                svc["_markStabilizing"](str(pdf))
+                await asyncio.sleep(0.08)
+            finally:
+                svc["stopScanning"]()
+
+        asyncio.run(run())
+        assert captured == [str(pdf), str(pdf)]
+    finally:
+        db.close()
+
+
 @pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
 def test_event_driven_add_starts_observer_dynamically(tmp_path):
     db = open_migrated_db()

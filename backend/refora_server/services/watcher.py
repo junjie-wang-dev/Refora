@@ -111,6 +111,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "loop": None,
         "lock": None,
         "stabilizers": {},
+        "stableSignatures": {},
         "debounceTimer": None,
         "pending": set(),
         "reconcileTask": None,
@@ -234,11 +235,20 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                 return
         if _shouldIgnorePath(path, path, library_folder) and not allow_library:
             return
+        signature = _fileSignature(path)
+        if signature is None:
+            return
         lock = state["lock"]
         if lock is None:
             lock = threading.Lock()
             state["lock"] = lock
         with lock:
+            stable_signatures: dict[str, tuple[int, int, int, int]] = state[
+                "stableSignatures"
+            ]
+            if stable_signatures.get(path) == signature:
+                return
+            stable_signatures[path] = signature
             pending: set[str] = state["pending"]
             pending.add(path)
         loop = _getLoop()
@@ -333,12 +343,14 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         t.start()
 
     def _cancelStabilizer(path: str) -> None:
+        path = os.path.normpath(os.path.abspath(path))
         lock = state["lock"]
         if lock is None:
             return
         with lock:
             stabilizers: dict[str, threading.Timer] = state["stabilizers"]
             timer = stabilizers.pop(path, None)
+            state["stableSignatures"].pop(path, None)
         if timer is not None:
             timer.cancel()
 
@@ -656,6 +668,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
             return
         state["running"] = True
         state["seen"] = {}
+        state["stableSignatures"] = {}
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -710,6 +723,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
                     except Exception:
                         pass
                 stabilizers.clear()
+                state["stableSignatures"] = {}
 
     def setLibraryHealthCheck(callback: OnLibraryHealthCheck | None) -> None:
         state["libraryHealthCheck"] = callback
