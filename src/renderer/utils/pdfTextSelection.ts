@@ -59,6 +59,45 @@ function distanceToRect(clientX: number, clientY: number, rect: DOMRect): number
   return dx * dx + dy * dy
 }
 
+function textPositionInSpan(
+  span: HTMLElement,
+  clientX: number,
+  clientY: number
+): { position: PdfTextPosition; distance: number } | null {
+  const spanBounds = span.getBoundingClientRect()
+  if (distanceToRect(clientX, clientY, spanBounds) > 4) return null
+  let best: { position: PdfTextPosition; distance: number } | null = null
+  const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    const length = node.textContent?.length ?? 0
+    for (let offset = 0; offset < length; offset += 1) {
+      const range = document.createRange()
+      range.setStart(node, offset)
+      range.setEnd(node, offset + 1)
+      for (const rect of Array.from(range.getClientRects())) {
+        const distance = distanceToRect(clientX, clientY, rect)
+        const position = {
+          node,
+          offset: clientX < rect.left + rect.width / 2 ? offset : offset + 1
+        }
+        if (!best || distance < best.distance) best = { position, distance }
+      }
+    }
+    if (length > 0 && !best) {
+      const ratio = spanBounds.width > 0
+        ? Math.max(0, Math.min(1, (clientX - spanBounds.left) / spanBounds.width))
+        : 0
+      best = {
+        position: { node, offset: Math.round(length * ratio) },
+        distance: distanceToRect(clientX, clientY, spanBounds)
+      }
+    }
+    node = walker.nextNode()
+  }
+  return best
+}
+
 function fallbackTextPositionAtPoint(
   root: HTMLElement,
   clientX: number,
@@ -69,36 +108,8 @@ function fallbackTextPositionAtPoint(
   let best: { position: PdfTextPosition; distance: number } | null = null
   for (const layer of layers) {
     for (const span of layer.querySelectorAll<HTMLElement>('span')) {
-      const spanBounds = span.getBoundingClientRect()
-      if (distanceToRect(clientX, clientY, spanBounds) > 4) continue
-      const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
-      let node = walker.nextNode()
-      while (node) {
-        const length = node.textContent?.length ?? 0
-        for (let offset = 0; offset < length; offset += 1) {
-          const range = document.createRange()
-          range.setStart(node, offset)
-          range.setEnd(node, offset + 1)
-          for (const rect of Array.from(range.getClientRects())) {
-            const distance = distanceToRect(clientX, clientY, rect)
-            const position = {
-              node,
-              offset: clientX < rect.left + rect.width / 2 ? offset : offset + 1
-            }
-            if (!best || distance < best.distance) best = { position, distance }
-          }
-        }
-        if (length > 0 && !best) {
-          const ratio = spanBounds.width > 0
-            ? Math.max(0, Math.min(1, (clientX - spanBounds.left) / spanBounds.width))
-            : 0
-          best = {
-            position: { node, offset: Math.round(length * ratio) },
-            distance: distanceToRect(clientX, clientY, spanBounds)
-          }
-        }
-        node = walker.nextNode()
-      }
+      const candidate = textPositionInSpan(span, clientX, clientY)
+      if (candidate && (!best || candidate.distance < best.distance)) best = candidate
     }
   }
   return best?.position ?? null
@@ -119,8 +130,15 @@ export function pdfTextPositionAtPoint(
       }).caretRangeFromPoint?.(clientX, clientY) ?? null
   const node = caretPosition?.offsetNode ?? caretRange?.startContainer
   const offset = caretPosition?.offset ?? caretRange?.startOffset
-  return validTextPosition(root, node, offset) ??
-    fallbackTextPositionAtPoint(root, clientX, clientY)
+  const nativePosition = validTextPosition(root, node, offset)
+  const nativeSpan = nativePosition?.node.parentElement
+    ?.closest<HTMLElement>('.textLayer span')
+  const nativeGeometry = nativeSpan
+    ? textPositionInSpan(nativeSpan, clientX, clientY)?.position ?? null
+    : null
+  return nativeGeometry ??
+    fallbackTextPositionAtPoint(root, clientX, clientY) ??
+    nativePosition
 }
 
 export function updateTextSelection(start: PdfTextPosition, end: PdfTextPosition): void {

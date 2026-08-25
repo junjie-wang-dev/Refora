@@ -9,7 +9,7 @@ afterEach(() => {
 })
 
 describe('PDF text selection', () => {
-  it('falls back to text-layer geometry when caret hit testing misses the text node', () => {
+  it('prefers text-layer geometry when native caret hit testing returns a stale offset', () => {
     const root = document.createElement('div')
     const layer = document.createElement('div')
     const span = document.createElement('span')
@@ -34,7 +34,7 @@ describe('PDF text selection', () => {
     const caretDescriptor = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint')
     Object.defineProperty(document, 'caretPositionFromPoint', {
       configurable: true,
-      value: () => ({ offsetNode: document.body, offset: 0 })
+      value: () => ({ offsetNode: span.firstChild, offset: 0 })
     })
     const rectsDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
     Object.defineProperty(Range.prototype, 'getClientRects', {
