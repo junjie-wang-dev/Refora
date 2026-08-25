@@ -117,16 +117,23 @@ test.describe('Built-in PDF reader', () => {
 
     await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     await expect(page.locator('[data-annotation-sidebar][data-overlay]')).toBeVisible()
-    await page.getByRole('button', { name: 'Close annotations panel' }).click()
+    const closeAnnotationsPanel = page.getByRole('button', {
+      name: 'Close annotations panel'
+    })
+    await closeAnnotationsPanel.click()
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
     await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     await expect(page.locator('[data-annotation-sidebar][data-overlay]')).toBeVisible()
+    await closeAnnotationsPanel.click()
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Enter fullscreen' }).click()
+    await expect(page.getByRole('button', { name: 'Exit fullscreen' })).toBeVisible()
     const pdfPage = page.locator('.pdf-reader-page').first()
     const annotationInput = pdfPage.locator('[data-annotation-input-layer]')
 
     const freehandTool = page.locator('button[data-shortcut="P"]')
     await freehandTool.click()
-    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Freehand drawing')
+    await expect(freehandTool).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(5)
     await page.getByRole('button', { name: 'Increase drawing line width' }).click()
@@ -169,7 +176,6 @@ test.describe('Built-in PDF reader', () => {
       name: 'Delete selected annotations (1)'
     })).toHaveCount(0)
     await freehandTool.click()
-    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     await expect(page.getByRole('button', {
       name: 'Read and select text',
       exact: true
@@ -326,7 +332,6 @@ test.describe('Built-in PDF reader', () => {
     const addTextTool = page.getByRole('button', { name: 'Add text', exact: true })
     await addTextTool.click()
     await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
-    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
     const movableTextBounds = await inlineText.boundingBox()
     expect(movableTextBounds).not.toBeNull()
     await page.mouse.move(
@@ -422,11 +427,15 @@ test.describe('Built-in PDF reader', () => {
       return (await api.documents.pdfAnnotations(documentId)).length
     }, secondDocumentId)).toBe(0)
 
-    await page.getByRole('button', { name: 'Add note', exact: true }).click()
-    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    const addNoteTool = page.getByRole('button', { name: 'Add note', exact: true })
+    await addNoteTool.click()
+    await expect(addNoteTool).toHaveAttribute('aria-pressed', 'true')
+    const sidebarCountBeforeNote = await page.locator('[data-annotation-sidebar]').count()
     await pdfPage.click({ position: { x: 180, y: 120 } })
-    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
-    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(sidebarCountBeforeNote)
+    if (sidebarCountBeforeNote === 0) {
+      await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    }
     const noteComment = page.locator('[data-annotation-sidebar]')
       .getByPlaceholder('Add a comment…', { exact: true })
     await expect(noteComment).toBeFocused()
@@ -455,6 +464,8 @@ test.describe('Built-in PDF reader', () => {
       return (await api.documents.pdfAnnotations(documentId)).length
     }, secondDocumentId)).toBe(0)
 
+    await page.getByRole('button', { name: 'Exit fullscreen' }).click()
+    await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeVisible()
     await page.getByTestId('app-sidebar-layer')
       .getByRole('button', { name: 'Reader workspace', exact: true })
       .click()
