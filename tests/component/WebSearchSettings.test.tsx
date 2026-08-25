@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 vi.mock('react-i18next', () => {
@@ -41,7 +41,6 @@ import { WebSearchSettings } from '../../src/renderer/components/WebSearchSettin
 
 describe('WebSearchSettings', () => {
   beforeEach(() => {
-    cleanup()
     vi.spyOn(api.webSearch, 'getConfig').mockResolvedValue({
       provider: 'tavily',
       hasTavilyApiKey: true,
@@ -62,6 +61,8 @@ describe('WebSearchSettings', () => {
       resultCount: 1
     })
   })
+
+  afterEach(cleanup)
 
   it('shows key presence without exposing stored secrets and saves replacements', async () => {
     render(<WebSearchSettings />)

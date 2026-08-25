@@ -28,7 +28,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Set up uv
@@ -43,31 +43,13 @@ jobs:
       - name: Audit Node.js dependencies
         run: npm audit --audit-level=moderate
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Typecheck tests
-        run: npm run typecheck:tests
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Unit and component tests with coverage
-        run: npm run test:coverage
-
-      - name: Python server tests
-        run: npm run test:backend
-
-      - name: Python source validation
-        run: uv run --project backend --locked python -m compileall -q backend/refora_server backend/workers
+      - name: Verify
+        run: npm run verify
 
       - name: Audit Python dependencies
         run: |
           uv export --project backend --locked --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/refora-requirements.txt"
           uvx --from pip-audit==2.10.1 pip-audit -r "$RUNNER_TEMP/refora-requirements.txt" --disable-pip --progress-spinner off
-
-      - name: Server integration tests
-        run: npm run test:server-integration
 
   e2e:
     name: E2E
@@ -82,7 +64,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Set up uv
@@ -98,7 +80,7 @@ jobs:
         run: uv run --project backend --locked python -c "import fastapi, uvicorn, websockets"
 
       - name: Playwright E2E suite
-        run: npm run test:e2e -- --workers=1
+        run: npm run test:e2e:ci
 
       - name: Upload E2E diagnostics
         if: failure()
