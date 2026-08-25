@@ -590,15 +590,22 @@ describe('PdfReader rendering visibility', () => {
 
   it('jumps to an unmounted page through the virtualizer', async () => {
     pdfMocks.document.numPages = 1000
-    render(<PdfReader />)
+    const view = render(<PdfReader />)
     await waitFor(() => expect(screen.getByText('/ 1000')).toBeInTheDocument())
     const input = screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })
+    const scroller = view.container.querySelector<HTMLElement>(
+      '[data-pdf-page-virtualizer]'
+    )?.parentElement
+    expect(scroller).not.toBeNull()
+    const scrollTo = vi.fn()
+    scroller!.scrollTo = scrollTo
 
     fireEvent.change(input, { target: { value: '900' } })
     fireEvent.submit(input.closest('form') as HTMLFormElement)
 
     expect(pdfVirtualizerMocks.getOffsetForIndex).toHaveBeenCalledWith(899, 'start')
     expect(pdfVirtualizerMocks.scrollToIndex).not.toHaveBeenCalled()
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
     expect(input).toHaveValue('900')
   })
 

@@ -619,7 +619,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         root.scrollTo({
           left: root.scrollLeft,
           top: offset,
-          behavior: 'smooth'
+          behavior: 'auto'
         })
       } else {
         root.scrollTop = offset

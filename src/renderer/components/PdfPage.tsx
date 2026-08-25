@@ -768,15 +768,9 @@ export default function PdfPage({
     if (!element || event.button !== 0) return
     const target = event.target
     if (target instanceof Element && target.closest('.annotationLayer')) return
-    if (
-      textSelectionEnabled &&
-      target instanceof Element &&
-      target.closest('.textLayer span, .textLayer br')
-    ) {
-      const root = scrollRootRef.current
-      const position = root
-        ? pdfTextPositionAtPoint(root, event.clientX, event.clientY)
-        : null
+    if (textSelectionEnabled) {
+      const root = scrollRootRef.current ?? element
+      const position = pdfTextPositionAtPoint(root, event.clientX, event.clientY)
       if (position) {
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
@@ -797,8 +791,8 @@ export default function PdfPage({
         textSelectionStartRef.current = position
         if (doubleClick) updateWordSelection(position)
         else updateTextSelection(position, position)
+        return
       }
-      return
     }
     lastTextClickRef.current = null
     event.preventDefault()
