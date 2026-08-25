@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -369,6 +370,11 @@ def test_startScanning_idempotent():
 
 def test_fallback_scan_loop_runs_library_health_check(monkeypatch):
     monkeypatch.setattr(watcher_module, "_WATCHDOG_AVAILABLE", False)
+    monkeypatch.setattr(
+        watcher_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: 100.0),
+    )
     db = open_migrated_db()
     checks: list[None] = []
     try:

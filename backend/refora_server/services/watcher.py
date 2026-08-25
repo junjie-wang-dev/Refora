@@ -119,7 +119,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         "failedObserverFolders": {},
         "skippedLibraryFiles": {},
         "libraryHealthCheck": on_library_health_check,
-        "lastLibraryHealthCheckAt": 0.0,
+        "lastLibraryHealthCheckAt": None,
     }
 
     def _warning(message: str) -> None:
@@ -524,7 +524,12 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
         if not callable(callback):
             return
         now = time.monotonic()
-        if not force and now - state["lastLibraryHealthCheckAt"] < library_health_interval:
+        last_check_at = state["lastLibraryHealthCheckAt"]
+        if (
+            not force
+            and last_check_at is not None
+            and now - last_check_at < library_health_interval
+        ):
             return
         state["lastLibraryHealthCheckAt"] = now
         result = callback()
@@ -708,7 +713,7 @@ def createWatcherService(repos: WatcherRepos, deps: WatcherServiceDeps | None = 
 
     def setLibraryHealthCheck(callback: OnLibraryHealthCheck | None) -> None:
         state["libraryHealthCheck"] = callback
-        state["lastLibraryHealthCheckAt"] = 0.0
+        state["lastLibraryHealthCheckAt"] = None
 
     def scanOnce() -> list[str]:
         return _scanAll()
