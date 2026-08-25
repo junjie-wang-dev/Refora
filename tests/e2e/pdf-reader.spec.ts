@@ -133,14 +133,28 @@ test.describe('Built-in PDF reader', () => {
     await expect(annotationInput).toHaveClass(/pointer-events-auto/)
     const drawingBounds = await annotationInput.boundingBox()
     expect(drawingBounds).not.toBeNull()
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight
+    }))
+    const visibleDrawingBounds = {
+      left: Math.max(0, drawingBounds!.x),
+      right: Math.min(viewport.width, drawingBounds!.x + drawingBounds!.width),
+      top: Math.max(0, drawingBounds!.y),
+      bottom: Math.min(viewport.height, drawingBounds!.y + drawingBounds!.height)
+    }
+    const visibleDrawingWidth = visibleDrawingBounds.right - visibleDrawingBounds.left
+    const visibleDrawingHeight = visibleDrawingBounds.bottom - visibleDrawingBounds.top
+    expect(visibleDrawingWidth).toBeGreaterThan(100)
+    expect(visibleDrawingHeight).toBeGreaterThan(100)
     await page.mouse.move(
-      drawingBounds!.x + drawingBounds!.width * 0.15,
-      drawingBounds!.y + drawingBounds!.height * 0.45
+      visibleDrawingBounds.left + visibleDrawingWidth * 0.2,
+      visibleDrawingBounds.top + visibleDrawingHeight * 0.35
     )
     await page.mouse.down()
     await page.mouse.move(
-      drawingBounds!.x + drawingBounds!.width * 0.3,
-      drawingBounds!.y + drawingBounds!.height * 0.55,
+      visibleDrawingBounds.left + visibleDrawingWidth * 0.4,
+      visibleDrawingBounds.top + visibleDrawingHeight * 0.5,
       { steps: 6 }
     )
     await page.mouse.up()
