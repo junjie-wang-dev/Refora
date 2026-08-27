@@ -51,6 +51,24 @@ describe('pdfCanvasLayout', () => {
     ])
   })
 
+  it('keeps the tile grid stable across high zoom thresholds', () => {
+    const maximumViewport = { width: 3060, height: 3960 }
+    const highZoom = pdfCanvasLayout(3060, 3960, 2, maximumViewport)
+    const lowerZoom = pdfCanvasLayout(2142, 2772, 2, maximumViewport)
+
+    expect(highZoom.tiles).toHaveLength(9)
+    expect(lowerZoom.tiles).toHaveLength(9)
+    expect(lowerZoom.tiles.map(({ column, row }) => `${column}-${row}`)).toEqual(
+      highZoom.tiles.map(({ column, row }) => `${column}-${row}`)
+    )
+    lowerZoom.tiles.forEach((tile, index) => {
+      const highZoomTile = highZoom.tiles[index]
+      expect(tile.cssX / 2142).toBeCloseTo(highZoomTile.cssX / 3060, 3)
+      expect(tile.cssY / 2772).toBeCloseTo(highZoomTile.cssY / 3960, 3)
+      expect(tile.pixelWidth * tile.pixelHeight).toBeLessThanOrEqual(2 ** 24)
+    })
+  })
+
   it('falls back to the high-quality minimum for an invalid device ratio', () => {
     const layout = pdfCanvasLayout(612, 792, 0)
 

@@ -317,6 +317,7 @@ export default function PdfPage({
   pdf,
   pageNumber,
   scale,
+  maximumScale,
   rotation,
   devicePixelRatio,
   scrollRootRef,
@@ -336,6 +337,7 @@ export default function PdfPage({
   pdf: PDFDocumentProxy
   pageNumber: number
   scale: number
+  maximumScale: number
   rotation: number
   devicePixelRatio: number
   scrollRootRef: RefObject<HTMLDivElement | null>
@@ -389,6 +391,10 @@ export default function PdfPage({
     () => page?.getViewport({ scale, rotation }) ?? null,
     [page, rotation, scale]
   )
+  const maximumViewport = useMemo(
+    () => page?.getViewport({ scale: maximumScale, rotation }) ?? null,
+    [maximumScale, page, rotation]
+  )
   const layoutBaseHeight = useMemo(
     () => page?.getViewport({ scale: 1, rotation }).height ?? null,
     [page, rotation]
@@ -403,10 +409,13 @@ export default function PdfPage({
       : { width: 612, height: 792 }
   }, [page])
   const canvasLayout = useMemo(
-    () => viewport
-      ? pdfCanvasLayout(viewport.width, viewport.height, devicePixelRatio)
+    () => viewport && maximumViewport
+      ? pdfCanvasLayout(viewport.width, viewport.height, devicePixelRatio, {
+          width: maximumViewport.width,
+          height: maximumViewport.height
+        })
       : null,
-    [devicePixelRatio, viewport]
+    [devicePixelRatio, maximumViewport, viewport]
   )
   const textSelectionEnabled = tool === null ||
     tool === 'highlight' ||

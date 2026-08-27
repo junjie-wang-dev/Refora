@@ -26,6 +26,11 @@ export interface PdfCanvasLayout {
   tiles: PdfCanvasTile[]
 }
 
+export interface PdfCanvasGridViewport {
+  height: number
+  width: number
+}
+
 export function pdfVisibilityObserverOptions(root: Element): IntersectionObserverInit {
   return {
     root,
@@ -60,13 +65,19 @@ export function pdfRenderPixelRatio(devicePixelRatio: number): number {
 export function pdfCanvasLayout(
   viewportWidth: number,
   viewportHeight: number,
-  devicePixelRatio: number
+  devicePixelRatio: number,
+  gridViewport: PdfCanvasGridViewport = {
+    width: viewportWidth,
+    height: viewportHeight
+  }
 ): PdfCanvasLayout {
   const pixelRatio = pdfRenderPixelRatio(devicePixelRatio)
   const pixelWidth = Math.max(1, Math.ceil(viewportWidth * pixelRatio))
   const pixelHeight = Math.max(1, Math.ceil(viewportHeight * pixelRatio))
-  const columns = Math.ceil(pixelWidth / MAX_TILE_PIXEL_DIMENSION)
-  const rows = Math.ceil(pixelHeight / MAX_TILE_PIXEL_DIMENSION)
+  const gridPixelWidth = Math.max(pixelWidth, Math.ceil(gridViewport.width * pixelRatio))
+  const gridPixelHeight = Math.max(pixelHeight, Math.ceil(gridViewport.height * pixelRatio))
+  const columns = Math.ceil(gridPixelWidth / MAX_TILE_PIXEL_DIMENSION)
+  const rows = Math.ceil(gridPixelHeight / MAX_TILE_PIXEL_DIMENSION)
   const tiles: PdfCanvasTile[] = []
 
   for (let row = 0; row < rows; row += 1) {

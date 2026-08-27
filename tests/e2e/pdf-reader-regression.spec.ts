@@ -259,6 +259,42 @@ test.describe('PDF reader regressions', () => {
       return { drifts }
     })
     expect(Math.max(...zoomContinuity.drifts)).toBeLessThan(2)
+    await zoomInput.fill('500')
+    await zoomInput.press('Enter')
+    await expect(zoomInput).toHaveValue('500')
+    const highZoomTileContinuity = await page.evaluate(async () => {
+      const root = document.querySelector<HTMLElement>('[data-pdf-page-virtualizer]')?.parentElement
+      const anchoredPage = root?.querySelector<HTMLElement>('[data-page-number="2"]')
+      if (!root || !anchoredPage) return { before: 0, after: 0, retained: false }
+      const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      const before = Array.from(anchoredPage.querySelectorAll<HTMLElement>(
+        '[data-pdf-canvas-tile]'
+      ))
+      root.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: Math.log(5 / 3.5) / 0.01,
+        clientX: root.getBoundingClientRect().left + root.clientWidth / 2,
+        clientY: root.getBoundingClientRect().top + root.clientHeight / 2
+      }))
+      await frame()
+      await frame()
+      const nextPage = root.querySelector<HTMLElement>('[data-page-number="2"]')
+      const after = Array.from(nextPage?.querySelectorAll<HTMLElement>(
+        '[data-pdf-canvas-tile]'
+      ) ?? [])
+      return {
+        before: before.length,
+        after: after.length,
+        retained: after.length === before.length && after.every((tile, index) =>
+          tile === before[index]
+        )
+      }
+    })
+    expect(highZoomTileContinuity.before).toBeGreaterThan(1)
+    expect(highZoomTileContinuity.after).toBe(highZoomTileContinuity.before)
+    expect(highZoomTileContinuity.retained).toBe(true)
     const zoomGaps = await page.evaluate(async () => {
       const root = document.querySelector<HTMLElement>('[data-pdf-page-virtualizer]')?.parentElement
       if (!root) return ['missing-scroller']

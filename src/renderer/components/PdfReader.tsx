@@ -1294,6 +1294,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       pdf={pdf}
                       pageNumber={pageNumber}
                       scale={scale}
+                      maximumScale={MAX_SCALE}
                       rotation={rotation}
                       devicePixelRatio={devicePixelRatio}
                       scrollRootRef={scrollRef}
