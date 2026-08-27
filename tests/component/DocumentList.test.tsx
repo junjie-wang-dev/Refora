@@ -64,6 +64,7 @@ let mockState: {
   toggleSelect: ReturnType<typeof vi.fn>
   setFocusedDoc: ReturnType<typeof vi.fn>
   toggleStar: ReturnType<typeof vi.fn>
+  openPdf: ReturnType<typeof vi.fn>
   categories: { id: string; name: string; count: number }[]
   createCategory: ReturnType<typeof vi.fn>
   assignDocumentsToCategory: ReturnType<typeof vi.fn>
@@ -91,7 +92,7 @@ vi.mock('@renderer/store/documentStore', () => ({
         toggleSelect: mockState.toggleSelect,
         setFocusedDoc: mockState.setFocusedDoc,
         toggleStar: mockState.toggleStar,
-        openPdf: vi.fn(),
+        openPdf: mockState.openPdf,
         openInFinder: vi.fn(),
         requestDeleteConfirm: vi.fn(),
         refreshMetadata: vi.fn(),
@@ -146,6 +147,7 @@ function setupDefaultState() {
     toggleSelect: vi.fn(),
     setFocusedDoc: vi.fn(),
     toggleStar: vi.fn(),
+    openPdf: vi.fn(),
     categories: [],
     createCategory: vi.fn(),
     assignDocumentsToCategory: vi.fn(),
@@ -373,7 +375,7 @@ describe('DocumentList', () => {
     expect(mockState.setColumns).not.toHaveBeenCalled()
   })
 
-  it('renders the compact two-line paper list under a closeable tab header', () => {
+  it('renders the compact two-line paper list with an open-file action under a closeable tab header', async () => {
     const onClose = vi.fn()
     mockState.documents = [
       makeDoc({ id: 'doc-1', title: 'Compact Paper', authors: 'Compact Author' })
@@ -388,9 +390,13 @@ describe('DocumentList', () => {
     expect(screen.queryByText('list.title')).not.toBeInTheDocument()
     expect(screen.getByText('Compact Paper').closest('[style*="height: 52px"]')).not.toBeNull()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'detail.open' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'list.starDocument' })).toBeInTheDocument()
+    const openButton = screen.getByRole('button', { name: 'detail.open' })
+    expect(screen.queryByRole('button', { name: 'list.starDocument' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'list.expand' })).not.toBeInTheDocument()
+
+    await userEvent.click(openButton)
+    expect(mockState.openPdf).toHaveBeenCalledWith('doc-1')
+    expect(mockState.setFocusedDoc).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'list.close' }))
     expect(onClose).toHaveBeenCalledTimes(1)

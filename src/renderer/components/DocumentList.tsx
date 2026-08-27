@@ -641,65 +641,65 @@ export default function DocumentList({
                     }}
                   >
                     {!compact && (
-                      <>
-                        <div role="gridcell" className="flex w-10 flex-shrink-0 items-center justify-center">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
-                            checked={isSelected}
-                            aria-label={t('list.selectDocument', {
-                              title: doc.title || doc.fileName
-                            })}
-                            onChange={(e) => {
-                              e.stopPropagation()
-                              toggleSelect(doc.id)
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </div>
-                        <div role="gridcell" className="flex w-8 flex-shrink-0 items-center justify-center text-center">
-                          {isMissing ? (
-                            <span title={t('detail.relocate') ?? 'Relocate'}>
-                              <Warning className="h-4 w-4 text-warning" />
-                            </span>
-                          ) : (
-                            <button
-                              className="flex items-center justify-center text-accent transition-colors duration-150 hover:text-accent-hover cursor-pointer"
-                              title={t('detail.open')}
-                              aria-label={t('detail.open')}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                openPdf(doc.id)
-                              }}
-                            >
-                              <FileText className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </>
-                    )}
-                    <div role="gridcell" className={`flex-shrink-0 text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
-                      <button
-                        className="cursor-pointer"
-                        title={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
-                          title: doc.title || doc.fileName
-                        })}
-                        aria-label={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
-                          title: doc.title || doc.fileName
-                        })}
-                        aria-pressed={Boolean(doc.starred)}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleStar(doc.id)
-                        }}
-                      >
-                        <Star
-                          className={`h-4 w-4 ${
-                            doc.starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted'
-                          }`}
+                      <div role="gridcell" className="flex w-10 flex-shrink-0 items-center justify-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
+                          checked={isSelected}
+                          aria-label={t('list.selectDocument', {
+                            title: doc.title || doc.fileName
+                          })}
+                          onChange={(e) => {
+                            e.stopPropagation()
+                            toggleSelect(doc.id)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
                         />
-                      </button>
+                      </div>
+                    )}
+                    <div role="gridcell" className={`flex flex-shrink-0 items-center justify-center text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
+                      {isMissing ? (
+                        <span title={t('detail.relocate') ?? 'Relocate'}>
+                          <Warning className="h-4 w-4 text-warning" />
+                        </span>
+                      ) : (
+                        <button
+                          className="flex items-center justify-center text-accent transition-colors duration-150 hover:text-accent-hover cursor-pointer"
+                          title={t('detail.open')}
+                          aria-label={t('detail.open')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openPdf(doc.id)
+                          }}
+                        >
+                          <FileText className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
+                    {!compact && (
+                      <div role="gridcell" className="w-8 flex-shrink-0 text-center">
+                        <button
+                          className="cursor-pointer"
+                          title={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                            title: doc.title || doc.fileName
+                          })}
+                          aria-label={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                            title: doc.title || doc.fileName
+                          })}
+                          aria-pressed={Boolean(doc.starred)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleStar(doc.id)
+                          }}
+                        >
+                          <Star
+                            className={`h-4 w-4 ${
+                              doc.starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
                     {compact ? (
                       <div role="gridcell" className="min-w-0 flex-1 pl-1">
                         <div className="flex min-w-0 items-center gap-1.5">
