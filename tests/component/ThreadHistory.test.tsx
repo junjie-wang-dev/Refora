@@ -84,7 +84,7 @@ describe('ThreadHistory', () => {
 
   afterEach(cleanup)
 
-  it('toggles the menu and disables the trigger while streaming', async () => {
+  it('keeps the thread menu available while streaming', async () => {
     const user = userEvent.setup()
     const { rerender } = renderHistory({ menuOpen: false })
 
@@ -99,17 +99,18 @@ describe('ThreadHistory', () => {
         onMenuOpenChange={mocks.onMenuOpenChange}
       />
     )
-    expect(screen.getByRole('button', { name: 'Thread history' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Thread history' })).toBeEnabled()
   })
 
-  it('disables thread switching while streaming even when the menu is open', async () => {
+  it('allows thread switching while streaming and protects the active thread from deletion', async () => {
     renderHistory({ streaming: true })
 
     const switchButton = screen.getByRole('button', { name: 'First conversation' })
-    expect(switchButton).toBeDisabled()
+    expect(switchButton).toBeEnabled()
     fireEvent.click(switchButton)
-    expect(mocks.setActiveThreadId).not.toHaveBeenCalled()
-    expect(mocks.onMenuOpenChange).not.toHaveBeenCalled()
+    expect(mocks.setActiveThreadId).toHaveBeenCalledWith(thread.id)
+    expect(mocks.onMenuOpenChange).toHaveBeenCalledWith(false)
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled()
   })
 
   it('renders the empty state when there are no threads', () => {

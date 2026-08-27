@@ -154,7 +154,6 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   const workspacePanelOpen = useWorkspaceStore((s) => s.panelOpen)
   const workspaceFullscreen = useWorkspaceStore((s) => s.fullscreen)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
-  const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
   const pendingChatDraft = useChatDraftStore((s) => s.pending)
   const ocrReaderOpen = useOcrReaderStore((s) => s.documentId !== null)
   const previousActiveWorkspaceIdRef = useRef(activeWorkspaceId)
@@ -663,7 +662,6 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
                       : 'text-muted hover:bg-hover hover:text-foreground'
                   )}
                   onClick={() => setChatOpen((open) => !open)}
-                  disabled={chatStreaming && chatVisible}
                   title={chatToggleLabel}
                   aria-label={chatToggleLabel}
                   aria-pressed={chatVisible}

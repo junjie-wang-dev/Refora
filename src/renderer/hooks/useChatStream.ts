@@ -73,6 +73,8 @@ export function useChatStream({
 
   const threadIdRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
+  const activeRunThreadIdRef = useRef<string | null>(null)
+  const activeRunWorkspaceIdRef = useRef<string | null>(null)
   const streamingTextRef = useRef('')
   const streamingReasoningRef = useRef('')
   const streamingStepOutputRef = useRef(new Map<string, string>())
@@ -122,6 +124,8 @@ export function useChatStream({
     cancelledRunRef.current = null
     isSendingRef.current = false
     activeRunIdRef.current = null
+    activeRunThreadIdRef.current = null
+    activeRunWorkspaceIdRef.current = null
     streamingTextRef.current = ''
     streamingReasoningRef.current = ''
     streamingStepOutputRef.current.clear()
@@ -146,10 +150,11 @@ export function useChatStream({
   const displayMessages = useMemo(() => messages.filter((m) => m.role !== 'tool'), [messages])
 
   useEffect(() => {
+    const observingActiveRun = activeRunIdRef.current !== null &&
+      activeRunWorkspaceIdRef.current === activeWorkspaceId &&
+      activeRunThreadIdRef.current === activeThreadId
     threadIdRef.current = activeThreadId
-    if (!isSendingRef.current) {
-      resetRunState()
-    }
+    if (!observingActiveRun) resetRunState()
     stickToBottomRef.current = true
     if (!activeThreadId) {
       setMessages([])
@@ -199,6 +204,8 @@ export function useChatStream({
         const status = traceRunStatus(runStep)
         if (runStep && (status === 'running' || status === 'interrupted')) {
           activeRunIdRef.current = runStep.runId
+          activeRunThreadIdRef.current = activeThreadId
+          activeRunWorkspaceIdRef.current = activeWorkspaceId
           setActiveRunId(runStep.runId)
           isSendingRef.current = status === 'running'
           setStreaming(status === 'running')
@@ -208,7 +215,7 @@ export function useChatStream({
     return () => {
       cancelled = true
     }
-  }, [activeThreadId, resetRunState])
+  }, [activeThreadId, activeWorkspaceId, resetRunState])
 
   const scheduleStreamingFlush = useCallback(() => {
     if (rafIdRef.current != null) return
@@ -327,6 +334,8 @@ export function useChatStream({
     })
     isSendingRef.current = false
     activeRunIdRef.current = null
+    activeRunThreadIdRef.current = null
+    activeRunWorkspaceIdRef.current = null
     setActiveRunId(null)
     cancelledRef.current = false
     cancelledRunRef.current = null
@@ -602,7 +611,9 @@ export function useChatStream({
       deferredTraceTimersRef.current.clear()
       liveActivityStartedAtRef.current.clear()
       if (isSendingRef.current && activeRunIdRef.current) {
-        void api.ai.chatCancel(activeRunIdRef.current).catch(() => undefined)
+        activeRunIdRef.current = null
+        activeRunThreadIdRef.current = null
+        activeRunWorkspaceIdRef.current = null
       }
       isSendingRef.current = false
       setChatStreaming(false)
@@ -692,6 +703,8 @@ export function useChatStream({
     const requestedRunId = globalThis.crypto?.randomUUID?.() ??
       `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     activeRunIdRef.current = requestedRunId
+    activeRunThreadIdRef.current = existingThread
+    activeRunWorkspaceIdRef.current = activeWorkspaceId
     setActiveRunId(requestedRunId)
     streamingTextRef.current = ''
     streamingReasoningRef.current = ''
@@ -746,28 +759,31 @@ export function useChatStream({
           ? attachments.map((docId) => ({ type: 'document' as const, docId }))
           : undefined
       })
-      if (disposedRef.current) {
-        void api.ai.chatCancel(runId).catch(() => undefined)
-        return
-      }
-      if (activeRunIdRef.current === requestedRunId) {
-        activeRunIdRef.current = runId
-        setActiveRunId(runId)
-      }
       const resolvedContext = { ...sendContext, threadId, runId, persisted: true }
       if (retrySendRef.current === sendContext) retrySendRef.current = resolvedContext
       if (latestSendRef.current === sendContext) latestSendRef.current = resolvedContext
-      if (!existingThread) {
+      if (disposedRef.current || activeRunIdRef.current !== requestedRunId) {
+        if (useWorkspaceStore.getState().activeWorkspaceId === activeWorkspaceId) {
+          void fetchThreadsRef.current({ selectLatestIfNone: true })
+        }
+        return
+      }
+      activeRunIdRef.current = runId
+      activeRunThreadIdRef.current = threadId
+      setActiveRunId(runId)
+      if (!existingThread && activeRunWorkspaceIdRef.current === activeWorkspaceId) {
         useWorkspaceStore.getState().adoptStreamingThread(threadId)
         threadIdRef.current = threadId
       }
       if (cancelledRef.current) cancelRun(runId)
       void fetchThreads()
     } catch (e) {
-      if (disposedRef.current) return
+      if (disposedRef.current || activeRunIdRef.current !== requestedRunId) return
       cancelledRef.current = false
       cancelledRunRef.current = null
       activeRunIdRef.current = null
+      activeRunThreadIdRef.current = null
+      activeRunWorkspaceIdRef.current = null
       setActiveRunId(null)
       setCanRetry(true)
       setError(errorMessage(e, t('workspace.chat.sendFailed', 'Failed to send message')))
@@ -797,6 +813,8 @@ export function useChatStream({
     pendingInterruptRef.current = null
     setPendingInterrupt(null)
     activeRunIdRef.current = context.interrupt.runId
+    activeRunThreadIdRef.current = context.interrupt.threadId
+    activeRunWorkspaceIdRef.current = activeWorkspaceId
     setActiveRunId(context.interrupt.runId)
     setActiveOcrDocumentId(reviewedOcrDocumentId(context))
     setStreaming(true)
@@ -825,7 +843,7 @@ export function useChatStream({
       setCanRetry(true)
       setError(errorMessage(resumeError, tRef.current('workspace.chat.resumeFailed', 'Failed to resume agent')))
     }
-  }, [])
+  }, [activeWorkspaceId])
 
   const handleRetry = useCallback(() => {
     const resume = resumeRetryRef.current

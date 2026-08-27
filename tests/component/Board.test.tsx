@@ -31,6 +31,9 @@ const mockCreateNote = vi.fn()
 const mockDeleteNote = vi.fn()
 const mockUpdateNote = vi.fn()
 const mockUpdateReport = vi.fn()
+const mockSummarizeDocument = vi.fn((docId: string) => {
+  void window.api.ai.summarize(docId)
+})
 const mockConnectionsList = vi.fn()
 const mockConnectionsCreate = vi.fn()
 const mockConnectionsDelete = vi.fn()
@@ -61,6 +64,9 @@ vi.mock('@renderer/store/workspaceStore', () => ({
       assets: mockAssets,
       activeWorkspaceId: mockActiveWorkspaceId,
       panelView: mockPanelView,
+      summarizingDocIds: new Set<string>(),
+      summaryErrors: new Map<string, string>(),
+      summarizeDocument: mockSummarizeDocument,
       addDocs: mockAddDocs,
       addAssets: mockAddAssets,
       addFiles: mockAddFiles,
@@ -114,6 +120,9 @@ beforeEach(() => {
   mockDeleteNote.mockReset()
   mockUpdateNote.mockReset().mockResolvedValue(true)
   mockUpdateReport.mockReset().mockResolvedValue(true)
+  mockSummarizeDocument.mockReset().mockImplementation((docId: string) => {
+    void window.api.ai.summarize(docId)
+  })
   mockConnectionsList.mockReset().mockResolvedValue([])
   mockConnectionsCreate.mockReset()
   mockConnectionsDelete.mockReset().mockResolvedValue(undefined)

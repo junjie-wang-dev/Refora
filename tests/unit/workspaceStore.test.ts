@@ -91,11 +91,16 @@ const mockReportsUpdate = vi.fn()
 const mockChatThreads = vi.fn()
 const mockChatDeleteThread = vi.fn()
 const mockRenameThread = vi.fn()
+const mockSummarize = vi.fn()
 const mockOnWorkspaceItemsChanged = vi.fn()
 const mockOnAiReportCreated = vi.fn()
+const mockOnAiSummaryUpdated = vi.fn()
+const mockOnAiSummaryError = vi.fn()
 const mockOnLibrarySwitched = vi.fn()
 const mockDisposeWorkspaceItemsChanged = vi.fn()
 const mockDisposeAiReportCreated = vi.fn()
+const mockDisposeAiSummaryUpdated = vi.fn()
+const mockDisposeAiSummaryError = vi.fn()
 const mockDisposeLibrarySwitched = vi.fn()
 const mockWorkspacesList = vi.fn()
 const mockWorkspacesCreate = vi.fn()
@@ -127,6 +132,8 @@ function resetStoreState(): void {
     panelView: 'workspace',
     fullscreen: false,
     chatStreaming: false,
+    summarizingDocIds: new Set(),
+    summaryErrors: new Map(),
     items: [],
     reports: [],
     notes: [],
@@ -144,11 +151,16 @@ beforeEach(() => {
   mockChatThreads.mockReset()
   mockChatDeleteThread.mockReset()
   mockRenameThread.mockReset()
+  mockSummarize.mockReset().mockResolvedValue(undefined)
   mockOnWorkspaceItemsChanged.mockReset().mockReturnValue(mockDisposeWorkspaceItemsChanged)
   mockOnAiReportCreated.mockReset().mockReturnValue(mockDisposeAiReportCreated)
+  mockOnAiSummaryUpdated.mockReset().mockReturnValue(mockDisposeAiSummaryUpdated)
+  mockOnAiSummaryError.mockReset().mockReturnValue(mockDisposeAiSummaryError)
   mockOnLibrarySwitched.mockReset().mockReturnValue(mockDisposeLibrarySwitched)
   mockDisposeWorkspaceItemsChanged.mockReset()
   mockDisposeAiReportCreated.mockReset()
+  mockDisposeAiSummaryUpdated.mockReset()
+  mockDisposeAiSummaryError.mockReset()
   mockDisposeLibrarySwitched.mockReset()
   mockWorkspacesList.mockReset()
   mockWorkspacesCreate.mockReset()
@@ -214,10 +226,13 @@ beforeEach(() => {
   ai.chatThreads = mockChatThreads
   ai.chatDeleteThread = mockChatDeleteThread
   ai.renameThread = mockRenameThread
+  ai.summarize = mockSummarize
 
   const events = api.events as Record<string, unknown>
   events.onWorkspaceItemsChanged = mockOnWorkspaceItemsChanged
   events.onAiReportCreated = mockOnAiReportCreated
+  events.onAiSummaryUpdated = mockOnAiSummaryUpdated
+  events.onAiSummaryError = mockOnAiSummaryError
   events.onLibrarySwitched = mockOnLibrarySwitched
 
   const workspaces = api.workspaces as Record<string, unknown>
@@ -420,7 +435,7 @@ describe('WorkspaceStore', () => {
       }
     })
 
-    it('reports a blocked switch when chat starts while renderer drafts are flushing', async () => {
+    it('switches after drafts flush even when a chat starts in the background', async () => {
       let release: () => void = () => undefined
       const draftSave = new Promise<void>((resolve) => {
         release = resolve
@@ -434,8 +449,8 @@ describe('WorkspaceStore', () => {
         useWorkspaceStore.setState({ chatStreaming: true })
         release()
 
-        await expect(switching).resolves.toBe(false)
-        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-old')
+        await expect(switching).resolves.toBe(true)
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-new')
       } finally {
         unregister()
       }
@@ -823,9 +838,34 @@ describe('WorkspaceStore', () => {
 
       useWorkspaceStore.getState().destroy()
       expect(mockDisposeAiReportCreated).toHaveBeenCalledOnce()
+      expect(mockDisposeAiSummaryUpdated).toHaveBeenCalledOnce()
+      expect(mockDisposeAiSummaryError).toHaveBeenCalledOnce()
       expect(mockDisposeWorkspaceItemsChanged).toHaveBeenCalledOnce()
       expect(mockDisposeLibrarySwitched).toHaveBeenCalledOnce()
       expect(useWorkspaceStore.getState().initialized).toBe(false)
+    })
+
+    it('keeps summary jobs active across workspace switches until a backend event settles them', async () => {
+      useWorkspaceStore.getState().init()
+
+      useWorkspaceStore.getState().summarizeDocument('doc-1')
+      expect(mockSummarize).toHaveBeenCalledWith('doc-1')
+      expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set(['doc-1']))
+
+      useWorkspaceStore.getState().setActiveWorkspace('ws-2')
+      expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set(['doc-1']))
+
+      const updated = mockOnAiSummaryUpdated.mock.calls[0][0] as (docId: string) => void
+      updated('doc-1')
+      expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set())
+
+      useWorkspaceStore.getState().summarizeDocument('doc-2')
+      const failed = mockOnAiSummaryError.mock.calls[0][0] as (
+        payload: { docId: string; message: string }
+      ) => void
+      failed({ docId: 'doc-2', message: 'provider failed' })
+      expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set())
+      expect(useWorkspaceStore.getState().summaryErrors.get('doc-2')).toBe('provider failed')
     })
 
     it('resets workspace state and refetches on library:switched', async () => {
@@ -840,6 +880,8 @@ describe('WorkspaceStore', () => {
         reports: [makeReport()],
         notes: [makeNote()],
         assets: [makeAsset()],
+        summarizingDocIds: new Set(['doc-1']),
+        summaryErrors: new Map([['doc-2', 'failed']]),
         threads: [{ id: 'old-thread', workspaceId: 'old-ws', providerId: 'p', agentProfileId: null, title: 'T', createdAt: 0, headCheckpointId: null, agentStateVersion: 0 }]
       })
 
@@ -864,6 +906,8 @@ describe('WorkspaceStore', () => {
       expect(useWorkspaceStore.getState().notes).toEqual([])
       expect(useWorkspaceStore.getState().assets).toEqual([])
       expect(useWorkspaceStore.getState().threads).toEqual([])
+      expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set())
+      expect(useWorkspaceStore.getState().summaryErrors).toEqual(new Map())
     })
 
     it('ignores delayed workspace and global thread responses from the previous library', async () => {
@@ -928,30 +972,22 @@ describe('WorkspaceStore', () => {
   })
 
   describe('thread and panel actions', () => {
-    it('blocks switching to another thread while chat is streaming and allows it afterwards', () => {
+    it('switches threads while the previous chat continues in the background', () => {
       useWorkspaceStore.setState({ activeThreadId: 'thread-1', chatStreaming: true })
 
       useWorkspaceStore.getState().setActiveThreadId('thread-2')
-      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
+      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-2')
 
       useWorkspaceStore.getState().setActiveThreadId(null)
-      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
-
-      useWorkspaceStore.getState().setChatStreaming(false)
-      useWorkspaceStore.getState().setActiveThreadId('thread-2')
-      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-2')
+      expect(useWorkspaceStore.getState().activeThreadId).toBeNull()
     })
 
-    it('adopts a newly created streaming thread past the switch guard', () => {
+    it('adopts a newly created streaming thread and still permits later navigation', () => {
       useWorkspaceStore.setState({ activeThreadId: null, chatStreaming: true })
 
       useWorkspaceStore.getState().adoptStreamingThread('thread-new')
       expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-new')
 
-      useWorkspaceStore.getState().setActiveThreadId('thread-1')
-      expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-new')
-
-      useWorkspaceStore.getState().setChatStreaming(false)
       useWorkspaceStore.getState().setActiveThreadId('thread-1')
       expect(useWorkspaceStore.getState().activeThreadId).toBe('thread-1')
     })

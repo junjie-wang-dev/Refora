@@ -9,6 +9,7 @@ import type {
   WorkspaceNotePatch,
   WorkspaceNoteType,
   ChatThread,
+  SummaryErrorEvent,
   WorkspaceItemsChangedEvent,
   WorkspaceAsset,
   WorkspaceContentKind
@@ -28,6 +29,8 @@ interface WorkspaceState {
   panelView: 'workspace' | 'markdown' | 'pdf'
   fullscreen: boolean
   chatStreaming: boolean
+  summarizingDocIds: Set<string>
+  summaryErrors: Map<string, string>
   items: WorkspaceItem[]
   reports: AiReport[]
   notes: WorkspaceNote[]
@@ -47,6 +50,7 @@ interface WorkspaceState {
   setActiveThreadId: (id: string | null) => void
   adoptStreamingThread: (id: string) => void
   setChatStreaming: (streaming: boolean) => void
+  summarizeDocument: (docId: string) => void
   deleteThread: (threadId: string) => Promise<void>
   renameThread: (threadId: string, title: string) => Promise<void>
   fetchThreads: (options?: { selectLatestIfNone?: boolean }) => Promise<void>
@@ -80,6 +84,8 @@ interface WorkspaceState {
 }
 
 const aiReportCreatedCb: Array<null | ((report: AiReport) => void)> = [null]
+const aiSummaryUpdatedCb: Array<null | ((docId: string) => void)> = [null]
+const aiSummaryErrorCb: Array<null | ((payload: SummaryErrorEvent) => void)> = [null]
 const workspaceItemsChangedCb: Array<null | ((payload: WorkspaceItemsChangedEvent) => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
 const eventDisposers: Array<() => void> = []
@@ -185,6 +191,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   panelView: 'workspace',
   fullscreen: false,
   chatStreaming: false,
+  summarizingDocIds: new Set(),
+  summaryErrors: new Map(),
   items: [],
   reports: [],
   notes: [],
@@ -207,6 +215,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
     }
     eventDisposers.push(api.events.onAiReportCreated(aiReportCreatedCb[0]))
+
+    aiSummaryUpdatedCb[0] = (docId: string) => {
+      set((state) => {
+        if (!state.summarizingDocIds.has(docId) && !state.summaryErrors.has(docId)) return state
+        const summarizingDocIds = new Set(state.summarizingDocIds)
+        const summaryErrors = new Map(state.summaryErrors)
+        summarizingDocIds.delete(docId)
+        summaryErrors.delete(docId)
+        return { summarizingDocIds, summaryErrors }
+      })
+    }
+    eventDisposers.push(api.events.onAiSummaryUpdated(aiSummaryUpdatedCb[0]))
+
+    aiSummaryErrorCb[0] = (payload: SummaryErrorEvent) => {
+      set((state) => {
+        const summarizingDocIds = new Set(state.summarizingDocIds)
+        const summaryErrors = new Map(state.summaryErrors)
+        summarizingDocIds.delete(payload.docId)
+        summaryErrors.set(payload.docId, payload.message)
+        return { summarizingDocIds, summaryErrors }
+      })
+    }
+    eventDisposers.push(api.events.onAiSummaryError(aiSummaryErrorCb[0]))
 
     workspaceItemsChangedCb[0] = (payload: WorkspaceItemsChangedEvent) => {
       if (payload.workspaceId === get().activeWorkspaceId) {
@@ -236,6 +267,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         panelView: 'workspace',
         fullscreen: false,
         chatStreaming: false,
+        summarizingDocIds: new Set(),
+        summaryErrors: new Map(),
         items: [],
         reports: [],
         notes: [],
@@ -260,6 +293,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     threadConfirmedTitles.clear()
     eventDisposers.splice(0).forEach((dispose) => dispose())
     aiReportCreatedCb[0] = null
+    aiSummaryUpdatedCb[0] = null
+    aiSummaryErrorCb[0] = null
     workspaceItemsChangedCb[0] = null
     librarySwitchedCb[0] = null
     set({ initialized: false })
@@ -344,16 +379,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveWorkspace: (id: string | null) => {
-    const current = get()
-    if (current.chatStreaming) {
-      if (!id || current.activeWorkspaceId !== id) return false
-      set((state) => ({
-        panelOpen: true,
-        panelView: 'workspace',
-        openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, id)
-      }))
-      return true
-    }
     set((state) => ({
       activeWorkspaceId: id,
       openWorkspaceIds: addOpenWorkspace(state.openWorkspaceIds, id),
@@ -393,8 +418,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveThreadId: (id: string | null) => {
-    const current = get()
-    if (current.chatStreaming && current.activeThreadId !== id) return
     set({ activeThreadId: id })
   },
 
@@ -404,6 +427,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   setChatStreaming: (streaming: boolean) => {
     set({ chatStreaming: streaming })
+  },
+
+  summarizeDocument: (docId: string) => {
+    set((state) => {
+      const summarizingDocIds = new Set(state.summarizingDocIds).add(docId)
+      const summaryErrors = new Map(state.summaryErrors)
+      summaryErrors.delete(docId)
+      return { summarizingDocIds, summaryErrors }
+    })
+    void api.ai.summarize(docId).catch((cause) => {
+      set((state) => {
+        const summarizingDocIds = new Set(state.summarizingDocIds)
+        const summaryErrors = new Map(state.summaryErrors)
+        summarizingDocIds.delete(docId)
+        summaryErrors.set(docId, errorMessage(cause, i18n.t('workspace.summaryFailed')))
+        return { summarizingDocIds, summaryErrors }
+      })
+    })
   },
 
   deleteThread: async (threadId: string) => {

@@ -427,7 +427,7 @@ describe('GlobalSearch', () => {
     expect(mocks.showToast).not.toHaveBeenCalled()
   })
 
-  it('disables context switches while AI chat is streaming', async () => {
+  it('opens another workspace or chat while AI work continues in the background', async () => {
     mocks.workspaceState.chatStreaming = true
     render(<GlobalSearch />)
     const input = screen.getByRole('combobox', { name: 'globalSearch.label' })
@@ -438,16 +438,18 @@ describe('GlobalSearch', () => {
     })
     const chatOption = screen.getByRole('option', { name: 'globalSearch.openChat: Transformer discussion' })
 
-    expect(fileOption).toBeDisabled()
-    expect(contentOption).toBeDisabled()
-    expect(chatOption).toBeDisabled()
-    expect(fileOption).toHaveAttribute('title', 'globalSearch.unavailableWhileStreaming')
+    expect(fileOption).toBeEnabled()
+    expect(contentOption).toBeEnabled()
+    expect(chatOption).toBeEnabled()
     fireEvent.click(fileOption)
-    fireEvent.click(contentOption)
-    fireEvent.click(chatOption)
-    expect(mocks.requestActiveWorkspace).not.toHaveBeenCalled()
-    expect(mocks.setActiveThreadId).not.toHaveBeenCalled()
-    expect(mocks.openMarkdownCard).not.toHaveBeenCalled()
-    expect(api.workspaceAssets.open).not.toHaveBeenCalled()
+    await waitFor(() => expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-files'))
+    expect(api.workspaceAssets.open).toHaveBeenCalledWith('asset-1')
+
+    fireEvent.change(input, { target: { value: 'transformer again' } })
+    fireEvent.click(await screen.findByRole('option', {
+      name: 'globalSearch.openChat: Transformer discussion'
+    }))
+    await waitFor(() => expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-chat'))
+    expect(mocks.setActiveThreadId).toHaveBeenCalledWith('thread-1')
   })
 })

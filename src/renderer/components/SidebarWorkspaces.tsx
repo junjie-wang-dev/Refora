@@ -19,7 +19,6 @@ export default function SidebarWorkspaces() {
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const requestActiveWorkspace = useWorkspaceStore((s) => s.requestActiveWorkspace)
-  const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
   const createWorkspace = useWorkspaceStore((s) => s.createWorkspace)
   const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace)
   const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace)
@@ -163,7 +162,6 @@ export default function SidebarWorkspaces() {
                   icon={<SquaresFour className="h-4 w-4" />}
                   label={w.name}
                   active={activeWorkspaceId === w.id}
-                  disabled={chatStreaming && activeWorkspaceId !== w.id}
                   onClick={() => void requestActiveWorkspace(w.id)}
                   onContextMenu={(e) => handleWsItemContext(e, w)}
                 />

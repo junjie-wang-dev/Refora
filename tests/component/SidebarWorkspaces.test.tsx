@@ -87,16 +87,18 @@ describe('SidebarWorkspaces', () => {
     expect(screen.queryByPlaceholderText('sidebar.workspaceName')).not.toBeInTheDocument()
   })
 
-  it('selects workspaces and disables switching while another chat streams', () => {
+  it('selects another workspace while a chat continues in the background', () => {
     mocks.state.chatStreaming = true
     render(<SidebarWorkspaces />)
 
     const active = screen.getByRole('button', { name: 'Research' })
     const other = screen.getByRole('button', { name: 'Reading' })
     fireEvent.click(active)
+    fireEvent.click(other)
     expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(mocks.requestActiveWorkspace).toHaveBeenCalledWith('ws-2')
     expect(active).toHaveClass('sidebar-item-active')
-    expect(other).toHaveAttribute('aria-disabled', 'true')
+    expect(other).not.toHaveAttribute('aria-disabled', 'true')
   })
 
   it('exposes create through the section context menu', () => {

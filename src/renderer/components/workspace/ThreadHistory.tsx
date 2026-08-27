@@ -49,7 +49,6 @@ export default function ThreadHistory({
           onClick={() => onMenuOpenChange(!menuOpen)}
           title={t('workspace.chat.threadHistory', 'Thread history')}
           aria-label={t('workspace.chat.threadHistory', 'Thread history')}
-          disabled={streaming}
         >
           <ClockCounterClockwise className="h-4 w-4" />
         </UiButton>
@@ -98,10 +97,7 @@ export default function ThreadHistory({
                   ) : (
                     <button
                       type="button"
-                      className={`min-w-0 flex-1 truncate text-left ${
-                        streaming ? 'cursor-not-allowed opacity-50' : ''
-                      }`}
-                      disabled={streaming}
+                      className="min-w-0 flex-1 truncate text-left"
                       onClick={() => {
                         setActiveThreadId(th.id)
                         onMenuOpenChange(false)
@@ -145,6 +141,7 @@ export default function ThreadHistory({
                           }
                         })
                       }}
+                      disabled={streaming && th.id === activeThreadId}
                       title={t('common.delete', 'Delete')}
                       aria-label={t('common.delete', 'Delete')}
                     >

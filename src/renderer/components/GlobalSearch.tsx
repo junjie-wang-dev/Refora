@@ -63,8 +63,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   const requestVersionRef = useRef(0)
   const translationRef = useRef(t)
   translationRef.current = t
-  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId)
-  const chatStreaming = useWorkspaceStore((state) => state.chatStreaming)
   const setSearchResults = useDocumentStore((state) => state.setSearchResults)
   const setFocusedDoc = useDocumentStore((state) => state.setFocusedDoc)
   const clearSearch = useDocumentStore((state) => state.clearSearch)
@@ -167,7 +165,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     } else if (selection.kind === 'workspaceFile') {
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
-        if (store.chatStreaming) return
         if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else {
         store.openPanel()
@@ -180,7 +177,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     } else if (selection.kind === 'workspaceContent') {
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
-        if (store.chatStreaming) return
         if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else {
         store.openPanel()
@@ -188,7 +184,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       useWorkspaceStore.getState().openMarkdownCard(selection.value.kind, selection.value.id)
     } else {
       const store = useWorkspaceStore.getState()
-      if (store.chatStreaming) return
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
         if (!await store.requestActiveWorkspace(selection.value.workspaceId)) return
       } else if (selection.value.workspaceId) {
@@ -210,15 +205,9 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   const showResults = expanded && query.trim().length > 0
   let selectionOffset = 0
 
-  const selectionUnavailable = useCallback((selection: SearchSelection) => {
-    if (!chatStreaming || selection.kind === 'document') return false
-    if (selection.kind === 'chat') return true
-    return selection.value.workspaceId !== activeWorkspaceId
-  }, [activeWorkspaceId, chatStreaming])
-
   const selectableIndices = useMemo(
-    () => selections.flatMap((selection, index) => selectionUnavailable(selection) ? [] : [index]),
-    [selectionUnavailable, selections]
+    () => selections.map((_, index) => index),
+    [selections]
   )
 
   useEffect(() => {
@@ -234,24 +223,18 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
   ) => {
     const index = selectionOffset++
     const selectionId = selection.kind === 'chat' ? selection.value.threadId : selection.value.id
-    const unavailable = selectionUnavailable(selection)
     return (
       <button
         key={`${selection.kind}:${selectionId}`}
         type="button"
         role="option"
         aria-label={label}
-        aria-selected={!unavailable && index === activeIndex}
-        aria-disabled={unavailable}
-        disabled={unavailable}
-        title={unavailable ? t('globalSearch.unavailableWhileStreaming') : undefined}
+        aria-selected={index === activeIndex}
         className={`flex w-full min-w-0 items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-150 ${
-          unavailable
-            ? 'cursor-not-allowed opacity-45'
-            : index === activeIndex ? 'bg-active' : 'hover:bg-hover'
+          index === activeIndex ? 'bg-active' : 'hover:bg-hover'
         }`}
         onMouseEnter={() => {
-          if (!unavailable) setActiveIndex(index)
+          setActiveIndex(index)
         }}
         id={searchSelectionId(selection)}
         onClick={() => void selectResult(selection)}
@@ -309,8 +292,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
               setActiveIndex(selectableIndices[position < 0 ? selectableIndices.length - 1 : Math.max(0, position - 1)])
             } else if (
               event.key === 'Enter' &&
-              selections[activeIndex] &&
-              !selectionUnavailable(selections[activeIndex])
+              selections[activeIndex]
             ) {
               event.preventDefault()
               void selectResult(selections[activeIndex])

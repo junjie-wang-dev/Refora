@@ -2585,7 +2585,7 @@ describe('useChatStream lifecycle', () => {
     expect(result.current.streaming).toBe(true)
   })
 
-  it('cancels an active run and releases the global lock when unmounted', async () => {
+  it('leaves an active run in the backend and releases the visible streaming state when unmounted', async () => {
     setupApi([])
     const setChatStreaming = vi.fn()
     const { result, unmount } = renderHook(() => useChatStream({
@@ -2605,10 +2605,46 @@ describe('useChatStream lifecycle', () => {
 
     unmount()
 
-    expect(mockChatCancel).toHaveBeenCalledWith(
-      (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId
-    )
+    expect(mockChatCancel).not.toHaveBeenCalled()
     expect(setChatStreaming).toHaveBeenLastCalledWith(false)
+  })
+
+  it('detaches from a run when switching workspaces without cancelling it', async () => {
+    setupApi([])
+    const setChatStreaming = vi.fn()
+    const { result, rerender } = renderHook(
+      ({ workspaceId, threadId }: { workspaceId: string; threadId: string }) => useChatStream({
+        activeWorkspaceId: workspaceId,
+        activeDocumentId: null,
+        activeProviderId: 'p1',
+        activeThreadId: threadId,
+        requestModel: '',
+        deepThinking: false,
+        setChatStreaming,
+        fetchThreads: vi.fn().mockResolvedValue(undefined)
+      }),
+      { initialProps: { workspaceId: 'ws-1', threadId: 'thread-1' } }
+    )
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => {
+      await result.current.sendText('Keep researching', [], 'thread-1')
+    })
+
+    rerender({ workspaceId: 'ws-2', threadId: 'thread-2' })
+
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.activeRunId).toBeNull()
+    expect(mockChatCancel).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await result.current.sendText('Start another task', [], 'thread-2')
+    })
+    expect(mockChatSend).toHaveBeenCalledTimes(2)
+    expect(mockChatSend.mock.calls[1][0]).toMatchObject({
+      workspaceId: 'ws-2',
+      threadId: 'thread-2'
+    })
   })
 
   it('cancels a new thread after its id arrives when stop is clicked immediately', async () => {

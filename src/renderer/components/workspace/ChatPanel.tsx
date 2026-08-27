@@ -490,9 +490,9 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         title={activeThreadTitle}
         onClose={onClose}
         closeLabel={t('workspace.chat.closePanel')}
-        closeDisabled={chat.streaming}
+        closeDisabled={false}
         onTitleClick={() => setThreadMenuOpen((open) => !open)}
-        titleDisabled={chat.streaming}
+        titleDisabled={false}
         actions={
           <>
             <ThreadHistory
@@ -508,7 +508,6 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
               onClick={startNewChat}
               title={t('workspace.chat.newChat', 'New chat')}
               aria-label={t('workspace.chat.newChat', 'New chat')}
-              disabled={chat.streaming}
             >
               <Plus className="h-4 w-4" />
             </UiButton>

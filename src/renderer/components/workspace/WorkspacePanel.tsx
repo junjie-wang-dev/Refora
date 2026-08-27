@@ -44,7 +44,6 @@ export default function WorkspacePanel() {
   const openWorkspaceIds = useWorkspaceStore((s) => s.openWorkspaceIds)
   const panelView = useWorkspaceStore((s) => s.panelView)
   const fullscreen = useWorkspaceStore((s) => s.fullscreen)
-  const chatStreaming = useWorkspaceStore((s) => s.chatStreaming)
   const reports = useWorkspaceStore((s) => s.reports)
   const notes = useWorkspaceStore((s) => s.notes)
   const markdownCardRequest = useWorkspaceStore((s) => s.markdownCardRequest)
@@ -181,11 +180,9 @@ export default function WorkspacePanel() {
   const handleCloseWorkspace = useCallback((workspaceId: string) => {
     closeWorkspaceTab(workspaceId)
     if (panelView !== 'workspace' || activeWorkspaceId !== workspaceId) return
-    const nextWorkspace = chatStreaming
-      ? undefined
-      : workspaces.find(
-        (workspace) => workspace.id !== workspaceId && openWorkspaceIds.includes(workspace.id)
-      )
+    const nextWorkspace = workspaces.find(
+      (workspace) => workspace.id !== workspaceId && openWorkspaceIds.includes(workspace.id)
+    )
     if (nextWorkspace) {
       setActiveWorkspace(nextWorkspace.id)
     } else if (activeMarkdownCard) {
@@ -199,7 +196,6 @@ export default function WorkspacePanel() {
   }, [
     activeMarkdownCard,
     activeWorkspaceId,
-    chatStreaming,
     closePanel,
     closeWorkspaceTab,
     openWorkspaceIds,

@@ -751,7 +751,7 @@ describe('WorkspacePanel tab header', () => {
     })
   })
 
-  it('closes the active workspace panel instead of leaving a blank tab bar while streaming', () => {
+  it('activates another open workspace when closing the active tab while streaming', () => {
     mockWorkspacePanelState.chatStreaming = true
     mockWorkspacePanelState.openWorkspaceIds = ['ws-1', 'ws-2']
 
@@ -766,8 +766,8 @@ describe('WorkspacePanel tab header', () => {
     expect(close).toBeEnabled()
     fireEvent.click(close)
 
-    expect(mockWorkspacePanelState.closePanel).toHaveBeenCalledOnce()
-    expect(mockWorkspacePanelState.setActiveWorkspace).not.toHaveBeenCalled()
+    expect(mockWorkspacePanelState.setActiveWorkspace).toHaveBeenCalledWith('ws-2')
+    expect(mockWorkspacePanelState.closePanel).not.toHaveBeenCalled()
   })
 
   it('creates Markdown notes and sticky notes from fixed canvas actions', () => {
