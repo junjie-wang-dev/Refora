@@ -9,6 +9,7 @@ const MAX_TILE_PIXEL_DIMENSION = Math.min(
 )
 
 export interface PdfCanvasTile {
+  column: number
   cssHeight: number
   cssWidth: number
   cssX: number
@@ -17,6 +18,7 @@ export interface PdfCanvasTile {
   pixelWidth: number
   pixelX: number
   pixelY: number
+  row: number
 }
 
 export interface PdfCanvasLayout {
@@ -76,6 +78,7 @@ export function pdfCanvasLayout(
       const tilePixelWidth = nextPixelX - pixelX
       const tilePixelHeight = nextPixelY - pixelY
       tiles.push({
+        column,
         cssHeight: tilePixelHeight / pixelRatio,
         cssWidth: tilePixelWidth / pixelRatio,
         cssX: pixelX / pixelRatio,
@@ -83,7 +86,8 @@ export function pdfCanvasLayout(
         pixelHeight: tilePixelHeight,
         pixelWidth: tilePixelWidth,
         pixelX,
-        pixelY
+        pixelY,
+        row
       })
     }
   }
