@@ -44,7 +44,7 @@ WORKSPACE_SYSTEM_PROMPT = (
     "workspace from the paper catalog. Use read_workspace_item with an itemId returned by "
     "list_workspace_context to read report, note, document, or asset contents. "
     "Use workspace tools for pinned papers, notes, assets, and connections. "
-    "When the user message contains [Attached papers], prioritize those papers."
+    "When the user message contains [Attached workspace files], prioritize those items."
 )
 
 ACTIVE_DOCUMENT_SYSTEM_PROMPT = (
@@ -160,22 +160,62 @@ def _attachment_context(
     workspace_id: str,
     attachments: list[dict[str, Any]],
 ) -> str:
+    workspace_items = _value(repos.get("workspaceItems"), "list")(workspace_id)
     documents = {item["docId"]: item for item in _workspace_documents(repos, workspace_id)}
+    document_item_ids = {
+        item["docId"]: item["id"]
+        for item in workspace_items
+        if item.get("kind") == "document"
+        and isinstance(item.get("docId"), str)
+        and isinstance(item.get("id"), str)
+    }
+    list_assets = _value(repos.get("workspaceAssets"), "list")
+    assets = {
+        asset["id"]: asset
+        for asset in list_assets(workspace_id)
+        if isinstance(asset.get("id"), str)
+    } if callable(list_assets) else {}
+    asset_item_ids = {
+        item["assetId"]: item["id"]
+        for item in workspace_items
+        if item.get("kind") == "asset"
+        and isinstance(item.get("assetId"), str)
+        and isinstance(item.get("id"), str)
+    }
     lines: list[str] = []
     omitted = 0
     for attachment in attachments[:MAX_ATTACHMENTS]:
-        doc_id = attachment.get("docId") if attachment.get("type") == "document" else None
-        document = documents.get(doc_id) if isinstance(doc_id, str) else None
-        if document is None:
-            omitted += 1
-            continue
-        lines.append(
-            f"- docId: {document['docId']}\n"
-            f"  title: {document['title']}\n"
-            f"  authors: {document.get('authors') or ''}\n"
-            f"  year: {document.get('year') or ''}\n"
-            f"  hasSummary: {'true' if document['hasSummary'] else 'false'}"
-        )
+        if attachment.get("type") == "document":
+            doc_id = attachment.get("docId")
+            document = documents.get(doc_id) if isinstance(doc_id, str) else None
+            item_id = document_item_ids.get(doc_id) if isinstance(doc_id, str) else None
+            if document is not None and item_id is not None:
+                lines.append(
+                    f"- type: document\n"
+                    f"  itemId: {item_id}\n"
+                    f"  docId: {document['docId']}\n"
+                    f"  title: {document['title']}\n"
+                    f"  authors: {document.get('authors') or ''}\n"
+                    f"  year: {document.get('year') or ''}\n"
+                    f"  hasSummary: {'true' if document['hasSummary'] else 'false'}"
+                )
+                continue
+        elif attachment.get("type") == "asset":
+            asset_id = attachment.get("assetId")
+            asset = assets.get(asset_id) if isinstance(asset_id, str) else None
+            item_id = asset_item_ids.get(asset_id) if isinstance(asset_id, str) else None
+            if asset is not None and item_id is not None:
+                lines.append(
+                    f"- type: asset\n"
+                    f"  itemId: {item_id}\n"
+                    f"  assetId: {asset['id']}\n"
+                    f"  fileName: {asset.get('fileName') or asset['id']}\n"
+                    f"  mimeType: {asset.get('mimeType') or ''}\n"
+                    f"  previewKind: {asset.get('previewKind') or 'none'}\n"
+                    f"  fileMissing: {asset.get('fileMissing', 0)}"
+                )
+                continue
+        omitted += 1
     omitted += max(0, len(attachments) - MAX_ATTACHMENTS)
     if omitted:
         lines.append(f"(Note: {omitted} attachment(s) were unavailable in this workspace and omitted.)")
@@ -505,7 +545,7 @@ async def assemble_turn(
             [item for item in attachments if isinstance(item, dict)],
         )
         if block:
-            text = f"{text}\n\n[Attached papers]\n{block}"
+            text = f"{text}\n\n[Attached workspace files]\n{block}"
     checkpoint_before = (
         replaced_run.get("checkpointBefore")
         if replaced_run is not None

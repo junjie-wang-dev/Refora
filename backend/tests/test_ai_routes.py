@@ -106,6 +106,16 @@ class FakeRepos:
                 "createdAt": 1,
             }
         }
+        self.assets = {
+            "asset-1": {
+                "id": "asset-1",
+                "workspaceId": "workspace-1",
+                "fileName": "experiment.csv",
+                "mimeType": "text/csv",
+                "previewKind": "text",
+                "fileMissing": 0,
+            }
+        }
         self.documents = {"get": self.get_document}
         self.settings = {
             "get": lambda key, default="": '"provider-1"'
@@ -118,6 +128,13 @@ class FakeRepos:
         }
         self.workspaces = {"list": lambda: [{"id": "workspace-1", "name": "Workspace"}]}
         self.workspaceItems = {"list": self.list_workspace_items}
+        self.workspaceAssets = {
+            "list": lambda workspace_id: [
+                asset
+                for asset in self.assets.values()
+                if asset["workspaceId"] == workspace_id
+            ]
+        }
         self.aiSummaries = {"getFullText": self.get_full_text, "getSummary": self.get_summary}
         self.chat = {
             "createThread": self.create_thread,
@@ -154,6 +171,7 @@ class FakeRepos:
         if workspace_id == "workspace-1":
             return [
                 {"id": "item-1", "workspaceId": workspace_id, "kind": "document", "docId": "doc-1"},
+                {"id": "item-asset-1", "workspaceId": workspace_id, "kind": "asset", "assetId": "asset-1"},
             ]
         return []
 
@@ -727,6 +745,32 @@ def test_chat_send_validates_attachment_workspace_ownership() -> None:
             "attachments": [{"type": "document", "docId": "doc-missing"}],
         },
     )
+    valid_asset = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-attach-asset",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Analyze this file",
+            "providerId": "provider-1",
+            "attachments": [{"type": "asset", "assetId": "asset-1"}],
+        },
+    )
+    foreign_asset = request(
+        client,
+        "POST",
+        "/ai/chat/send",
+        json={
+            "runId": "run-foreign-asset",
+            "threadId": "thread-1",
+            "workspaceId": "workspace-1",
+            "text": "Analyze this file",
+            "providerId": "provider-1",
+            "attachments": [{"type": "asset", "assetId": "asset-missing"}],
+        },
+    )
 
     assert valid.status_code == 200
     assert valid.json()["data"]["runId"] == "run-attach"
@@ -734,7 +778,14 @@ def test_chat_send_validates_attachment_workspace_ownership() -> None:
     assert no_workspace.json()["error"]["code"] == "invalid_attachment"
     assert foreign_doc.status_code == 400
     assert foreign_doc.json()["error"]["code"] == "invalid_attachment"
-    assert [sent["runId"] for sent in runtime.sent] == ["run-attach"]
+    assert valid_asset.status_code == 200
+    assert foreign_asset.status_code == 400
+    assert foreign_asset.json()["error"]["code"] == "invalid_attachment"
+    asset_message = runtime.sent[1]["messages"][-1]["content"]
+    assert "[Attached workspace files]" in asset_message
+    assert "itemId: item-asset-1" in asset_message
+    assert "fileName: experiment.csv" in asset_message
+    assert [sent["runId"] for sent in runtime.sent] == ["run-attach", "run-attach-asset"]
 
 
 def test_chat_send_adds_the_active_reader_document_to_agent_context() -> None:

@@ -673,10 +673,9 @@ export interface ChatThread {
   agentStateVersion: number
 }
 
-export interface ChatAttachment {
-  type: 'document'
-  docId: string
-}
+export type ChatAttachment =
+  | { type: 'document'; docId: string }
+  | { type: 'asset'; assetId: string }
 
 export interface ChatMessage {
   id: string
