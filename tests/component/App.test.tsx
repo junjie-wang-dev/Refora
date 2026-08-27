@@ -585,6 +585,19 @@ describe('App root layout', () => {
     expect(detailPanelContainer).toHaveStyle({ width: '384px' })
   })
 
+  it('closes the detail panel when a bulk selection shrinks to one document', async () => {
+    mocks.documentState.selectedIds = ['doc-1', 'doc-2']
+    const view = render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    const detailPanelContainer = screen.getByTestId('detail-panel').parentElement?.parentElement
+    await waitFor(() => expect(detailPanelContainer).toHaveStyle({ width: '384px' }))
+
+    mocks.documentState.selectedIds = ['doc-1']
+    view.rerender(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    await waitFor(() => expect(detailPanelContainer).toHaveStyle({ width: '0px' }))
+  })
+
   it('closes a compact document list and reopens it when a library view is selected', async () => {
     const view = render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
 

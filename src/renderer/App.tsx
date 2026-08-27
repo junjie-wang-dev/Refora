@@ -195,7 +195,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   }, [focusedDocId, selectedIds])
 
   useEffect(() => {
-    if (!focusedDocId && selectedIds.length === 0) {
+    if (!focusedDocId && selectedIds.length < 2) {
       setRightPanelOpen(false)
     }
   }, [focusedDocId, selectedIds])
