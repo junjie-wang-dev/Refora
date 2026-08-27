@@ -649,10 +649,11 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     const target = event.target
     if (target instanceof HTMLElement && target.closest('[data-card-scroll]')) return
     event.preventDefault()
+    if (event.deltaX === 0) return
     const current = viewportRef.current
     const next = {
       panX: current.panX - event.deltaX,
-      panY: current.panY - event.deltaY,
+      panY: current.panY,
       zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
     }
     updateViewportTransient(next)

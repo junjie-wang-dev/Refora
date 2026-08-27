@@ -879,7 +879,7 @@ describe('Board error handling', () => {
 })
 
 describe('Board canvas controls and connections', () => {
-  it('keeps the canvas at 100% without zoom controls or a dotted grid', async () => {
+  it('keeps the canvas at 100% without vertical wheel movement, zoom controls, or a dotted grid', async () => {
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
     const world = container.querySelector('.workspace-canvas-world') as HTMLElement
@@ -888,12 +888,13 @@ describe('Board canvas controls and connections', () => {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
+      deltaX: 24,
       deltaY: 120
     })
     board.dispatchEvent(wheel)
 
     await waitFor(() => {
-      expect(world.style.transform).toBe('translate3d(0px, -120px, 0) scale(1)')
+      expect(world.style.transform).toBe('translate3d(-24px, 0px, 0) scale(1)')
     })
     expect(wheel.defaultPrevented).toBe(true)
     expect(screen.queryByRole('button', { name: 'workspace.canvasZoomIn' })).not.toBeInTheDocument()
@@ -973,7 +974,7 @@ describe('Board canvas controls and connections', () => {
   })
 
   it('persists a pending wheel viewport when the board unmounts', async () => {
-    const updateViewport = vi.fn().mockResolvedValue({ panX: -12, panY: -18, zoom: 1 })
+    const updateViewport = vi.fn().mockResolvedValue({ panX: -12, panY: 0, zoom: 1 })
     window.api.workspaceCanvas.update = updateViewport
     const { container, unmount } = render(<Board />)
     const board = container.firstElementChild as HTMLElement
@@ -984,7 +985,7 @@ describe('Board canvas controls and connections', () => {
     await waitFor(() => {
       expect(updateViewport).toHaveBeenCalledWith('ws-1', {
         panX: -12,
-        panY: -18,
+        panY: 0,
         zoom: 1
       })
     })
@@ -1021,7 +1022,7 @@ describe('Board canvas controls and connections', () => {
     })
     expect(updateViewport).toHaveBeenNthCalledWith(2, 'ws-1', {
       panX: -15,
-      panY: -27,
+      panY: 0,
       zoom: 1
     })
   })
