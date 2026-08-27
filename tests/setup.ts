@@ -496,6 +496,7 @@ export const createMockReforaApi = (): ReforaApi => ({
     onMenuImportMendeley: (_cb: unknown) => noopDisposer,
     onMenuImportIdentifier: (_cb: unknown) => noopDisposer,
     onLibrarySwitched: (_cb: unknown) => noopDisposer,
+    onLibraryContentsChanged: (_cb: unknown) => noopDisposer,
     onSyncAuthConfirmation: (_cb: unknown) => noopDisposer,
     onAiSummaryUpdated: (_cb: unknown) => noopDisposer,
     onAiSummaryError: (_cb: unknown) => noopDisposer,

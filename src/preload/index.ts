@@ -481,6 +481,8 @@ const api: ReforaApi = {
       subscribe(IpcChannel.EventMenuImportIdentifier, cb),
     onLibrarySwitched: (cb: (payload: LibrarySwitchResult) => void) =>
       subscribe(IpcChannel.EventLibrarySwitched, cb),
+    onLibraryContentsChanged: (cb: () => void) =>
+      subscribe(IpcChannel.EventLibraryContentsChanged, cb),
     onSyncAuthConfirmation: (cb: (payload: SyncAuthConfirmation) => void) => {
       const subscription = { callback: cb }
       authConfirmationSubscription = subscription

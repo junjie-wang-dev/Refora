@@ -117,6 +117,7 @@ const menuExportBibtexCb: Array<null | (() => void)> = [null]
 const menuImportZoteroCb: Array<null | (() => void)> = [null]
 const menuImportMendeleyCb: Array<null | (() => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
+const libraryContentsChangedCb: Array<null | (() => void)> = [null]
 const documentEventDisposers: Array<() => void> = []
 
 let toastTimeout: ReturnType<typeof setTimeout> | null = null
@@ -790,6 +791,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
     documentEventDisposers.push(api.events.onLibrarySwitched(librarySwitchedCb[0]))
 
+    libraryContentsChangedCb[0] = () => {
+      void Promise.resolve().then(() => {
+        void get().fetchDocuments().catch(() => undefined)
+        void get().fetchCategories()
+        void get().fetchDocumentCounts()
+      })
+    }
+    documentEventDisposers.push(
+      api.events.onLibraryContentsChanged(libraryContentsChangedCb[0])
+    )
+
     void get().fetchDocuments().catch(() => undefined)
     void get().fetchCategories()
     void get().fetchDocumentCounts()
@@ -949,6 +961,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     menuImportZoteroCb[0] = null
     menuImportMendeleyCb[0] = null
     librarySwitchedCb[0] = null
+    libraryContentsChangedCb[0] = null
     if (toastTimeout) clearTimeout(toastTimeout)
     set({ initialized: false })
   }

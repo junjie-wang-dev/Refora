@@ -236,6 +236,7 @@ describe('preload IPC bridge', () => {
       [IpcChannel.EventMenuImportMendeley, (cb) => api.events.onMenuImportMendeley(cb)],
       [IpcChannel.EventMenuImportIdentifier, (cb) => api.events.onMenuImportIdentifier(cb)],
       [IpcChannel.EventLibrarySwitched, (cb) => api.events.onLibrarySwitched(cb)],
+      [IpcChannel.EventLibraryContentsChanged, (cb) => api.events.onLibraryContentsChanged(cb)],
       [IpcChannel.EventAiSummaryUpdated, (cb) => api.events.onAiSummaryUpdated(cb)],
       [IpcChannel.EventAiSummaryError, (cb) => api.events.onAiSummaryError(cb)],
       [IpcChannel.EventAiChatToken, (cb) => api.events.onAiChatToken(cb)],

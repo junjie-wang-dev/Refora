@@ -896,6 +896,7 @@ export interface DocumentEvents {
   onMenuImportMendeley(cb: () => void): () => void
   onMenuImportIdentifier(cb: () => void): () => void
   onLibrarySwitched(cb: (payload: LibrarySwitchResult) => void): () => void
+  onLibraryContentsChanged(cb: () => void): () => void
   onSyncAuthConfirmation(cb: (payload: SyncAuthConfirmation) => void): () => void
   onAiSummaryUpdated(cb: (docId: string) => void): () => void
   onAiSummaryError(cb: (payload: SummaryErrorEvent) => void): () => void

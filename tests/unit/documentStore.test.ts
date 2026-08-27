@@ -70,6 +70,7 @@ const mockOnMenuExportBibtex = vi.fn()
 const mockOnMenuImportZotero = vi.fn()
 const mockOnMenuImportMendeley = vi.fn()
 const mockOnLibrarySwitched = vi.fn()
+const mockOnLibraryContentsChanged = vi.fn()
 const mockDisposeDocUpdated = vi.fn()
 const mockDisposeImportProgress = vi.fn()
 const mockDisposeImportToast = vi.fn()
@@ -77,6 +78,7 @@ const mockDisposeMenuExportBibtex = vi.fn()
 const mockDisposeMenuImportZotero = vi.fn()
 const mockDisposeMenuImportMendeley = vi.fn()
 const mockDisposeLibrarySwitched = vi.fn()
+const mockDisposeLibraryContentsChanged = vi.fn()
 
 const defaultListColumnState: ListColumnState = {
   columns: [
@@ -144,6 +146,7 @@ beforeEach(() => {
   mockOnMenuImportZotero.mockReset()
   mockOnMenuImportMendeley.mockReset()
   mockOnLibrarySwitched.mockReset()
+  mockOnLibraryContentsChanged.mockReset()
   mockDisposeDocUpdated.mockReset()
   mockDisposeImportProgress.mockReset()
   mockDisposeImportToast.mockReset()
@@ -151,6 +154,7 @@ beforeEach(() => {
   mockDisposeMenuImportZotero.mockReset()
   mockDisposeMenuImportMendeley.mockReset()
   mockDisposeLibrarySwitched.mockReset()
+  mockDisposeLibraryContentsChanged.mockReset()
 
   mockOnDocUpdated.mockReturnValue(mockDisposeDocUpdated)
   mockOnImportProgress.mockReturnValue(mockDisposeImportProgress)
@@ -159,6 +163,7 @@ beforeEach(() => {
   mockOnMenuImportZotero.mockReturnValue(mockDisposeMenuImportZotero)
   mockOnMenuImportMendeley.mockReturnValue(mockDisposeMenuImportMendeley)
   mockOnLibrarySwitched.mockReturnValue(mockDisposeLibrarySwitched)
+  mockOnLibraryContentsChanged.mockReturnValue(mockDisposeLibraryContentsChanged)
 
   mockList.mockResolvedValue([])
   mockCounts.mockResolvedValue({ all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 })
@@ -239,6 +244,7 @@ beforeEach(() => {
   events.onMenuImportZotero = mockOnMenuImportZotero
   events.onMenuImportMendeley = mockOnMenuImportMendeley
   events.onLibrarySwitched = mockOnLibrarySwitched
+  events.onLibraryContentsChanged = mockOnLibraryContentsChanged
 
   resetStoreState()
   useConfirmStore.setState({ request: null })
@@ -396,7 +402,32 @@ describe('DocumentStore', () => {
       expect(mockDisposeMenuImportZotero).toHaveBeenCalledOnce()
       expect(mockDisposeMenuImportMendeley).toHaveBeenCalledOnce()
       expect(mockDisposeLibrarySwitched).toHaveBeenCalledOnce()
+      expect(mockDisposeLibraryContentsChanged).toHaveBeenCalledOnce()
       expect(useDocumentStore.getState().initialized).toBe(false)
+    })
+
+    it('refreshes synced documents without clearing the current reading context', async () => {
+      const synced = makeDoc({ id: 'doc-1', title: 'Synced title' })
+      mockList.mockResolvedValue([synced])
+      useDocumentStore.setState({
+        documents: [makeDoc({ id: 'doc-1', title: 'Old title' })],
+        selectedIds: ['doc-1'],
+        focusedDocId: 'doc-1',
+        listMode: { mode: 'starred' }
+      })
+
+      useDocumentStore.getState().init(null)
+      const refresh = mockOnLibraryContentsChanged.mock.calls[0]?.[0] as (() => void)
+      refresh()
+
+      await vi.waitFor(() => {
+        expect(useDocumentStore.getState().documents).toEqual([synced])
+      })
+      expect(useDocumentStore.getState()).toMatchObject({
+        selectedIds: ['doc-1'],
+        focusedDocId: 'doc-1',
+        listMode: { mode: 'starred' }
+      })
     })
 
     it('library:switched event refetches documents and clears selection', async () => {

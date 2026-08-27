@@ -97,11 +97,13 @@ const mockOnAiReportCreated = vi.fn()
 const mockOnAiSummaryUpdated = vi.fn()
 const mockOnAiSummaryError = vi.fn()
 const mockOnLibrarySwitched = vi.fn()
+const mockOnLibraryContentsChanged = vi.fn()
 const mockDisposeWorkspaceItemsChanged = vi.fn()
 const mockDisposeAiReportCreated = vi.fn()
 const mockDisposeAiSummaryUpdated = vi.fn()
 const mockDisposeAiSummaryError = vi.fn()
 const mockDisposeLibrarySwitched = vi.fn()
+const mockDisposeLibraryContentsChanged = vi.fn()
 const mockWorkspacesList = vi.fn()
 const mockWorkspacesCreate = vi.fn()
 const mockWorkspacesRename = vi.fn()
@@ -157,11 +159,13 @@ beforeEach(() => {
   mockOnAiSummaryUpdated.mockReset().mockReturnValue(mockDisposeAiSummaryUpdated)
   mockOnAiSummaryError.mockReset().mockReturnValue(mockDisposeAiSummaryError)
   mockOnLibrarySwitched.mockReset().mockReturnValue(mockDisposeLibrarySwitched)
+  mockOnLibraryContentsChanged.mockReset().mockReturnValue(mockDisposeLibraryContentsChanged)
   mockDisposeWorkspaceItemsChanged.mockReset()
   mockDisposeAiReportCreated.mockReset()
   mockDisposeAiSummaryUpdated.mockReset()
   mockDisposeAiSummaryError.mockReset()
   mockDisposeLibrarySwitched.mockReset()
+  mockDisposeLibraryContentsChanged.mockReset()
   mockWorkspacesList.mockReset()
   mockWorkspacesCreate.mockReset()
   mockWorkspacesRename.mockReset()
@@ -234,6 +238,7 @@ beforeEach(() => {
   events.onAiSummaryUpdated = mockOnAiSummaryUpdated
   events.onAiSummaryError = mockOnAiSummaryError
   events.onLibrarySwitched = mockOnLibrarySwitched
+  events.onLibraryContentsChanged = mockOnLibraryContentsChanged
 
   const workspaces = api.workspaces as Record<string, unknown>
   workspaces.list = mockWorkspacesList
@@ -842,6 +847,7 @@ describe('WorkspaceStore', () => {
       expect(mockDisposeAiSummaryError).toHaveBeenCalledOnce()
       expect(mockDisposeWorkspaceItemsChanged).toHaveBeenCalledOnce()
       expect(mockDisposeLibrarySwitched).toHaveBeenCalledOnce()
+      expect(mockDisposeLibraryContentsChanged).toHaveBeenCalledOnce()
       expect(useWorkspaceStore.getState().initialized).toBe(false)
     })
 
@@ -866,6 +872,51 @@ describe('WorkspaceStore', () => {
       failed({ docId: 'doc-2', message: 'provider failed' })
       expect(useWorkspaceStore.getState().summarizingDocIds).toEqual(new Set())
       expect(useWorkspaceStore.getState().summaryErrors.get('doc-2')).toBe('provider failed')
+    })
+
+    it('refreshes synced workspace content without closing the active workspace', async () => {
+      const workspace = { id: 'ws-1', name: 'Synced name', createdAt: 0, updatedAt: 2 }
+      const item = makeItem({ id: 'synced-item' })
+      const report = makeReport({ id: 'synced-report' })
+      const note = makeNote({ id: 'synced-note' })
+      const asset = makeAsset({ id: 'synced-asset' })
+      const thread = { id: 'thread-1', workspaceId: 'ws-1', providerId: 'p', agentProfileId: null, title: 'T', createdAt: 0, headCheckpointId: null, agentStateVersion: 0 }
+      mockWorkspacesList.mockResolvedValue([workspace])
+      mockWorkspaceItemsList.mockResolvedValue([item])
+      mockReportsList.mockResolvedValue([report])
+      mockWorkspaceNotesList.mockResolvedValue([note])
+      mockWorkspaceAssetsList.mockResolvedValue([asset])
+      mockChatThreads.mockResolvedValue([thread])
+      useWorkspaceStore.setState({
+        workspaces: [{ ...workspace, name: 'Old name' }],
+        activeWorkspaceId: workspace.id,
+        openWorkspaceIds: [workspace.id],
+        activeThreadId: thread.id,
+        panelOpen: true,
+        panelView: 'workspace',
+        fullscreen: true,
+        items: [makeItem({ id: 'old-item' })]
+      })
+
+      useWorkspaceStore.getState().init()
+      const refresh = mockOnLibraryContentsChanged.mock.calls[0]?.[0] as (() => void)
+      refresh()
+
+      await vi.waitFor(() => {
+        expect(useWorkspaceStore.getState().items).toEqual([item])
+        expect(useWorkspaceStore.getState().reports).toEqual([report])
+        expect(useWorkspaceStore.getState().notes).toEqual([note])
+        expect(useWorkspaceStore.getState().assets).toEqual([asset])
+      })
+      expect(useWorkspaceStore.getState()).toMatchObject({
+        workspaces: [workspace],
+        activeWorkspaceId: workspace.id,
+        openWorkspaceIds: [workspace.id],
+        activeThreadId: thread.id,
+        panelOpen: true,
+        panelView: 'workspace',
+        fullscreen: true
+      })
     })
 
     it('resets workspace state and refetches on library:switched', async () => {

@@ -163,6 +163,7 @@ export const IpcChannel = {
   EventMenuImportMendeley: 'menu:import-mendeley',
   EventMenuImportIdentifier: 'menu:import-identifier',
   EventLibrarySwitched: 'library:switched',
+  EventLibraryContentsChanged: 'library:contents-changed',
   EventSyncAuthConfirmation: 'sync:auth-confirmation',
   EventAiSummaryUpdated: 'ai:summary:updated',
   EventAiSummaryError: 'ai:summary:error',

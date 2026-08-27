@@ -88,6 +88,7 @@ const aiSummaryUpdatedCb: Array<null | ((docId: string) => void)> = [null]
 const aiSummaryErrorCb: Array<null | ((payload: SummaryErrorEvent) => void)> = [null]
 const workspaceItemsChangedCb: Array<null | ((payload: WorkspaceItemsChangedEvent) => void)> = [null]
 const librarySwitchedCb: Array<null | (() => void)> = [null]
+const libraryContentsChangedCb: Array<null | (() => void)> = [null]
 const eventDisposers: Array<() => void> = []
 const noteUpdateQueues = new Map<string, Promise<void>>()
 const noteUpdateRevisions = new Map<
@@ -280,6 +281,46 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     eventDisposers.push(api.events.onLibrarySwitched(librarySwitchedCb[0]))
 
+    libraryContentsChangedCb[0] = () => {
+      const generation = libraryGeneration
+      const activeWorkspaceId = get().activeWorkspaceId
+      void get().fetchWorkspaces().then(async () => {
+        if (generation !== libraryGeneration || get().activeWorkspaceId !== activeWorkspaceId) return
+        if (!activeWorkspaceId) {
+          await get().fetchThreads({ selectLatestIfNone: true })
+          return
+        }
+        if (!get().workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
+          set((state) => ({
+            activeWorkspaceId: null,
+            openWorkspaceIds: state.openWorkspaceIds.filter((id) => id !== activeWorkspaceId),
+            activeThreadId: null,
+            panelOpen: false,
+            panelView: 'workspace',
+            fullscreen: false,
+            items: [],
+            reports: [],
+            notes: [],
+            assets: [],
+            threads: [],
+            markdownCardRequest: null
+          }))
+          return
+        }
+        await Promise.all([
+          scheduleWorkspaceContentRefresh(
+            activeWorkspaceId,
+            get,
+            ['items', 'reports', 'notes', 'assets']
+          ),
+          get().fetchThreads({ selectLatestIfNone: true })
+        ])
+      }).catch(() => undefined)
+    }
+    eventDisposers.push(
+      api.events.onLibraryContentsChanged(libraryContentsChangedCb[0])
+    )
+
     void get().fetchWorkspaces()
   },
 
@@ -297,6 +338,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     aiSummaryErrorCb[0] = null
     workspaceItemsChangedCb[0] = null
     librarySwitchedCb[0] = null
+    libraryContentsChangedCb[0] = null
     set({ initialized: false })
   },
 

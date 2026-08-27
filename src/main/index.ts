@@ -47,6 +47,7 @@ import { createRendererPathCapabilities } from './services/fileCapabilities'
 import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
 import { consumeDeepLinkArguments, handoffSecondInstance } from './services/instanceHandoff'
 import { createLifecycleTransitionGate } from './services/lifecycleTransitionGate'
+import { sendLibraryContentsChanged } from './services/libraryContentsChanged'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -941,20 +942,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
       await librarySnapshotPolicy.snapshotNow(context, baseSequence)
     },
     onRemoteApplied: (context) => {
-      if (
-        !win
-        || win.isDestroyed()
-        || !activeLibraryFolder
-        || context.dbPath !== activeDbPath
-      ) return
-      win.webContents.send(IpcChannel.EventLibrarySwitched, {
-        libraryFolderPath: activeLibraryFolder,
-        dbExisted: true,
-        scanned: 0,
-        imported: 0,
-        skipped: 0,
-        errors: []
-      } satisfies LibrarySwitchResult)
+      sendLibraryContentsChanged(win, activeDbPath, context.dbPath)
     }
   })
   registerSyncAccountHandlers(syncAccountService)
