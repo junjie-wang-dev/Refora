@@ -15,14 +15,26 @@ import { useClickOutside } from '../../hooks/useClickOutside'
 import { Button as UiButton } from '../ui'
 import { api } from '../../ipc'
 import { MAX_INPUT_LENGTH } from '../../utils/chatUtils'
-import type { AiProvider } from '../../../shared/ipc-types'
+import type { AiProvider, ChatAttachment } from '../../../shared/ipc-types'
+
+type WorkspaceAttachmentOption = {
+  key: string
+  title: string
+  attachment: ChatAttachment
+}
+
+function attachmentKey(attachment: ChatAttachment): string {
+  return attachment.type === 'document'
+    ? `document:${attachment.docId}`
+    : `asset:${attachment.assetId}`
+}
 
 export interface ChatInputProps {
   input: string
   onInputChange: (value: string) => void
   streaming: boolean
-  selectedAttachments: string[]
-  onSelectedAttachmentsChange: React.Dispatch<React.SetStateAction<string[]>>
+  selectedAttachments: ChatAttachment[]
+  onSelectedAttachmentsChange: React.Dispatch<React.SetStateAction<ChatAttachment[]>>
   attachMenuOpen: boolean
   onAttachMenuOpenChange: React.Dispatch<React.SetStateAction<boolean>>
   activeWorkspaceId: string | null
@@ -53,34 +65,60 @@ export default function ChatInput({
   toolbar
 }: ChatInputProps) {
   const { t } = useTranslation()
-  const [workspaceDocs, setWorkspaceDocs] = useState<Array<{ docId: string; title: string }>>([])
+  const [workspaceAttachmentState, setWorkspaceAttachmentState] = useState<{
+    workspaceId: string
+    options: WorkspaceAttachmentOption[]
+  } | null>(null)
   const attachMenuRef = useRef<HTMLDivElement | null>(null)
+  const shouldLoadAttachments = attachMenuOpen || selectedAttachments.length > 0
+  const workspaceAttachments = workspaceAttachmentState?.workspaceId === activeWorkspaceId
+    ? workspaceAttachmentState.options
+    : []
 
   useClickOutside(attachMenuRef, () => onAttachMenuOpenChange(false), attachMenuOpen)
 
   useEffect(() => {
-    setWorkspaceDocs([])
-    if (!attachMenuOpen || !activeWorkspaceId) return
+    if (!shouldLoadAttachments || !activeWorkspaceId) return
     let cancelled = false
     void (async () => {
       try {
-        const items = await api.workspaceItems.list(activeWorkspaceId)
-        const docItems = items.filter((i) => i.kind === 'document' && i.docId)
-        const docs = await Promise.all(
-          docItems.map(async (i) => {
-            const doc = await api.documents.get(i.docId!)
-            return { docId: i.docId!, title: doc?.title ?? doc?.fileName ?? i.docId! }
+        const [items, assets] = await Promise.all([
+          api.workspaceItems.list(activeWorkspaceId),
+          api.workspaceAssets.list(activeWorkspaceId)
+        ])
+        const assetsById = new Map(assets.map((asset) => [asset.id, asset]))
+        const options = (await Promise.all(
+          items.map(async (item): Promise<WorkspaceAttachmentOption | null> => {
+            if (item.kind === 'document' && item.docId) {
+              const document = await api.documents.get(item.docId)
+              const attachment = { type: 'document' as const, docId: item.docId }
+              return {
+                key: attachmentKey(attachment),
+                title: document?.title?.trim() || document?.fileName || item.docId,
+                attachment
+              }
+            }
+            if (item.kind === 'asset' && item.assetId) {
+              const asset = assetsById.get(item.assetId)
+              const attachment = { type: 'asset' as const, assetId: item.assetId }
+              return {
+                key: attachmentKey(attachment),
+                title: asset?.fileName ?? item.assetId,
+                attachment
+              }
+            }
+            return null
           })
-        )
-        if (!cancelled) setWorkspaceDocs(docs)
+        )).filter((option): option is WorkspaceAttachmentOption => option !== null)
+        if (!cancelled) setWorkspaceAttachmentState({ workspaceId: activeWorkspaceId, options })
       } catch {
-        if (!cancelled) setWorkspaceDocs([])
+        if (!cancelled) setWorkspaceAttachmentState({ workspaceId: activeWorkspaceId, options: [] })
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [attachMenuOpen, activeWorkspaceId])
+  }, [activeWorkspaceId, shouldLoadAttachments])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -193,12 +231,15 @@ export default function ChatInput({
       <div className="mx-auto flex w-full max-w-[768px] flex-col rounded-xl border border-border bg-input-area shadow-sm focus-within:border-accent focus-within:ring-1 focus-within:ring-accent">
         {selectedAttachments.length > 0 && (
           <div className="flex flex-wrap gap-1 px-2 pt-1">
-            {selectedAttachments.map((docId) => {
-              const doc = workspaceDocs.find((d) => d.docId === docId)
-              const attachmentTitle = doc?.title ?? docId.slice(0, 8)
+            {selectedAttachments.map((attachment) => {
+              const key = attachmentKey(attachment)
+              const option = workspaceAttachments.find((candidate) => candidate.key === key)
+              const attachmentTitle = option?.title ?? (
+                attachment.type === 'document' ? attachment.docId : attachment.assetId
+              )
               return (
                 <span
-                  key={docId}
+                  key={key}
                   className="inline-flex items-center gap-1 rounded-full border border-border bg-panel-2 px-2 py-0.5 text-caption text-foreground"
                 >
                   <span className="max-w-[120px] truncate">{attachmentTitle}</span>
@@ -207,7 +248,9 @@ export default function ChatInput({
                     className="text-muted transition-colors duration-150 hover:text-error"
                     aria-label={t('workspace.chat.removeAttachment', { title: attachmentTitle })}
                     onClick={() =>
-                      onSelectedAttachmentsChange((prev) => prev.filter((id) => id !== docId))
+                      onSelectedAttachmentsChange((previous) =>
+                        previous.filter((candidate) => attachmentKey(candidate) !== key)
+                      )
                     }
                   >
                     ×
@@ -255,8 +298,8 @@ export default function ChatInput({
               className={`shrink-0 ${selectedAttachments.length > 0 ? 'text-accent' : ''}`}
               onClick={() => onAttachMenuOpenChange((v) => !v)}
               disabled={!activeWorkspaceId || streaming}
-              title={t('workspace.chat.attachPapers', 'Attach papers')}
-              aria-label={t('workspace.chat.attachPapers', 'Attach papers')}
+              title={t('workspace.chat.attachPapers', 'Attach workspace files')}
+              aria-label={t('workspace.chat.attachPapers', 'Attach workspace files')}
             >
               <Paperclip className="h-4 w-4" />
               {selectedAttachments.length > 0 && (
@@ -265,18 +308,20 @@ export default function ChatInput({
             </UiButton>
             {attachMenuOpen && (
               <div className="absolute bottom-full left-0 z-50 mb-1 max-h-64 w-64 overflow-y-auto rounded-lg border border-border bg-panel shadow-lg">
-                {workspaceDocs.length === 0 ? (
+                {workspaceAttachments.length === 0 ? (
                   <p className="px-3 py-2 text-label text-muted">
-                    {t('workspace.chat.noWorkspaceDocs', 'No papers in workspace. Add papers to the board first.')}
+                    {t('workspace.chat.noWorkspaceDocs', 'No files in workspace. Add files to the board first.')}
                   </p>
                 ) : (
                   <div className="flex flex-col gap-0.5 p-1">
-                    {workspaceDocs.map((doc) => {
-                      const checked = selectedAttachments.includes(doc.docId)
+                    {workspaceAttachments.map((option) => {
+                      const checked = selectedAttachments.some(
+                        (attachment) => attachmentKey(attachment) === option.key
+                      )
                       const maxReached = selectedAttachments.length >= 8 && !checked
                       return (
                         <label
-                          key={doc.docId}
+                          key={option.key}
                           className={`flex items-center gap-2 rounded px-2 py-1 text-label transition-colors duration-150 hover:bg-hover ${maxReached ? 'opacity-40' : ''}`}
                         >
                           <input
@@ -286,13 +331,13 @@ export default function ChatInput({
                             onChange={() => {
                               onSelectedAttachmentsChange((prev) =>
                                 checked
-                                  ? prev.filter((id) => id !== doc.docId)
-                                  : [...prev, doc.docId]
+                                  ? prev.filter((attachment) => attachmentKey(attachment) !== option.key)
+                                  : [...prev, option.attachment]
                               )
                             }}
                             className="h-3 w-3 shrink-0"
                           />
-                          <span className="min-w-0 flex-1 truncate text-foreground">{doc.title}</span>
+                          <span className="min-w-0 flex-1 truncate text-foreground">{option.title}</span>
                         </label>
                       )
                     })}

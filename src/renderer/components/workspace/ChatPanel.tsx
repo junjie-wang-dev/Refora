@@ -5,7 +5,8 @@ import { api } from '../../ipc'
 import { errorMessage } from '../../../shared/ipc-types'
 import type {
   AiProvider,
-  AiReasoningEffort
+  AiReasoningEffort,
+  ChatAttachment
 } from '../../../shared/ipc-types'
 import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -118,7 +119,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const [modelSwitchHint, setModelSwitchHint] = useState<'model' | 'provider' | null>(null)
 
   const [input, setInput] = useState('')
-  const [selectedAttachments, setSelectedAttachments] = useState<string[]>([])
+  const [selectedAttachments, setSelectedAttachments] = useState<ChatAttachment[]>([])
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
 
   const [inputAreaHeight, setInputAreaHeight] = useState(0)

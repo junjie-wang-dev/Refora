@@ -10,6 +10,7 @@ import type {
   ChatDoneEvent,
   ChatErrorEvent,
   ChatInterruptedEvent,
+  ChatAttachment,
   ChatMessage,
   ChatReasoningEvent,
   ChatRunStatusEvent,
@@ -683,7 +684,7 @@ export function useChatStream({
 
   const sendText = useCallback(async (
     text: string,
-    attachments: string[],
+    attachments: ChatAttachment[],
     existingThread: string | null,
     replacement: ChatReplacementOptions = {}
   ) => {
@@ -724,7 +725,7 @@ export function useChatStream({
       : activeDocumentId
     const sendContext: ChatSendContext = {
       text,
-      attachments: [...attachments],
+      attachments: attachments.map((attachment) => ({ ...attachment })),
       activeDocumentId: contextDocumentId,
       threadId: existingThread,
       runId: requestedRunId,
@@ -755,9 +756,7 @@ export function useChatStream({
           deepThinking,
           ...(reasoningEffort ? { reasoningEffort } : {})
         },
-        attachments: attachments.length > 0
-          ? attachments.map((docId) => ({ type: 'document' as const, docId }))
-          : undefined
+        attachments: attachments.length > 0 ? attachments : undefined
       })
       const resolvedContext = { ...sendContext, threadId, runId, persisted: true }
       if (retrySendRef.current === sendContext) retrySendRef.current = resolvedContext
@@ -888,7 +887,7 @@ export function useChatStream({
 
   const handleRegenerate = useCallback(() => {
     let text = ''
-    let attachments: string[] = []
+    let attachments: ChatAttachment[] = []
     let contextDocumentId: string | null | undefined
     let threadId = activeThreadId
     const latestSend = latestSendRef.current

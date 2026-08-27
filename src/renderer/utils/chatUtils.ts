@@ -7,6 +7,7 @@ import type {
   AgentRunStatus,
   AgentTraceStep,
   AiReasoningEffort,
+  ChatAttachment,
   ChatMessage
 } from '../../shared/ipc-types'
 
@@ -17,7 +18,7 @@ export type RecentModelEntry = { model: string; providerId: string }
 
 export type ChatSendContext = {
   text: string
-  attachments: string[]
+  attachments: ChatAttachment[]
   activeDocumentId: string | null
   threadId: string | null
   runId: string | null
@@ -70,7 +71,7 @@ export interface UseChatStreamReturn {
   activeOcrDocumentId: string | null
   sendText: (
     text: string,
-    attachments: string[],
+    attachments: ChatAttachment[],
     existingThread: string | null,
     replacement?: ChatReplacementOptions
   ) => Promise<void>

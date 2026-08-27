@@ -66,6 +66,17 @@ def _body_object(value: Any) -> dict[str, Any]:
     return value
 
 
+def _attachment_reference(value: Any) -> tuple[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("type")
+    field = "docId" if kind == "document" else "assetId" if kind == "asset" else None
+    identifier = value.get(field) if field else None
+    if not isinstance(identifier, str) or not identifier.strip():
+        return None
+    return kind, identifier
+
+
 async def _read_body(request: Request) -> dict[str, Any]:
     try:
         return _body_object(await request.json())
@@ -267,28 +278,27 @@ def create_ai_router(deps: Any) -> APIRouter:
                 raise RouteError("validation", "features must be an object")
             if "attachments" in body:
                 attachments = body["attachments"]
-                if not isinstance(attachments, list) or not attachments or any(
-                    not isinstance(item, dict)
-                    or item.get("type") != "document"
-                    or not isinstance(item.get("docId"), str)
-                    or not item["docId"].strip()
-                    for item in attachments
-                ):
-                    raise RouteError("validation", "attachments must contain document references")
+                references = (
+                    [_attachment_reference(item) for item in attachments]
+                    if isinstance(attachments, list)
+                    else []
+                )
+                if not references or any(reference is None for reference in references):
+                    raise RouteError("validation", "attachments must contain workspace file references")
                 workspace_id = body.get("workspaceId")
                 if not workspace_id:
                     raise RouteError("invalid_attachment", "Attachments require a workspace")
                 workspace_items = _value(_value(repos, "workspaceItems"), "list")(workspace_id)
-                ws_doc_ids = {
-                    item.get("docId")
+                workspace_references = {
+                    (item.get("kind"), item.get("docId") if item.get("kind") == "document" else item.get("assetId"))
                     for item in workspace_items
-                    if item.get("kind") == "document" and isinstance(item.get("docId"), str)
+                    if item.get("kind") in {"document", "asset"}
                 }
-                for att in attachments:
-                    if att.get("docId") not in ws_doc_ids:
+                for reference in references:
+                    if reference not in workspace_references:
                         raise RouteError(
                             "invalid_attachment",
-                            "Attachment is not a valid document in this workspace",
+                            "Attachment is not a valid file in this workspace",
                         )
             if runtime is None:
                 raise RouteError("unavailable", "Agent runtime is unavailable", 503)

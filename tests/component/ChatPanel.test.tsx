@@ -1791,7 +1791,7 @@ describe('ChatInput attachment loading', () => {
       input=""
       onInputChange={vi.fn()}
       streaming={false}
-      selectedAttachments={['doc-1']}
+      selectedAttachments={[{ type: 'document', docId: 'doc-1' }]}
       onSelectedAttachmentsChange={onSelectedAttachmentsChange}
       attachMenuOpen
       onAttachMenuOpenChange={vi.fn()}
@@ -1807,6 +1807,68 @@ describe('ChatInput attachment loading', () => {
     await waitFor(() => expect(screen.getAllByText('Named paper')).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.removeAttachment' }))
     expect(onSelectedAttachmentsChange).toHaveBeenCalledWith(expect.any(Function))
+  })
+
+  it('shows the paper name while the attachment picker is closed', async () => {
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.workspaceItems.list = vi.fn().mockResolvedValue([{ kind: 'document', docId: 'doc-1' }])
+    w.api.documents.get = vi.fn().mockResolvedValue({
+      id: 'doc-1',
+      title: 'Persistent paper title'
+    })
+
+    render(<ChatInput
+      input=""
+      onInputChange={vi.fn()}
+      streaming={false}
+      selectedAttachments={[{ type: 'document', docId: 'doc-1' }]}
+      onSelectedAttachmentsChange={vi.fn()}
+      attachMenuOpen={false}
+      onAttachMenuOpenChange={vi.fn()}
+      activeWorkspaceId="ws-1"
+      providers={[TEST_PROVIDER]}
+      canSend={false}
+      onSend={vi.fn()}
+      onCancel={vi.fn()}
+      textareaRef={{ current: null }}
+      inputAreaRef={{ current: null }}
+    />)
+
+    expect(await screen.findByText('Persistent paper title')).toBeInTheDocument()
+    expect(screen.queryByText('doc-1')).not.toBeInTheDocument()
+  })
+
+  it('allows selecting a file asset from the workspace', async () => {
+    const w = window as unknown as { api: Record<string, Record<string, unknown>> }
+    w.api.workspaceItems.list = vi.fn().mockResolvedValue([
+      { kind: 'asset', assetId: 'asset-1' }
+    ])
+    w.api.workspaceAssets.list = vi.fn().mockResolvedValue([
+      { id: 'asset-1', fileName: 'experiment.csv' }
+    ])
+    const onSelectedAttachmentsChange = vi.fn()
+
+    render(<ChatInput
+      input=""
+      onInputChange={vi.fn()}
+      streaming={false}
+      selectedAttachments={[]}
+      onSelectedAttachmentsChange={onSelectedAttachmentsChange}
+      attachMenuOpen
+      onAttachMenuOpenChange={vi.fn()}
+      activeWorkspaceId="ws-1"
+      providers={[TEST_PROVIDER]}
+      canSend={false}
+      onSend={vi.fn()}
+      onCancel={vi.fn()}
+      textareaRef={{ current: null }}
+      inputAreaRef={{ current: null }}
+    />)
+
+    const assetLabel = await screen.findByText('experiment.csv')
+    fireEvent.click(within(assetLabel.closest('label')!).getByRole('checkbox'))
+    const update = onSelectedAttachmentsChange.mock.calls[0][0]
+    expect(update([])).toEqual([{ type: 'asset', assetId: 'asset-1' }])
   })
 })
 
@@ -2492,7 +2554,11 @@ describe('useChatStream lifecycle', () => {
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))
 
     await act(async () => {
-      await result.current.sendText('Compare these papers', ['doc-1'], 'thread-1')
+      await result.current.sendText(
+        'Compare these papers',
+        [{ type: 'document', docId: 'doc-1' }],
+        'thread-1'
+      )
     })
     const runId = (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId!
     act(() => {
@@ -2514,12 +2580,34 @@ describe('useChatStream lifecycle', () => {
     })
   })
 
+  it('sends workspace file attachments to the agent', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+
+    await act(async () => {
+      await result.current.sendText(
+        'Analyze this dataset',
+        [{ type: 'asset', assetId: 'asset-1' }],
+        'thread-1'
+      )
+    })
+
+    expect(mockChatSend.mock.calls[0][0] as ChatSendRequest).toMatchObject({
+      text: 'Analyze this dataset',
+      attachments: [{ type: 'asset', assetId: 'asset-1' }]
+    })
+  })
+
   it('preserves attachments when regenerating a completed response', async () => {
     const { result } = renderChatStream()
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))
 
     await act(async () => {
-      await result.current.sendText('Summarize this paper', ['doc-2'], 'thread-1')
+      await result.current.sendText(
+        'Summarize this paper',
+        [{ type: 'document', docId: 'doc-2' }],
+        'thread-1'
+      )
     })
     const runId = (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId!
     act(() => {
