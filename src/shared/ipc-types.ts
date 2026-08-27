@@ -15,8 +15,11 @@ import type {
 } from './webSearch'
 import type {
   SyncAuthConfirmation,
+  SyncConflict,
+  SyncConflictResolutionRequest,
   SyncCredentials,
   SyncEmailRequest,
+  SyncEnabledRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from './sync-types'
@@ -968,6 +971,10 @@ export interface ReforaApi {
     signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
     resendConfirmation(request: SyncEmailRequest): Promise<void>
     signOut(): Promise<SyncServiceStatus>
+    setEnabled(request: SyncEnabledRequest): Promise<SyncServiceStatus>
+    runNow(): Promise<SyncServiceStatus>
+    conflicts(): Promise<SyncConflict[]>
+    resolveConflict(request: SyncConflictResolutionRequest): Promise<SyncServiceStatus>
   }
   appearance: {
     setThemeSource(theme: ThemeMode): Promise<void>

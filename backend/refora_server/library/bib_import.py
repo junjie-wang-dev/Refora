@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from refora_server.library.authors import normalizeAuthorList
-from refora_server.library.paths import isInsideLibrary
+from refora_server.library.paths import isInLibraryRoot
 
 
 FIELD_MAP = {
@@ -496,17 +496,17 @@ async def importFromBibtex(
                 if not library_folder:
                     raise ValueError("Library folder is not configured")
                 stored_path = pdf_path
-                if not isInsideLibrary(pdf_path, library_folder):
+                if not isInLibraryRoot(pdf_path, library_folder):
                     copied = await asyncio.to_thread(
                         copy_to_library,
                         pdf_path,
                         library_folder,
                     )
                     validated_copy = _validate_pdf_path(copied, library_folder)
-                    if validated_copy is None or not isInsideLibrary(
+                    if validated_copy is None or not isInLibraryRoot(
                         validated_copy, library_folder
                     ):
-                        raise ValueError("Copied PDF path is outside the library folder")
+                        raise ValueError("Copied PDF path is outside the library root")
                     copied_path = validated_copy
                     stored_path = validated_copy
                     copied_hash = await asyncio.to_thread(hash_pdf, stored_path)

@@ -1,6 +1,9 @@
 import type {
   SyncCredentials,
+  SyncConflict,
+  SyncConflictResolutionRequest,
   SyncEmailRequest,
+  SyncEnabledRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from '../../shared/sync-types'
@@ -8,6 +11,7 @@ import { MainProcessError } from './errors'
 import { logger } from './logger'
 import type { SupabaseAuthClient } from './supabaseAuth'
 import type { SyncSessionStore } from './syncSessionStore'
+import type { MetadataSyncEngine } from './metadataSyncEngine'
 
 export interface SyncAccountService {
   status(): Promise<SyncServiceStatus>
@@ -15,12 +19,18 @@ export interface SyncAccountService {
   signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
   resendConfirmation(request: SyncEmailRequest): Promise<void>
   signOut(): Promise<SyncServiceStatus>
+  setEnabled(request: SyncEnabledRequest): Promise<SyncServiceStatus>
+  runNow(): Promise<SyncServiceStatus>
+  waitForIdle(): Promise<void>
+  conflicts(): Promise<SyncConflict[]>
+  resolveConflict(request: SyncConflictResolutionRequest): Promise<SyncServiceStatus>
 }
 
 export interface SyncAccountServiceDeps {
   configured: boolean
   auth: SupabaseAuthClient | null
   sessions: SyncSessionStore
+  engine?: MetadataSyncEngine | null
 }
 
 function normalizeEmail(value: unknown): string {
@@ -54,25 +64,36 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
     return deps.auth
   }
 
+  function libraryStatus() {
+    try {
+      return deps.engine?.status() ?? null
+    } catch {
+      return null
+    }
+  }
+
   function currentStatus(session = deps.sessions.load()): SyncServiceStatus {
     if (!deps.configured) {
       return {
         configured: false,
         signedIn: false,
-        account: null
+        account: null,
+        library: libraryStatus()
       }
     }
     if (!session) {
       return {
         configured: true,
         signedIn: false,
-        account: null
+        account: null,
+        library: libraryStatus()
       }
     }
     return {
       configured: true,
       signedIn: true,
-      account: session.user
+      account: session.user,
+      library: libraryStatus()
     }
   }
 
@@ -162,6 +183,13 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
       const generation = ++sessionGeneration
       const session = deps.sessions.load()
       deps.sessions.clear()
+      try {
+        await deps.engine?.waitForIdle()
+      } catch (error) {
+        logger.warn(
+          `sync-account:pending sync failed during sign-out: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
       if (session && deps.auth) {
         try {
           await deps.auth.signOut(session.accessToken)
@@ -172,6 +200,50 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
         }
       }
       return currentStatus(generation === sessionGeneration ? null : deps.sessions.load())
+    },
+    async setEnabled(request) {
+      if (!request || typeof request.enabled !== 'boolean') {
+        throw new MainProcessError('invalid_argument', 'Sync enabled state must be a boolean')
+      }
+      if (!deps.engine) throw new MainProcessError('sync_unavailable', 'Metadata sync is unavailable')
+      if (!request.enabled) {
+        deps.engine.setEnabled(false)
+        return currentStatus(await activeSession())
+      }
+      const session = await activeSession()
+      if (!session) throw new MainProcessError('sync_auth_required', 'Sign in before enabling sync')
+      deps.engine.setEnabled(true)
+      await deps.engine.run(session.accessToken)
+      return currentStatus(await activeSession())
+    },
+    async runNow() {
+      if (!deps.engine) throw new MainProcessError('sync_unavailable', 'Metadata sync is unavailable')
+      const session = await activeSession()
+      if (!session) throw new MainProcessError('sync_auth_required', 'Sign in before syncing')
+      await deps.engine.run(session.accessToken)
+      return currentStatus(await activeSession())
+    },
+    async waitForIdle() {
+      await deps.engine?.waitForIdle()
+    },
+    async conflicts() {
+      return deps.engine?.conflicts() ?? []
+    },
+    async resolveConflict(request) {
+      if (!deps.engine) throw new MainProcessError('sync_unavailable', 'Metadata sync is unavailable')
+      if (
+        !request
+        || typeof request.id !== 'string'
+        || !request.id
+        || (request.resolution !== 'keep_local' && request.resolution !== 'use_remote')
+      ) throw new MainProcessError('invalid_argument', 'Sync conflict resolution is invalid')
+      await deps.engine.resolveConflict(request.id, request.resolution)
+      if (request.resolution === 'keep_local') {
+        const session = await activeSession()
+        if (!session) throw new MainProcessError('sync_auth_required', 'Sign in before syncing')
+        await deps.engine.run(session.accessToken)
+      }
+      return currentStatus(await activeSession())
     }
   }
 }

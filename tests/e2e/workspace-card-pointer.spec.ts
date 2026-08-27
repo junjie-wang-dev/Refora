@@ -343,7 +343,12 @@ test.describe('Workspace card pointer gestures', () => {
       { workspaceName, pdfPath: authorizedPdfPath }
     )
 
-    const summaryDb = new DatabaseSync(path.join(libraryFolder, 'refora.db'))
+    const libraryStorageKey = createHash('sha256')
+      .update(fs.realpathSync(libraryFolder))
+      .digest('hex')
+      .slice(0, 32)
+    const localDataFolder = path.join(userDataFolder, 'libraries', libraryStorageKey)
+    const summaryDb = new DatabaseSync(path.join(localDataFolder, 'working.db'))
     const summaryTimestamp = Date.now()
     summaryDb.prepare(
       `INSERT INTO ai_summaries (docId, model, summaryJson, fullText, createdAt, updatedAt)
@@ -403,7 +408,7 @@ test.describe('Workspace card pointer gestures', () => {
     }, previewUrl)
     expect(cacheControl).toBe('no-store')
 
-    const previewCacheRoot = path.join(libraryFolder, '.refora', 'derived', 'pdf-previews')
+    const previewCacheRoot = path.join(localDataFolder, '.refora', 'derived', 'pdf-previews')
     await expect.poll(() => {
       if (!fs.existsSync(previewCacheRoot)) return 0
       return fs.readdirSync(previewCacheRoot).reduce((count, directory) => {

@@ -26,6 +26,31 @@ function assembly(options: {
 }
 
 describe('library switcher', () => {
+  it('stops database writers before creating the final snapshot', async () => {
+    const order: string[] = []
+    const previous = assembly({ stop: async () => { order.push('stop') } })
+    const target = assembly()
+    let state = { assembly: previous as ServerAssembly | null, dbPath: '/old/db', libraryFolder: '/old' }
+    const switchLibrary = createLibrarySwitcher({
+      resolveFolder: (folder) => folder,
+      isDirectory: () => true,
+      dbPathForFolder: () => '/new/db',
+      dbExistsInFolder: () => true,
+      createAssembly: vi.fn().mockResolvedValue(target),
+      beforeSwitch: async () => { order.push('flush') },
+      snapshotCurrent: async () => { order.push('snapshot') },
+      getState: () => state,
+      setState: (next) => { state = next },
+      persistLibraryFolder: vi.fn(),
+      emitSwitched: vi.fn(),
+      onRecoveryFailed: vi.fn()
+    })
+
+    await switchLibrary('/new')
+
+    expect(order).toEqual(['flush', 'stop', 'snapshot'])
+  })
+
   it('restores the previous library when the target fails to start', async () => {
     const previous = assembly()
     const target = assembly({ start: async () => { throw new Error('target failed') } })

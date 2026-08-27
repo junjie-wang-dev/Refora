@@ -39,3 +39,26 @@ def test_sync_operation_ledger_is_compact_bounded_and_short_lived() -> None:
     assert ">= 20000" in sql
     assert "refora_sync_push_v2_internal" in sql
     assert "from public, anon, authenticated" in sql
+
+
+def test_sync_lifecycle_quotas_exclude_tombstones_and_retired_devices() -> None:
+    sql = (MIGRATIONS / "202608270004_sync_lifecycle_quotas.sql").read_text(
+        encoding="utf-8"
+    ).lower()
+    assert "where not deleted" in sql
+    assert "v_old_active" in sql
+    assert "v_new_active" in sql
+    assert "interval '180 days'" in sql
+    assert "sync_devices_user_last_seen_idx" in sql
+    assert "moveToLibrary".lower() in sql
+
+
+def test_public_push_returns_the_compact_operation_result() -> None:
+    sql = (MIGRATIONS / "202608270005_sync_compact_push_result.sql").read_text(
+        encoding="utf-8"
+    ).lower()
+    assert "refora_sync_push_v4_internal" in sql
+    assert "select result into v_result" in sql
+    assert "from public, anon, authenticated" in sql
+    assert "security definer" in sql
+    assert "set search_path = ''" in sql

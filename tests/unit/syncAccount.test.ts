@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSyncAccountService } from '../../src/main/services/syncAccount'
 import type { SupabaseSession } from '../../src/main/services/supabaseAuth'
+import type { MetadataSyncEngine } from '../../src/main/services/metadataSyncEngine'
 
 const session: SupabaseSession = {
   accessToken: 'access',
@@ -9,7 +10,10 @@ const session: SupabaseSession = {
   user: { id: 'user-1', email: 'reader@example.com' }
 }
 
-function setup(initialSession: SupabaseSession | null = null) {
+function setup(
+  initialSession: SupabaseSession | null = null,
+  engine?: MetadataSyncEngine
+) {
   let stored = initialSession
   const auth = {
     signIn: vi.fn().mockResolvedValue(session),
@@ -30,7 +34,8 @@ function setup(initialSession: SupabaseSession | null = null) {
   const service = createSyncAccountService({
     configured: true,
     auth,
-    sessions
+    sessions,
+    engine
   })
   return { service, auth, sessions }
 }
@@ -209,6 +214,27 @@ describe('sync account service', () => {
       signedIn: false
     })
     expect(sessions.clear).toHaveBeenCalled()
+    expect(auth.signOut).toHaveBeenCalledWith('access')
+  })
+
+  it('waits for an active metadata sync before completing sign-out', async () => {
+    let releaseSync: () => void = () => undefined
+    const activeSync = new Promise<void>((resolve) => {
+      releaseSync = resolve
+    })
+    const waitForIdle = vi.fn(async () => activeSync)
+    const { service, sessions, auth } = setup(session, {
+      waitForIdle
+    } as unknown as MetadataSyncEngine)
+
+    const signingOut = service.signOut()
+    await vi.waitFor(() => expect(waitForIdle).toHaveBeenCalledOnce())
+    expect(sessions.clear).toHaveBeenCalled()
+    expect(auth.signOut).not.toHaveBeenCalled()
+
+    releaseSync()
+    await signingOut
+
     expect(auth.signOut).toHaveBeenCalledWith('access')
   })
 })

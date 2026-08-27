@@ -718,6 +718,39 @@ describe('AiProvidersSection', () => {
     expect(screen.getByText('Email confirmed')).toBeInTheDocument()
   })
 
+  it('shows a sync failure only once when the action and stored status report the same error', async () => {
+    const signedInStatus = {
+      configured: true,
+      signedIn: true,
+      account: { id: 'user-1', email: 'reader@example.com' },
+      library: {
+        libraryId: '10000000-0000-0000-0000-000000000010',
+        enabled: true,
+        running: false,
+        lastSyncedAt: null,
+        lastError: 'duplicate sync failure',
+        pendingCount: 0,
+        conflictCount: 0,
+        storageMode: 'local-working-cloud-snapshots' as const
+      }
+    }
+    api.sync.status = vi.fn().mockResolvedValue(signedInStatus)
+    api.sync.runNow = vi.fn().mockRejectedValue(new Error('duplicate sync failure'))
+    useSyncAccountStore.setState({
+      status: signedInStatus,
+      loading: false,
+      loadFailed: false,
+      confirmation: null
+    })
+
+    render(<AccountModal open onClose={vi.fn()} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'account.syncNow' }))
+    await waitFor(() => {
+      expect(screen.getAllByText('duplicate sync failure')).toHaveLength(1)
+    })
+  })
+
   it('shows the MinerU install path and progress in Settings', async () => {
     api.mineru.status = vi.fn().mockResolvedValue({
       state: 'installing',

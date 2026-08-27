@@ -17,7 +17,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from refora_server.library.pdf_discovery import find_pdf_files
-from refora_server.library.paths import isInsideLibrary
+from refora_server.library.paths import isInLibraryRoot
 from refora_server.services.document_identity import (
     file_signature,
     refresh_document_identity,
@@ -70,10 +70,18 @@ def validatePdfContents(path: str) -> dict[str, str] | None:
         return {"type": "corrupted", "message": str(error)}
 
 
-def _copy_to_library(source: str, library_folder: str) -> str:
+def _copy_to_library(
+    source: str,
+    library_folder: str,
+    preferred_name: str | None = None,
+) -> str:
     folder = Path(library_folder)
     folder.mkdir(parents=True, exist_ok=True)
     source_path = Path(source)
+    requested_name = Path(preferred_name or source_path.name).name
+    if Path(requested_name).suffix.lower() != ".pdf":
+        requested_name = source_path.name
+    requested_path = Path(requested_name)
     source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     source_fd = -1
     temporary_fd = -1
@@ -103,7 +111,7 @@ def _copy_to_library(source: str, library_folder: str) -> str:
         number = 0
         while True:
             suffix = "" if number == 0 else f" ({number})"
-            destination = folder / f"{source_path.stem}{suffix}{source_path.suffix}"
+            destination = folder / f"{requested_path.stem}{suffix}{requested_path.suffix}"
             try:
                 os.link(temporary, destination, follow_symlinks=False)
                 published = destination
@@ -140,6 +148,26 @@ def _file_identity(path: str) -> tuple[int, int, int, int, int]:
     )
 
 
+def _is_content_object_path(path: str, library_folder: str) -> bool:
+    try:
+        relative = Path(path).resolve().relative_to(Path(library_folder).resolve())
+    except ValueError:
+        return False
+    parts = relative.parts
+    return len(parts) == 4 and parts[:2] == ("objects", "sha256")
+
+
+def _remove_empty_content_object_directories(path: str, library_folder: str) -> None:
+    current = Path(path).parent
+    root = Path(library_folder).resolve()
+    while current != root:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
 def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
     getter = deps.get("getLibraryFolder")
     if callable(getter):
@@ -167,7 +195,6 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
     hash_pdf = options.get("hashPdf", hashPdf)
     validate_pdf = options.get("validatePdf", validatePdfContents)
     extract_metadata = options.get("extractPdfMetadata")
-    confirm_duplicate = options.get("confirmDuplicate")
     complete_callbacks: list[Callable[[dict[str, Any]], None]] = []
     import_lock = asyncio.Lock()
     destroyed = False
@@ -228,37 +255,17 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                         )
                     skipped.append(path)
                     continue
-                stored_path = path
-                if not isInsideLibrary(path, library_folder):
-                    copied = await call_work(copy_to_library, path, library_folder)
-                    stored_path = validatePdfPath(copied) or ""
-                    if not stored_path or not isInsideLibrary(stored_path, library_folder):
-                        raise ValueError("Copied PDF path is outside the library folder")
-                    copied_path = stored_path
-                initial_identity = _file_identity(stored_path)
-                file_hash = await call_work(hash_pdf, stored_path)
+                source_identity = _file_identity(path)
+                file_hash = await call_work(hash_pdf, path)
                 duplicate = (
                     documents["findByHash"](file_hash)
                     if file_hash
                     else None
                 )
                 if duplicate is not None:
-                    if isWatch or not callable(confirm_duplicate):
-                        if copied_path:
-                            Path(copied_path).unlink(missing_ok=True)
-                            copied_path = None
-                        skipped.append(path)
-                        continue
-                    should_skip = confirm_duplicate(Path(path).name)
-                    if inspect.isawaitable(should_skip):
-                        should_skip = await should_skip
-                    if should_skip is not False:
-                        if copied_path:
-                            Path(copied_path).unlink(missing_ok=True)
-                            copied_path = None
-                        skipped.append(path)
-                        continue
-                validation = await call_work(validate_pdf, stored_path)
+                    skipped.append(path)
+                    continue
+                validation = await call_work(validate_pdf, path)
                 if isinstance(validation, dict):
                     file_name = Path(path).name
                     if validation.get("type") == "encrypted":
@@ -268,10 +275,19 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     else:
                         message = str(validation.get("message") or "Unable to read PDF")
                     errors.append({"path": path, "message": message})
-                    if copied_path:
-                        Path(copied_path).unlink(missing_ok=True)
-                        copied_path = None
                     continue
+                if _file_identity(path) != source_identity:
+                    raise RuntimeError("PDF changed during import")
+                stored_path = path
+                if not isInLibraryRoot(path, library_folder):
+                    copied = await call_work(copy_to_library, path, library_folder)
+                    stored_path = validatePdfPath(copied) or ""
+                    if not stored_path or not isInLibraryRoot(stored_path, library_folder):
+                        raise ValueError("Copied PDF path is outside the library root")
+                    if await call_work(hash_pdf, stored_path) != file_hash:
+                        raise ValueError("Copied PDF content failed verification")
+                    copied_path = stored_path
+                initial_identity = _file_identity(stored_path)
                 now = now_ms()
                 extracted = (
                     await call_work(extract_metadata, stored_path)
@@ -316,6 +332,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                         "fileMissing": 0,
                     }
                 )
+                copied_path = None
                 imported.append(document["id"])
             except Exception as error:
                 if copied_path:
@@ -337,6 +354,76 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
         )
         return await importFiles(paths)
 
+    async def normalizeManagedFiles() -> dict[str, Any]:
+        async with import_lock:
+            library_folder = _library_folder(repos, options)
+            normalized = 0
+            errors: list[dict[str, str]] = []
+            if not library_folder or destroyed:
+                return {"normalized": normalized, "errors": errors}
+            offset = 0
+            migrated_content_objects: set[str] = set()
+            while not destroyed:
+                documents_page = documents["list"](
+                    {"mode": "all", "limit": 500, "offset": offset}
+                )
+                if not documents_page:
+                    break
+                for document in documents_page:
+                    path = validatePdfPath(document.get("filePath"))
+                    if path is None:
+                        continue
+                    if isInLibraryRoot(path, library_folder):
+                        continue
+                    copied_path: str | None = None
+                    try:
+                        file_hash = await call_work(hash_pdf, path)
+                        copied = await call_work(
+                            _copy_to_library,
+                            path,
+                            library_folder,
+                            document.get("fileName"),
+                        )
+                        destination = validatePdfPath(copied) or ""
+                        copied_path = destination
+                        if not destination or await call_work(hash_pdf, destination) != file_hash:
+                            raise ValueError("Managed PDF content failed verification")
+                        file_stat = os.stat(destination, follow_symlinks=False)
+                        documents["updateFileIdentity"](
+                            document["id"],
+                            destination,
+                            Path(destination).name,
+                            file_stat.st_size,
+                            file_hash,
+                            file_stat.st_dev,
+                            file_stat.st_ino,
+                            file_stat.st_mtime_ns,
+                        )
+                        updated = documents["get"](document["id"])
+                        if (
+                            updated is None
+                            or Path(updated["filePath"]).resolve()
+                            != Path(destination).resolve()
+                        ):
+                            raise RuntimeError("Managed PDF record changed during normalization")
+                        copied_path = None
+                        normalized += 1
+                        if _is_content_object_path(path, library_folder):
+                            migrated_content_objects.add(path)
+                    except Exception as error:
+                        if copied_path:
+                            Path(copied_path).unlink(missing_ok=True)
+                        errors.append({"path": path, "message": str(error)})
+                offset += len(documents_page)
+                if len(documents_page) < 500:
+                    break
+            for path in migrated_content_objects:
+                if documents["findByPath"](path) is not None:
+                    continue
+                Path(path).unlink(missing_ok=True)
+                _remove_empty_content_object_directories(path, library_folder)
+            return {"normalized": normalized, "errors": errors}
+
     def onComplete(callback: Callable[[dict[str, Any]], None]) -> None:
         complete_callbacks.append(callback)
 
@@ -348,6 +435,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
     return {
         "importFiles": importFiles,
         "importFolder": importFolder,
+        "normalizeManagedFiles": normalizeManagedFiles,
         "onComplete": onComplete,
         "destroy": destroy,
     }

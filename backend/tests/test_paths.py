@@ -6,6 +6,7 @@ import pytest
 from refora_server.library.paths import (
     containsLibrary,
     isInsideLibrary,
+    isInLibraryRoot,
     resolveFromLibrary,
     toLibraryRelative,
 )
@@ -56,6 +57,12 @@ def test_isInsideLibrary_resolves_symlinked_ancestors(tmp_path):
 
     assert isInsideLibrary(str(document), str(alias))
     assert toLibraryRelative(str(document), str(alias)) == "doc.pdf"
+
+
+def test_isInLibraryRoot_only_accepts_direct_children():
+    assert isInLibraryRoot("/lib/paper.pdf", "/lib")
+    assert not isInLibraryRoot("/lib/sub/paper.pdf", "/lib")
+    assert not isInLibraryRoot("/other/paper.pdf", "/lib")
 
 
 def test_isInsideLibrary_case_insensitive():

@@ -114,9 +114,7 @@ def resolve_startup_paths(db_path: str, library_folder: str) -> tuple[str, str]:
     resolved = os.path.realpath(os.path.abspath(value))
     if not os.path.isdir(resolved):
         return db_path, ""
-    destination_path = os.path.join(resolved, os.path.basename(db_path))
-    _migrate_legacy_database(db_path, destination_path)
-    return destination_path, resolved
+    return db_path, resolved
 
 
 def _bind_socket(host: str, port: int) -> socket.socket:

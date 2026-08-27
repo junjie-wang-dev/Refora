@@ -94,6 +94,7 @@ def create_lifespan(
         agent_runtime: dict[str, Any] | None = None
         cli_runtime: Any | None = None
         recovery_task: asyncio.Task[Any] | None = None
+        normalization_task: asyncio.Task[Any] | None = None
         database = db
         owns_database = database is None
         try:
@@ -109,6 +110,7 @@ def create_lifespan(
             app.state.db = database
             app.state.db_path = db_path
             app.state.library_folder = library_folder
+            app.state.local_data_folder = os.path.dirname(os.path.abspath(db_path))
             repos = create_repositories(
                 database,
                 RepositoryDeps(
@@ -234,24 +236,10 @@ def create_lifespan(
             exporter = {}
             web_search = {}
             if complete_repos:
-                async def confirm_duplicate(file_name: str) -> bool:
-                    result = await connector.dialog_choose(
-                        "Duplicate File",
-                        f'"{file_name}" has the same content as a file already in your library. Skip this file?',
-                        ["Skip", "Import Anyway"],
-                        0,
-                        0,
-                    )
-                    if not isinstance(result, dict) or result.get("ok") is not True:
-                        return True
-                    data = result.get("data")
-                    return not isinstance(data, dict) or data.get("response") != 1
-
                 importer = createImporter(
                     repos,
                     {
                         "getLibraryFolder": lambda: app.state.library_folder,
-                        "confirmDuplicate": confirm_duplicate,
                         "emitProgress": lambda data: schedule_event(
                             events, "import.progress", data, server_loop
                         ),
@@ -330,7 +318,7 @@ def create_lifespan(
                     OcrServiceDeps(
                         engineManager=mineru,
                         worker=worker,
-                        getLibraryFolder=lambda: app.state.library_folder,
+                        getLibraryFolder=lambda: app.state.local_data_folder,
                         emitProgress=lambda data: schedule_event(events, "ocr.progress", data),
                         emitCompleted=lambda data: schedule_event(events, "ocr.completed", data),
                         emitError=lambda data: schedule_event(events, "ocr.error", data),
@@ -407,7 +395,7 @@ def create_lifespan(
 
             academic_runtime = create_academic_runtime(
                 repos,
-                app.state.library_folder,
+                app.state.local_data_folder,
                 proxy_url,
                 {
                     "cache": create_academic_cache,
@@ -440,7 +428,7 @@ def create_lifespan(
             sandbox = createSandboxService(
                 SandboxOptions(
                     shared_root=os.path.join(
-                        os.path.abspath(app.state.library_folder),
+                        os.path.abspath(app.state.local_data_folder),
                         ".refora-agent",
                         "shared",
                     ),
@@ -520,7 +508,7 @@ def create_lifespan(
                     repos,
                     {
                         "connector": connector,
-                        "getSandboxPath": lambda workspace_id: f"{app.state.library_folder}/.refora/sandboxes/{workspace_id}",
+                        "getSandboxPath": lambda workspace_id: f"{app.state.local_data_folder}/.refora/sandboxes/{workspace_id}",
                         "agentRuntime": LazyAgentRuntime(app),
                         "academic": academic,
                         "importer": importer,
@@ -936,7 +924,7 @@ def create_lifespan(
                                 services=services,
                                 connector=connector,
                                 db_path=db_path,
-                                library_folder=app.state.library_folder,
+                                library_folder=app.state.local_data_folder,
                             )
                             await agent_runtime["startRecover"](assembled)
                         except Exception as error:
@@ -981,8 +969,28 @@ def create_lifespan(
                 from refora_server.server.app import configure_app
 
                 configure_app(app)
+            normalize_managed_files = importer.get("normalizeManagedFiles")
+            if callable(normalize_managed_files):
+                async def normalize_library_files() -> None:
+                    try:
+                        result = await normalize_managed_files()
+                        errors = result.get("errors") if isinstance(result, dict) else None
+                        if isinstance(errors, list) and errors:
+                            logging.getLogger(__name__).warning(
+                                "library PDF normalization completed with %d errors",
+                                len(errors),
+                            )
+                    except Exception as error:
+                        logging.getLogger(__name__).warning(
+                            "library PDF normalization failed: %s", error
+                        )
+
+                normalization_task = asyncio.create_task(normalize_library_files())
             yield
         finally:
+            if normalization_task is not None:
+                normalization_task.cancel()
+                await asyncio.gather(normalization_task, return_exceptions=True)
             if recovery_task is not None:
                 recovery_task.cancel()
                 await asyncio.gather(recovery_task, return_exceptions=True)

@@ -41,8 +41,10 @@ async def test_import_files_copies_and_deduplicates_by_hash(tmp_path: Path) -> N
     assert document is not None
     assert document["title"] == "Extracted title"
     assert document["metadataStatus"] == "done"
-    assert Path(document["filePath"]).parent == library
-    assert Path(document["filePath"]).exists()
+    stored = Path(document["filePath"])
+    assert stored.parent == library
+    assert stored.name == "first.pdf"
+    assert stored.exists()
     assert [event["current"] for event in progress] == [1, 2, 3]
 
 
@@ -70,7 +72,7 @@ async def test_watched_duplicate_skips_pdf_validation(tmp_path: Path) -> None:
     assert duplicate_result["skipped"] == [str(duplicate.resolve())]
     imported = documents["get"](first_result["imported"][0])
     assert imported is not None
-    assert validated == [imported["filePath"]]
+    assert validated == [str(first.resolve())]
 
 
 @pytest.mark.asyncio
@@ -151,7 +153,7 @@ async def test_import_files_rejects_corrupted_pdf(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_duplicate_can_be_imported_anyway(tmp_path: Path) -> None:
+async def test_manual_duplicate_is_deduplicated_by_content_hash(tmp_path: Path) -> None:
     library = tmp_path / "library"
     first = tmp_path / "first.pdf"
     duplicate = tmp_path / "duplicate.pdf"
@@ -177,12 +179,13 @@ async def test_manual_duplicate_can_be_imported_anyway(tmp_path: Path) -> None:
     second_result = await importer["importFiles"]([str(duplicate)])
 
     assert len(first_result["imported"]) == 1
-    assert len(second_result["imported"]) == 1
-    assert decisions == ["duplicate.pdf"]
+    assert second_result["imported"] == []
+    assert second_result["skipped"] == [str(duplicate.resolve())]
+    assert decisions == []
 
 
 @pytest.mark.asyncio
-async def test_import_identity_is_computed_from_the_library_copy(tmp_path: Path) -> None:
+async def test_import_rejects_a_source_changed_while_hashing(tmp_path: Path) -> None:
     library = tmp_path / "library"
     source = tmp_path / "source.pdf"
     _pdf(source, b"original")
@@ -205,13 +208,11 @@ async def test_import_identity_is_computed_from_the_library_copy(tmp_path: Path)
 
     result = await importer["importFiles"]([str(source)])
 
-    document = documents["get"](result["imported"][0])
-    assert document is not None
-    stored = Path(document["filePath"])
-    assert hashed_paths == [str(stored)]
-    assert stored.read_bytes() == b"%PDF-1.7\noriginal"
-    assert document["fileSize"] == stored.stat().st_size
-    assert document["fileHash"] == hashlib.sha256(stored.read_bytes()).hexdigest()
+    assert result["imported"] == []
+    assert result["errors"] == [
+        {"path": str(source), "message": "PDF changed during import"}
+    ]
+    assert hashed_paths == [str(source.resolve())]
 
 
 @pytest.mark.asyncio
@@ -261,12 +262,12 @@ async def test_invalid_copy_result_never_deletes_the_source_pdf(tmp_path: Path) 
     result = await importer["importFiles"]([str(source)])
 
     assert result["imported"] == []
-    assert "outside the library folder" in result["errors"][0]["message"]
+    assert "outside the library root" in result["errors"][0]["message"]
     assert source.exists()
 
 
 @pytest.mark.asyncio
-async def test_database_failure_removes_the_published_library_copy(tmp_path: Path) -> None:
+async def test_database_failure_removes_the_unreferenced_library_copy(tmp_path: Path) -> None:
     library = tmp_path / "library"
     source = tmp_path / "source.pdf"
     _pdf(source, b"content")
@@ -293,6 +294,159 @@ async def test_database_failure_removes_the_published_library_copy(tmp_path: Pat
     ]
     assert list(library.iterdir()) == []
     assert source.exists()
+
+
+@pytest.mark.asyncio
+async def test_normalize_managed_files_moves_content_objects_to_the_library_root(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    source = library / "objects" / "sha256" / "ab" / f"{'a' * 64}.pdf"
+    source.parent.mkdir(parents=True)
+    _pdf(source, b"legacy")
+    file_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    repos["documents"]["insert"](
+        make_doc(
+            id="legacy-doc",
+            file_path=str(source),
+            file_name="Readable Name.pdf",
+            file_size=source.stat().st_size,
+            file_hash=file_hash,
+        )
+    )
+    importer = createImporter(
+        repos,
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["normalizeManagedFiles"]()
+
+    assert result == {"normalized": 1, "errors": []}
+    document = repos["documents"]["get"]("legacy-doc")
+    assert document is not None
+    assert document["fileName"] == "Readable Name.pdf"
+    assert Path(document["filePath"]) == library / "Readable Name.pdf"
+    assert not source.exists()
+    assert not (library / "objects").exists()
+
+
+@pytest.mark.asyncio
+async def test_normalize_managed_files_migrates_all_records_sharing_one_object(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    source = library / "objects" / "sha256" / "ab" / f"{'b' * 64}.pdf"
+    source.parent.mkdir(parents=True)
+    _pdf(source, b"shared")
+    file_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    for document_id, file_name in (("first", "First.pdf"), ("second", "Second.pdf")):
+        repos["documents"]["insert"](
+            make_doc(
+                id=document_id,
+                file_path=str(source),
+                file_name=file_name,
+                file_size=source.stat().st_size,
+                file_hash=file_hash,
+            )
+        )
+    importer = createImporter(
+        repos,
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["normalizeManagedFiles"]()
+
+    assert result == {"normalized": 2, "errors": []}
+    assert Path(repos["documents"]["get"]("first")["filePath"]) == library / "First.pdf"
+    assert Path(repos["documents"]["get"]("second")["filePath"]) == library / "Second.pdf"
+    assert not source.exists()
+    assert not (library / "objects").exists()
+
+
+@pytest.mark.asyncio
+async def test_normalize_managed_files_does_not_rewrite_root_records(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "paper.pdf"
+    _pdf(source, b"root")
+    db = open_migrated_db()
+    repos = create_repositories(
+        db,
+        RepositoryDeps(getLibraryFolder=lambda: str(library)),
+    )
+    repos["documents"]["insert"](
+        make_doc(
+            id="root-doc",
+            file_path=str(source),
+            file_name=source.name,
+            file_size=source.stat().st_size,
+            file_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+        )
+    )
+    before = repos["documents"]["get"]("root-doc")
+    importer = createImporter(
+        repos,
+        {
+            "getLibraryFolder": lambda: str(library),
+            "hashPdf": lambda _path: (_ for _ in ()).throw(
+                AssertionError("root PDF must not be rehashed")
+            ),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["normalizeManagedFiles"]()
+
+    after = repos["documents"]["get"]("root-doc")
+    assert result == {"normalized": 0, "errors": []}
+    assert after["updatedAt"] == before["updatedAt"]
+
+
+@pytest.mark.asyncio
+async def test_import_files_keep_readable_names_and_never_overwrite_collisions(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    first = tmp_path / "first" / "paper.pdf"
+    second = tmp_path / "second" / "paper.pdf"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    _pdf(first, b"first")
+    _pdf(second, b"second")
+    documents = make_docs_repo(open_migrated_db(), str(library))
+    importer = createImporter(
+        {"documents": documents},
+        {
+            "getLibraryFolder": lambda: str(library),
+            "validatePdf": lambda _path: None,
+        },
+    )
+
+    result = await importer["importFiles"]([str(first), str(second)])
+
+    assert len(result["imported"]) == 2
+    assert result["errors"] == []
+    stored = sorted(Path(item["filePath"]) for item in documents["list"]({"mode": "all"}))
+    assert stored == [library / "paper (1).pdf", library / "paper.pdf"]
+    assert {path.read_bytes() for path in stored} == {first.read_bytes(), second.read_bytes()}
 
 
 @pytest.mark.asyncio

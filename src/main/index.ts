@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { createWriteStream, existsSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -7,7 +7,14 @@ import { initLogger, logger } from './services/logger'
 import { createPdfTextService } from './services/pdfText'
 import type { PdfTextService } from './services/pdfText'
 import { removePdfPreviewCacheForDocument } from './services/pdfPreviewCache'
-import { dbPathForLibraryFolder, dbExistsInLibraryFolder, DB_FILE_NAME } from './services/dbPath'
+import { dbPathForLibraryFolder, dbExistsInLibraryFolder } from './services/dbPath'
+import {
+  adoptDatabaseForLibrary,
+  createLibrarySnapshot,
+  prepareLibraryDatabase,
+  readLibraryFolderFromDatabase
+} from './services/libraryDatabase'
+import { createLibrarySnapshotPolicy } from './services/librarySnapshotPolicy'
 import {
   readLibraryFolderPath,
   readPendingAuthConfirmation,
@@ -66,12 +73,17 @@ let activeLibraryFolder = ''
 let win: BrowserWindow | null = null
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
 let syncHandlerChannels: string[] = []
+let syncTimer: ReturnType<typeof setInterval> | null = null
+let snapshotTimer: ReturnType<typeof setInterval> | null = null
 let menuLanguage: 'zh' | 'en' = 'en'
 let flushWindowState: () => Promise<void> = async () => undefined
 let allowWindowClose = false
 const rendererPathCapabilities = createRendererPathCapabilities()
 const rendererFlushCoordinator = createRendererFlushCoordinator()
 const lifecycleTransitionGate = createLifecycleTransitionGate()
+const librarySnapshotPolicy = createLibrarySnapshotPolicy({
+  createSnapshot: (context, baseSequence) => createLibrarySnapshot({ ...context, baseSequence })
+})
 const appLifecycleIpcHandlers = createAppLifecycleIpcHandlers({
   completeRendererFlush: (requestId, error) =>
     rendererFlushCoordinator.complete(requestId, error)
@@ -208,6 +220,44 @@ function unregisterSyncAccountHandlers(): void {
   syncHandlerChannels = []
 }
 
+async function runEnabledSync(): Promise<void> {
+  const service = syncAccountService
+  if (!service) return
+  try {
+    const status = await service.status()
+    if (status.signedIn && status.library?.enabled && !status.library.running) {
+      await service.runNow()
+    }
+  } catch (error) {
+    logger.warn(`sync:background failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function syncBeforePersistence(): Promise<void> {
+  const service = syncAccountService
+  if (!service) return
+  try {
+    const status = await service.status()
+    if (status.signedIn && status.library?.enabled) await service.runNow()
+    else await service.waitForIdle()
+  } catch (error) {
+    logger.warn(`sync:persistence failed: ${error instanceof Error ? error.message : String(error)}`)
+    await service.waitForIdle().catch(() => undefined)
+  }
+}
+
+async function snapshotActiveLibraryIfChanged(): Promise<void> {
+  if (!activeDbPath || !activeLibraryFolder) return
+  try {
+    await librarySnapshotPolicy.snapshotIfChanged({
+      dbPath: activeDbPath,
+      libraryFolder: activeLibraryFolder
+    })
+  } catch (error) {
+    logger.warn(`snapshot:scheduled failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function deliverAuthConfirmation(): void {
   const target = win
   if (!pendingAuthConfirmation || !target || target.isDestroyed()) return
@@ -320,15 +370,11 @@ function registerDocumentProtocol(): void {
       if (!assembly) return new Response('Server unavailable', { status: 503 })
       if (url.hostname === 'preview' && parts.length === 1) {
         if (!pdfTextService) return new Response('Preview unavailable', { status: 503 })
-        const [document, settings] = await Promise.all([
-          assembly.getClient().http.documentsGet(parts[0]),
-          assembly.getClient().http.settingsGet()
-        ])
-        const libraryFolder = settings['libraryFolderPath']
-        if (typeof libraryFolder !== 'string') {
+        const document = await assembly.getClient().http.documentsGet(parts[0])
+        if (!activeDbPath) {
           return new Response('Library unavailable', { status: 503 })
         }
-        const png = await pdfTextService.getPreviewForDocument(document, libraryFolder)
+        const png = await pdfTextService.getPreviewForDocument(document, dirname(activeDbPath))
         return new Response(new Uint8Array(png), {
           headers: {
             'Cache-Control': 'no-store',
@@ -626,28 +672,48 @@ function createWindow(bounds?: WindowBounds | null): BrowserWindow {
 
   return bw
 }
-function resolveStartupLibrary(): { dbPath: string; libraryFolder: string } {
+async function resolveStartupLibrary(): Promise<{ dbPath: string; libraryFolder: string }> {
   const userDataDir = app.getPath('userData')
-  const userDataDbPath = join(userDataDir, DB_FILE_NAME)
 
   const prefsLibrary = readLibraryFolderPath(userDataDir)
   if (prefsLibrary) {
+    let libraryFolder = ''
     try {
-      const libraryFolder = realpathSync(prefsLibrary)
+      libraryFolder = realpathSync(prefsLibrary)
       if (!statSync(libraryFolder).isDirectory()) throw new Error('not a directory')
+    } catch {
+      logger.warn(`db:startup prefs library folder invalid, clearing prefs: ${prefsLibrary}`)
+      writeLibraryFolderPath(userDataDir, '')
+    }
+    if (libraryFolder) {
       logger.info(
-        dbExistsInLibraryFolder(libraryFolder)
+        dbExistsInLibraryFolder(userDataDir, libraryFolder)
           ? `db:startup using library db (prefs) at ${libraryFolder}`
           : `db:startup creating library db (prefs) at ${libraryFolder}`
       )
-      return { dbPath: dbPathForLibraryFolder(libraryFolder), libraryFolder }
-    } catch {
-      logger.warn(`db:startup prefs library folder invalid, clearing prefs: ${prefsLibrary}`)
+      const prepared = await prepareLibraryDatabase(userDataDir, libraryFolder)
+      return { dbPath: prepared.dbPath, libraryFolder }
     }
-    writeLibraryFolderPath(userDataDir, '')
   }
 
-  return { dbPath: userDataDbPath, libraryFolder: '' }
+  const prepared = await prepareLibraryDatabase(userDataDir, '')
+  const storedLibrary = readLibraryFolderFromDatabase(prepared.dbPath)
+  if (storedLibrary) {
+    try {
+      const libraryFolder = realpathSync(storedLibrary)
+      if (!statSync(libraryFolder).isDirectory()) throw new Error('not a directory')
+      const adopted = await adoptDatabaseForLibrary(
+        userDataDir,
+        libraryFolder,
+        prepared.dbPath
+      )
+      writeLibraryFolderPath(userDataDir, libraryFolder)
+      return { dbPath: adopted.dbPath, libraryFolder }
+    } catch {
+      logger.warn(`db:startup ignored invalid stored library folder: ${storedLibrary}`)
+    }
+  }
+  return { dbPath: prepared.dbPath, libraryFolder: '' }
 }
 async function createPythonServerAssembly(
   dbPath: string,
@@ -723,13 +789,13 @@ async function createPythonServerAssembly(
       if (!result.canceled && result.filePath) writeFileSync(result.filePath, bibtex, 'utf8')
     },
     removeDocumentPreviewCache: async (documentId) => {
-      const currentLibraryFolder = libraryFolder || activeLibraryFolder
-      if (!currentLibraryFolder) return
+      const currentDbPath = dbPath || activeDbPath
+      if (!currentDbPath) return
       try {
         if (pdfTextService) {
-          await pdfTextService.removePreviewCacheForDocument(documentId, currentLibraryFolder)
+          await pdfTextService.removePreviewCacheForDocument(documentId, dirname(currentDbPath))
         } else {
-          await removePdfPreviewCacheForDocument(currentLibraryFolder, documentId)
+          await removePdfPreviewCacheForDocument(dirname(currentDbPath), documentId)
         }
       } catch (error) {
         logger.warn(
@@ -790,11 +856,26 @@ const switchLibraryFolder = createLibrarySwitcher({
       return false
     }
   },
-  dbPathForFolder: dbPathForLibraryFolder,
-  dbExistsInFolder: dbExistsInLibraryFolder,
+  dbPathForFolder: (folder) => dbPathForLibraryFolder(app.getPath('userData'), folder),
+  dbExistsInFolder: (folder) => dbExistsInLibraryFolder(app.getPath('userData'), folder),
+  prepareDatabase: (folder) => prepareLibraryDatabase(app.getPath('userData'), folder),
   createAssembly: (dbPath, libraryFolder) =>
     createPythonServerAssembly(dbPath, libraryFolder, switchLibraryFolderPython),
-  beforeSwitch: () => flushRendererState(),
+  beforeSwitch: async () => {
+    await flushRendererState()
+    await syncBeforePersistence()
+  },
+  snapshotCurrent: async (state) => {
+    if (!state.dbPath || !state.libraryFolder) return
+    try {
+      await librarySnapshotPolicy.snapshotNow({
+        dbPath: state.dbPath,
+        libraryFolder: state.libraryFolder
+      })
+    } catch (error) {
+      logger.warn(`snapshot:switch failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  },
   activateAssembly: async (assembly) => {
     await activatePythonServerAssembly(assembly)
   },
@@ -813,6 +894,7 @@ const switchLibraryFolder = createLibrarySwitcher({
     if (win && !win.isDestroyed()) {
       win.webContents.send(IpcChannel.EventLibrarySwitched, result)
     }
+    void runEnabledSync()
   },
   onRecoveryFailed: (error) => {
     logger.error(`library recovery failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -851,7 +933,29 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   syncAccountService = createSyncRuntime({
     userDataDir: app.getPath('userData'),
     fetch: (input, init) => net.fetch(input, init),
-    issueConfirmationRedirect: () => authConfirmationGuard.issue()
+    issueConfirmationRedirect: () => authConfirmationGuard.issue(),
+    getLibrary: () => activeDbPath && activeLibraryFolder
+      ? { dbPath: activeDbPath, libraryFolder: activeLibraryFolder }
+      : null,
+    createSnapshot: async (context, baseSequence) => {
+      await librarySnapshotPolicy.snapshotNow(context, baseSequence)
+    },
+    onRemoteApplied: (context) => {
+      if (
+        !win
+        || win.isDestroyed()
+        || !activeLibraryFolder
+        || context.dbPath !== activeDbPath
+      ) return
+      win.webContents.send(IpcChannel.EventLibrarySwitched, {
+        libraryFolderPath: activeLibraryFolder,
+        dbExisted: true,
+        scanned: 0,
+        imported: 0,
+        skipped: 0,
+        errors: []
+      } satisfies LibrarySwitchResult)
+    }
   })
   registerSyncAccountHandlers(syncAccountService)
 
@@ -862,7 +966,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     }
   }
 
-  const { dbPath, libraryFolder } = resolveStartupLibrary()
+  const { dbPath, libraryFolder } = await resolveStartupLibrary()
   activeDbPath = dbPath
   activeLibraryFolder = libraryFolder
   registerWorkspaceAssetProtocol()
@@ -881,13 +985,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
         const resolvedLibraryFolder = realpathSync(bootstrap.libraryFolderPath)
         if (!statSync(resolvedLibraryFolder).isDirectory()) throw new Error('not a directory')
         activeLibraryFolder = resolvedLibraryFolder
-        activeDbPath = dbPathForLibraryFolder(activeLibraryFolder)
+        activeDbPath = dbPathForLibraryFolder(app.getPath('userData'), activeLibraryFolder)
         writeLibraryFolderPath(app.getPath('userData'), activeLibraryFolder)
       } catch {
         logger.warn(`db:bootstrap ignored invalid library folder: ${bootstrap.libraryFolderPath}`)
       }
     }
     savedBounds = bootstrap.windowBounds
+    void runEnabledSync()
   } catch (error) {
     logger.error(`local library startup failed: ${error instanceof Error ? error.message : String(error)}`)
     const failedAssembly = serverAssembly
@@ -897,6 +1002,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   win = createWindow(savedBounds)
 
   Menu.setApplicationMenu(buildMenu(menuLanguage))
+  syncTimer = setInterval(() => void runEnabledSync(), 5 * 60 * 1000)
+  snapshotTimer = setInterval(() => void snapshotActiveLibraryIfChanged(), 30 * 60 * 1000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -916,11 +1023,32 @@ const handleBeforeQuit = createShutdownHandler({
   flushRendererState: () => flushRendererState(),
   unregisterHandlers: unregisterSyncAccountHandlers,
   stopServices: async () => {
+    await syncBeforePersistence()
     const assembly = serverAssembly
     serverAssembly = null
-    await assembly?.stop()
+    let stopError: unknown = null
+    try {
+      await assembly?.stop()
+    } catch (error) {
+      stopError = error
+    }
+    if (activeDbPath && activeLibraryFolder) {
+      try {
+        await librarySnapshotPolicy.snapshotNow({
+          dbPath: activeDbPath,
+          libraryFolder: activeLibraryFolder
+        })
+      } catch (error) {
+        logger.warn(`snapshot:shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (stopError) throw stopError
   },
   destroyRuntimes: () => {
+    if (syncTimer) clearInterval(syncTimer)
+    syncTimer = null
+    if (snapshotTimer) clearInterval(snapshotTimer)
+    snapshotTimer = null
     pdfTextService?.destroy()
     pdfTextService = null
     serverPythonRuntime?.destroy()

@@ -69,6 +69,8 @@ test.describe('Import E2E', () => {
     })
     expect(docs).toHaveLength(1)
     expect(docs[0].filePath).toBe(fs.realpathSync(path.join(libraryFolder, 'valid.pdf')))
+    expect(docs[0].fileName).toBe('valid.pdf')
+    expect(fs.statSync(docs[0].filePath).isFile()).toBe(true)
   })
 
   test('emits import:progress events when importing multiple files', async () => {

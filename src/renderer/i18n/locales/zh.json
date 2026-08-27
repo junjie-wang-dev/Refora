@@ -66,7 +66,22 @@
     "signedInTitle": "已登录",
     "signedInDescription": "此设备已连接到你的 Refora 账户。",
     "signOut": "退出登录",
-    "signOutFailed": "退出登录失败"
+    "signOutFailed": "退出登录失败",
+    "syncTitle": "文献库同步",
+    "syncToggle": "启用文献库同步",
+    "syncNoLibrary": "请先选择文献库目录，再启用同步。",
+    "syncDisabledDescription": "默认关闭。账户保持登录，但不会上传任何文献库元数据。",
+    "syncEnabledDescription": "仅同步笔记、收藏、批注、分类、Workspace 布局和记忆；PDF 与数据库快照仍保存在云盘目录。",
+    "syncNow": "立即同步",
+    "syncFailed": "文献库同步失败",
+    "lastSynced": "上次同步：{{value}}",
+    "syncCounts": "待同步 {{pending}} 项 · 冲突 {{conflicts}} 项",
+    "conflictsTitle": "同步冲突",
+    "conflictsDescription": "请选择保留哪一份；在你决定前，另一份不会被覆盖。",
+    "conflictItem": "{{type}} · {{id}}",
+    "useRemote": "使用云端版本",
+    "keepLocal": "保留本机版本",
+    "conflictFailed": "无法解决同步冲突"
   },
   "recovery": {
     "title": "无法打开本地文献库",

@@ -121,6 +121,22 @@ export const createMockReforaApi = (): ReforaApi => ({
       signedIn: false,
       account: null,
     }),
+    setEnabled: async () => ({
+      configured: true,
+      signedIn: true,
+      account: { id: 'user-1', email: 'user@example.com' },
+    }),
+    runNow: async () => ({
+      configured: true,
+      signedIn: true,
+      account: { id: 'user-1', email: 'user@example.com' },
+    }),
+    conflicts: async () => [],
+    resolveConflict: async () => ({
+      configured: true,
+      signedIn: true,
+      account: { id: 'user-1', email: 'user@example.com' },
+    }),
   },
 
   appearance: {

@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Modal } from '@lobehub/ui'
 import {
   CheckCircle,
+  ArrowsClockwise,
+  CloudCheck,
   CloudSlash,
   SignOut,
   WarningCircle
@@ -12,6 +14,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { useSyncAccountStore } from '../store/syncAccountStore'
 import { AccountAuthForm } from './AccountAuthForm'
 import { Button } from './ui'
+import type { SyncConflict } from '../../shared/sync-types'
 
 interface AccountModalProps {
   open: boolean
@@ -29,12 +32,22 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
   const clearConfirmation = useSyncAccountStore((state) => state.clearConfirmation)
   const [signingOut, setSigningOut] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [conflicts, setConflicts] = useState<SyncConflict[]>([])
 
   useEffect(() => {
     if (!open) return
     setActionError(null)
     void loadAccount()
   }, [loadAccount, open])
+
+  useEffect(() => {
+    if (!open || !status?.signedIn || !status.library?.conflictCount) {
+      setConflicts([])
+      return
+    }
+    void api.sync.conflicts().then(setConflicts).catch(() => setConflicts([]))
+  }, [open, status?.library?.conflictCount, status?.signedIn])
 
   const signOut = async () => {
     setSigningOut(true)
@@ -45,6 +58,45 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
       setActionError(errorMessage(error, t('account.signOutFailed')))
     } finally {
       setSigningOut(false)
+    }
+  }
+
+  const setSyncEnabled = async (enabled: boolean) => {
+    setSyncBusy(true)
+    setActionError(null)
+    try {
+      setStatus(await api.sync.setEnabled({ enabled }))
+    } catch (error) {
+      setActionError(errorMessage(error, t('account.syncFailed')))
+      await loadAccount()
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
+  const runSync = async () => {
+    setSyncBusy(true)
+    setActionError(null)
+    try {
+      setStatus(await api.sync.runNow())
+    } catch (error) {
+      setActionError(errorMessage(error, t('account.syncFailed')))
+      await loadAccount()
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
+  const resolveConflict = async (id: string, resolution: 'keep_local' | 'use_remote') => {
+    setSyncBusy(true)
+    setActionError(null)
+    try {
+      setStatus(await api.sync.resolveConflict({ id, resolution }))
+      setConflicts(await api.sync.conflicts())
+    } catch (error) {
+      setActionError(errorMessage(error, t('account.conflictFailed')))
+    } finally {
+      setSyncBusy(false)
     }
   }
 
@@ -113,6 +165,8 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
   } else {
     const email = status.account?.email ?? ''
     const initial = email.trim().slice(0, 1).toUpperCase() || '?'
+    const librarySync = status.library ?? null
+    const syncError = actionError ?? librarySync?.lastError ?? null
     content = (
       <div>
         <div className="flex flex-col items-center border-b border-border bg-panel-2/60 px-8 pb-6 pt-8 text-center">
@@ -130,9 +184,88 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
             <div className="mt-1 truncate text-sm font-medium text-foreground">{email}</div>
           </div>
 
-          {actionError && (
+          <div className="rounded-xl border border-border bg-background p-4">
+            <div className="flex items-start gap-3">
+              <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${librarySync?.enabled ? 'bg-success/10 text-success' : 'bg-panel-2 text-muted'}`}>
+                {librarySync?.enabled
+                  ? <CloudCheck className="h-5 w-5" weight="duotone" />
+                  : <CloudSlash className="h-5 w-5" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold text-foreground">{t('account.syncTitle')}</div>
+                <p className="mt-1 text-label leading-relaxed text-muted">
+                  {librarySync
+                    ? t(librarySync.enabled ? 'account.syncEnabledDescription' : 'account.syncDisabledDescription')
+                    : t('account.syncNoLibrary')}
+                </p>
+                {librarySync?.lastSyncedAt && (
+                  <div className="mt-1 text-label text-muted">
+                    {t('account.lastSynced', { value: new Date(librarySync.lastSyncedAt).toLocaleString() })}
+                  </div>
+                )}
+              </div>
+              {librarySync && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={librarySync.enabled}
+                  aria-label={t('account.syncToggle')}
+                  disabled={syncBusy}
+                  onClick={() => void setSyncEnabled(!librarySync.enabled)}
+                  className={`relative mt-1 h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${librarySync.enabled ? 'bg-accent' : 'bg-panel-2'}`}
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${librarySync.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              )}
+            </div>
+            {librarySync?.enabled && (
+              <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                <div className="text-label text-muted">
+                  {t('account.syncCounts', {
+                    pending: librarySync.pendingCount,
+                    conflicts: librarySync.conflictCount
+                  })}
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<ArrowsClockwise className="h-3.5 w-3.5" />}
+                  loading={syncBusy}
+                  onClick={() => void runSync()}
+                >
+                  {t('account.syncNow')}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {conflicts.length > 0 && (
+            <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
+              <div className="text-xs font-semibold text-foreground">{t('account.conflictsTitle')}</div>
+              <p className="mt-1 text-label leading-relaxed text-muted">{t('account.conflictsDescription')}</p>
+              <div className="mt-3 flex max-h-40 flex-col gap-2 overflow-y-auto">
+                {conflicts.map((conflict) => (
+                  <div key={conflict.id} className="rounded-lg border border-border bg-panel px-3 py-2">
+                    <div className="truncate text-label font-medium text-foreground">
+                      {t('account.conflictItem', { type: conflict.entityType, id: conflict.entityId })}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Button size="sm" variant="secondary" disabled={syncBusy} onClick={() => void resolveConflict(conflict.id, 'use_remote')}>
+                        {t('account.useRemote')}
+                      </Button>
+                      <Button size="sm" variant="secondary" disabled={syncBusy} onClick={() => void resolveConflict(conflict.id, 'keep_local')}>
+                        {t('account.keepLocal')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {syncError && (
             <div className="rounded-lg bg-error/10 px-3 py-2 text-label text-error" role="alert">
-              {actionError}
+              {syncError}
             </div>
           )}
 

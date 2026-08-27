@@ -1,6 +1,6 @@
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "f29a63daeb291c66badcc5b3eaf4a61ee7f268176f4d03d78a9d4194134b445c" as const
+export const SERVER_PROTOCOL_DIGEST = "2548d26cf7dc645d5fa851a29313cbd2cd295b5f3cb80c68694edfb565d53051" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -366,7 +366,7 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "POST",
     "path": "/ai/chat/send",
-    "schemaDigest": "e714dc7be612a86f7b5098c133f97dcd4f20ba95cce1ecb9451803a67af7dc8c"
+    "schemaDigest": "79e5ed992f7033207ed61d67e04c11d543443594b232e031a4085c154353190d"
   },
   {
     "method": "POST",

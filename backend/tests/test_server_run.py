@@ -11,7 +11,7 @@ from refora_server.server import run as server_run
 from refora_server.server.run import _bind_socket, resolve_startup_paths
 
 
-def test_resolve_startup_paths_migrates_legacy_library_setting(tmp_path) -> None:
+def test_resolve_startup_paths_keeps_database_local_when_library_setting_exists(tmp_path) -> None:
     library = tmp_path / "library"
     library.mkdir()
     bootstrap = tmp_path / "refora.db"
@@ -28,17 +28,17 @@ def test_resolve_startup_paths_migrates_legacy_library_setting(tmp_path) -> None
 
     db_path, library_folder = resolve_startup_paths(str(bootstrap), "")
 
-    assert db_path == str(library / "refora.db")
+    assert db_path == str(bootstrap)
     assert library_folder == str(library)
     assert bootstrap.is_file()
-    migrated = sqlite3.connect(db_path)
+    migrated = sqlite3.connect(bootstrap)
     try:
         assert migrated.execute("SELECT value FROM sentinel").fetchone() == ("preserved",)
     finally:
         migrated.close()
 
 
-def test_resolve_startup_paths_keeps_existing_library_database(tmp_path) -> None:
+def test_resolve_startup_paths_ignores_a_cloud_database_with_the_same_name(tmp_path) -> None:
     library = tmp_path / "library"
     library.mkdir()
     bootstrap = tmp_path / "refora.db"
@@ -57,10 +57,7 @@ def test_resolve_startup_paths_keeps_existing_library_database(tmp_path) -> None
     existing.commit()
     existing.close()
 
-    assert resolve_startup_paths(str(bootstrap), "") == (
-        str(destination),
-        str(library),
-    )
+    assert resolve_startup_paths(str(bootstrap), "") == (str(bootstrap), str(library))
     preserved = sqlite3.connect(destination)
     try:
         assert preserved.execute("SELECT value FROM sentinel").fetchone() == ("existing",)
@@ -68,7 +65,7 @@ def test_resolve_startup_paths_keeps_existing_library_database(tmp_path) -> None
         preserved.close()
 
 
-def test_resolve_startup_paths_replaces_empty_initialized_library_database(
+def test_resolve_startup_paths_never_replaces_a_cloud_database(
     tmp_path,
 ) -> None:
     library = tmp_path / "library"
@@ -98,12 +95,9 @@ def test_resolve_startup_paths_replaces_empty_initialized_library_database(
     empty.commit()
     empty.close()
 
-    assert resolve_startup_paths(str(bootstrap), "") == (
-        str(destination),
-        str(library),
-    )
+    assert resolve_startup_paths(str(bootstrap), "") == (str(bootstrap), str(library))
 
-    migrated = sqlite3.connect(destination)
+    migrated = sqlite3.connect(bootstrap)
     try:
         assert migrated.execute("SELECT title FROM documents").fetchone() == (
             "Preserved",

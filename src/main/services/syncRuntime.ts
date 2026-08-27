@@ -5,6 +5,9 @@ import { createSyncSessionStore } from './syncSessionStore'
 import { createSyncAccountService, type SyncAccountService } from './syncAccount'
 import { logger } from './logger'
 import type { AuthConfirmationRedirect } from './authDeepLink'
+import { createSupabaseSyncClient } from './supabaseSync'
+import { SyncStateDatabase } from './syncStateDatabase'
+import { createMetadataSyncEngine, type ActiveLibraryContext } from './metadataSyncEngine'
 
 declare const __REFORA_SUPABASE_URL__: string
 declare const __REFORA_SUPABASE_PUBLISHABLE_KEY__: string
@@ -15,6 +18,9 @@ export interface SyncRuntimeDeps {
   env?: NodeJS.ProcessEnv
   safeStorage?: SafeStorageProxy
   issueConfirmationRedirect: () => AuthConfirmationRedirect
+  getLibrary?: () => ActiveLibraryContext | null
+  createSnapshot?: (context: ActiveLibraryContext, baseSequence: number) => Promise<void>
+  onRemoteApplied?: (context: ActiveLibraryContext) => void
 }
 
 export function validSupabaseUrl(value: string): boolean {
@@ -54,7 +60,10 @@ export function createSyncRuntime({
   fetch,
   env = process.env,
   safeStorage = createSafeStorageProxy(),
-  issueConfirmationRedirect
+  issueConfirmationRedirect,
+  getLibrary,
+  createSnapshot,
+  onRemoteApplied
 }: SyncRuntimeDeps): SyncAccountService {
   const embeddedUrl = typeof __REFORA_SUPABASE_URL__ === 'string'
     ? __REFORA_SUPABASE_URL__
@@ -72,9 +81,19 @@ export function createSyncRuntime({
   const auth = configured
     ? createSupabaseAuthClient({ url, publishableKey, fetch, issueConfirmationRedirect })
     : null
+  const engine = configured && getLibrary
+    ? createMetadataSyncEngine({
+      state: new SyncStateDatabase(userDataDir),
+      remote: createSupabaseSyncClient({ url, publishableKey, fetch }),
+      getLibrary,
+      createSnapshot,
+      onRemoteApplied
+    })
+    : null
   return createSyncAccountService({
     configured,
     auth,
-    sessions: createSyncSessionStore(userDataDir, safeStorage)
+    sessions: createSyncSessionStore(userDataDir, safeStorage),
+    engine
   })
 }

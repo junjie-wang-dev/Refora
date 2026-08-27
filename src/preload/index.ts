@@ -85,8 +85,11 @@ import type {
 } from '../shared/webSearch'
 import type {
   SyncAuthConfirmation,
+  SyncConflict,
+  SyncConflictResolutionRequest,
   SyncCredentials,
   SyncEmailRequest,
+  SyncEnabledRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from '../shared/sync-types'
@@ -243,7 +246,13 @@ const api: ReforaApi = {
       invoke<SyncSignUpResult>(IpcChannel.SyncSignUp, credentials),
     resendConfirmation: (request: SyncEmailRequest) =>
       invoke<void>(IpcChannel.SyncResendConfirmation, request),
-    signOut: () => invoke<SyncServiceStatus>(IpcChannel.SyncSignOut)
+    signOut: () => invoke<SyncServiceStatus>(IpcChannel.SyncSignOut),
+    setEnabled: (request: SyncEnabledRequest) =>
+      invoke<SyncServiceStatus>(IpcChannel.SyncSetEnabled, request),
+    runNow: () => invoke<SyncServiceStatus>(IpcChannel.SyncRunNow),
+    conflicts: () => invoke<SyncConflict[]>(IpcChannel.SyncConflicts),
+    resolveConflict: (request: SyncConflictResolutionRequest) =>
+      invoke<SyncServiceStatus>(IpcChannel.SyncResolveConflict, request)
   },
 
   appearance: {

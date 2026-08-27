@@ -54,6 +54,10 @@ export const IpcChannel = {
   SyncSignUp: 'sync:signUp',
   SyncResendConfirmation: 'sync:resendConfirmation',
   SyncSignOut: 'sync:signOut',
+  SyncSetEnabled: 'sync:setEnabled',
+  SyncRunNow: 'sync:runNow',
+  SyncConflicts: 'sync:conflicts',
+  SyncResolveConflict: 'sync:resolveConflict',
 
   WebSearchConfigGet: 'webSearch:config:get',
   WebSearchConfigUpdate: 'webSearch:config:update',

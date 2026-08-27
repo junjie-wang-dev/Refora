@@ -15,6 +15,33 @@ from refora_server.library.identifier_import import (
 )
 
 
+def test_identifier_copy_removes_published_file_when_directory_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source" / "paper.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF-1.7\nsource")
+    library = tmp_path / "library"
+    original_fsync = identifier_import.os.fsync
+    calls = 0
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory fsync failed")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(identifier_import.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        identifier_import._copy_to_library(str(source), str(library))
+
+    assert source.exists()
+    assert list(library.iterdir()) == []
+
+
 @pytest.mark.asyncio
 async def test_import_identifier_uses_mocked_academic_metadata(tmp_path: Path) -> None:
     library = tmp_path / "library"
@@ -52,6 +79,7 @@ async def test_import_identifier_uses_mocked_academic_metadata(tmp_path: Path) -
     assert document is not None
     assert document["title"] == "Mocked Paper"
     assert document["arxivId"] == "2401.12345"
+    assert Path(document["filePath"]) == library / "Mocked Paper.pdf"
     assert Path(document["filePath"]).exists()
     with pytest.raises(ValueError, match="already"):
         await importByIdentifier({"documents": documents}, "2401.12345", deps)
@@ -101,6 +129,7 @@ async def test_doi_import_uses_crossref_metadata_and_pdf_link(tmp_path: Path) ->
     assert document["title"] == "Crossref Paper"
     assert document["metadataSource"] == "crossref"
     assert document["arxivId"] == "2401.12345"
+    assert Path(document["filePath"]) == library / "Crossref Paper.pdf"
 
 
 def test_identifier_detection_and_doi_extraction() -> None:

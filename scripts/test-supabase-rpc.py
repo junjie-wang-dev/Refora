@@ -15,6 +15,9 @@ LIBRARY_B = "20000000-0000-0000-0000-000000000010"
 DEVICE_A = "10000000-0000-0000-0000-000000000020"
 APPLIED_OPERATION = "10000000-0000-0000-0000-000000000030"
 CONFLICT_OPERATION = "10000000-0000-0000-0000-000000000031"
+DELETE_OPERATION = "10000000-0000-0000-0000-000000000032"
+RESURRECT_OPERATION = "10000000-0000-0000-0000-000000000033"
+NEW_DEVICE = "10000000-0000-0000-0000-000000000021"
 
 
 def require_env(name: str) -> str:
@@ -73,11 +76,12 @@ def push(
     entity_id: str,
     base_version: int,
     payload: dict[str, Any],
+    deleted: bool = False,
 ) -> dict[str, Any]:
     cursor.execute(
         """
         select public.refora_sync_push(
-          %s, %s, %s, 'category', %s, %s, false, %s::jsonb
+          %s, %s, %s, 'category', %s, %s, %s, %s::jsonb
         )
         """,
         (
@@ -86,6 +90,7 @@ def push(
             operation_id,
             entity_id,
             base_version,
+            deleted,
             json.dumps(payload),
         ),
     )
@@ -198,6 +203,43 @@ def main() -> None:
             assert applied["status"] == "applied"
             checks += 1
 
+            cursor.execute(
+                "select entity_count, payload_bytes from public.refora_sync_list_libraries()"
+            )
+            entity_count, payload_bytes = cursor.fetchone()
+            assert entity_count == 1 and payload_bytes > 0
+            checks += 1
+
+            deleted = push(
+                cursor,
+                DELETE_OPERATION,
+                "category-a",
+                1,
+                {},
+                deleted=True,
+            )
+            assert deleted["status"] == "applied"
+            cursor.execute(
+                "select entity_count, payload_bytes from public.refora_sync_list_libraries()"
+            )
+            assert tuple(cursor.fetchone()) == (0, 0)
+            checks += 1
+
+            resurrected = push(
+                cursor,
+                RESURRECT_OPERATION,
+                "category-a",
+                2,
+                {"name": "Reading again", "sortOrder": 0},
+            )
+            assert resurrected["status"] == "applied"
+            cursor.execute(
+                "select entity_count, payload_bytes from public.refora_sync_list_libraries()"
+            )
+            entity_count, payload_bytes = cursor.fetchone()
+            assert entity_count == 1 and payload_bytes > 0
+            checks += 1
+
             conflict = push(
                 cursor,
                 CONFLICT_OPERATION,
@@ -207,6 +249,22 @@ def main() -> None:
             )
             assert conflict["status"] == "conflict"
             assert "payload" not in conflict
+            checks += 1
+            expect_sqlstate(
+                cursor,
+                "22023",
+                """
+                select public.refora_sync_push(
+                  %s, %s, %s, 'category', 'category-b', 0, false, %s::jsonb
+                )
+                """,
+                (
+                    LIBRARY_A,
+                    DEVICE_A,
+                    "10000000-0000-0000-0000-000000000034",
+                    json.dumps({"name": "Invalid", "moveToLibrary": None}),
+                ),
+            )
             checks += 1
             assert push(
                 cursor,
@@ -258,6 +316,22 @@ def main() -> None:
                 ),
             )
             checks += 1
+            expect_sqlstate(
+                cursor,
+                "42501",
+                """
+                select public.refora_sync_push_v4_internal(
+                  %s, %s, %s, 'category', 'private-v4-call', 0, false, %s::jsonb
+                )
+                """,
+                (
+                    LIBRARY_A,
+                    DEVICE_A,
+                    "10000000-0000-0000-0000-000000000035",
+                    json.dumps({"name": "Private v4", "sortOrder": 4}),
+                ),
+            )
+            checks += 1
 
             become_postgres(cursor)
             cursor.execute(
@@ -273,6 +347,25 @@ def main() -> None:
             )
             compact, payload_absent, short_lived = cursor.fetchone()
             assert compact and payload_absent and short_lived
+            checks += 1
+
+            cursor.execute(
+                """
+                insert into refora_sync.devices(id, user_id, name, last_seen_at)
+                select
+                  ('30000000-0000-0000-0000-' || lpad(value::text, 12, '0'))::uuid,
+                  %s,
+                  'Retired device',
+                  now() - interval '181 days'
+                from generate_series(1, 20) value
+                """,
+                (USER_A,),
+            )
+            become_user(cursor, USER_A)
+            cursor.execute(
+                "select public.refora_sync_register_device(%s, 'New device')",
+                (NEW_DEVICE,),
+            )
             checks += 1
 
             become_user(cursor, USER_B)

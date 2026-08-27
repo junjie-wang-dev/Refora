@@ -59,6 +59,14 @@ def isInsideLibrary(absPath: str, libraryFolder: str) -> bool:
     return _same_path(normAbs, normLib) or _starts_with_dir(normLib, normAbs)
 
 
+def isInLibraryRoot(absPath: str, libraryFolder: str) -> bool:
+    if not absPath or not libraryFolder:
+        return False
+    normLib = _resolve(libraryFolder)
+    normAbs = _resolve(absPath)
+    return _same_path(os.path.dirname(normAbs), normLib)
+
+
 def containsLibrary(parentPath: str, libraryFolder: str) -> bool:
     if not parentPath or not libraryFolder:
         return False

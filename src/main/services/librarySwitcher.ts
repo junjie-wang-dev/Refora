@@ -12,12 +12,17 @@ interface LibrarySwitcherDeps {
   isDirectory: (folder: string) => boolean
   dbPathForFolder: (folder: string) => string
   dbExistsInFolder: (folder: string) => boolean
+  prepareDatabase?: (folder: string) => Promise<{
+    dbPath: string
+    dbExisted: boolean
+  }>
   createAssembly: (
     dbPath: string,
     libraryFolder: string,
     switchLibraryFolder: (folder: string) => Promise<LibrarySwitchResult>
   ) => Promise<ServerAssembly>
   beforeSwitch?: () => Promise<void>
+  snapshotCurrent?: (state: LibraryState) => Promise<void>
   activateAssembly?: (assembly: ServerAssembly) => Promise<void>
   getState: () => LibraryState
   setState: (state: LibraryState) => void
@@ -55,8 +60,8 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
     }
 
     switching = true
-    const targetDbPath = deps.dbPathForFolder(resolvedFolder)
-    const dbExisted = deps.dbExistsInFolder(resolvedFolder)
+    let targetDbPath = deps.dbPathForFolder(resolvedFolder)
+    let dbExisted = deps.dbExistsInFolder(resolvedFolder)
     let nextAssembly: ServerAssembly | null = null
     let switchStarted = false
     let preferenceCommitted = false
@@ -64,11 +69,17 @@ export function createLibrarySwitcher(deps: LibrarySwitcherDeps) {
       await deps.beforeSwitch?.()
       switchStarted = true
       await previous.assembly?.stop()
+      await deps.snapshotCurrent?.(previous)
       deps.setState({
         assembly: null,
         dbPath: previous.dbPath,
         libraryFolder: previous.libraryFolder
       })
+      if (deps.prepareDatabase) {
+        const prepared = await deps.prepareDatabase(resolvedFolder)
+        targetDbPath = prepared.dbPath
+        dbExisted = prepared.dbExisted
+      }
       nextAssembly = await deps.createAssembly(
         targetDbPath,
         resolvedFolder,

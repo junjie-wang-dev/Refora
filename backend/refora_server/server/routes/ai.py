@@ -298,7 +298,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 services=services,
                 connector=connector or _value(request.app.state, "connector"),
                 db_path=_value(request.app.state, "db_path", ""),
-                library_folder=_value(request.app.state, "library_folder", ""),
+                library_folder=_value(request.app.state, "local_data_folder", ""),
             )
             starter = _value(runtime, "start") or _value(runtime, "send")
             result = await _resolve(starter(assembled))
@@ -373,7 +373,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 services=services,
                 connector=connector or _value(request.app.state, "connector"),
                 db_path=_value(request.app.state, "db_path", ""),
-                library_folder=_value(request.app.state, "library_folder", ""),
+                library_folder=_value(request.app.state, "local_data_folder", ""),
             )
             starter = _value(runtime, "startResume") or _value(runtime, "resume")
             result = await _resolve(starter(assembled))

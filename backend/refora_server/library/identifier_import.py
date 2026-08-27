@@ -19,6 +19,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 
 from refora_server.academic.arxiv import base_arxiv_id, normalize_arxiv_id
 from refora_server.academic.types import PaperLocator
+from refora_server.library.paths import isInLibraryRoot
 
 
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -293,13 +294,35 @@ def _copy_to_library(source: str, library_folder: str) -> str:
     folder = Path(library_folder)
     folder.mkdir(parents=True, exist_ok=True)
     source_path = Path(source)
-    destination = folder / source_path.name
-    number = 1
-    while destination.exists():
-        destination = folder / f"{source_path.stem} ({number}){source_path.suffix}"
-        number += 1
-    shutil.copy2(source_path, destination)
-    return str(destination.resolve())
+    temporary = folder / f".refora-identifier-{uuid.uuid4()}.tmp"
+    published: Path | None = None
+    completed = False
+    try:
+        shutil.copy2(source_path, temporary)
+        with temporary.open("rb") as copied:
+            os.fsync(copied.fileno())
+        number = 0
+        while True:
+            suffix = "" if number == 0 else f" ({number})"
+            destination = folder / f"{source_path.stem}{suffix}{source_path.suffix}"
+            try:
+                os.link(temporary, destination, follow_symlinks=False)
+                published = destination
+                break
+            except FileExistsError:
+                number += 1
+        directory_fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        resolved = destination.resolve(strict=True)
+        completed = True
+        return str(resolved)
+    finally:
+        if published is not None and not completed:
+            published.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
@@ -417,7 +440,7 @@ async def importByIdentifier(
     safe_url = options.get("isSafeUrl", _validate_safe_url)
     if not await _await(safe_url(pdf_url)):
         raise ValueError("The download URL is not allowed (must be a public http(s) address).")
-    temporary_dir = tempfile.mkdtemp(prefix="identifier-", dir=str(Path(library_folder)))
+    temporary_dir = tempfile.mkdtemp(prefix="refora-identifier-")
     try:
         downloader = options.get("downloadPdf", downloadPdf)
         temporary_path = await _await(downloader(pdf_url, temporary_dir, file_name))
@@ -462,11 +485,29 @@ async def importByIdentifier(
                 "fileMissing": 0,
             }
         )
+        copied_path: str | None = None
+        copy_to_library = options.get("copyToLibrary", _copy_to_library)
         try:
-            copied_path = options.get("copyToLibrary", _copy_to_library)(temporary_path, library_folder)
-            repos["documents"]["updateFilePath"](document["id"], copied_path, Path(copied_path).name)
+            copied_path = copy_to_library(temporary_path, library_folder)
+            if not isInLibraryRoot(copied_path, library_folder):
+                raise ValueError("Copied PDF path is outside the library root")
+            if _hash_pdf(copied_path) != file_hash:
+                raise ValueError("Copied PDF content failed verification")
+            copied_stat = os.stat(copied_path, follow_symlinks=False)
+            repos["documents"]["updateFileIdentity"](
+                document["id"],
+                copied_path,
+                Path(copied_path).name,
+                copied_stat.st_size,
+                file_hash,
+                copied_stat.st_dev,
+                copied_stat.st_ino,
+                copied_stat.st_mtime_ns,
+            )
         except Exception:
             repos["documents"]["delete"](document["id"])
+            if copied_path and copy_to_library is _copy_to_library:
+                Path(copied_path).unlink(missing_ok=True)
             raise ValueError("Failed to copy the downloaded PDF to the library folder.")
         return document["id"]
     finally:

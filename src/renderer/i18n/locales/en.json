@@ -66,7 +66,22 @@
     "signedInTitle": "You’re signed in",
     "signedInDescription": "This device is connected to your Refora account.",
     "signOut": "Sign out",
-    "signOutFailed": "Failed to sign out"
+    "signOutFailed": "Failed to sign out",
+    "syncTitle": "Library sync",
+    "syncToggle": "Enable library sync",
+    "syncNoLibrary": "Choose a library folder before enabling sync.",
+    "syncDisabledDescription": "Off by default. Your account stays connected, but no library metadata is uploaded.",
+    "syncEnabledDescription": "Syncs only notes, starred state, annotations, categories, workspaces, layouts, and memories. PDFs and snapshots remain in your cloud-drive folder.",
+    "syncNow": "Sync now",
+    "syncFailed": "Library sync failed",
+    "lastSynced": "Last synced: {{value}}",
+    "syncCounts": "{{pending}} pending · {{conflicts}} conflicts",
+    "conflictsTitle": "Sync conflicts",
+    "conflictsDescription": "Choose which copy to keep. The other copy remains untouched until you decide.",
+    "conflictItem": "{{type}} · {{id}}",
+    "useRemote": "Use cloud copy",
+    "keepLocal": "Keep this Mac",
+    "conflictFailed": "Could not resolve the sync conflict"
   },
   "recovery": {
     "title": "The local library couldn’t be opened",
