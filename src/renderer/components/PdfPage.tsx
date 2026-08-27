@@ -1081,7 +1081,7 @@ export default function PdfPage({
       )}
       {page && viewport && canvasLayout?.tiles.map((tile) => (
         <PdfCanvasTileView
-          key={`${tile.pixelX}-${tile.pixelY}`}
+          key={`${tile.column}-${tile.row}`}
           page={page}
           scrollRootRef={scrollRootRef}
           tile={tile}

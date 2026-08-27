@@ -407,6 +407,51 @@ describe('PdfReader rendering visibility', () => {
     expect(view.container.querySelector('.pdf-reader-page')).toBeVisible()
   })
 
+  it('retains committed high-zoom tiles while zooming out', async () => {
+    const view = render(<PdfReader />)
+    const zoom = await screen.findByRole('textbox', { name: 'pdfReader.zoomPercentage' })
+
+    fireEvent.change(zoom, { target: { value: '500' } })
+    fireEvent.submit(zoom.closest('form') as HTMLFormElement)
+    const tilesAtFiveHundred = await waitFor(() => {
+      const tiles = Array.from(
+        view.container.querySelectorAll<HTMLElement>('[data-pdf-canvas-tile]')
+      )
+      expect(tiles.length).toBeGreaterThan(1)
+      return tiles
+    })
+    const retainedTile = tilesAtFiveHundred[1]
+    const retainedTileObserver = await waitFor(() => {
+      const observer = observers.find((candidate) => candidate.target === retainedTile)
+      expect(observer).toBeDefined()
+      return observer
+    })
+
+    act(() => {
+      retainedTileObserver?.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        retainedTileObserver as unknown as IntersectionObserver
+      )
+    })
+    await waitFor(() => expect(pdfMocks.renderPage).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(Array.from(retainedTile.querySelectorAll('canvas')).some(
+      (canvas) => canvas.style.visibility === 'visible' &&
+        canvas.width > 1 && canvas.height > 1
+    )).toBe(true))
+
+    fireEvent.change(zoom, { target: { value: '450' } })
+    fireEvent.submit(zoom.closest('form') as HTMLFormElement)
+
+    await waitFor(() => {
+      const tilesAtFourHundredFifty = Array.from(
+        view.container.querySelectorAll<HTMLElement>('[data-pdf-canvas-tile]')
+      )
+      expect(tilesAtFourHundredFifty).toHaveLength(tilesAtFiveHundred.length)
+      expect(tilesAtFourHundredFifty[1]).toBe(retainedTile)
+    })
+    expect(retainedTile).toBeVisible()
+  })
+
   it('finishes and commits an in-flight tile after a transient visibility change', async () => {
     let finishRender!: () => void
     const cancelRender = vi.fn()
