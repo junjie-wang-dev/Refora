@@ -102,6 +102,70 @@ def test_workspace_mutations_emit_refresh_events():
     ]
 
 
+def test_update_report_is_scoped_to_the_current_workspace_and_emits_refresh():
+    changed: list[tuple[str, str]] = []
+    updates: list[tuple[str, dict[str, str]]] = []
+    reports = {
+        "report-current": {
+            "id": "report-current",
+            "workspaceId": "workspace",
+            "title": "Current report",
+            "contentMd": "Original",
+        },
+        "report-other": {
+            "id": "report-other",
+            "workspaceId": "other-workspace",
+            "title": "Other report",
+            "contentMd": "Private",
+        },
+    }
+
+    def update(report_id: str, patch: dict[str, str]):
+        updates.append((report_id, patch))
+        reports[report_id].update(patch)
+        return reports[report_id]
+
+    executor = AgentToolExecutor(
+        AgentToolContext(run_id="run", workspace_id="workspace"),
+        {
+            "repos": {
+                "aiReports": {
+                    "get": reports.get,
+                    "update": update,
+                }
+            },
+            "workspace_changed": lambda workspace_id, reason: changed.append(
+                (workspace_id, reason)
+            ),
+        },
+    )
+
+    updated = json.loads(
+        executor.execute(
+            "update_report",
+            {"reportId": "report-current", "contentMd": "Revised"},
+        )
+    )
+    outside = json.loads(
+        executor.execute(
+            "update_report",
+            {"reportId": "report-other", "title": "Leaked"},
+        )
+    )
+
+    assert updated == {
+        "updated": True,
+        "reportId": "report-current",
+        "title": "Current report",
+        "workspaceId": "workspace",
+    }
+    assert updates == [("report-current", {"contentMd": "Revised"})]
+    assert changed == [("workspace", "other")]
+    assert outside["error"]["message"] == (
+        "Report is not available in the current workspace"
+    )
+
+
 def test_workspace_search_reports_summary_availability():
     repos = {
         "workspaceItems": {

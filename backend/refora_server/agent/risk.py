@@ -39,6 +39,7 @@ _BASE: dict[str, RiskClass] = {
     "write_file": RiskClass.WRITE_LOCAL,
     "edit_file": RiskClass.WRITE_LOCAL,
     "generate_report": RiskClass.WRITE_LOCAL,
+    "update_report": RiskClass.WRITE_LOCAL,
     "add_docs_to_workspace": RiskClass.WRITE_LOCAL,
     "create_workspace_connections": RiskClass.WRITE_LOCAL,
     "prepare_paper_ocr": RiskClass.EXTERNAL,

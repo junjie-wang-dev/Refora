@@ -241,6 +241,7 @@ def test_refora_mcp_initialization_guides_workspace_tool_usage():
     assert result["protocolVersion"] == "2025-06-18"
     assert "list_workspace_context" in result["instructions"]
     assert "read_workspace_item" in result["instructions"]
+    assert "update_report" in result["instructions"]
 
 
 def test_codex_jsonl_events_map_to_agent_runtime_events():

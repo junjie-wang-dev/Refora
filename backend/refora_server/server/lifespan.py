@@ -844,6 +844,7 @@ def create_lifespan(
                         "add_docs_to_workspace",
                         "create_workspace_connections",
                         "generate_report",
+                        "update_report",
                         "explore_research_frontier",
                     }
                 profile = request.get("agentProfile")

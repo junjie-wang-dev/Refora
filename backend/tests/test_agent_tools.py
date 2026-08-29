@@ -200,6 +200,7 @@ def test_tool_factory_covers_read_web_academic_workspace_and_memory_tools():
         "add_docs_to_workspace",
         "create_workspace_connections",
         "generate_report",
+        "update_report",
         "prepare_paper_ocr",
         "propose_workspace_memory_update",
         "publish_workspace_artifacts",
@@ -235,6 +236,13 @@ def test_library_tools_registered_with_document_and_summary_schemas():
     related = tools["find_related_papers"].args_schema
     assert related["required"] == ["docId"]
     assert related["properties"]["limit"] == {"type": "integer", "minimum": 1, "maximum": 20, "default": 8}
+
+    update_report = tools["update_report"].args_schema
+    assert update_report["required"] == ["reportId"]
+    assert update_report["anyOf"] == [
+        {"required": ["title"]},
+        {"required": ["contentMd"]},
+    ]
 
 
 def _library_executor(repos, deps_extra=None):

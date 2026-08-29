@@ -336,6 +336,14 @@ function formatToolLabel(
           : t('workspace.chat.toolGenerateReportDone', 'Generated report'),
         detail: compactDetail(firstString(objParam, ['title'])) || undefined
       }
+    case 'update_report':
+      return {
+        icon: 'report',
+        text: running
+          ? t('workspace.chat.toolUpdateReport', 'Updating report…')
+          : t('workspace.chat.toolUpdateReportDone', 'Updated report'),
+        detail: compactDetail(firstString(objParam, ['title', 'reportId'])) || undefined
+      }
     case 'add_docs_to_workspace':
       return {
         icon: 'add',

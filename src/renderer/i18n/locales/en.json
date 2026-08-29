@@ -966,6 +966,8 @@
       "toolOpenPaperDone": "Opened paper",
       "toolGenerateReport": "Generating report…",
       "toolGenerateReportDone": "Generated report",
+      "toolUpdateReport": "Updating report…",
+      "toolUpdateReportDone": "Updated report",
       "toolAddDocs": "Adding to workspace…",
       "toolAddDocsDone": "Added to workspace",
       "toolCreateConnections": "Connecting workspace cards…",

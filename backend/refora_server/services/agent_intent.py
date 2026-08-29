@@ -38,6 +38,8 @@ WORKSPACE_SYSTEM_PROMPT = (
     "When the user asks for a report, survey, literature review, or comparison, call "
     "generate_report to create and pin a structured report directly on the Workspace board; "
     "do not substitute a sandbox Markdown file unless the user explicitly requests a file. "
+    "When the user asks to edit an existing report, call list_workspace_context, read its "
+    "current contents with read_workspace_item, then call update_report with its reportId. "
     "Use publish_workspace_artifacts for requested file deliverables, not for structured "
     "Workspace reports. Before stating the current workspace inventory, card counts, or whether "
     "reports, notes, or assets exist, call list_workspace_context; do not infer the complete "
