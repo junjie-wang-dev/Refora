@@ -105,7 +105,63 @@ def test_model_installer_verifies_files_and_writes_local_config(tmp_path):
     assert config["models-dir"] == roots
     assert config["model-source"] == "huggingface"
     assert calls[0][1]["revision"] == "a" * 40
+    assert calls[0][1]["max_workers"] == 4
     assert calls[1][1]["revision"] == "b" * 40
+    assert calls[1][1]["max_workers"] == 4
+
+
+def test_model_installer_retries_failed_snapshot_download(tmp_path):
+    pipeline_content = b"pipeline-model"
+    vlm_content = b"vlm-model"
+    pipeline = tmp_path / "pipeline"
+    vlm = tmp_path / "vlm"
+    pipeline.mkdir()
+    vlm.mkdir()
+    (pipeline / "model.bin").write_bytes(pipeline_content)
+    (vlm / "model.bin").write_bytes(vlm_content)
+    manifest = {
+        "formatVersion": 1,
+        "mineruVersion": "3.4.4",
+        "repositories": [
+            {
+                "kind": "pipeline",
+                "repoId": "pipeline/repo",
+                "revision": "a" * 40,
+                "allowPatterns": ["*"],
+                "files": [_file_entry("model.bin", pipeline_content)],
+            },
+            {
+                "kind": "vlm",
+                "repoId": "vlm/repo",
+                "revision": "b" * 40,
+                "allowPatterns": ["*"],
+                "files": [_file_entry("model.bin", vlm_content)],
+            },
+        ],
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    calls: list[str] = []
+
+    def snapshot_download(repo_id, **_kwargs):
+        calls.append(repo_id)
+        if repo_id == "pipeline/repo" and calls.count(repo_id) < 3:
+            raise OSError("temporary transport failure")
+        return str(pipeline if repo_id == "pipeline/repo" else vlm)
+
+    roots = install_models(
+        manifest_path,
+        tmp_path / "mineru.json",
+        snapshot_download,
+    )
+
+    assert roots == {"pipeline": str(pipeline), "vlm": str(vlm)}
+    assert calls == [
+        "pipeline/repo",
+        "pipeline/repo",
+        "pipeline/repo",
+        "vlm/repo",
+    ]
 
 
 def test_model_installer_rejects_hash_mismatch(tmp_path):
