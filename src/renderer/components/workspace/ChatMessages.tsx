@@ -167,9 +167,9 @@ function RunTimeline({
   elapsedSeconds: number
 }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(streaming)
   useEffect(() => {
-    if (streaming) setOpen(true)
+    setOpen(streaming)
   }, [streaming])
   const lastStepStatus = steps.length > 0 ? steps[steps.length - 1].status : null
   const ordered = useMemo(
