@@ -19,7 +19,8 @@ pdfGlobals.Path2D ??= CanvasPath2D
 
 type PdfBinaryDataKind = 'cMapUrl' | 'standardFontDataUrl' | 'wasmUrl'
 const PDF_RANGE_CHUNK_SIZE = 64 * 1024
-const MAX_PDF_RANGE_BYTES = 1024 * 1024
+const PDF_RANGE_READ_SIZE = 1024 * 1024
+const MAX_PDF_RANGE_BYTES = 16 * 1024 * 1024
 
 class FileBinaryDataFactory {
   private readonly roots: Record<PdfBinaryDataKind, string | null>
@@ -120,7 +121,13 @@ export async function renderPdfPreview(
       const bytes = new Uint8Array(end - begin)
       let offset = 0
       while (offset < bytes.length) {
-        const count = readSync(source, bytes, offset, bytes.length - offset, begin + offset)
+        const count = readSync(
+          source,
+          bytes,
+          offset,
+          Math.min(PDF_RANGE_READ_SIZE, bytes.length - offset),
+          begin + offset
+        )
         if (count === 0) break
         offset += count
       }
