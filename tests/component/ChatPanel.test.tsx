@@ -1465,6 +1465,76 @@ describe('ChatMessages presentation', () => {
     expect(screen.getByRole('button', { name: 'workspace.chat.reasoningExpand' })).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('keeps live trace expanded and collapses it when streaming ends', () => {
+    const base = {
+      threadId: 'thread-1', runId: 'run-1', input: null,
+      startedAt: 1, inputTokens: null, outputTokens: null, totalTokens: null,
+      parentStepId: null, agentName: null, namespace: null, depth: 0,
+      checkpointId: null
+    }
+    const runningSteps: AgentTraceStep[] = [
+      {
+        ...base, id: 'run', kind: 'run', name: 'agent', output: null,
+        status: 'running', endedAt: null, seq: 0
+      },
+      {
+        ...base, id: 'reasoning', kind: 'reasoning', name: 'model_reasoning',
+        output: 'Inspecting sources', status: 'running', endedAt: null, seq: 1
+      },
+      {
+        ...base, id: 'tool', kind: 'tool', name: 'search_documents',
+        input: '{"query":"trace","scope":"library"}', output: null,
+        status: 'running', endedAt: null, seq: 2
+      }
+    ]
+    const props: Parameters<typeof ChatMessages>[0] = {
+      messages: [],
+      traceSteps: runningSteps,
+      streaming: true,
+      streamingText: '',
+      streamingReasoning: '',
+      activeRunId: 'run-1',
+      elapsedSeconds: 4,
+      loadingHistory: false,
+      providers: [],
+      onRegenerate: vi.fn(),
+      onSuggestionClick: vi.fn(),
+      scrollRef: { current: null },
+      inputAreaHeight: 0,
+      stickToBottomRef: { current: true }
+    }
+    const { container, rerender } = render(<ChatMessages {...props} />)
+
+    let runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+    expect(runToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Inspecting sources')).toBeInTheDocument()
+    expect(screen.getByText('workspace.chat.toolSearchLibrary')).toBeInTheDocument()
+
+    const completedSteps = runningSteps.map((step) => ({
+      ...step,
+      status: 'done' as const,
+      endedAt: 3
+    }))
+    rerender(
+      <ChatMessages
+        {...props}
+        messages={[{
+          id: 'answer', threadId: 'thread-1', role: 'assistant',
+          content: 'Final answer', createdAt: 4
+        }]}
+        traceSteps={completedSteps}
+        streaming={false}
+        activeRunId={null}
+      />
+    )
+
+    runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+    expect(runToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Inspecting sources')).toBeNull()
+    expect(screen.queryByText('workspace.chat.toolSearchLibraryDone')).toBeNull()
+    expect(screen.getByText('Final answer')).toBeInTheDocument()
+  })
+
   it('renders a completed assistant answer without extra header chrome', () => {
     const messages: ChatMessage[] = [
       { id: 'u1', threadId: 't1', role: 'user', content: 'Compare them', createdAt: 1 },
@@ -1479,9 +1549,9 @@ describe('ChatMessages presentation', () => {
     expect(screen.getAllByText('workspace.chat.traceLlmDone')).toHaveLength(1)
 
     const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
-    expect(runToggle).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(runToggle)
     expect(runToggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(runToggle)
+    expect(runToggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('The methods differ.')).toBeInTheDocument()
   })
 
@@ -1505,9 +1575,9 @@ describe('ChatMessages presentation', () => {
     const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
 
     expect(screen.getByText('Persisted final answer')).toBeInTheDocument()
-    expect(screen.getByText('Earlier progress')).toBeInTheDocument()
-    fireEvent.click(runToggle)
     expect(screen.queryByText('Earlier progress')).toBeNull()
+    fireEvent.click(runToggle)
+    expect(screen.getByText('Earlier progress')).toBeInTheDocument()
     expect(screen.getByText('Persisted final answer')).toBeInTheDocument()
   })
 
@@ -1540,17 +1610,22 @@ describe('ChatMessages presentation', () => {
     ]
 
     const { container } = renderMessages({ messages, traceSteps, streaming: false })
-    const kinds = [...container.querySelectorAll('[data-timeline-kind]')].map(
-      (element) => element.getAttribute('data-timeline-kind')
-    )
-
-    expect(kinds).toEqual(['reasoning', 'message', 'tool', 'message'])
     expect(container.querySelector('.chat-assistant-avatar')).toBeNull()
     expect(container.querySelector('.chat-reasoning-icon')).toBeNull()
     expect(container.querySelector('.chat-timeline-answer-label')).toBeNull()
     expect(container.querySelector('[data-timeline-kind="llm"]')).toBeNull()
-    expect(container.querySelector('[data-timeline-kind="tool"] .agent-trace-kind-icon')).not.toBeNull()
     expect(screen.getAllByText('workspace.chat.traceLlmDone')).toHaveLength(1)
+
+    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+    expect(runToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(container.querySelector('[data-timeline-kind="tool"]')).toBeNull()
+    fireEvent.click(runToggle)
+
+    const kinds = [...container.querySelectorAll('[data-timeline-kind]')].map(
+      (element) => element.getAttribute('data-timeline-kind')
+    )
+    expect(kinds).toEqual(['reasoning', 'message', 'tool', 'message'])
+    expect(container.querySelector('[data-timeline-kind="tool"] .agent-trace-kind-icon')).not.toBeNull()
     expect(screen.getByText('workspace.chat.deepThinking')).toBeInTheDocument()
     expect(screen.queryByText('Inspect sources')).not.toBeInTheDocument()
     const reasoningToggle = screen.getByRole('button', { name: 'workspace.chat.reasoningExpand' })
@@ -1561,7 +1636,6 @@ describe('ChatMessages presentation', () => {
     expect(screen.getByText('workspace.chat.toolSearchLibraryDone')).toBeInTheDocument()
     expect(screen.getByText('Final answer')).toBeInTheDocument()
 
-    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
     fireEvent.click(runToggle)
     expect(screen.queryByText('workspace.chat.deepThinking')).not.toBeInTheDocument()
     expect(screen.queryByText('Checking sources.')).not.toBeInTheDocument()
@@ -1691,6 +1765,11 @@ describe('ChatMessages presentation', () => {
     ]
 
     const { container } = renderMessages({ messages, traceSteps, streaming: false })
+    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+
+    expect(runToggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(runToggle)
+
     const timeline = container.querySelector('.chat-agent-timeline')
     const timelineText = timeline?.textContent ?? ''
 
@@ -1705,7 +1784,6 @@ describe('ChatMessages presentation', () => {
       timelineText.indexOf('Retrying publication.')
     )
 
-    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
     fireEvent.click(runToggle)
     expect(screen.queryByText('Paper loaded.')).not.toBeInTheDocument()
     expect(screen.getByText('Final answer')).toBeInTheDocument()
