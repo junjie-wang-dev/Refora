@@ -617,6 +617,10 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
             "UV_CACHE_DIR": os.path.join(path, "cache", "uv"),
             "UV_PYTHON_INSTALL_DIR": os.path.join(path, "runtime", "python"),
             "HF_HOME": os.path.join(path, "models", "huggingface"),
+            "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+            "HF_HUB_DISABLE_XET": "1",
+            "HF_HUB_DOWNLOAD_TIMEOUT": "60",
+            "HF_HUB_ETAG_TIMEOUT": "30",
             "MODELSCOPE_CACHE": os.path.join(path, "models", "modelscope"),
             "MINERU_TOOLS_CONFIG_JSON": os.path.join(path, "mineru.json"),
         }

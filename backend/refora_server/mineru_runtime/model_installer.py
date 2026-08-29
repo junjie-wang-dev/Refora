@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_WORKERS = 4
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -35,6 +39,31 @@ def _verify_repository(root: Path, repository: dict[str, Any]) -> None:
             raise RuntimeError(f"Model file failed verification: {relative}")
 
 
+def _download_repository(
+    repository: dict[str, Any],
+    snapshot_download: Callable[..., str],
+) -> Path:
+    last_error: Exception | None = None
+    for _attempt in range(_DOWNLOAD_ATTEMPTS):
+        try:
+            root = Path(
+                snapshot_download(
+                    repository["repoId"],
+                    revision=repository["revision"],
+                    allow_patterns=repository["allowPatterns"],
+                    max_workers=_DOWNLOAD_WORKERS,
+                )
+            ).resolve()
+            _verify_repository(root, repository)
+            return root
+        except Exception as error:
+            last_error = error
+    raise RuntimeError(
+        f"Model snapshot {repository['repoId']} failed after "
+        f"{_DOWNLOAD_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
+
+
 def install_models(
     manifest_path: Path,
     config_path: Path,
@@ -49,14 +78,7 @@ def install_models(
         snapshot_download = huggingface_snapshot_download
     roots: dict[str, str] = {}
     for repository in manifest["repositories"]:
-        root = Path(
-            snapshot_download(
-                repository["repoId"],
-                revision=repository["revision"],
-                allow_patterns=repository["allowPatterns"],
-            )
-        ).resolve()
-        _verify_repository(root, repository)
+        root = _download_repository(repository, snapshot_download)
         roots[repository["kind"]] = str(root)
     if set(roots) != {"pipeline", "vlm"}:
         raise RuntimeError("MinerU model manifest is incomplete")

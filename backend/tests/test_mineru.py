@@ -637,6 +637,10 @@ async def test_get_runtime_returns_environment_after_install(manager):
     runtime = await mgr["getRuntime"]()
     assert runtime.modelRevision == f"sha256:{mineru_mod._resource_sha256('model-manifest.json')}"
     assert runtime.environment["MINERU_MODEL_SOURCE"] == "local"
+    assert runtime.environment["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+    assert runtime.environment["HF_HUB_DISABLE_XET"] == "1"
+    assert runtime.environment["HF_HUB_DOWNLOAD_TIMEOUT"] == "60"
+    assert runtime.environment["HF_HUB_ETAG_TIMEOUT"] == "30"
     assert "HF_HOME" in runtime.environment
 
 
