@@ -685,90 +685,96 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
                 <StructuredDocumentPanel />
                 {chatPane}
               </div>
-            ) : workspaceFullscreen ? (
-              <div className="relative z-40 flex h-full min-h-0 w-full min-w-0 overflow-hidden">
-                <div className="min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="app-workspace-panel">
-                  <WorkspacePanel />
-                </div>
-                {chatPane}
-              </div>
             ) : (
-              <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+              <div
+                className={clsx(
+                  'flex h-full min-h-0 min-w-0 overflow-hidden',
+                  workspaceFullscreen && 'relative z-40 w-full'
+                )}
+              >
                 <div
                   className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
                   data-testid="app-primary-panels"
                 >
-                  {documentListOpen && (
-                    <div
-                      ref={documentListPanelRef}
-                      className={clsx(
-                        'relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden',
-                        workspacePanelOpen && documentListLayoutCompact ? 'shrink-0' : 'flex-1'
+                  {!workspaceFullscreen && (
+                    <>
+                      {documentListOpen && (
+                        <div
+                          ref={documentListPanelRef}
+                          className={clsx(
+                            'relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden',
+                            workspacePanelOpen && documentListLayoutCompact ? 'shrink-0' : 'flex-1'
+                          )}
+                          style={
+                            workspacePanelOpen && documentListLayoutCompact
+                              ? { width: `${documentListCompactWidth}px`, minWidth: DOC_LIST_COMPACT_MIN }
+                              : { minWidth: DOC_LIST_MIN }
+                          }
+                          data-testid="app-document-list-panel"
+                        >
+                          <DocumentList
+                            compact={workspacePanelOpen && documentListCompact}
+                            onDocumentFocus={() => setRightPanelOpen(true)}
+                            onClose={workspacePanelOpen && documentListCompact
+                              ? () => setDocumentListOpen(false)
+                              : undefined}
+                          />
+                        </div>
                       )}
-                      style={
-                        workspacePanelOpen && documentListLayoutCompact
-                          ? { width: `${documentListCompactWidth}px`, minWidth: DOC_LIST_COMPACT_MIN }
-                          : { minWidth: DOC_LIST_MIN }
-                      }
-                      data-testid="app-document-list-panel"
-                    >
-                      <DocumentList
-                        compact={workspacePanelOpen && documentListCompact}
-                        onDocumentFocus={() => setRightPanelOpen(true)}
-                        onClose={workspacePanelOpen && documentListCompact
-                          ? () => setDocumentListOpen(false)
-                          : undefined}
-                      />
-                    </div>
-                  )}
-                  {documentListOpen && (rightPanelOpen || (workspacePanelOpen && documentListLayoutCompact)) && (
-                    <ResizeDivider
-                      onResize={
-                        workspacePanelOpen && documentListLayoutCompact
-                          ? handleDocumentWorkspaceResize
-                          : handleDetailResize
-                      }
-                      onResizeStart={
-                        workspacePanelOpen && documentListLayoutCompact
-                          ? handleDocumentWorkspaceResizeStart
-                          : handleDetailResizeStart
-                      }
-                      onResizeEnd={
-                        workspacePanelOpen && documentListLayoutCompact
-                          ? handleDocumentWorkspaceResizeEnd
-                          : handleDetailResizeEnd
-                      }
-                      variant="line"
-                    />
-                  )}
-                  <div
-                    ref={detailPanelRef}
-                    className={clsx(
-                      'relative z-20 min-w-0 overflow-hidden',
-                      !rightPanelOpen && 'w-0'
-                    )}
-                    style={rightPanelOpen ? { width: `${detailWidth}px`, minWidth: 0 } : { width: 0 }}
-                  >
-                    <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden">
-                      <DetailPanel onClose={() => setRightPanelOpen(false)} />
-                    </div>
-                  </div>
-                  {workspacePanelOpen && !documentListLayoutCompact && (
-                    <ResizeDivider
-                      onResize={handleDocumentWorkspaceResize}
-                      onResizeStart={handleDocumentWorkspaceResizeStart}
-                      onResizeEnd={handleDocumentWorkspaceResizeEnd}
-                      variant="soft"
-                    />
+                      {documentListOpen && (rightPanelOpen || (workspacePanelOpen && documentListLayoutCompact)) && (
+                        <ResizeDivider
+                          onResize={
+                            workspacePanelOpen && documentListLayoutCompact
+                              ? handleDocumentWorkspaceResize
+                              : handleDetailResize
+                          }
+                          onResizeStart={
+                            workspacePanelOpen && documentListLayoutCompact
+                              ? handleDocumentWorkspaceResizeStart
+                              : handleDetailResizeStart
+                          }
+                          onResizeEnd={
+                            workspacePanelOpen && documentListLayoutCompact
+                              ? handleDocumentWorkspaceResizeEnd
+                              : handleDetailResizeEnd
+                          }
+                          variant="line"
+                        />
+                      )}
+                      <div
+                        ref={detailPanelRef}
+                        className={clsx(
+                          'relative z-20 min-w-0 overflow-hidden',
+                          !rightPanelOpen && 'w-0'
+                        )}
+                        style={rightPanelOpen ? { width: `${detailWidth}px`, minWidth: 0 } : { width: 0 }}
+                      >
+                        <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden">
+                          <DetailPanel onClose={() => setRightPanelOpen(false)} />
+                        </div>
+                      </div>
+                      {workspacePanelOpen && !documentListLayoutCompact && (
+                        <ResizeDivider
+                          onResize={handleDocumentWorkspaceResize}
+                          onResizeStart={handleDocumentWorkspaceResizeStart}
+                          onResizeEnd={handleDocumentWorkspaceResizeEnd}
+                          variant="soft"
+                        />
+                      )}
+                    </>
                   )}
                   {workspacePanelOpen && (
                     <div
                       ref={workspacePanelRef}
-                      style={documentListLayoutCompact ? undefined : { width: `${workspaceWidth}px` }}
+                      style={
+                        workspaceFullscreen || documentListLayoutCompact
+                          ? undefined
+                          : { width: `${workspaceWidth}px` }
+                      }
                       className={clsx(
                         'relative z-20 min-h-0 min-w-0 overflow-hidden',
-                        workspaceNeedsLeadingBorder && 'border-l border-border/50',
-                        documentListLayoutCompact ? 'flex-1' : 'shrink-0'
+                        !workspaceFullscreen && workspaceNeedsLeadingBorder && 'border-l border-border/50',
+                        workspaceFullscreen || documentListLayoutCompact ? 'flex-1' : 'shrink-0'
                       )}
                       data-testid="app-workspace-panel"
                     >

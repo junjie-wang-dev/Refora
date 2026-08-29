@@ -900,6 +900,23 @@ describe('App root layout', () => {
     expect(within(panelLayer).queryByTestId('document-list')).not.toBeInTheDocument()
   })
 
+  it('keeps the workspace reader mounted while toggling fullscreen', () => {
+    const view = render(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+    const workspacePanel = screen.getByTestId('workspace-panel')
+
+    mocks.workspaceState.fullscreen = true
+    view.rerender(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    expect(screen.getByTestId('workspace-panel')).toBe(workspacePanel)
+    expect(screen.queryByTestId('document-list')).not.toBeInTheDocument()
+
+    mocks.workspaceState.fullscreen = false
+    view.rerender(<App listColumnState={null} sidebarCollapsed={false} firstRun={false} />)
+
+    expect(screen.getByTestId('workspace-panel')).toBe(workspacePanel)
+    expect(screen.getByTestId('document-list')).toBeInTheDocument()
+  })
+
   it('places the collapsed sidebar toolbar inside the root top bar', () => {
     render(<App listColumnState={null} sidebarCollapsed firstRun={false} />)
 
