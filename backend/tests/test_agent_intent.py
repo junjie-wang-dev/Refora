@@ -27,6 +27,7 @@ def test_workspace_prompt_routes_structured_reports_directly_to_the_board():
     assert "call list_workspace_context" in WORKSPACE_SYSTEM_PROMPT
     assert "do not infer the complete workspace from the paper catalog" in WORKSPACE_SYSTEM_PROMPT
     assert "read_workspace_item" in WORKSPACE_SYSTEM_PROMPT
+    assert "call update_report" in WORKSPACE_SYSTEM_PROMPT
 
 
 def test_checkpoint_continuation_sends_only_the_new_user_message():

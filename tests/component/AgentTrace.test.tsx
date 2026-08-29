@@ -116,6 +116,21 @@ describe('AgentTracePanel', () => {
     expect(screen.getByText('Published artifacts')).toBeInTheDocument()
   })
 
+  it('labels report updates with the edited report', () => {
+    render(<AgentTracePanel steps={[
+      step({
+        id: 'update-report',
+        kind: 'tool',
+        name: 'update_report',
+        input: JSON.stringify({ reportId: 'report-1', contentMd: 'Revised' })
+      })
+    ]} streaming={false} />)
+    fireEvent.click(headerButton())
+
+    expect(screen.getByText('Updated report')).toBeInTheDocument()
+    expect(screen.getByText('report-1')).toBeInTheDocument()
+  })
+
   it('normalizes Codex CLI tool names to the shared API labels', () => {
     const steps = [
       step({ id: 'search', kind: 'tool', name: 'refora.search_documents', input: JSON.stringify({ query: 'agents', scope: 'workspace' }) }),

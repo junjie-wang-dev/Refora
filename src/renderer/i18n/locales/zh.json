@@ -966,6 +966,8 @@
       "toolOpenPaperDone": "已打开论文",
       "toolGenerateReport": "正在生成报告…",
       "toolGenerateReportDone": "已生成报告",
+      "toolUpdateReport": "正在修改报告…",
+      "toolUpdateReportDone": "已修改报告",
       "toolAddDocs": "正在添加到工作空间…",
       "toolAddDocsDone": "已添加到工作空间",
       "toolCreateConnections": "正在连接工作空间卡片…",

@@ -70,7 +70,8 @@ def _handle(config: dict[str, Any], message: dict[str, Any]) -> dict[str, Any] |
                     "For questions about the selected workspace's current cards, counts, or "
                     "contents, call list_workspace_context before answering. Use "
                     "read_workspace_item with a returned itemId for report, note, document, "
-                    "or asset contents. Do not infer "
+                    "or asset contents. To edit a report, read it first, then call "
+                    "update_report with its reportId. Do not infer "
                     "the complete workspace from the paper catalog alone."
                 ),
             },

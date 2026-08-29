@@ -71,6 +71,7 @@ def test_plan_mode_allows_read_tools():
     "tool_name",
     [
         "generate_report",
+        "update_report",
         "add_docs_to_workspace",
         "create_workspace_connections",
     ],
@@ -160,6 +161,7 @@ def test_classify_refora_tools():
         "write_file": RiskClass.WRITE_LOCAL,
         "edit_file": RiskClass.WRITE_LOCAL,
         "generate_report": RiskClass.WRITE_LOCAL,
+        "update_report": RiskClass.WRITE_LOCAL,
         "add_docs_to_workspace": RiskClass.WRITE_LOCAL,
         "create_workspace_connections": RiskClass.WRITE_LOCAL,
         "prepare_paper_ocr": RiskClass.EXTERNAL,

@@ -289,6 +289,30 @@ def generate_report(executor: Any, args: dict[str, Any]) -> Any:
     }
 
 
+def update_report(executor: Any, args: dict[str, Any]) -> Any:
+    ws = workspace(executor)
+    reports = repo(executor.repos, "aiReports")
+    current = call(reports, "get", args["reportId"])
+    if current is None or current.get("workspaceId") != ws:
+        raise ValueError("Report is not available in the current workspace")
+    patch = {
+        key: args[key]
+        for key in ("title", "contentMd")
+        if key in args
+    }
+    if not patch:
+        raise ValueError("At least one report field is required")
+    updated = call(reports, "update", current["id"], patch)
+    if callable(value(executor.deps, "workspace_changed")):
+        call(executor.deps, "workspace_changed", ws, "other")
+    return {
+        "updated": True,
+        "reportId": updated["id"],
+        "title": updated["title"],
+        "workspaceId": ws,
+    }
+
+
 _CONNECTION_ITEM_SCHEMA = object_schema(
     {
         "sourceItemId": {"type": "string", "minLength": 1},
@@ -299,6 +323,19 @@ _CONNECTION_ITEM_SCHEMA = object_schema(
     ["sourceItemId", "targetItemId"],
 )
 
+_UPDATE_REPORT_SCHEMA = object_schema(
+    {
+        "reportId": _TEXT,
+        "title": _TEXT,
+        "contentMd": _TEXT,
+    },
+    ["reportId"],
+)
+_UPDATE_REPORT_SCHEMA["anyOf"] = [
+    {"required": ["title"]},
+    {"required": ["contentMd"]},
+]
+
 
 class WorkspaceTools(ToolGroup):
     name = "workspace"
@@ -308,6 +345,7 @@ class WorkspaceTools(ToolGroup):
         "add_docs_to_workspace": add_docs_to_workspace,
         "create_workspace_connections": create_workspace_connections,
         "generate_report": generate_report,
+        "update_report": update_report,
     }
     descriptions = {
         "list_workspace_context": "List the current workspace cards and connections. Returns itemIds for documents, reports, notes, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
@@ -315,6 +353,7 @@ class WorkspaceTools(ToolGroup):
         "add_docs_to_workspace": "Add documents from the library to the current workspace board. Pass docIds as a comma-separated list or JSON array string. Returns JSON with added, alreadyInWorkspace, and missing arrays.",
         "create_workspace_connections": "Create directed connections between cards in the current workspace. Call list_workspace_context first and use only itemIds returned by it. Invalid, duplicate, and self connections are reported without creating them.",
         "generate_report": "Create and pin a structured report to the workspace board. Use this when the user asks for a report, survey, or comparison. sourceDocIds accepts a comma-separated list or a JSON array string of docIds.",
+        "update_report": "Update the title or Markdown content of an existing report in the current workspace. Use a reportId returned by list_workspace_context or generate_report. Read the report with read_workspace_item before changing content that must be preserved.",
     }
     schemas = {
         "list_workspace_context": object_schema({}),
@@ -322,4 +361,5 @@ class WorkspaceTools(ToolGroup):
         "add_docs_to_workspace": object_schema({"docIds": _TEXT}, ["docIds"]),
         "create_workspace_connections": object_schema({"connections": {"type": "array", "minItems": 1, "maxItems": 20, "items": _CONNECTION_ITEM_SCHEMA}}, ["connections"]),
         "generate_report": object_schema({"title": _TEXT, "contentMd": _TEXT, "sourceDocIds": {"type": "string", "description": "Comma-separated list or JSON array string of docIds"}}, ["title", "contentMd", "sourceDocIds"]),
+        "update_report": _UPDATE_REPORT_SCHEMA,
     }
