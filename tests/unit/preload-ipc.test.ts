@@ -103,6 +103,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.SettingsSet, args: ['language', 'zh'], invoke: (value) => value.settings.set('language', 'zh') },
       { channel: IpcChannel.SyncStatus, args: [], invoke: (value) => value.sync.status() },
       { channel: IpcChannel.SyncSignIn, args: [{ email: 'user@example.com', password: 'secret' }], invoke: (value) => value.sync.signIn({ email: 'user@example.com', password: 'secret' }) },
+      { channel: IpcChannel.SyncSignInWithOAuth, args: [{ provider: 'google' }], invoke: (value) => value.sync.signInWithOAuth({ provider: 'google' }) },
       { channel: IpcChannel.SyncSignUp, args: [{ email: 'user@example.com', password: 'secret' }], invoke: (value) => value.sync.signUp({ email: 'user@example.com', password: 'secret' }) },
       { channel: IpcChannel.SyncResendConfirmation, args: [{ email: 'user@example.com' }], invoke: (value) => value.sync.resendConfirmation({ email: 'user@example.com' }) },
       { channel: IpcChannel.SyncSignOut, args: [], invoke: (value) => value.sync.signOut() },

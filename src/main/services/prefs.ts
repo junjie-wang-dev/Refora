@@ -9,6 +9,9 @@ interface UserPrefs {
   pendingAuthConfirmation?: {
     nonce: string
     createdAt: number
+    flow?: 'email_confirmation' | 'oauth'
+    provider?: 'google' | 'apple'
+    codeVerifier?: string
   } | null
 }
 
@@ -28,6 +31,9 @@ function normalizePrefs(value: unknown): UserPrefs {
       || !pending.nonce
       || typeof pending.createdAt !== 'number'
       || !Number.isFinite(pending.createdAt)
+      || (pending.flow !== undefined && pending.flow !== 'email_confirmation' && pending.flow !== 'oauth')
+      || (pending.provider !== undefined && pending.provider !== 'google' && pending.provider !== 'apple')
+      || (pending.codeVerifier !== undefined && typeof pending.codeVerifier !== 'string')
     ) {
       delete prefs.pendingAuthConfirmation
     }
@@ -79,6 +85,9 @@ export function writeLibraryFolderPath(userDataDir: string, folder: string): voi
 export function readPendingAuthConfirmation(userDataDir: string): {
   nonce: string
   createdAt: number
+  flow?: 'email_confirmation' | 'oauth'
+  provider?: 'google' | 'apple'
+  codeVerifier?: string
 } | null {
   const pending = readPrefs(userDataDir).pendingAuthConfirmation
   if (
@@ -87,13 +96,22 @@ export function readPendingAuthConfirmation(userDataDir: string): {
     || !pending.nonce
     || typeof pending.createdAt !== 'number'
     || !Number.isFinite(pending.createdAt)
+    || (pending.flow !== undefined && pending.flow !== 'email_confirmation' && pending.flow !== 'oauth')
+    || (pending.provider !== undefined && pending.provider !== 'google' && pending.provider !== 'apple')
+    || (pending.codeVerifier !== undefined && typeof pending.codeVerifier !== 'string')
   ) return null
   return pending
 }
 
 export function writePendingAuthConfirmation(
   userDataDir: string,
-  pending: { nonce: string; createdAt: number } | null
+  pending: {
+    nonce: string
+    createdAt: number
+    flow?: 'email_confirmation' | 'oauth'
+    provider?: 'google' | 'apple'
+    codeVerifier?: string
+  } | null
 ): void {
   updatePrefs(userDataDir, { pendingAuthConfirmation: pending })
 }

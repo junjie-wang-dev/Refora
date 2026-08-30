@@ -44,6 +44,12 @@ export interface SyncCredentials {
   password: string
 }
 
+export type SyncOAuthProvider = 'google' | 'apple'
+
+export interface SyncOAuthRequest {
+  provider: SyncOAuthProvider
+}
+
 export interface SyncEmailRequest {
   email: string
 }
@@ -56,4 +62,6 @@ export interface SyncSignUpResult {
 export interface SyncAuthConfirmation {
   status: 'confirmed' | 'error'
   message: string | null
+  flow?: 'email_confirmation' | 'oauth'
+  provider?: SyncOAuthProvider
 }

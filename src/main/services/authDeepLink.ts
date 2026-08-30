@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { SyncAuthConfirmation } from '../../shared/sync-types'
+import type { SyncAuthConfirmation, SyncOAuthProvider } from '../../shared/sync-types'
 
 export const AUTH_CONFIRMATION_REDIRECT_URL = 'refora://auth/confirmed'
 export const AUTH_CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000
@@ -7,12 +7,32 @@ export const AUTH_CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000
 export interface PendingAuthConfirmation {
   nonce: string
   createdAt: number
+  flow?: 'email_confirmation' | 'oauth'
+  provider?: SyncOAuthProvider
+  codeVerifier?: string
 }
 
 export interface AuthConfirmationRedirect {
   url: string
   clear(): void
   rollback(): void
+}
+
+export interface AuthConfirmationIssue {
+  flow: 'oauth'
+  provider: SyncOAuthProvider
+  codeVerifier: string
+}
+
+export interface SyncOAuthCallback {
+  provider: SyncOAuthProvider
+  code: string
+  codeVerifier: string
+}
+
+export interface AuthDeepLinkResult {
+  confirmation: SyncAuthConfirmation
+  oauth: SyncOAuthCallback | null
 }
 
 interface AuthConfirmationGuardDeps {
@@ -73,9 +93,13 @@ export function createAuthConfirmationGuard(deps: AuthConfirmationGuardDeps) {
     if (deps.readPending()?.nonce === nonce) deps.writePending(replacement)
   }
 
-  function issue(): AuthConfirmationRedirect {
+  function issue(options?: AuthConfirmationIssue): AuthConfirmationRedirect {
     const previous = deps.readPending()
-    const pending = { nonce: createNonce(), createdAt: now() }
+    const pending: PendingAuthConfirmation = {
+      nonce: createNonce(),
+      createdAt: now(),
+      ...(options ?? {})
+    }
     deps.writePending(pending)
     const url = new URL(AUTH_CONFIRMATION_REDIRECT_URL)
     url.searchParams.set('nonce', pending.nonce)
@@ -86,7 +110,7 @@ export function createAuthConfirmationGuard(deps: AuthConfirmationGuardDeps) {
     }
   }
 
-  function consume(value: string): SyncAuthConfirmation | null {
+  function consume(value: string): AuthDeepLinkResult | null {
     const pending = deps.readPending()
     if (!pending) return null
     const age = now() - pending.createdAt
@@ -97,7 +121,42 @@ export function createAuthConfirmationGuard(deps: AuthConfirmationGuardDeps) {
     const confirmation = parseAuthConfirmationDeepLink(value, pending.nonce)
     if (!confirmation) return null
     deps.writePending(null)
-    return confirmation
+    if (pending.flow !== 'oauth') return { confirmation, oauth: null }
+    const oauthConfirmation: SyncAuthConfirmation = {
+      ...confirmation,
+      flow: 'oauth',
+      provider: pending.provider
+    }
+    if (confirmation.status === 'error') {
+      return { confirmation: oauthConfirmation, oauth: null }
+    }
+    const params = callbackParams(new URL(value))
+    const code = params.get('code') ?? ''
+    if (
+      (pending.provider !== 'google' && pending.provider !== 'apple')
+      || !pending.codeVerifier
+      || pending.codeVerifier.length > 128
+      || !code
+      || code.length > 2048
+    ) {
+      return {
+        confirmation: {
+          status: 'error',
+          message: 'Supabase returned an invalid OAuth callback',
+          flow: 'oauth',
+          provider: pending.provider
+        },
+        oauth: null
+      }
+    }
+    return {
+      confirmation: oauthConfirmation,
+      oauth: {
+        provider: pending.provider,
+        code,
+        codeVerifier: pending.codeVerifier
+      }
+    }
   }
 
   return { issue, consume }

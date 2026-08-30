@@ -3,7 +3,8 @@ import type {
   SyncConflictResolutionRequest,
   SyncCredentials,
   SyncEmailRequest,
-  SyncEnabledRequest
+  SyncEnabledRequest,
+  SyncOAuthRequest
 } from '../../../shared/sync-types'
 import type { SyncAccountService } from '../../services/syncAccount'
 import { resultify as forward } from './result'
@@ -13,6 +14,8 @@ export function createSyncHandlers(service: SyncAccountService) {
     [IpcChannel.SyncStatus]: () => forward(() => service.status()),
     [IpcChannel.SyncSignIn]: (credentials: SyncCredentials) =>
       forward(() => service.signIn(credentials)),
+    [IpcChannel.SyncSignInWithOAuth]: (request: SyncOAuthRequest) =>
+      forward(() => service.signInWithOAuth(request)),
     [IpcChannel.SyncSignUp]: (credentials: SyncCredentials) =>
       forward(() => service.signUp(credentials)),
     [IpcChannel.SyncResendConfirmation]: (request: SyncEmailRequest) =>

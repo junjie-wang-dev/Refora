@@ -51,6 +51,7 @@ export const IpcChannel = {
 
   SyncStatus: 'sync:status',
   SyncSignIn: 'sync:signIn',
+  SyncSignInWithOAuth: 'sync:signInWithOAuth',
   SyncSignUp: 'sync:signUp',
   SyncResendConfirmation: 'sync:resendConfirmation',
   SyncSignOut: 'sync:signOut',

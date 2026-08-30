@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createSupabaseAuthClient } from '../../src/main/services/supabaseAuth'
+import type { AuthConfirmationIssue } from '../../src/main/services/authDeepLink'
 
 const sessionPayload = {
   access_token: 'access-token',
@@ -58,6 +60,58 @@ describe('Supabase auth client', () => {
     expect(fetch).toHaveBeenCalledWith(
       'https://project.supabase.co/auth/v1/signup?redirect_to=refora%3A%2F%2Fauth%2Fconfirmed%3Fnonce%3Dtest-nonce',
       expect.objectContaining({ method: 'POST' })
+    )
+  })
+
+  it('creates provider authorization URLs with a persisted PKCE verifier', () => {
+    const redirect = issueConfirmationRedirect()
+    const issued: AuthConfirmationIssue[] = []
+    const issueRedirect = (options?: AuthConfirmationIssue) => {
+      if (options) issued.push(options)
+      return redirect
+    }
+    const client = createSupabaseAuthClient({
+      url: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_key',
+      fetch: vi.fn(),
+      issueConfirmationRedirect: issueRedirect
+    })
+
+    const authorization = client.beginOAuth('google')
+    const issue = issued[0]
+    const url = new URL(authorization.url)
+
+    expect(issue).toMatchObject({ flow: 'oauth', provider: 'google' })
+    expect(issue?.codeVerifier).toHaveLength(43)
+    expect(url.origin).toBe('https://project.supabase.co')
+    expect(url.pathname).toBe('/auth/v1/authorize')
+    expect(url.searchParams.get('provider')).toBe('google')
+    expect(url.searchParams.get('redirect_to')).toBe(redirect.url)
+    expect(url.searchParams.get('code_challenge_method')).toBe('s256')
+    expect(url.searchParams.get('code_challenge')).toBe(
+      createHash('sha256').update(issue?.codeVerifier ?? '').digest('base64url')
+    )
+  })
+
+  it('exchanges an OAuth authorization code for a Supabase session', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(sessionPayload)))
+    const client = createSupabaseAuthClient({
+      url: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_key',
+      fetch,
+      issueConfirmationRedirect
+    })
+
+    await expect(client.exchangeOAuthCode('auth-code', 'code-verifier')).resolves.toMatchObject({
+      accessToken: 'access-token',
+      user: { id: 'user-1', email: 'reader@example.com' }
+    })
+    expect(fetch).toHaveBeenCalledWith(
+      'https://project.supabase.co/auth/v1/token?grant_type=pkce',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ auth_code: 'auth-code', code_verifier: 'code-verifier' })
+      })
     )
   })
 

@@ -20,6 +20,7 @@ import type {
   SyncCredentials,
   SyncEmailRequest,
   SyncEnabledRequest,
+  SyncOAuthRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from './sync-types'
@@ -968,6 +969,7 @@ export interface ReforaApi {
   sync: {
     status(): Promise<SyncServiceStatus>
     signIn(credentials: SyncCredentials): Promise<SyncServiceStatus>
+    signInWithOAuth(request: SyncOAuthRequest): Promise<void>
     signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
     resendConfirmation(request: SyncEmailRequest): Promise<void>
     signOut(): Promise<SyncServiceStatus>

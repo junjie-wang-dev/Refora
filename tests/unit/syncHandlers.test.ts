@@ -13,6 +13,7 @@ describe('sync IPC handlers', () => {
     const service = {
       status: vi.fn(() => status),
       signIn: vi.fn().mockResolvedValue(status),
+      signInWithOAuth: vi.fn().mockResolvedValue(undefined),
       signUp: vi.fn(),
       resendConfirmation: vi.fn().mockResolvedValue(undefined),
       signOut: vi.fn()
@@ -20,6 +21,10 @@ describe('sync IPC handlers', () => {
     const handlers = createSyncHandlers(service)
 
     await expect(handlers[IpcChannel.SyncStatus]()).resolves.toEqual({ ok: true, data: status })
+    await expect(handlers[IpcChannel.SyncSignInWithOAuth]({ provider: 'google' })).resolves.toEqual({
+      ok: true,
+      data: undefined
+    })
     await expect(handlers[IpcChannel.SyncResendConfirmation]({
       email: 'reader@example.com'
     })).resolves.toEqual({ ok: true, data: undefined })

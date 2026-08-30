@@ -107,6 +107,7 @@ export const createMockReforaApi = (): ReforaApi => ({
       signedIn: true,
       account: { id: 'user-1', email: 'user@example.com' },
     }),
+    signInWithOAuth: noop,
     signUp: async () => ({
       confirmationRequired: true,
       status: {

@@ -31,6 +31,18 @@ vi.mock('react-i18next', () => ({
         'account.authMode': 'Account action',
         'account.signIn': 'Sign in',
         'account.createAccount': 'Create account',
+        'account.continueWithGoogle': 'Continue with Google',
+        'account.continueWithApple': 'Continue with Apple',
+        'account.orContinueWithEmail': 'or continue with email',
+        'account.finishOAuthInBrowser': 'Finish signing in in your browser.',
+        'account.oauthFailed': 'External sign-in failed',
+        'account.google': 'Google',
+        'account.apple': 'Apple',
+        'account.oauthSuccessTitle': 'Signed in with Google',
+        'account.oauthSuccessDescription': 'Your account is connected.',
+        'account.oauthFailedTitle': 'Google sign-in failed',
+        'account.oauthFailedDescription': 'Try again.',
+        'account.continueToAccount': 'Continue to account',
         'account.email': 'Email',
         'account.emailPlaceholder': 'you@example.com',
         'account.password': 'Password',
@@ -639,6 +651,25 @@ describe('AiProvidersSection', () => {
     expect(api.sync.resendConfirmation).toHaveBeenCalledWith({ email: 'reader@example.com' })
   })
 
+  it('offers Google and Apple sign-in through the desktop OAuth bridge', async () => {
+    api.sync.status = vi.fn().mockResolvedValue({
+      configured: true,
+      signedIn: false,
+      account: null
+    })
+    api.sync.signInWithOAuth = vi.fn().mockResolvedValue(undefined)
+
+    render(<AccountModal open onClose={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: 'Continue with Google' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
+
+    await waitFor(() => expect(api.sync.signInWithOAuth).toHaveBeenCalledWith({ provider: 'google' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Finish signing in in your browser.')
+  })
+
   it('opens authentication from Account settings', async () => {
     const onOpenAccount = vi.fn()
     api.sync.status = vi.fn().mockResolvedValue({
@@ -692,6 +723,33 @@ describe('AiProvidersSection', () => {
     expect(screen.getByText('Email confirmed')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Continue to sign in' }))
     expect(await screen.findByText('Welcome back')).toBeInTheDocument()
+  })
+
+  it('refreshes the account after an OAuth callback completes', async () => {
+    const signedInStatus = {
+      configured: true,
+      signedIn: true,
+      account: { id: 'user-1', email: 'reader@example.com' }
+    }
+    api.sync.status = vi.fn().mockResolvedValue(signedInStatus)
+    useSyncAccountStore.setState({
+      status: { configured: true, signedIn: false, account: null },
+      loading: false,
+      loadFailed: false,
+      confirmation: {
+        status: 'confirmed',
+        message: null,
+        flow: 'oauth',
+        provider: 'google'
+      }
+    })
+
+    render(<AccountModal open onClose={vi.fn()} />)
+
+    expect(screen.getByText('Signed in with Google')).toBeInTheDocument()
+    await waitFor(() => expect(useSyncAccountStore.getState().status).toEqual(signedInStatus))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to account' }))
+    expect(await screen.findByText('account.signedInTitle')).toBeInTheDocument()
   })
 
   it('shows a confirmation result even when another account session is already loaded', async () => {

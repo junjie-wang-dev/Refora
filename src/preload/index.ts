@@ -90,6 +90,7 @@ import type {
   SyncCredentials,
   SyncEmailRequest,
   SyncEnabledRequest,
+  SyncOAuthRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from '../shared/sync-types'
@@ -242,6 +243,8 @@ const api: ReforaApi = {
     status: () => invoke<SyncServiceStatus>(IpcChannel.SyncStatus),
     signIn: (credentials: SyncCredentials) =>
       invoke<SyncServiceStatus>(IpcChannel.SyncSignIn, credentials),
+    signInWithOAuth: (request: SyncOAuthRequest) =>
+      invoke<void>(IpcChannel.SyncSignInWithOAuth, request),
     signUp: (credentials: SyncCredentials) =>
       invoke<SyncSignUpResult>(IpcChannel.SyncSignUp, credentials),
     resendConfirmation: (request: SyncEmailRequest) =>
