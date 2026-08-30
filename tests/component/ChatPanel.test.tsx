@@ -1643,6 +1643,54 @@ describe('ChatMessages presentation', () => {
     expect(screen.getByText('Final answer')).toBeInTheDocument()
   })
 
+  it('keeps a live progress message above the tool that follows it', () => {
+    const base = {
+      threadId: 't1',
+      runId: 'run-cli',
+      input: null,
+      startedAt: 1,
+      endedAt: 2,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      parentStepId: null,
+      agentName: null,
+      namespace: null,
+      depth: 0,
+      checkpointId: null
+    }
+    const traceSteps: AgentTraceStep[] = [
+      {
+        ...base, id: 'run', kind: 'run', name: 'agent', output: null,
+        status: 'running', endedAt: null, seq: 0
+      },
+      {
+        ...base, id: 'progress', kind: 'message', name: 'assistant_message',
+        output: 'I will inspect the paper first.', status: 'done', seq: 1
+      },
+      {
+        ...base, id: 'tool', kind: 'tool', name: 'search_documents',
+        input: '{"query":"paper","scope":"library"}', output: null,
+        status: 'running', startedAt: 2, endedAt: null, seq: 2
+      }
+    ]
+
+    const { container } = renderMessages({
+      traceSteps,
+      streaming: true,
+      streamingText: 'I will inspect the paper first.',
+      activeRunId: 'run-cli'
+    })
+
+    const kinds = [...container.querySelectorAll('[data-timeline-kind]')].map(
+      (element) => element.getAttribute('data-timeline-kind')
+    )
+    expect(kinds).toEqual(['message', 'tool'])
+    expect(container.querySelector('.chat-agent-timeline')).toHaveTextContent(
+      'I will inspect the paper first.'
+    )
+  })
+
   it('does not pair a failed run without an answer to the next assistant message', () => {
     const messages: ChatMessage[] = [
       { id: 'a1', threadId: 't1', role: 'assistant', content: 'Successful answer', createdAt: 20 }
