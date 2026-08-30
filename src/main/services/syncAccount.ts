@@ -4,18 +4,22 @@ import type {
   SyncConflictResolutionRequest,
   SyncEmailRequest,
   SyncEnabledRequest,
+  SyncOAuthRequest,
   SyncServiceStatus,
   SyncSignUpResult
 } from '../../shared/sync-types'
 import { MainProcessError } from './errors'
 import { logger } from './logger'
 import type { SupabaseAuthClient } from './supabaseAuth'
+import type { SyncOAuthCallback } from './authDeepLink'
 import type { SyncSessionStore } from './syncSessionStore'
 import type { MetadataSyncEngine } from './metadataSyncEngine'
 
 export interface SyncAccountService {
   status(): Promise<SyncServiceStatus>
   signIn(credentials: SyncCredentials): Promise<SyncServiceStatus>
+  signInWithOAuth(request: SyncOAuthRequest): Promise<void>
+  completeOAuth(callback: SyncOAuthCallback): Promise<SyncServiceStatus>
   signUp(credentials: SyncCredentials): Promise<SyncSignUpResult>
   resendConfirmation(request: SyncEmailRequest): Promise<void>
   signOut(): Promise<SyncServiceStatus>
@@ -31,6 +35,7 @@ export interface SyncAccountServiceDeps {
   auth: SupabaseAuthClient | null
   sessions: SyncSessionStore
   engine?: MetadataSyncEngine | null
+  openExternal?: (url: string) => Promise<void>
 }
 
 function normalizeEmail(value: unknown): string {
@@ -150,6 +155,42 @@ export function createSyncAccountService(deps: SyncAccountServiceDeps): SyncAcco
       const auth = requireAuth()
       const generation = ++sessionGeneration
       const session = await auth.signIn(credentials.email, credentials.password)
+      if (generation !== sessionGeneration) return currentStatus(deps.sessions.load())
+      deps.sessions.save(session)
+      return currentStatus(session)
+    },
+    async signInWithOAuth(input) {
+      if (!input || (input.provider !== 'google' && input.provider !== 'apple')) {
+        throw new MainProcessError('invalid_argument', 'Select a supported sign-in provider')
+      }
+      if (!deps.openExternal) {
+        throw new MainProcessError('sync_oauth_unavailable', 'External sign-in is unavailable')
+      }
+      const authorization = requireAuth().beginOAuth(input.provider)
+      try {
+        await deps.openExternal(authorization.url)
+      } catch (error) {
+        authorization.rollback()
+        throw new MainProcessError(
+          'sync_oauth_launch_failed',
+          error instanceof Error ? error.message : 'Unable to open the sign-in page'
+        )
+      }
+    },
+    async completeOAuth(callback) {
+      if (
+        !callback
+        || (callback.provider !== 'google' && callback.provider !== 'apple')
+        || !callback.code
+        || !callback.codeVerifier
+      ) {
+        throw new MainProcessError('invalid_argument', 'Supabase returned an invalid OAuth callback')
+      }
+      const generation = ++sessionGeneration
+      const session = await requireAuth().exchangeOAuthCode(
+        callback.code,
+        callback.codeVerifier
+      )
       if (generation !== sessionGeneration) return currentStatus(deps.sessions.load())
       deps.sessions.save(session)
       return currentStatus(session)

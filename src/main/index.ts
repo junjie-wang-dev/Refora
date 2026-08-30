@@ -35,6 +35,7 @@ import {
 import { createSyncRuntime } from './services/syncRuntime'
 import type { SyncAccountService } from './services/syncAccount'
 import { createAuthConfirmationGuard } from './services/authDeepLink'
+import type { SyncOAuthCallback } from './services/authDeepLink'
 import type { SyncAuthConfirmation } from '../shared/sync-types'
 import { createSyncHandlers } from './sidecar/ipc/sync'
 import { createLibrarySwitcher } from './services/librarySwitcher'
@@ -73,6 +74,8 @@ let activeDbPath = ''
 let activeLibraryFolder = ''
 let win: BrowserWindow | null = null
 let pendingAuthConfirmation: SyncAuthConfirmation | null = null
+let pendingOAuthCallback: SyncOAuthCallback | null = null
+let completingOAuth = false
 let syncHandlerChannels: string[] = []
 let syncTimer: ReturnType<typeof setInterval> | null = null
 let snapshotTimer: ReturnType<typeof setInterval> | null = null
@@ -270,12 +273,44 @@ function deliverAuthConfirmation(): void {
   target.focus()
 }
 
+async function completePendingOAuthCallback(): Promise<void> {
+  if (!pendingOAuthCallback || !syncAccountService || completingOAuth) return
+  completingOAuth = true
+  const callback = pendingOAuthCallback
+  pendingOAuthCallback = null
+  try {
+    await syncAccountService.completeOAuth(callback)
+    pendingAuthConfirmation = {
+      status: 'confirmed',
+      message: null,
+      flow: 'oauth',
+      provider: callback.provider
+    }
+  } catch (error) {
+    pendingAuthConfirmation = {
+      status: 'error',
+      message: (error instanceof Error ? error.message : 'OAuth sign-in failed').slice(0, 500),
+      flow: 'oauth',
+      provider: callback.provider
+    }
+  } finally {
+    completingOAuth = false
+  }
+  deliverAuthConfirmation()
+  if (pendingOAuthCallback) void completePendingOAuthCallback()
+}
+
 function handleAuthDeepLink(value: string): boolean {
   try {
-    const confirmation = authConfirmationGuard.consume(value)
-    if (!confirmation) return false
-    pendingAuthConfirmation = confirmation
-    deliverAuthConfirmation()
+    const result = authConfirmationGuard.consume(value)
+    if (!result) return false
+    if (result.oauth) {
+      pendingOAuthCallback = result.oauth
+      void completePendingOAuthCallback()
+    } else {
+      pendingAuthConfirmation = result.confirmation
+      deliverAuthConfirmation()
+    }
     return true
   } catch (error) {
     logger.error(`auth deep link rejected: ${error instanceof Error ? error.message : String(error)}`)
@@ -934,7 +969,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   syncAccountService = createSyncRuntime({
     userDataDir: app.getPath('userData'),
     fetch: (input, init) => net.fetch(input, init),
-    issueConfirmationRedirect: () => authConfirmationGuard.issue(),
+    issueConfirmationRedirect: (options) => authConfirmationGuard.issue(options),
+    openExternal: (url) => shell.openExternal(url),
     getLibrary: () => activeDbPath && activeLibraryFolder
       ? { dbPath: activeDbPath, libraryFolder: activeLibraryFolder }
       : null,
@@ -945,6 +981,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
       sendLibraryContentsChanged(win, activeDbPath, context.dbPath)
     }
   })
+  await completePendingOAuthCallback()
   registerSyncAccountHandlers(syncAccountService)
 
   if (isDev) {

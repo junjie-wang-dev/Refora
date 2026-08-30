@@ -39,9 +39,22 @@ The redirect scheme is present in packaged builds. For an end-to-end macOS callb
 
 The checked-in local Supabase configuration also enables email confirmation and allows `refora://auth/confirmed`, so local Auth responses follow the same confirmation-required branch as production. The custom scheme itself still requires a packaged app for a full macOS callback test.
 
+## Google and Apple sign-in
+
+Refora starts Google and Apple sign-in in the system browser using Supabase Auth's PKCE flow. The main process generates and retains the verifier, exchanges the returned authorization code, and stores the resulting Supabase session with macOS `safeStorage`; OAuth codes and tokens are never exposed to the renderer.
+
+Before testing either provider:
+
+1. Keep `refora://auth/confirmed` in Authentication → URL Configuration → Additional Redirect URLs.
+2. Enable Google or Apple under Authentication → Providers and add that provider's client ID and secret.
+3. In the Google Cloud console, register `https://PROJECT_REF.supabase.co/auth/v1/callback` as an authorized redirect URI.
+4. For Apple web OAuth, configure a Services ID and register `https://PROJECT_REF.supabase.co/auth/v1/callback` as its return URL. Apple client secrets must be rotated before their six-month expiry.
+
+The checked-in `supabase/config.toml` keeps both social providers disabled because their client IDs and secrets are deployment-specific. For local Supabase testing, enable the relevant block locally and supply its secret through the referenced environment variable; never commit provider secrets.
+
 ## Current implementation boundary
 
-This build implements Supabase account registration, email confirmation, sign-in, encrypted session storage, sign-out, and the local/cloud database foundations. The metadata synchronization engine is deliberately unavailable in the UI because remote-library discovery, entity adapters, outbox processing, pull application, and conflict recovery are not implemented yet.
+This build implements Supabase account registration, email confirmation, password sign-in, Google and Apple sign-in, encrypted session storage, sign-out, and the local/cloud database foundations.
 
 Signing in and signing up use Supabase Auth. Refora stores the encrypted account session locally, refreshes expiring access tokens, and does not create a cloud library, register a device, enqueue metadata, upload library content, or call a sync RPC. The per-library `sync_state.enabled` value defaults to `0`, so each SQLite library has an independent, opt-in consent boundary when the engine is implemented. Account IPC is independent from the Python sidecar, and the account window remains available in database recovery mode.
 

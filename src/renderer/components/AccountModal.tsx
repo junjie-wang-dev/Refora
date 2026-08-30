@@ -42,6 +42,12 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
   }, [loadAccount, open])
 
   useEffect(() => {
+    if (open && confirmation?.flow === 'oauth' && confirmation.status === 'confirmed') {
+      void loadAccount()
+    }
+  }, [confirmation, loadAccount, open])
+
+  useEffect(() => {
     if (!open || !status?.signedIn || !status.library?.conflictCount) {
       setConflicts([])
       return
@@ -140,6 +146,10 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
     )
   } else if (confirmation) {
     const confirmed = confirmation.status === 'confirmed'
+    const oauth = confirmation.flow === 'oauth'
+    const provider = confirmation.provider === 'apple'
+      ? t('account.apple')
+      : t('account.google')
     content = (
       <div className="flex flex-col items-center px-8 py-10 text-center">
         <span className={`mb-4 flex h-14 w-14 items-center justify-center rounded-full ${confirmed ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
@@ -148,15 +158,19 @@ export default function AccountModal({ open, onClose }: AccountModalProps) {
             : <WarningCircle className="h-7 w-7" />}
         </span>
         <h2 className="text-base font-semibold text-foreground">
-          {confirmed ? t('account.emailConfirmedTitle') : t('account.confirmationFailedTitle')}
+          {oauth
+            ? t(confirmed ? 'account.oauthSuccessTitle' : 'account.oauthFailedTitle', { provider })
+            : t(confirmed ? 'account.emailConfirmedTitle' : 'account.confirmationFailedTitle')}
         </h2>
         <p className="mt-2 max-w-sm text-xs leading-relaxed text-muted">
           {confirmed
-            ? t('account.emailConfirmedDescription')
-            : confirmation.message ?? t('account.confirmationFailedDescription')}
+            ? t(oauth ? 'account.oauthSuccessDescription' : 'account.emailConfirmedDescription')
+            : confirmation.message ?? t(oauth ? 'account.oauthFailedDescription' : 'account.confirmationFailedDescription')}
         </p>
         <Button variant="primary" className="mt-6" onClick={clearConfirmation}>
-          {confirmed ? t('account.continueToSignIn') : t('account.backToAccount')}
+          {oauth
+            ? t('account.continueToAccount')
+            : confirmed ? t('account.continueToSignIn') : t('account.backToAccount')}
         </Button>
       </div>
     )

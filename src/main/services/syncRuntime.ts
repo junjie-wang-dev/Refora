@@ -4,7 +4,7 @@ import { createSupabaseAuthClient } from './supabaseAuth'
 import { createSyncSessionStore } from './syncSessionStore'
 import { createSyncAccountService, type SyncAccountService } from './syncAccount'
 import { logger } from './logger'
-import type { AuthConfirmationRedirect } from './authDeepLink'
+import type { AuthConfirmationIssue, AuthConfirmationRedirect } from './authDeepLink'
 import { createSupabaseSyncClient } from './supabaseSync'
 import { SyncStateDatabase } from './syncStateDatabase'
 import { createMetadataSyncEngine, type ActiveLibraryContext } from './metadataSyncEngine'
@@ -17,7 +17,8 @@ export interface SyncRuntimeDeps {
   fetch: (input: string, init?: RequestInit) => Promise<Response>
   env?: NodeJS.ProcessEnv
   safeStorage?: SafeStorageProxy
-  issueConfirmationRedirect: () => AuthConfirmationRedirect
+  issueConfirmationRedirect: (options?: AuthConfirmationIssue) => AuthConfirmationRedirect
+  openExternal?: (url: string) => Promise<void>
   getLibrary?: () => ActiveLibraryContext | null
   createSnapshot?: (context: ActiveLibraryContext, baseSequence: number) => Promise<void>
   onRemoteApplied?: (context: ActiveLibraryContext) => void
@@ -61,6 +62,7 @@ export function createSyncRuntime({
   env = process.env,
   safeStorage = createSafeStorageProxy(),
   issueConfirmationRedirect,
+  openExternal,
   getLibrary,
   createSnapshot,
   onRemoteApplied
@@ -94,6 +96,7 @@ export function createSyncRuntime({
     configured,
     auth,
     sessions: createSyncSessionStore(userDataDir, safeStorage),
-    engine
+    engine,
+    openExternal
   })
 }

@@ -44,9 +44,48 @@ describe('auth confirmation deep link', () => {
     const redirect = guard.issue()
 
     expect(redirect.url).toBe('refora://auth/confirmed?nonce=signup-nonce')
-    expect(guard.consume(redirect.url)).toEqual({ status: 'confirmed', message: null })
+    expect(guard.consume(redirect.url)).toEqual({
+      confirmation: { status: 'confirmed', message: null },
+      oauth: null
+    })
     expect(pending).toBeNull()
     expect(guard.consume(redirect.url)).toBeNull()
+  })
+
+  it('returns a validated OAuth code with its single-use PKCE verifier', () => {
+    let pending: {
+      nonce: string
+      createdAt: number
+      flow?: 'email_confirmation' | 'oauth'
+      provider?: 'google' | 'apple'
+      codeVerifier?: string
+    } | null = null
+    const guard = createAuthConfirmationGuard({
+      readPending: () => pending,
+      writePending: (value) => { pending = value },
+      now: () => 10_000,
+      createNonce: () => 'oauth-nonce'
+    })
+    const redirect = guard.issue({
+      flow: 'oauth',
+      provider: 'apple',
+      codeVerifier: 'pkce-verifier'
+    })
+
+    expect(guard.consume(`${redirect.url}&code=auth-code`)).toEqual({
+      confirmation: {
+        status: 'confirmed',
+        message: null,
+        flow: 'oauth',
+        provider: 'apple'
+      },
+      oauth: {
+        provider: 'apple',
+        code: 'auth-code',
+        codeVerifier: 'pkce-verifier'
+      }
+    })
+    expect(pending).toBeNull()
   })
 
   it('rejects and clears an expired pending confirmation', () => {

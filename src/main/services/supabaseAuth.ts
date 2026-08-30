@@ -1,5 +1,7 @@
+import { createHash, randomBytes } from 'node:crypto'
 import { MainProcessError } from './errors'
-import type { AuthConfirmationRedirect } from './authDeepLink'
+import type { SyncOAuthProvider } from '../../shared/sync-types'
+import type { AuthConfirmationIssue, AuthConfirmationRedirect } from './authDeepLink'
 
 export interface SupabaseUser {
   id: string
@@ -18,8 +20,15 @@ export interface SupabaseSignUpResponse {
   user: SupabaseUser
 }
 
+export interface SupabaseOAuthAuthorization {
+  url: string
+  rollback(): void
+}
+
 export interface SupabaseAuthClient {
   signIn(email: string, password: string): Promise<SupabaseSession>
+  beginOAuth(provider: SyncOAuthProvider): SupabaseOAuthAuthorization
+  exchangeOAuthCode(code: string, codeVerifier: string): Promise<SupabaseSession>
   signUp(email: string, password: string): Promise<SupabaseSignUpResponse>
   resendConfirmation(email: string): Promise<void>
   refresh(refreshToken: string): Promise<SupabaseSession>
@@ -30,7 +39,7 @@ export interface SupabaseAuthClientDeps {
   url: string
   publishableKey: string
   fetch: (input: string, init?: RequestInit) => Promise<Response>
-  issueConfirmationRedirect: () => AuthConfirmationRedirect
+  issueConfirmationRedirect: (options?: AuthConfirmationIssue) => AuthConfirmationRedirect
   requestTimeoutMs?: number
 }
 
@@ -154,6 +163,31 @@ export function createSupabaseAuthClient({
   return {
     async signIn(email, password) {
       const payload = await request('/auth/v1/token?grant_type=password', { email, password })
+      return parseSession(payload as AuthPayload)
+    },
+    beginOAuth(provider) {
+      const codeVerifier = randomBytes(32).toString('base64url')
+      const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+      const redirect = issueConfirmationRedirect({
+        flow: 'oauth',
+        provider,
+        codeVerifier
+      })
+      const authorizationUrl = new URL(`${baseUrl}/auth/v1/authorize`)
+      authorizationUrl.searchParams.set('provider', provider)
+      authorizationUrl.searchParams.set('redirect_to', redirect.url)
+      authorizationUrl.searchParams.set('code_challenge', codeChallenge)
+      authorizationUrl.searchParams.set('code_challenge_method', 's256')
+      return {
+        url: authorizationUrl.toString(),
+        rollback: redirect.rollback
+      }
+    },
+    async exchangeOAuthCode(code, codeVerifier) {
+      const payload = await request('/auth/v1/token?grant_type=pkce', {
+        auth_code: code,
+        code_verifier: codeVerifier
+      })
       return parseSession(payload as AuthPayload)
     },
     async signUp(email, password) {

@@ -17,6 +17,8 @@ function setup(
   let stored = initialSession
   const auth = {
     signIn: vi.fn().mockResolvedValue(session),
+    beginOAuth: vi.fn(() => ({ url: 'https://project.supabase.co/auth/v1/authorize', rollback: vi.fn() })),
+    exchangeOAuthCode: vi.fn().mockResolvedValue(session),
     signUp: vi.fn().mockResolvedValue({ session: null, user: session.user }),
     resendConfirmation: vi.fn().mockResolvedValue(undefined),
     refresh: vi.fn().mockResolvedValue(session),
@@ -64,6 +66,8 @@ describe('sync account service', () => {
       configured: true,
       auth: {
         signIn: vi.fn().mockResolvedValue(session),
+        beginOAuth: vi.fn(),
+        exchangeOAuthCode: vi.fn(),
         signUp: vi.fn(),
         resendConfirmation: vi.fn(),
         refresh: vi.fn(),
@@ -206,6 +210,46 @@ describe('sync account service', () => {
       email: ' reader@example.com '
     })).resolves.toBeUndefined()
     expect(auth.resendConfirmation).toHaveBeenCalledWith('reader@example.com')
+  })
+
+  it('opens OAuth in the system browser and saves the exchanged session', async () => {
+    const openExternal = vi.fn().mockResolvedValue(undefined)
+    const { auth, sessions } = setup()
+    const oauthService = createSyncAccountService({
+      configured: true,
+      auth,
+      sessions,
+      openExternal
+    })
+
+    await expect(oauthService.signInWithOAuth({ provider: 'google' })).resolves.toBeUndefined()
+    expect(auth.beginOAuth).toHaveBeenCalledWith('google')
+    expect(openExternal).toHaveBeenCalledWith('https://project.supabase.co/auth/v1/authorize')
+
+    await expect(oauthService.completeOAuth({
+      provider: 'google',
+      code: 'auth-code',
+      codeVerifier: 'code-verifier'
+    })).resolves.toMatchObject({ signedIn: true, account: session.user })
+    expect(auth.exchangeOAuthCode).toHaveBeenCalledWith('auth-code', 'code-verifier')
+    expect(sessions.save).toHaveBeenCalledWith(session)
+  })
+
+  it('rolls back the pending OAuth callback when the browser cannot open', async () => {
+    const rollback = vi.fn()
+    const { service: _service, auth, sessions } = setup()
+    auth.beginOAuth.mockReturnValue({ url: 'https://project.supabase.co/auth/v1/authorize', rollback })
+    const service = createSyncAccountService({
+      configured: true,
+      auth,
+      sessions,
+      openExternal: vi.fn().mockRejectedValue(new Error('browser unavailable'))
+    })
+
+    await expect(service.signInWithOAuth({ provider: 'apple' })).rejects.toMatchObject({
+      code: 'sync_oauth_launch_failed'
+    })
+    expect(rollback).toHaveBeenCalledOnce()
   })
 
   it('clears the session when signing out', async () => {
