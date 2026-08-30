@@ -68,6 +68,48 @@ class NapiCanvasFactory {
   }
 }
 
+class NapiFilterFactory {
+  addFilter(): string {
+    return 'none'
+  }
+
+  addHCMFilter(): string {
+    return 'none'
+  }
+
+  addAlphaFilter(): string {
+    return 'none'
+  }
+
+  addLuminosityFilter(): string {
+    return 'none'
+  }
+
+  addKnockoutFilter(): string {
+    return 'none'
+  }
+
+  addHighlightHCMFilter(): string {
+    return 'none'
+  }
+
+  addSelectionHCMFilter(): string {
+    return 'none'
+  }
+
+  addSelectionFilter(): string {
+    return 'none'
+  }
+
+  createSelectionStyle(): null {
+    return null
+  }
+
+  destroy(): void {
+    void 0
+  }
+}
+
 interface WorkerRequest {
   correlationId: string
   filePath: string
@@ -147,6 +189,7 @@ export async function renderPdfPreview(
       range,
       rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
       CanvasFactory: NapiCanvasFactory,
+      FilterFactory: NapiFilterFactory,
       BinaryDataFactory: FileBinaryDataFactory,
       useWorkerFetch: false,
       useSystemFonts: false,
