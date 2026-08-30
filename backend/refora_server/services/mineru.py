@@ -36,7 +36,7 @@ _ARCHIVE_TIMEOUT_SECONDS = 2 * 60
 _PYTHON_INSTALL_TIMEOUT_SECONDS = 30 * 60
 _VENV_TIMEOUT_SECONDS = 5 * 60
 _PACKAGE_INSTALL_TIMEOUT_SECONDS = 60 * 60
-_MODEL_DOWNLOAD_TIMEOUT_SECONDS = 2 * 60 * 60
+_MODEL_DOWNLOAD_TIMEOUT_SECONDS = 12 * 60 * 60
 _HEALTH_CHECK_TIMEOUT_SECONDS = 60
 
 
@@ -53,6 +53,53 @@ def _resource_sha256(name: str) -> str:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _model_download_bytes(
+    hf_home: str,
+    manifest: dict[str, Any],
+) -> tuple[int, int]:
+    received = 0
+    total = 0
+    hub = Path(hf_home) / "hub"
+    for repository in manifest.get("repositories", []):
+        repo_id = repository.get("repoId")
+        revision = repository.get("revision")
+        files = repository.get("files")
+        if (
+            not isinstance(repo_id, str)
+            or not isinstance(revision, str)
+            or not isinstance(files, list)
+        ):
+            continue
+        cache = hub / f"models--{repo_id.replace('/', '--')}"
+        blobs = cache / "blobs"
+        snapshot = cache / "snapshots" / revision
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            relative = entry.get("path")
+            sha256 = entry.get("sha256")
+            size = entry.get("size")
+            if (
+                not isinstance(relative, str)
+                or not isinstance(sha256, str)
+                or not isinstance(size, int)
+            ):
+                continue
+            total += size
+            current = 0
+            for candidate in (
+                blobs / sha256,
+                blobs / f"{sha256}.incomplete",
+                snapshot / relative,
+            ):
+                try:
+                    current = max(current, candidate.stat().st_size)
+                except OSError:
+                    pass
+            received += min(current, size)
+    return received, total
 
 
 def now_ms() -> int:
@@ -437,6 +484,8 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
     runtime_lock_sha256 = _resource_sha256("uv.lock")
     model_manifest_path = _runtime_resource_path("model-manifest.json")
     model_manifest_sha256 = _resource_sha256("model-manifest.json")
+    with open(model_manifest_path, "r", encoding="utf-8") as fh:
+        model_manifest = json.load(fh)
     model_installer_path = _runtime_resource_path("model_installer.py")
     listeners: set[ProgressListener] = set()
     state: dict[str, Any] = {
@@ -468,6 +517,47 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
 
     def _manifest_path() -> str:
         return os.path.join(_install_path(), "installed-manifest.json")
+
+    def _runtime_ready_path(path: str) -> str:
+        return os.path.join(path, ".runtime-ready.json")
+
+    def _runtime_is_ready(path: str) -> bool:
+        try:
+            with open(_runtime_ready_path(path), "r", encoding="utf-8") as fh:
+                marker = json.load(fh)
+        except (OSError, ValueError):
+            return False
+        return bool(
+            isinstance(marker, dict)
+            and marker.get("formatVersion") == 1
+            and marker.get("version") == MINERU_VERSION
+            and marker.get("architecture") == architecture
+            and marker.get("runtimeLockSha256") == runtime_lock_sha256
+            and _is_executable(os.path.join(path, "runtime", "uv"))
+            and _is_executable(os.path.join(path, "runtime", "venv", "bin", "python"))
+        )
+
+    def _write_runtime_ready(path: str) -> None:
+        marker_path = _runtime_ready_path(path)
+        temporary = f"{marker_path}.tmp-{uuid.uuid4()}"
+        with open(temporary, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "formatVersion": 1,
+                    "version": MINERU_VERSION,
+                    "architecture": architecture,
+                    "runtimeLockSha256": runtime_lock_sha256,
+                },
+                fh,
+                indent=2,
+            )
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, marker_path)
 
     def _emit(
         install_id: str,
@@ -572,7 +662,7 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 installedAt=None,
                 diskBytes=None,
                 error=(
-                    "MinerU installation is incomplete or invalid"
+                    state["last_error"] or "MinerU installation is incomplete or invalid"
                     if path_exists
                     else state["last_error"]
                 ),
@@ -663,144 +753,217 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
             environment = _install_environment(path)
             archive = os.path.join(path, ".downloads", release["archive"])
             extracted = os.path.join(path, ".downloads", "uv-extracted")
+            uv_path = os.path.join(path, "runtime", "uv")
+            venv = os.path.join(path, "runtime", "venv")
+            venv_python = os.path.join(venv, "bin", "python")
             state["last_error"] = None
             try:
                 _emit(install_id, "preparing", "Preparing the MinerU installation", None)
                 _require_safe_managed_path(_read_install_root(), path)
-                if _path_exists(path):
+                resume_runtime = _runtime_is_ready(path)
+                if (
+                    not resume_runtime
+                    and _path_exists(path)
+                    and _is_executable(uv_path)
+                    and _is_executable(venv_python)
+                ):
+                    try:
+                        await _run_file(
+                            uv_path,
+                            ["pip", "check", "--python", venv_python],
+                            cwd=path,
+                            env=environment,
+                            cancel_event=cancel_event,
+                            on_child=_on_child,
+                            timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
+                        )
+                        output = await _run_file(
+                            venv_python,
+                            ["-c", "from mineru.version import __version__; print(__version__)"],
+                            cwd=path,
+                            env=environment,
+                            cancel_event=cancel_event,
+                            on_child=_on_child,
+                            timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
+                        )
+                        resume_runtime = MINERU_VERSION in output.split()
+                        if resume_runtime:
+                            _write_runtime_ready(path)
+                    except Exception:
+                        if cancel_event.is_set():
+                            raise
+                        resume_runtime = False
+                if _path_exists(path) and not resume_runtime:
                     await deps.trashItem(path)
                 safe_makedirs(os.path.join(path, ".downloads"))
                 safe_makedirs(os.path.join(path, "home"))
                 safe_makedirs(os.path.join(path, "models"))
                 safe_makedirs(os.path.join(path, "cache"))
-                _emit(
-                    install_id,
-                    "installingTools",
-                    "Downloading the verified uv runtime",
-                    0,
-                    currentArtifact=release["archive"],
-                )
-
-                def _on_download(received: int, total: int | None) -> None:
-                    ratio = (min(received / total, 1) if total else None)
+                if not resume_runtime:
                     _emit(
                         install_id,
                         "installingTools",
                         "Downloading the verified uv runtime",
-                        None if ratio is None else ratio * 100,
+                        0,
                         currentArtifact=release["archive"],
-                        bytesReceived=received,
-                        bytesTotal=total,
                     )
 
-                await deps.downloadFile(
-                    uv_download_url(release),
-                    archive,
-                    cancel_event,
-                    _on_download,
+                    def _on_download(received: int, total: int | None) -> None:
+                        ratio = min(received / total, 1) if total else None
+                        _emit(
+                            install_id,
+                            "installingTools",
+                            "Downloading the verified uv runtime",
+                            None if ratio is None else ratio * 100,
+                            currentArtifact=release["archive"],
+                            bytesReceived=received,
+                            bytesTotal=total,
+                        )
+
+                    await deps.downloadFile(
+                        uv_download_url(release),
+                        archive,
+                        cancel_event,
+                        _on_download,
+                    )
+                    if (await _sha256(archive)) != release["sha256"]:
+                        raise RuntimeError("Downloaded uv runtime failed checksum verification")
+                    safe_makedirs(extracted)
+                    await _run_file(
+                        "/usr/bin/tar",
+                        ["-xzf", archive, "--strip-components", "1", "-C", extracted],
+                        cwd=path,
+                        env={"PATH": "/usr/bin:/bin"},
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_ARCHIVE_TIMEOUT_SECONDS,
+                    )
+                    safe_makedirs(os.path.join(path, "runtime"))
+                    os.chmod(os.path.join(extracted, "uv"), 0o755)
+                    os.replace(os.path.join(extracted, "uv"), uv_path)
+                    _emit(
+                        install_id,
+                        "installingPython",
+                        f"Installing managed Python {MINERU_PYTHON_VERSION}",
+                        None,
+                        currentArtifact=f"Python {MINERU_PYTHON_VERSION}",
+                    )
+                    await _run_file(
+                        uv_path,
+                        [
+                            "python",
+                            "install",
+                            MINERU_PYTHON_VERSION,
+                            "--install-dir",
+                            os.path.join(path, "runtime", "python"),
+                        ],
+                        cwd=path,
+                        env=environment,
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_PYTHON_INSTALL_TIMEOUT_SECONDS,
+                    )
+                    python_bin = await _managed_python(os.path.join(path, "runtime", "python"))
+                    if not python_bin:
+                        raise RuntimeError("Managed Python installation did not produce an executable")
+                    await _run_file(
+                        uv_path,
+                        ["venv", "--python", python_bin, venv],
+                        cwd=path,
+                        env=environment,
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_VENV_TIMEOUT_SECONDS,
+                    )
+                    mineru_extra = "all" if architecture == "arm64" else "core"
+                    _emit(
+                        install_id,
+                        "installingMineru",
+                        f"Installing MinerU {MINERU_VERSION}",
+                        None,
+                        currentArtifact=f"mineru[{mineru_extra}]=={MINERU_VERSION}",
+                    )
+                    await _run_file(
+                        uv_path,
+                        [
+                            "sync",
+                            "--project",
+                            runtime_project_path,
+                            "--locked",
+                            "--no-dev",
+                            "--no-install-project",
+                            "--active",
+                            "--extra",
+                            architecture,
+                        ],
+                        cwd=path,
+                        env={
+                            **environment,
+                            "VIRTUAL_ENV": venv,
+                            "UV_PROJECT_ENVIRONMENT": venv,
+                        },
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+                    )
+                    await _run_file(
+                        uv_path,
+                        ["pip", "check", "--python", venv_python],
+                        cwd=path,
+                        env=environment,
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
+                    )
+                    _write_runtime_ready(path)
+
+                def _emit_model_progress(
+                    progress: tuple[int, int] | None = None,
+                ) -> tuple[int, int]:
+                    received, total = progress or _model_download_bytes(
+                        environment["HF_HOME"], model_manifest
+                    )
+                    _emit(
+                        install_id,
+                        "downloadingModels",
+                        "Downloading MinerU models",
+                        min(received / total, 1) * 100 if total else None,
+                        currentArtifact="MinerU models",
+                        bytesReceived=received,
+                        bytesTotal=total or None,
+                    )
+                    return received, total
+
+                async def _observe_model_progress(
+                    previous: tuple[int, int],
+                ) -> None:
+                    while True:
+                        await asyncio.sleep(1)
+                        current = _model_download_bytes(
+                            environment["HF_HOME"], model_manifest
+                        )
+                        if current != previous:
+                            _emit_model_progress(current)
+                            previous = current
+
+                initial_progress = _emit_model_progress()
+                progress_task = asyncio.ensure_future(
+                    _observe_model_progress(initial_progress)
                 )
-                if (await _sha256(archive)) != release["sha256"]:
-                    raise RuntimeError("Downloaded uv runtime failed checksum verification")
-                safe_makedirs(extracted)
-                await _run_file(
-                    "/usr/bin/tar",
-                    ["-xzf", archive, "--strip-components", "1", "-C", extracted],
-                    cwd=path,
-                    env={"PATH": "/usr/bin:/bin"},
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_ARCHIVE_TIMEOUT_SECONDS,
-                )
-                uv_path = os.path.join(path, "runtime", "uv")
-                safe_makedirs(os.path.join(path, "runtime"))
-                os.chmod(os.path.join(extracted, "uv"), 0o755)
-                os.replace(os.path.join(extracted, "uv"), uv_path)
-                _emit(
-                    install_id,
-                    "installingPython",
-                    f"Installing managed Python {MINERU_PYTHON_VERSION}",
-                    None,
-                    currentArtifact=f"Python {MINERU_PYTHON_VERSION}",
-                )
-                await _run_file(
-                    uv_path,
-                    ["python", "install", MINERU_PYTHON_VERSION, "--install-dir", os.path.join(path, "runtime", "python")],
-                    cwd=path,
-                    env=environment,
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_PYTHON_INSTALL_TIMEOUT_SECONDS,
-                )
-                python_bin = await _managed_python(os.path.join(path, "runtime", "python"))
-                if not python_bin:
-                    raise RuntimeError("Managed Python installation did not produce an executable")
-                venv = os.path.join(path, "runtime", "venv")
-                await _run_file(
-                    uv_path,
-                    ["venv", "--python", python_bin, venv],
-                    cwd=path,
-                    env=environment,
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_VENV_TIMEOUT_SECONDS,
-                )
-                venv_python = os.path.join(venv, "bin", "python")
-                mineru_extra = "all" if architecture == "arm64" else "core"
-                _emit(
-                    install_id,
-                    "installingMineru",
-                    f"Installing MinerU {MINERU_VERSION}",
-                    None,
-                    currentArtifact=f"mineru[{mineru_extra}]=={MINERU_VERSION}",
-                )
-                await _run_file(
-                    uv_path,
-                    [
-                        "sync",
-                        "--project",
-                        runtime_project_path,
-                        "--locked",
-                        "--no-dev",
-                        "--no-install-project",
-                        "--active",
-                        "--extra",
-                        architecture,
-                    ],
-                    cwd=path,
-                    env={
-                        **environment,
-                        "VIRTUAL_ENV": venv,
-                        "UV_PROJECT_ENVIRONMENT": venv,
-                    },
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_PACKAGE_INSTALL_TIMEOUT_SECONDS,
-                )
-                await _run_file(
-                    uv_path,
-                    ["pip", "check", "--python", venv_python],
-                    cwd=path,
-                    env=environment,
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_HEALTH_CHECK_TIMEOUT_SECONDS,
-                )
-                _emit(
-                    install_id,
-                    "downloadingModels",
-                    "Downloading MinerU models",
-                    None,
-                    currentArtifact="MinerU models",
-                )
-                await _run_file(
-                    venv_python,
-                    [model_installer_path, model_manifest_path, os.path.join(path, "mineru.json")],
-                    cwd=path,
-                    env=environment,
-                    cancel_event=cancel_event,
-                    on_child=_on_child,
-                    timeout_seconds=_MODEL_DOWNLOAD_TIMEOUT_SECONDS,
-                )
+                try:
+                    await _run_file(
+                        venv_python,
+                        [model_installer_path, model_manifest_path, os.path.join(path, "mineru.json")],
+                        cwd=path,
+                        env=environment,
+                        cancel_event=cancel_event,
+                        on_child=_on_child,
+                        timeout_seconds=_MODEL_DOWNLOAD_TIMEOUT_SECONDS,
+                    )
+                    _emit_model_progress()
+                finally:
+                    progress_task.cancel()
+                    await asyncio.gather(progress_task, return_exceptions=True)
                 _emit(install_id, "healthCheck", "Checking the MinerU runtime", None)
                 output = await _run_file(
                     venv_python,
@@ -846,7 +1009,8 @@ def create_mineru_engine_manager(deps: MineruEngineManagerDeps):
                 )
                 try:
                     _require_safe_managed_path(_read_install_root(), path)
-                    shutil.rmtree(path, ignore_errors=True)
+                    if cancel_event.is_set() or not _runtime_is_ready(path):
+                        shutil.rmtree(path, ignore_errors=True)
                 except Exception:
                     pass
                 raise

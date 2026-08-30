@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_ATTEMPTS = 8
 _DOWNLOAD_WORKERS = 4
 
 
@@ -18,6 +18,23 @@ def _sha256(path: Path) -> str:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _discard_invalid_file(root: Path, path: Path) -> None:
+    try:
+        target = path.resolve(strict=True)
+    except OSError:
+        target = None
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    cache_root = root.parent.parent
+    if target is not None and target != path and target.is_relative_to(cache_root):
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _verify_repository(root: Path, repository: dict[str, Any]) -> None:
@@ -30,12 +47,18 @@ def _verify_repository(root: Path, repository: dict[str, Any]) -> None:
     if actual != set(expected):
         missing = sorted(set(expected) - actual)
         unexpected = sorted(actual - set(expected))
+        for relative in unexpected:
+            try:
+                (root / relative).unlink(missing_ok=True)
+            except OSError:
+                pass
         raise RuntimeError(
             f"Model snapshot file set mismatch: missing={missing}, unexpected={unexpected}"
         )
     for relative, entry in expected.items():
         path = root / relative
         if path.stat().st_size != entry["size"] or _sha256(path) != entry["sha256"]:
+            _discard_invalid_file(root, path)
             raise RuntimeError(f"Model file failed verification: {relative}")
 
 

@@ -164,6 +164,57 @@ def test_model_installer_retries_failed_snapshot_download(tmp_path):
     ]
 
 
+def test_model_installer_discards_corrupt_cached_file_before_retry(tmp_path):
+    expected = b"verified-model"
+    pipeline = tmp_path / "pipeline"
+    vlm = tmp_path / "vlm"
+    pipeline.mkdir()
+    vlm.mkdir()
+    (vlm / "model.bin").write_bytes(b"vlm")
+    manifest = {
+        "formatVersion": 1,
+        "mineruVersion": "3.4.4",
+        "repositories": [
+            {
+                "kind": "pipeline",
+                "repoId": "pipeline/repo",
+                "revision": "a" * 40,
+                "allowPatterns": ["*"],
+                "files": [_file_entry("model.bin", expected)],
+            },
+            {
+                "kind": "vlm",
+                "repoId": "vlm/repo",
+                "revision": "b" * 40,
+                "allowPatterns": ["*"],
+                "files": [_file_entry("model.bin", b"vlm")],
+            },
+        ],
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    calls = 0
+
+    def snapshot_download(repo_id, **_kwargs):
+        nonlocal calls
+        if repo_id == "pipeline/repo":
+            calls += 1
+            (pipeline / "model.bin").write_bytes(
+                b"corrupt" if calls == 1 else expected
+            )
+            return str(pipeline)
+        return str(vlm)
+
+    roots = install_models(
+        manifest_path,
+        tmp_path / "mineru.json",
+        snapshot_download,
+    )
+
+    assert roots == {"pipeline": str(pipeline), "vlm": str(vlm)}
+    assert calls == 2
+
+
 def test_model_installer_rejects_hash_mismatch(tmp_path):
     root = tmp_path / "model"
     root.mkdir()
@@ -183,7 +234,7 @@ def test_model_installer_rejects_hash_mismatch(tmp_path):
     }
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="failed verification"):
+    with pytest.raises(RuntimeError, match="failed after 8 attempts"):
         install_models(
             manifest_path,
             tmp_path / "mineru.json",
