@@ -79,6 +79,56 @@ describe('PDF worker preview', () => {
     expect(canvas.height).toBe(0)
   })
 
+  it('uses a headless filter factory for PDF soft masks', async () => {
+    const destroy = vi.fn(async () => {})
+    const canvas = {
+      width: 320,
+      height: 640,
+      getContext: vi.fn(() => ({ fillStyle: '', fillRect: vi.fn() })),
+      toBuffer: vi.fn(() => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]))
+    }
+    vi.doMock('@napi-rs/canvas', () => ({
+      createCanvas: vi.fn(() => canvas),
+      DOMMatrix: class {},
+      Path2D: class {}
+    }))
+    vi.doMock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
+      GlobalWorkerOptions: {},
+      PDFDataRangeTransport: class {},
+      getDocument: vi.fn((options: {
+        FilterFactory: new () => {
+          addAlphaFilter: () => string
+          addLuminosityFilter: () => string
+          addKnockoutFilter: () => string
+          destroy: () => void
+        }
+      }) => {
+        const filterFactory = new options.FilterFactory()
+        expect(filterFactory.addAlphaFilter()).toBe('none')
+        expect(filterFactory.addLuminosityFilter()).toBe('none')
+        expect(filterFactory.addKnockoutFilter()).toBe('none')
+        expect(() => filterFactory.destroy()).not.toThrow()
+        return {
+          promise: Promise.resolve({
+            getPage: vi.fn(async () => ({
+              cleanup: vi.fn(() => true),
+              getViewport: ({ scale }: { scale: number }) => ({
+                width: 100 * scale,
+                height: 200 * scale
+              }),
+              render: vi.fn(() => ({ promise: Promise.resolve() }))
+            }))
+          }),
+          destroy
+        }
+      })
+    }))
+
+    const { renderPdfPreview } = await import('../../src/main/worker/pdf-worker')
+
+    await expect(renderPdfPreview(resolve('tests/fixtures/valid.pdf'))).resolves.toBeInstanceOf(Uint8Array)
+  })
+
   it('serves bounded multi-megabyte PDF ranges without loading the whole file', async () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), 'refora-pdf-range-'))
     const filePath = join(tempDirectory, 'large.pdf')
