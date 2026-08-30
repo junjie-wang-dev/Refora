@@ -189,7 +189,12 @@ function RunTimeline({
     .filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
     .sort((left, right) => right.length - left.length)
     .find((candidate) => fallbackAnswer.startsWith(candidate)) ?? null
-  const finalMessageStep = tracedAnswer !== null ? messageSteps.at(-1) : undefined
+  const lastMessageStep = messageSteps.at(-1)
+  const finalMessageStep = tracedAnswer !== null && (
+    !streaming || ordered.at(-1)?.id === lastMessageStep?.id
+  )
+    ? lastMessageStep
+    : undefined
   const timelineSteps = ordered.filter(
     (step) => step.kind !== 'llm' && step.id !== finalMessageStep?.id
   )
