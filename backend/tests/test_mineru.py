@@ -284,6 +284,33 @@ def _make_executable(path):
     os.chmod(path, 0o755)
 
 
+def test_model_download_bytes_counts_complete_and_partial_cache_files(tmp_path):
+    hf_home = tmp_path / "huggingface"
+    cache = hf_home / "hub" / "models--org--repo"
+    blobs = cache / "blobs"
+    snapshot = cache / "snapshots" / ("a" * 40)
+    blobs.mkdir(parents=True)
+    (snapshot / "config").mkdir(parents=True)
+    (blobs / f"{'1' * 64}.incomplete").write_bytes(b"part")
+    (blobs / ("2" * 64)).write_bytes(b"ready")
+    (snapshot / "config" / "settings.json").write_bytes(b"{}")
+    manifest = {
+        "repositories": [
+            {
+                "repoId": "org/repo",
+                "revision": "a" * 40,
+                "files": [
+                    {"path": "partial.bin", "sha256": "1" * 64, "size": 10},
+                    {"path": "ready.bin", "sha256": "2" * 64, "size": 5},
+                    {"path": "config/settings.json", "sha256": "3" * 64, "size": 2},
+                ],
+            }
+        ]
+    }
+
+    assert mineru_mod._model_download_bytes(str(hf_home), manifest) == (11, 17)
+
+
 def _manifest(architecture="arm64", **overrides):
     return {
         "version": mineru_mod.MINERU_VERSION,
@@ -471,6 +498,85 @@ async def test_install_emits_progress_events(manager):
     assert "healthCheck" in events
     assert "finalizing" in events
     assert "completed" in events
+
+
+@pytest.mark.asyncio
+async def test_install_emits_model_download_byte_progress(manager, monkeypatch):
+    mgr, _deps = manager
+    monkeypatch.setattr(
+        mineru_mod,
+        "_model_download_bytes",
+        lambda _home, _manifest: (123, 456),
+    )
+    events = []
+    mgr["onProgress"](events.append)
+
+    await mgr["install"]()
+
+    model_events = [event for event in events if event.stage == "downloadingModels"]
+    assert model_events
+    assert model_events[0].bytesReceived == 123
+    assert model_events[0].bytesTotal == 456
+    assert model_events[0].percent == pytest.approx(123 / 456 * 100)
+
+
+@pytest.mark.asyncio
+async def test_model_download_failure_preserves_runtime_for_retry(manager, monkeypatch):
+    mgr, deps = manager
+    base_run_file = mineru_mod._run_file
+    model_attempts = 0
+    calls: list[tuple[str, list[str], float]] = []
+
+    def fail_first_model_download(
+        command, args, *, cwd, env, cancel_event, on_child, timeout_seconds
+    ):
+        nonlocal model_attempts
+        calls.append((command, args, timeout_seconds))
+        if args and args[0].endswith("model_installer.py"):
+            model_attempts += 1
+            if model_attempts == 1:
+                async def _fail():
+                    raise RuntimeError("temporary model network failure")
+
+                return _fail()
+        return base_run_file(
+            command,
+            args,
+            cwd=cwd,
+            env=env,
+            cancel_event=cancel_event,
+            on_child=on_child,
+            timeout_seconds=timeout_seconds,
+        )
+
+    monkeypatch.setattr(mineru_mod, "_run_file", fail_first_model_download)
+
+    with pytest.raises(RuntimeError, match="temporary model network failure"):
+        await mgr["install"]()
+
+    path = _install_path_for_root(deps.userDataDir)
+    assert os.path.exists(os.path.join(path, ".runtime-ready.json"))
+    failed = await mgr["getStatus"]()
+    assert failed.state == "invalid"
+    assert failed.error == "temporary model network failure"
+    first_call_count = len(calls)
+
+    completed = await mgr["install"]()
+
+    assert completed.state == "installed"
+    retry_calls = calls[first_call_count:]
+    assert not any("sync" in args for _command, args, _timeout in retry_calls)
+    model_calls = [
+        call
+        for call in calls
+        if call[1] and call[1][0].endswith("model_installer.py")
+    ]
+    assert len(model_calls) == 2
+    assert all(
+        timeout == mineru_mod._MODEL_DOWNLOAD_TIMEOUT_SECONDS
+        for _command, _args, timeout in model_calls
+    )
+    assert mineru_mod._MODEL_DOWNLOAD_TIMEOUT_SECONDS == 12 * 60 * 60
 
 
 @pytest.mark.asyncio
