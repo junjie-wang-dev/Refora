@@ -27,7 +27,6 @@ type PdfAnnotationPatch = Partial<Pick<
 >>
 
 export type PdfTool =
-  | 'select'
   | 'highlight'
   | 'underline'
   | 'strikeout'

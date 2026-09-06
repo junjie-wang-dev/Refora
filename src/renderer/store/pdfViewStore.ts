@@ -82,7 +82,7 @@ function persist(documentId: string): void {
   if (!data || state.loadStatus[documentId] !== 'loaded') return
   const currentGeneration = generation
   usePdfViewStore.setState((current) => ({
-    saveStatus: { ...current.saveStatus, [documentId]: 'saving' }
+    saveStatus: { ...current.saveStatus, [documentId]: current.saveStatus[documentId] === 'error' ? 'error' : 'saving' }
   }))
   const status = (value: 'saved' | 'error') => {
     if (generation !== currentGeneration || usePdfViewStore.getState().documents[documentId] !== data) return

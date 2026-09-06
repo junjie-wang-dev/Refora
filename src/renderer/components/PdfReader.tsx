@@ -17,7 +17,6 @@ import {
   CaretLeft,
   CaretRight,
   CheckCircle,
-  Cursor,
   CursorText,
   Eraser,
   Highlighter,
@@ -162,7 +161,6 @@ async function readPdfRangeWithRetry(
 }
 
 const TOOL_ICONS = {
-  select: Cursor,
   highlight: Highlighter,
   underline: TextUnderline,
   strikeout: TextStrikethrough,
@@ -173,7 +171,6 @@ const TOOL_ICONS = {
 } satisfies Record<PdfTool, typeof CursorText>
 
 const TOOL_SHORTCUTS: Record<PdfTool, string> = {
-  select: 'A',
   highlight: 'H',
   underline: 'U',
   strikeout: 'S',
@@ -266,7 +263,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
   const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    effectiveTool !== null && effectiveTool !== 'eraser' && effectiveTool !== 'select'
+    effectiveTool !== null && effectiveTool !== 'eraser'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -1084,7 +1081,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         return
       }
       const shortcuts: Partial<Record<string, PdfTool | null>> = {
-        a: 'select',
+        a: null,
         h: 'highlight',
         u: 'underline',
         s: 'strikeout',
@@ -1251,10 +1248,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         className="flex shrink-0 items-center gap-0.5"
         aria-label={t('pdfReader.annotationTools')}
       >
-        <ReaderButton label={t('pdfReader.tools.read')} active={effectiveTool === null}
-          shortcut="Esc" onClick={() => usePdfReaderStore.getState().setTool(null)}>
-          <CursorText className="h-4 w-4" />
-        </ReaderButton>
         {(Object.keys(TOOL_ICONS) as PdfTool[]).map((item) => {
           const Icon = TOOL_ICONS[item]
           return (
@@ -1288,7 +1281,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           data-active-pdf-tool
           className="shrink-0 rounded-md bg-active px-2 py-1 text-label font-medium text-accent"
         >
-          {t(effectiveTool === null ? 'pdfReader.tools.read' : `pdfReader.tools.${effectiveTool}`)}
+          {t(effectiveTool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${effectiveTool}`)}
         </span>
       )}
       {(effectiveTool === 'text' || selectedTextAnnotations.length > 0) && (
@@ -1485,7 +1478,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
             : saveStatus === 'error' ? t('pdfReader.retrySave')
               : viewLoadStatus === 'error' || viewSaveStatus === 'error' ? t('pdfReader.retryReadingState')
                 : annotationLoadStatus[activeDocument.id] === 'loading' ? t('pdfReader.loadingAnnotations')
-                  : t(`pdfReader.saveStatus.${saveStatus === 'saving' || viewSaveStatus === 'saving' ? 'saving' : saveStatus ?? 'idle'}`)}
+                  : t(`pdfReader.saveStatus.${saveStatus ?? 'idle'}`)}
         </span>
       </button>
       <ReaderButton

@@ -58,6 +58,8 @@ describe('PDF reading state and bookmarks', () => {
     await vi.advanceTimersByTimeAsync(400)
     expect(usePdfViewStore.getState().saveStatus.paper).toBe('error')
     expect(usePdfViewStore.getState().documents.paper.bookmarks).toHaveLength(1)
+    store.updateView('paper', { ...DEFAULT_PDF_VIEW, y: 0.6 })
+    expect(usePdfViewStore.getState().saveStatus.paper).toBe('error')
     store.retrySave('paper')
     await flushRendererSettingWrites()
     expect(usePdfViewStore.getState().saveStatus.paper).toBe('saved')

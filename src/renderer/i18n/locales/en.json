@@ -747,15 +747,14 @@
       "error": "Save failed"
     },
     "tools": {
-      "select": "Edit annotations",
+      "select": "Select annotations",
       "highlight": "Highlight",
       "underline": "Underline",
       "strikeout": "Strike out",
       "note": "Add note",
       "text": "Add text",
       "ink": "Freehand drawing",
-      "eraser": "Erase annotation",
-      "read": "Select text"
+      "eraser": "Erase annotation"
     },
     "navigation": {
       "title": "Document navigation",
@@ -790,7 +789,8 @@
     "persistenceStatus": "Reader save status",
     "retryReadingState": "Retry reading state",
     "readingStateFailed": "Reading position or bookmarks could not be loaded or saved. Use the save status button to retry.",
-    "annotationSaveFailed": "Annotations have not been saved. Use the save status button to retry."
+    "annotationSaveFailed": "Annotations have not been saved. Use the save status button to retry.",
+    "editTextHint": "Click to edit text; drag to move"
   },
   "workspace": {
     "untitled": "Untitled",

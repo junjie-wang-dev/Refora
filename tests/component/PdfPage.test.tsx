@@ -168,28 +168,33 @@ describe('PdfPage annotation interaction', () => {
     vi.unstubAllGlobals()
   })
 
-  it('leaves highlighted text available for reading and moves marks only in edit mode', async () => {
-    usePdfReaderStore.setState({ annotations: { paper: [highlight] } })
+  it('selects highlights without moving them, including when dragging a mixed selection', async () => {
+    const ink: PdfAnnotation = {
+      id: 'ink', kind: 'ink', page: 1, text: '', comment: '', color: '#f00',
+      points: [{ x: 0.3, y: 0.3 }, { x: 0.4, y: 0.4 }], createdAt: 0
+    }
+    usePdfReaderStore.setState({ annotations: { paper: [highlight, ink] } })
     const view = render(<Harness />)
     const page = await loadedPage(view.container)
     const mark = screen.getByRole('button', { name: 'pdfReader.tools.highlight' })
-    expect(mark).toHaveClass('pointer-events-none')
-    expect(mark).toHaveAttribute('tabindex', '-1')
+    expect(mark).toHaveClass('cursor-pointer')
     fireEvent.pointerDown(mark, { button: 0, pointerId: 1, clientX: 100, clientY: 100 })
     fireEvent.pointerMove(page, { pointerId: 1, clientX: 160, clientY: 180 })
     fireEvent.pointerUp(page, { pointerId: 1, clientX: 160, clientY: 180 })
+    expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([highlight.id])
     expect(usePdfReaderStore.getState().annotations.paper[0].rects).toEqual(highlight.rects)
+    expect(usePdfReaderStore.getState().annotationHistory.paper).toBeUndefined()
 
-    act(() => usePdfReaderStore.getState().setTool('select'))
-    expect(mark).toHaveClass('pointer-events-auto')
-    fireEvent.pointerDown(mark, { button: 0, pointerId: 2, clientX: 100, clientY: 100 })
-    fireEvent.pointerMove(page, { pointerId: 2, clientX: 130, clientY: 140 })
-    fireEvent.pointerMove(page, { pointerId: 2, clientX: 160, clientY: 180 })
-    fireEvent.pointerUp(page, { pointerId: 2, clientX: 160, clientY: 180 })
-    expect(usePdfReaderStore.getState().annotations.paper[0].rects?.[0].x).toBeCloseTo(0.2)
+    act(() => usePdfReaderStore.getState().selectAnnotations([highlight.id, ink.id]))
+    const drawing = page.querySelector('[data-annotation-kind="ink"]')!
+    fireEvent.pointerDown(drawing, { button: 0, pointerId: 2, clientX: 180, clientY: 240 })
+    fireEvent.pointerMove(page, { pointerId: 2, clientX: 240, clientY: 320 })
+    fireEvent.pointerUp(page, { pointerId: 2, clientX: 240, clientY: 320 })
+    expect(usePdfReaderStore.getState().annotations.paper[0].rects).toEqual(highlight.rects)
+    expect(usePdfReaderStore.getState().annotations.paper[1].points?.[0].x).toBeCloseTo(0.4)
     expect(usePdfReaderStore.getState().annotationHistory.paper.past).toHaveLength(1)
     act(() => usePdfReaderStore.getState().undo('paper'))
-    expect(usePdfReaderStore.getState().annotations.paper[0].rects).toEqual(highlight.rects)
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([highlight, ink])
   })
 
   it('opens a new note immediately, saves its comment and reopens it without a sidebar', async () => {
@@ -216,7 +221,7 @@ describe('PdfPage annotation interaction', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('edits existing text with a double click and groups all typing into one undo', async () => {
+  it.each(['click', 'double click', 'keyboard'])('reopens text with %s and groups each editing session for undo', async (action) => {
     usePdfReaderStore.setState({ annotations: { paper: [{
       id: 'text', kind: 'text', page: 1, text: 'Original', comment: '', color: '#f00',
       point: { x: 0.1, y: 0.2 }, size: { width: 0.3, height: 0.05 }, createdAt: 0
@@ -225,13 +230,24 @@ describe('PdfPage annotation interaction', () => {
     await loadedPage(view.container)
     const editor = screen.getByRole('textbox', { name: 'pdfReader.tools.text' })
     expect(editor).toHaveAttribute('readonly')
-    fireEvent.doubleClick(editor)
+    expect(editor).toHaveAttribute('title', 'pdfReader.editTextHint')
+    if (action === 'click') fireEvent.click(editor)
+    else if (action === 'double click') fireEvent.doubleClick(editor)
+    else fireEvent.keyDown(editor, { key: 'Enter' })
+    await waitFor(() => expect(editor).toHaveFocus())
     expect(editor).not.toHaveAttribute('readonly')
+    expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['text'])
     expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#f00')
     fireEvent.change(editor, { target: { value: 'Updated' } })
     fireEvent.change(editor, { target: { value: 'Updated annotation' } })
     fireEvent.blur(editor)
     expect(editor).toHaveAttribute('readonly')
+    fireEvent.click(editor)
+    await waitFor(() => expect(editor).toHaveFocus())
+    fireEvent.change(editor, { target: { value: 'Edited again' } })
+    fireEvent.blur(editor)
+    act(() => usePdfReaderStore.getState().undo('paper'))
+    expect(editor).toHaveValue('Updated annotation')
     act(() => usePdfReaderStore.getState().undo('paper'))
     expect(editor).toHaveValue('Original')
   })

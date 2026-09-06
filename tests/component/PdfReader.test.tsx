@@ -935,13 +935,13 @@ describe('PdfReader rendering visibility', () => {
     await waitFor(() => expect(Number((zoom as HTMLInputElement).value)).toBeGreaterThan(137.5))
   })
 
-  it('moves a selected text mark with a pointer drag', async () => {
+  it('moves a selected underline with a pointer drag', async () => {
     usePdfReaderStore.setState({
-      tool: 'select',
+      tool: null,
       annotations: {
         paper: [{
-          id: 'movable-highlight',
-          kind: 'highlight',
+          id: 'movable-underline',
+          kind: 'underline',
           page: 1,
           color: '#f2c94c',
           text: 'Move me',
@@ -975,7 +975,7 @@ describe('PdfReader rendering visibility', () => {
     pdfPage.setPointerCapture = vi.fn()
     const highlight = await waitFor(() => {
       const element = pdfPage.querySelector<HTMLButtonElement>(
-        'button[aria-label="pdfReader.tools.highlight"]'
+        'button[aria-label="pdfReader.tools.underline"]'
       )
       expect(element).not.toBeNull()
       return element!
@@ -1039,7 +1039,7 @@ describe('PdfReader rendering visibility', () => {
     expect(usePdfReaderStore.getState().tool).toBe('highlight')
   })
 
-  it('preserves text reading by default and enables annotation interaction with the select tool', async () => {
+  it('uses text selection over text and annotation selection over page whitespace by default', async () => {
     const view = render(<PdfReader />)
     const pdfPage = await waitFor(() => {
       const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
@@ -1063,8 +1063,9 @@ describe('PdfReader rendering visibility', () => {
     text.textContent = 'Selectable PDF text'
     textLayer.append(text)
 
-    expect(screen.getByRole('button', { name: 'pdfReader.tools.read' }))
-      .toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: 'pdfReader.tools.read' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.tools.select' })).not.toBeInTheDocument()
+    expect(usePdfReaderStore.getState().tool).toBeNull()
     expect(pdfPage.querySelector('[data-annotation-input-layer]'))
       .toHaveClass('pointer-events-none')
 
@@ -1072,7 +1073,7 @@ describe('PdfReader rendering visibility', () => {
     expect(pdfPage.querySelector('[data-annotation-selection]')).toBeNull()
 
     fireEvent.pointerDown(pdfPage, { pointerId: 2, clientX: 10, clientY: 10 })
-    expect(pdfPage.querySelector('[data-annotation-selection]')).toBeNull()
+    expect(pdfPage.querySelector('[data-annotation-selection]')).toBeVisible()
     fireEvent.pointerUp(pdfPage, { pointerId: 2, clientX: 20, clientY: 20 })
 
     act(() => usePdfReaderStore.setState({
@@ -1109,11 +1110,9 @@ describe('PdfReader rendering visibility', () => {
       expect(element).not.toBeNull()
       return element!
     })
-    expect(markedText).toHaveClass('pointer-events-none')
-    expect(markedText).toHaveAttribute('tabindex', '-1')
-    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.tools.select' }))
-    expect(usePdfReaderStore.getState().tool).toBe('select')
-    expect(markedText).toHaveClass('z-20', 'pointer-events-auto', 'cursor-move')
+    expect(markedText).toHaveAttribute('tabindex', '0')
+    expect(usePdfReaderStore.getState().tool).toBeNull()
+    expect(markedText).toHaveClass('z-20', 'pointer-events-auto', 'cursor-pointer')
     fireEvent.pointerDown(pdfPage, { pointerId: 3, clientX: 10, clientY: 10 })
     expect(pdfPage.querySelector('[data-annotation-selection]')).toBeVisible()
     fireEvent.pointerUp(pdfPage, { pointerId: 3, clientX: 20, clientY: 20 })
@@ -1127,7 +1126,10 @@ describe('PdfReader rendering visibility', () => {
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([])
 
     const ink = pdfPage.querySelector<SVGPolylineElement>('[data-annotation-kind="ink"]')!
+    fireEvent.keyDown(window, { key: 'h' })
+    expect(usePdfReaderStore.getState().tool).toBe('highlight')
     fireEvent.keyDown(window, { key: 'a' })
+    expect(usePdfReaderStore.getState().tool).toBeNull()
     fireEvent.keyDown(ink, { key: 'Enter' })
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['ink-1'])
     act(() => usePdfReaderStore.getState().setTool('eraser'))
@@ -1209,9 +1211,9 @@ describe('PdfReader rendering visibility', () => {
         '[data-pdf-annotation-toolbar]'
       )
       expect(toolbar).not.toBeNull()
-      expect(within(toolbar!).getByRole('button', { name: 'pdfReader.tools.read' })).toBeEnabled()
+      expect(within(toolbar!).getAllByRole('button')).toHaveLength(7)
       within(toolbar!).getAllByRole('button').forEach((button) => {
-        if (button.getAttribute('aria-label') !== 'pdfReader.tools.read') expect(button).toBeDisabled()
+        expect(button).toBeDisabled()
       })
 
       const pdfPage = await waitFor(() => {
@@ -1398,6 +1400,38 @@ describe('PdfReader rendering visibility', () => {
     expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#f00')
     fireEvent.keyDown(screen.getByPlaceholderText('pdfReader.search'), { key: 'z', metaKey: true })
     expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#f00')
+  })
+
+  it('saves reading progress silently and only reports a failed write', async () => {
+    let completeSave!: () => void
+    const save = vi.spyOn(api.settings, 'set').mockImplementationOnce(() => new Promise<void>((resolve) => {
+      completeSave = resolve
+    }))
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    const status = screen.getByRole('button', { name: 'pdfReader.persistenceStatus' })
+    const readingView = { ...DEFAULT_PDF_VIEW, y: 0.3 }
+    act(() => usePdfViewStore.getState().updateView('paper', readingView))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('pdfReader.document.paper', {
+      view: readingView, bookmarks: []
+    }))
+    expect(usePdfViewStore.getState().saveStatus.paper).toBe('saving')
+    expect(status).toHaveTextContent('pdfReader.saveStatus.saved')
+    expect(status).not.toHaveTextContent('pdfReader.saveStatus.saving')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await act(async () => completeSave())
+    await waitFor(() => expect(usePdfViewStore.getState().saveStatus.paper).toBe('saved'))
+    expect(status).toHaveTextContent('pdfReader.saveStatus.saved')
+
+    save.mockRejectedValueOnce(new Error('Disk full'))
+    act(() => usePdfViewStore.getState().updateView('paper', { ...readingView, y: 0.6 }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateFailed'))
+    expect(status).toHaveTextContent('pdfReader.retryReadingState')
+    fireEvent.click(status)
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(save).toHaveBeenLastCalledWith('pdfReader.document.paper', {
+      view: { ...readingView, y: 0.6 }, bookmarks: []
+    })
   })
 
   it('shows annotation save failures and retries from the toolbar while the sidebar stays closed', async () => {

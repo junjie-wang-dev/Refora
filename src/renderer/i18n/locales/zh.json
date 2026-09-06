@@ -747,15 +747,14 @@
       "error": "保存失败"
     },
     "tools": {
-      "select": "编辑批注",
+      "select": "框选批注",
       "highlight": "高亮",
       "underline": "下划线",
       "strikeout": "删除线",
       "note": "添加便签",
       "text": "添加文字",
       "ink": "自由手绘",
-      "eraser": "擦除批注",
-      "read": "选择文字"
+      "eraser": "擦除批注"
     },
     "navigation": {
       "title": "文档导航",
@@ -790,7 +789,8 @@
     "persistenceStatus": "阅读器保存状态",
     "retryReadingState": "重试阅读状态",
     "readingStateFailed": "阅读位置或书签未能加载或保存，请点击保存状态按钮重试。",
-    "annotationSaveFailed": "批注尚未保存，请点击保存状态按钮重试。"
+    "annotationSaveFailed": "批注尚未保存，请点击保存状态按钮重试。",
+    "editTextHint": "单击编辑文字，拖动移动"
   },
   "workspace": {
     "untitled": "未命名",

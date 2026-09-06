@@ -819,17 +819,20 @@ export default function PdfPage({
     event: ReactPointerEvent<Element>,
     annotation: PdfAnnotation
   ) => {
-    if (tool !== 'select' || event.button !== 0 || !pageElementRef.current) return
+    if (tool !== null || event.button !== 0 || !pageElementRef.current) return
     event.preventDefault()
     event.stopPropagation()
     window.getSelection()?.removeAllRanges()
     const ids = selectedAnnotationIds.includes(annotation.id)
       ? selectedAnnotationIds
       : [annotation.id]
-    const draggedAnnotations = annotations.filter((item) => ids.includes(item.id))
     if (!selectedAnnotationIds.includes(annotation.id)) selectAnnotation(annotation.id)
+    if (annotation.kind === 'highlight') return
+    const draggedAnnotations = annotations.filter((item) =>
+      ids.includes(item.id) && item.kind !== 'highlight'
+    )
     usePdfReaderStore.getState().beginHistoryGroup(documentId)
-    pageElementRef.current.setPointerCapture(event.pointerId)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
     annotationDragRef.current = {
       pointerId: event.pointerId,
       start: normalizedPoint(event as ReactPointerEvent<HTMLDivElement>, pageElementRef.current),
@@ -873,11 +876,11 @@ export default function PdfPage({
     lastTextClickRef.current = null
     event.preventDefault()
     window.getSelection()?.removeAllRanges()
-    if (tool === 'select') {
+    if (tool === null) {
       if (
         target instanceof Element &&
         target.closest(
-          '.annotationLayer, button, textarea, [data-annotation-kind]'
+          '.textLayer span, .textLayer br, .annotationLayer, button, textarea, [data-annotation-kind]'
         )
       ) return
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -973,7 +976,7 @@ export default function PdfPage({
       return
     }
     const selectionStart = selectionStartRef.current
-    if (element && selectionStart && tool === 'select') {
+    if (element && selectionStart && tool === null) {
       pendingSelectionRectRef.current = selectionRectFromPoints(
         selectionStart,
         normalizedPoint(event, element)
@@ -1064,7 +1067,7 @@ export default function PdfPage({
       textPointerRef.current = null
       textSelectionStartRef.current = null
       addTextAnnotation()
-    } else if (tool === 'select') finishSelection(event)
+    } else if (tool === null) finishSelection(event)
     else if (tool === 'ink') finishInk()
   }
 
@@ -1092,7 +1095,7 @@ export default function PdfPage({
       inkPointsRef.current = null
       setInkPoints(null)
     }
-    if (tool !== 'select') {
+    if (tool !== null) {
       cancelScheduledFrame(selectionFrameRef)
       pendingSelectionRectRef.current = null
       selectionStartRef.current = null
@@ -1204,10 +1207,10 @@ export default function PdfPage({
   const handleAnnotationClick = (annotation: PdfAnnotation) => {
     if (suppressAnnotationClickRef.current) return
     if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-    else if (annotation.kind === 'note' && (tool === null || tool === 'select' || tool === 'note')) {
+    else if (annotation.kind === 'note' && (tool === null || tool === 'note')) {
       selectAnnotation(annotation.id)
       setEditingNoteAnnotationId(annotation.id)
-    } else if (tool === 'select') selectAnnotation(annotation.id)
+    } else if (tool === null) selectAnnotation(annotation.id)
   }
 
   return (
@@ -1291,7 +1294,7 @@ export default function PdfPage({
         className={`absolute inset-0 h-full w-full ${
           tool === 'eraser' ? 'pointer-events-auto' : 'pointer-events-none'
         }`}
-        style={{ zIndex: tool === 'eraser' || tool === 'select' ? 20 : 0 }}
+        style={{ zIndex: tool === 'eraser' || tool === null ? 20 : 0 }}
         viewBox="0 0 1 1"
         preserveAspectRatio="none"
         aria-label={t('pdfReader.annotations')}
@@ -1314,7 +1317,7 @@ export default function PdfPage({
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
                 className={
-                  tool === 'eraser' || tool === 'select'
+                  tool === 'eraser' || tool === null
                     ? 'pointer-events-stroke cursor-pointer'
                     : ''
                 }
@@ -1322,7 +1325,7 @@ export default function PdfPage({
                   ? { filter: 'drop-shadow(0 0 2px var(--color-accent))' }
                   : undefined}
                 role="button"
-                tabIndex={tool === 'eraser' || tool === 'select' ? 0 : -1}
+                tabIndex={tool === 'eraser' || tool === null ? 0 : -1}
                 aria-label={annotationLabel(annotation, t)}
                 aria-pressed={selectedAnnotationIds.includes(annotation.id)}
                 onPointerDown={(event) => startAnnotationDrag(event, annotation)}
@@ -1331,7 +1334,7 @@ export default function PdfPage({
                   if (event.key !== 'Enter' && event.key !== ' ') return
                   event.preventDefault()
                   if (tool === 'eraser') removeAnnotation(documentId, annotation.id)
-                  else if (tool === 'select') selectAnnotation(annotation.id)
+                  else if (tool === null) selectAnnotation(annotation.id)
                 }}
               />
             )
@@ -1374,10 +1377,10 @@ export default function PdfPage({
               key={`${annotation.id}-${index}`}
               data-annotation-id={annotation.id}
               type="button"
-              tabIndex={index === 0 && (tool === 'select' || tool === 'eraser') ? 0 : -1}
+              tabIndex={index === 0 && (tool === null || tool === 'eraser') ? 0 : -1}
               className={`absolute z-20 border-0 p-0 ${
-                tool === 'eraser' || tool === 'select'
-                  ? 'pointer-events-auto cursor-move'
+                tool === 'eraser' || tool === null
+                  ? `pointer-events-auto ${annotation.kind === 'highlight' ? 'cursor-pointer' : 'cursor-move'}`
                   : 'pointer-events-none'
               }`}
               style={{
@@ -1415,8 +1418,8 @@ export default function PdfPage({
             data-annotation-id={annotation.id}
             type="button"
             className={`absolute z-20 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-black/15 text-black shadow-sm ${
-              tool === 'eraser' || tool === 'select' || tool === null || tool === 'note'
-                ? `pointer-events-auto ${tool === 'select' ? 'cursor-move' : 'cursor-pointer'}`
+              tool === 'eraser' || tool === null || tool === 'note'
+                ? `pointer-events-auto ${tool === null ? 'cursor-move' : 'cursor-pointer'}`
                 : 'pointer-events-none'
             } ${
               selectedAnnotationIds.includes(annotation.id) ? 'ring-2 ring-accent' : ''
@@ -1466,8 +1469,8 @@ export default function PdfPage({
               className={`pdf-text-annotation absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
                 editing
                   ? 'pointer-events-auto'
-                  : tool === 'select' || tool === 'eraser' || tool === null
-                    ? `pointer-events-auto ${tool === 'select' ? 'cursor-move' : 'cursor-text'}`
+                  : tool === null || tool === 'eraser'
+                    ? `pointer-events-auto ${tool === null ? 'cursor-move' : 'cursor-text'}`
                     : 'pointer-events-none'
               } ${
                 selectedAnnotationIds.includes(annotation.id)
@@ -1487,9 +1490,10 @@ export default function PdfPage({
                 '--pdf-text-annotation-color': annotation.color
               } as CSSProperties}
               aria-label={t('pdfReader.tools.text')}
+              title={!editing ? t('pdfReader.editTextHint') : undefined}
               readOnly={!editing}
               onPointerDown={(event) => {
-                if (tool === 'select' && !editing) {
+                if (tool === null && !editing) {
                   startAnnotationDrag(event, annotation)
                   return
                 }
@@ -1499,9 +1503,17 @@ export default function PdfPage({
                 }
                 event.stopPropagation()
               }}
-              onClick={() => handleAnnotationClick(annotation)}
+              onClick={() => {
+                if (suppressAnnotationClickRef.current) return
+                handleAnnotationClick(annotation)
+                if (tool === null || tool === 'text') {
+                  beginEditingHistory()
+                  setEditingTextAnnotationId(annotation.id)
+                }
+              }}
               onDoubleClick={() => {
-                if (tool !== null && tool !== 'select') return
+                if (tool !== null) return
+                selectAnnotation(annotation.id)
                 beginEditingHistory()
                 setEditingTextAnnotationId(annotation.id)
               }}
@@ -1535,6 +1547,14 @@ export default function PdfPage({
                 )
               }}
               onKeyDown={(event) => {
+                if (!editing && tool === null && (event.key === 'Enter' || event.key === 'F2')) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  selectAnnotation(annotation.id)
+                  beginEditingHistory()
+                  setEditingTextAnnotationId(annotation.id)
+                  return
+                }
                 if (event.key !== 'Escape') return
                 event.stopPropagation()
                 event.currentTarget.blur()
