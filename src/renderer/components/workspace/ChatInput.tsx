@@ -33,6 +33,7 @@ export interface ChatInputProps {
   input: string
   onInputChange: (value: string) => void
   streaming: boolean
+  queueing?: boolean
   selectedAttachments: ChatAttachment[]
   onSelectedAttachmentsChange: React.Dispatch<React.SetStateAction<ChatAttachment[]>>
   attachMenuOpen: boolean
@@ -51,6 +52,7 @@ export default function ChatInput({
   input,
   onInputChange,
   streaming,
+  queueing = false,
   selectedAttachments,
   onSelectedAttachmentsChange,
   attachMenuOpen,
@@ -95,7 +97,7 @@ export default function ChatInput({
               return {
                 key: attachmentKey(attachment),
                 title: document?.title?.trim() || document?.fileName || item.docId,
-                attachment
+                attachment: { ...attachment, title: document?.title?.trim() || document?.fileName }
               }
             }
             if (item.kind === 'asset' && item.assetId) {
@@ -104,7 +106,7 @@ export default function ChatInput({
               return {
                 key: attachmentKey(attachment),
                 title: asset?.fileName ?? item.assetId,
-                attachment
+                attachment: { ...attachment, title: asset?.fileName }
               }
             }
             return null
@@ -297,7 +299,7 @@ export default function ChatInput({
               iconOnly
               className={`shrink-0 ${selectedAttachments.length > 0 ? 'text-accent' : ''}`}
               onClick={() => onAttachMenuOpenChange((v) => !v)}
-              disabled={!activeWorkspaceId || streaming}
+              disabled={!activeWorkspaceId}
               title={t('workspace.chat.attachPapers', 'Attach workspace files')}
               aria-label={t('workspace.chat.attachPapers', 'Attach workspace files')}
             >
@@ -356,7 +358,7 @@ export default function ChatInput({
             data-testid="chat-input-controls"
           >
             {toolbar}
-            {streaming ? (
+            {streaming && (
               <UiButton
                 variant="danger"
                 size="sm"
@@ -368,20 +370,19 @@ export default function ChatInput({
               >
                 <Square className="h-3.5 w-3.5" />
               </UiButton>
-            ) : (
-              <UiButton
+            )}
+            <UiButton
                 variant="primary"
                 size="sm"
                 iconOnly
                 className="shrink-0"
                 onClick={onSend}
                 disabled={!canSend}
-                aria-label={t('workspace.chat.send', 'PaperPlaneTilt')}
-                title={`${t('workspace.chat.send', 'PaperPlaneTilt')} (⏎)`}
+                aria-label={t(queueing ? 'workspace.chat.queueMessage' : 'workspace.chat.send', queueing ? 'Queue follow-up' : 'Send')}
+                title={`${t(queueing ? 'workspace.chat.queueMessage' : 'workspace.chat.send', queueing ? 'Queue follow-up' : 'Send')} (⏎)`}
               >
                 <PaperPlaneTilt className="h-3.5 w-3.5" />
               </UiButton>
-            )}
           </div>
         </div>
       </div>

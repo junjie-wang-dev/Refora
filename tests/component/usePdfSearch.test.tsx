@@ -48,6 +48,20 @@ function setup(pdf: PDFDocumentProxy) {
 }
 
 describe('usePdfSearch', () => {
+  it('selects evidence on the cited page before matching the same words on other pages', async () => {
+    const { pdf, getPage } = documentWithPages(['same evidence', 'same evidence', 'another page'])
+    const { result, navigateToPage } = setup(pdf)
+    act(() => result.current.updateQuery('same evidence', 2))
+    await act(async () => { await result.current.run() })
+    expect(getPage).toHaveBeenNthCalledWith(1, 2)
+    expect(result.current.matches.map((match) => match.page)).toEqual([2, 1])
+    expect(navigateToPage).toHaveBeenCalledWith(2)
+    expect(result.current.pagesSearched).toBe(3)
+    act(() => result.current.updateQuery('same evidence'))
+    await act(async () => { await result.current.run() })
+    expect(result.current.matches.map((match) => match.page)).toEqual([1, 2])
+  })
+
   it('publishes matches before all pages load and preserves a result selected during the scan', async () => {
     const lastPage = deferred<TextContent>()
     const { pdf } = documentWithPages(['term term', () => lastPage.promise])

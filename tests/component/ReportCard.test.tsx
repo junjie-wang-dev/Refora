@@ -40,6 +40,7 @@ const mockWorkspacePanelState = vi.hoisted(() => ({
   toggleFullscreen: vi.fn(),
   closePanel: vi.fn(),
   showWorkspace: vi.fn(),
+  openPdfReader: vi.fn(),
   showMarkdown: vi.fn(),
   clearMarkdownCardRequest: vi.fn(),
   updateNote: vi.fn(),
@@ -210,6 +211,9 @@ beforeEach(() => {
   mockWorkspacePanelState.showWorkspace.mockImplementation(() => {
     mockWorkspacePanelState.panelView = 'workspace'
   })
+  mockWorkspacePanelState.openPdfReader.mockReset().mockImplementation(() => {
+    mockWorkspacePanelState.panelView = 'pdf'
+  })
   mockWorkspacePanelState.showMarkdown.mockReset().mockImplementation(() => {
     mockWorkspacePanelState.panelView = 'markdown'
   })
@@ -244,8 +248,10 @@ describe('ReportCard', () => {
     expect(onOpen).toHaveBeenCalledOnce()
   })
 
-  it('opens a citation PDF without opening the Markdown reader or a browser link', async () => {
+  it('opens a citation in the built-in PDF reader without opening the report or a browser link', async () => {
     const onOpen = vi.fn()
+    const paper = { id: 'e9e71747-2fd1-4038-ab42-00553e68328c', title: '3DGUT', fileName: '3dgut.pdf' }
+    mockOpenPdf.mockResolvedValue(paper)
     render(
       <ReportCard
         report={makeReport({
@@ -262,8 +268,11 @@ describe('ReportCard', () => {
     fireEvent.click(citation)
 
     await waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('e9e71747-2fd1-4038-ab42-00553e68328c')
+      expect(mockOpenPdf).toHaveBeenCalledWith(paper.id, false)
+      expect(mockPdfReaderState.open).toHaveBeenCalledWith(paper, undefined)
+      expect(mockWorkspacePanelState.openPdfReader).toHaveBeenCalledOnce()
     })
+    expect(mockWorkspacePanelState.panelView).toBe('pdf')
     expect(onOpen).not.toHaveBeenCalled()
   })
 
@@ -850,12 +859,13 @@ describe('NoteCard', () => {
 
   it('uses the report Markdown preview style and opens document citations the same way', async () => {
     const onOpen = vi.fn()
-    mockOpenPdf.mockResolvedValue(undefined)
+    const paper = { id: 'source-doc', title: 'Source', fileName: 'source.pdf' }
+    mockOpenPdf.mockResolvedValue(paper)
     const { container: noteContainer } = render(
       <NoteCard
         note={{
           ...note,
-          contentMd: '[Source](refora://doc/source-doc)'
+          contentMd: '[Source](refora://doc/source-doc?page=3&quote=Original%20evidence)'
         }}
         onDelete={() => {}}
         onUpdate={async () => true}
@@ -876,8 +886,11 @@ describe('NoteCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Source' }))
 
     await waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('source-doc')
+      expect(mockOpenPdf).toHaveBeenCalledWith('source-doc', false)
+      expect(mockPdfReaderState.open).toHaveBeenCalledWith(paper, { page: 3, search: 'Original evidence' })
+      expect(mockWorkspacePanelState.openPdfReader).toHaveBeenCalledOnce()
     })
+    expect(mockWorkspacePanelState.panelView).toBe('pdf')
     expect(onOpen).not.toHaveBeenCalled()
   })
 

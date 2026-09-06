@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import quote, unquote
 
 from refora_server.agent.tools.common import call, object_schema, repo, value
 from refora_server.agent.tools.registry import ToolGroup
@@ -13,30 +15,46 @@ _SEARCH_SCOPE = {"type": "string", "enum": ["workspace", "library"]}
 _READ_SOURCE = {"type": "string", "enum": ["auto", "ocr", "extracted"], "default": "auto"}
 
 
+def _ocr_image_links(text: str, document_id: str, result_key: str) -> str:
+    prefix = f"refora-document://ocr/{quote(document_id, safe='')}/{quote(result_key, safe='')}/"
+
+    def replace(match: re.Match[str]) -> str:
+        raw = unquote(match[2])
+        if ".." in raw.split("/") or "\\" in raw or "\x00" in raw:
+            return match[0]
+        path = "assets/" + raw[len("images/"):] if raw.startswith("images/") else raw
+        return match[1] + prefix + "/".join(quote(part, safe="") for part in path.split("/"))
+
+    return re.sub(r"(!\[[^\]\n]*\]\(<?)((?:images|assets)/[^\s)>]+)", replace, text)
+
+
 def search_documents(executor: Any, args: dict[str, Any]) -> Any:
     documents = repo(executor.repos, "documents")
-    query = args.get("query", "")
-    docs = (
-        call(documents, "search", query, 50)
-        if query
-        else call(documents, "list", {"mode": "all"})
-    )
+    query = args.get("query", "").strip()
     workspace_id = value(executor.context, "workspace_id")
     scope = args.get("scope") or ("workspace" if workspace_id else "library")
     if scope == "workspace":
         if not workspace_id:
             raise ValueError("Workspace document search requires a selected workspace")
-        workspace_doc_ids = {
-            item["docId"]
-            for item in call(
-                repo(executor.repos, "workspaceItems"), "list", workspace_id
-            )
-            if item.get("docId")
-        }
-        docs = [doc for doc in docs if doc["id"] in workspace_doc_ids]
     max_results = 50 if scope == "workspace" else 20
+    limit = min(max_results, max(1, int(args.get("limit", max_results))))
+    offset = max(0, int(args.get("offset", 0)))
+    selected_workspace = workspace_id if scope == "workspace" else None
+    if query:
+        docs = call(documents, "search", query, limit + 1, offset, selected_workspace)
+    else:
+        docs = call(
+            documents,
+            "list",
+            {
+                "mode": "all",
+                "workspaceId": selected_workspace,
+                "limit": limit + 1,
+                "offset": offset,
+            },
+        )
     summaries = value(executor.repos, "aiSummaries")
-    return [
+    results = [
         {
             "docId": doc["id"],
             "title": doc.get("title") or doc.get("fileName"),
@@ -50,8 +68,16 @@ def search_documents(executor: Any, args: dict[str, Any]) -> Any:
                 and summary.get("content")
             ),
         }
-        for doc in docs[:max_results]
+        for doc in docs[:limit]
     ]
+    has_more = len(docs) > limit
+    return {
+        "documents": results,
+        "offset": offset,
+        "limit": limit,
+        "hasMore": has_more,
+        "nextOffset": offset + limit if has_more else None,
+    }
 
 
 def get_paper_context(executor: Any, args: dict[str, Any]) -> Any:
@@ -124,6 +150,7 @@ def read_paper(executor: Any, args: dict[str, Any]) -> Any:
     if ocr_result is not None:
         response["profile"] = ocr_result["profile"]
         response["resultKey"] = ocr_result["resultKey"]
+        response["text"] = _ocr_image_links(response["text"], args["docId"], ocr_result["resultKey"])
     return response
 
 
@@ -145,14 +172,14 @@ class LibraryTools(ToolGroup):
         "find_related_papers": find_related_papers,
     }
     descriptions = {
-        "search_documents": "Search documents by title, authors, abstract, or keywords. scope=workspace limits results to the selected workspace; scope=library searches the full local library. An empty query lists documents in scope.",
+        "search_documents": "Search documents by title, authors, abstract, or keywords. scope=workspace limits results to the selected workspace; scope=library searches the full local library. An empty query lists documents in scope. Returns documents and pagination metadata; use nextOffset while hasMore is true to retrieve additional matches.",
         "get_paper_context": "Get a paper's complete metadata and cached summary, when available, using its docId.",
         "read_paper": "Read paginated paper text. source=auto prefers cached OCR, source=ocr requires cached OCR, and source=extracted forces plain PDF extraction. Call prepare_paper_ocr if OCR is needed but missing.",
         "open_paper": "Open a paper PDF in the system default viewer by its docId. Use when the user wants to view or read a paper.",
         "find_related_papers": "Find related papers that already exist in the local library using title, keywords, abstract, authors, venue, and year metadata. Returns ranked results and whether each paper is already in the current workspace. Does not access the network.",
     }
     schemas = {
-        "search_documents": object_schema({"query": _TEXT, "scope": _SEARCH_SCOPE}, ["query"]),
+        "search_documents": object_schema({"query": _TEXT, "scope": _SEARCH_SCOPE, "offset": _OFFSET, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["query"]),
         "get_paper_context": object_schema({"docId": _DOC_ID}, ["docId"]),
         "read_paper": object_schema({"docId": _DOC_ID, "source": _READ_SOURCE, "offset": _OFFSET, "limit": _CHUNK_LIMIT}, ["docId"]),
         "open_paper": object_schema({"docId": _DOC_ID}, ["docId"]),

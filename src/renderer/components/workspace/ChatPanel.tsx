@@ -173,9 +173,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const canSend = !!activeProviderId &&
     !!input.trim() &&
     input.trim().length <= MAX_INPUT_LENGTH &&
-    !chat.streaming &&
-    !chat.loadingHistory &&
-    !chat.pendingInterrupt
+    !chat.loadingHistory
 
   useEffect(() => {
     if (!pendingChatDraft || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
@@ -352,7 +350,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     const onShortcut = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') {
         const el = textareaRef.current
-        if (!chat.streaming && el) {
+        if (el) {
           e.preventDefault()
           el.focus()
         }
@@ -442,7 +440,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   )
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || chat.streaming || chat.loadingHistory || chat.pendingInterrupt) return
+    if (!input.trim() || !activeProviderId || chat.loadingHistory) return
     const text = input.trim()
     if (text.length > MAX_INPUT_LENGTH) {
       chat.setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))
@@ -452,8 +450,9 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     setInput('')
     setSelectedAttachments([])
     setAttachMenuOpen(false)
-    void chat.sendText(text, atts, activeThreadId)
-  }, [activeThreadId, chat, input, selectedAttachments, t])
+    if (chat.streaming || chat.pendingInterrupt || chat.activeRunId) chat.queueFollowUp(text, atts)
+    else void chat.sendText(text, atts, activeThreadId)
+  }, [activeProviderId, activeThreadId, chat, input, selectedAttachments, t])
 
   const exportThread = useCallback(async (threadId: string) => {
     if (!threadId) return
@@ -472,6 +471,10 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
           continue
         }
         lines.push(msg.content, '')
+        for (const attachment of msg.attachments ?? []) {
+          const title = attachment.title || t(attachment.type === 'document' ? 'workspace.chat.attachedPaper' : 'workspace.chat.attachedFile')
+          lines.push(`- ${title}`, '')
+        }
       }
       const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
       const url = URL.createObjectURL(blob)
@@ -522,9 +525,14 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         streaming={chat.streaming}
         streamingText={chat.streamingText}
         streamingReasoning={chat.streamingReasoning}
+        streamingMedia={chat.streamingMedia}
         activeRunId={chat.activeRunId}
         elapsedSeconds={chat.elapsedSeconds}
         loadingHistory={chat.loadingHistory}
+        loadingEarlier={chat.loadingEarlier}
+        hasEarlierMessages={chat.hasEarlierMessages}
+        onLoadEarlier={chat.loadEarlierMessages}
+        regenerateDisabled={!!chat.pendingInterrupt}
         providers={providers}
         onRegenerate={chat.handleRegenerate}
         onSuggestionClick={setInput}
@@ -547,6 +555,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
           activeWorkspaceId={activeWorkspaceId}
           streaming={chat.streaming}
           onResolve={chat.resolveInterrupt}
+          onCancel={chat.handleCancel}
         />
       )}
 
@@ -593,10 +602,32 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         </div>
       )}
 
+      {chat.queuedMessages.length > 0 && (
+        <div className="shrink-0 px-3 pb-2" data-testid="chat-follow-up-queue">
+          <div className="mx-auto max-w-[768px] rounded-lg border border-border bg-panel-2 p-3 text-xs">
+            <p className="mb-2 text-muted">
+              {t(chat.queuePaused ? 'workspace.chat.queuePaused' : 'workspace.chat.queueWaiting', chat.queuePaused ? 'Follow-ups paused. Send when you are ready.' : 'Queued follow-ups will send after the current response completes.')}
+            </p>
+            <ol className="max-h-32 space-y-2 overflow-y-auto">
+              {chat.queuedMessages.map((entry) => (
+                <li key={entry.id} className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{entry.text}</span>
+                  <UiButton variant="ghost" size="sm" iconOnly aria-label={t('workspace.chat.removeQueued', 'Remove queued message')} onClick={() => chat.removeQueuedMessage(entry.id)}><X className="h-3 w-3" /></UiButton>
+                </li>
+              ))}
+            </ol>
+            {!chat.streaming && !chat.pendingInterrupt && !chat.activeRunId && (
+              <UiButton variant="ghost" size="sm" onClick={chat.sendQueuedMessages}>{t('workspace.chat.sendQueued', 'Send queued messages')}</UiButton>
+            )}
+          </div>
+        </div>
+      )}
+
       <ChatInput
         input={input}
         onInputChange={setInput}
         streaming={chat.streaming}
+        queueing={!!chat.activeRunId || !!chat.pendingInterrupt || chat.streaming}
         selectedAttachments={selectedAttachments}
         onSelectedAttachmentsChange={setSelectedAttachments}
         attachMenuOpen={attachMenuOpen}

@@ -130,6 +130,8 @@ function parseAgentTraceStep(value: unknown): AgentTraceStep | null {
   if (!isFiniteNumber(value.depth)) return null
   return {
     id: value.id,
+    ...(isFiniteNumber(value.revision) ? { revision: value.revision } : {}),
+    ...(value.result !== undefined ? { result: value.result } : {}),
     threadId: value.threadId,
     runId: value.runId,
     kind,

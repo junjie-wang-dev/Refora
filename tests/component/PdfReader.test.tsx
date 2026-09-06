@@ -765,6 +765,39 @@ describe('PdfReader rendering visibility', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true')
   })
 
+  it('opens a citation at its page and highlights the exact evidence after the PDF loads', async () => {
+    pdfMocks.document.numPages = 2
+    pdfMocks.page.getTextContent.mockResolvedValue({ items: [{ str: 'An exact quotation from the paper' }] })
+    await usePdfReaderStore.getState().open(document(), { page: 2, search: 'exact quotation' })
+    const view = render(<PdfReader />)
+
+    await waitFor(() => expect(screen.getByPlaceholderText('pdfReader.search')).toHaveValue('exact quotation'))
+    await waitFor(() => expect(
+      view.container.querySelector('[data-page-number="2"] .textLayer .highlight.selected')
+    ).toHaveTextContent('exact quotation'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2')
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+
+    await act(async () => {
+      await usePdfReaderStore.getState().open(document(), { page: 1, search: 'exact quotation' })
+    })
+    await waitFor(() => expect(
+      view.container.querySelector('[data-page-number="1"] .textLayer .highlight.selected')
+    ).toHaveTextContent('exact quotation'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('1')
+  })
+
+  it('keeps citation navigation pending until the reader is active and clamps the requested page', async () => {
+    pdfMocks.document.numPages = 2
+    await usePdfReaderStore.getState().open(document(), { page: 100 })
+    const view = render(<PdfReader active={false} />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    expect(usePdfReaderStore.getState().navigationRequest).not.toBeNull()
+    view.rerender(<PdfReader active />)
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2'))
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+  })
+
   it('does not let an older search overwrite a newer result', async () => {
     const view = render(<PdfReader />)
     await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())

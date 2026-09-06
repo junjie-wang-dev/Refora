@@ -102,13 +102,23 @@
     },
     {
       "method": "GET",
+      "path": "/ai/chat/runs/{run_id}/snapshot",
+      "schemaDigest": "11374bbf2170e1e6fd29b83f0d9f5aceedf267688e3308c4cf8e53d0f1fbbaa0"
+    },
+    {
+      "method": "GET",
       "path": "/ai/chat/threads",
       "schemaDigest": "cefb157e0e5acb6468ee54cc470ed2db337d19cfa4fb0d292371e8a8bb52bd4e"
     },
     {
       "method": "GET",
       "path": "/ai/chat/threads/{thread_id}/history",
-      "schemaDigest": "2a7007f68591d6ed6252add731e406d563773020eb0a19f0012c6d0f2b76346f"
+      "schemaDigest": "bae1f25a34c02ce71bea5d7b7f8e16f56f79701068b6fa78c1c72d2e4c21360e"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/chat/threads/{thread_id}/history-page",
+      "schemaDigest": "6f10d9b67bb233b9fcd269e734774e23223a1bcc1acbc0aef84d86c9db9e37c6"
     },
     {
       "method": "GET",
@@ -124,6 +134,21 @@
       "method": "GET",
       "path": "/ai/doc-text/{document_id}",
       "schemaDigest": "18760c40e3b065c87e0737f736746519db477a0c41f6d59e1e5ffbe8eeaea210"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/media/{media_id}",
+      "schemaDigest": "ad9dcd6202bd4ad5b5c7acecb1211384e3a28abda7fa3f5caebb91122fa3507e"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/media/{media_id}/content",
+      "schemaDigest": "c5e3f7c51b9c2a14f049e841d75ae4ce70700ac1295f36f0876493cbad9c3561"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/media/{media_id}/text",
+      "schemaDigest": "bcd0401f8204b058dad4725aac0f0a0617d17c61b9c6fb738db0e68cb8778dbe"
     },
     {
       "method": "GET",
@@ -397,6 +422,11 @@
     },
     {
       "method": "POST",
+      "path": "/ai/media/resolve",
+      "schemaDigest": "029241036ff4150b7eb68ebb98b2dd829965beffcffe228805172d9e03f28a94"
+    },
+    {
+      "method": "POST",
       "path": "/ai/providers",
       "schemaDigest": "a8fb96d968f5f70e27331d4d21be278094c6d8167355ea2aa8cfb535038e071b"
     },
@@ -646,10 +676,11 @@
       "schemaDigest": "c45c598bbf7a0e26e28a8757e8e23e97cffed4ea7167d69f39c66529d8b2ffc1"
     }
   ],
-  "protocolDigest": "2548d26cf7dc645d5fa851a29313cbd2cd295b5f3cb80c68694edfb565d53051",
+  "protocolDigest": "2b00481d0ebaf50c254d5562941b9a8dcfeef4ec51299d2c5f00d8976b396bd1",
   "protocolVersion": 1,
   "serverEvents": [
     "ai.chat.token",
+    "ai.chat.media",
     "ai.chat.reasoning",
     "ai.chat.done",
     "ai.chat.error",

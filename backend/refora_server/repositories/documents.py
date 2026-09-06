@@ -238,6 +238,12 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         if isinstance(starred, bool):
             clauses.append("starred = ?")
             params.append(1 if starred else 0)
+        workspace_id = filter.get("workspaceId")
+        if isinstance(workspace_id, str) and workspace_id:
+            clauses.append(
+                "id IN (SELECT docId FROM workspace_items WHERE workspaceId = ? AND kind = 'document')"
+            )
+            params.append(workspace_id)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         order = _order_by_clause(mode, filter.get("sort"))
         pagination = ""
@@ -277,7 +283,12 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             "starred": row["starred"],
         }
 
-    def search(q: str, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+    def search(
+        q: str,
+        limit: int = 500,
+        offset: int = 0,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         trimmed = q.strip()
         if len(trimmed) == 0:
             return []
@@ -291,23 +302,29 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             if isinstance(offset, (int, float)) and offset == offset
             else 0
         )
+        workspace_filter = (
+            " AND d.id IN (SELECT docId FROM workspace_items WHERE workspaceId = ? AND kind = 'document')"
+            if workspace_id
+            else ""
+        )
+        workspace_params = [workspace_id] if workspace_id else []
         if len(trimmed) >= 3 and deps["getSearchMode"]() == "trigram":
             literal_query = '"' + trimmed.replace('"', '""') + '"'
             cur = db.execute(
                 "SELECT d.* FROM documents d JOIN docs_fts f ON d.rowid = f.rowid "
-                "WHERE docs_fts MATCH ? ORDER BY rank, d.id ASC LIMIT ? OFFSET ?",
-                [literal_query, safe_limit, safe_offset],
+                f"WHERE docs_fts MATCH ?{workspace_filter} ORDER BY rank, d.id ASC LIMIT ? OFFSET ?",
+                [literal_query, *workspace_params, safe_limit, safe_offset],
             )
             rows = cur.fetchall()
             lf = lib()
             return [_map_document(r, lf) for r in rows]
         escaped = trimmed.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
         like = f"%{escaped}%"
-        clauses = " OR ".join(f"{c} LIKE ? ESCAPE '\\'" for c in FTS_LIKE_COLUMNS)
-        params = [like] * len(FTS_LIKE_COLUMNS) + [safe_limit, safe_offset]
+        clauses = " OR ".join(f"d.{c} LIKE ? ESCAPE '\\'" for c in FTS_LIKE_COLUMNS)
+        params = [like] * len(FTS_LIKE_COLUMNS) + [*workspace_params, safe_limit, safe_offset]
         cur = db.execute(
-            f"SELECT * FROM documents WHERE {clauses} "
-            "ORDER BY addedAt DESC, id ASC LIMIT ? OFFSET ?",
+            f"SELECT d.* FROM documents d WHERE ({clauses}){workspace_filter} "
+            "ORDER BY d.addedAt DESC, d.id ASC LIMIT ? OFFSET ?",
             params,
         )
         rows = cur.fetchall()

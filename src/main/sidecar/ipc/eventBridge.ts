@@ -10,6 +10,7 @@ type EventForward = readonly [ServerEventName, (typeof IpcChannel)[keyof typeof 
 
 const eventForwards: readonly EventForward[] = [
   ['ai.chat.token', IpcChannel.EventAiChatToken],
+  ['ai.chat.media', IpcChannel.EventAiChatMedia],
   ['ai.chat.reasoning', IpcChannel.EventAiChatReasoning],
   ['ai.chat.done', IpcChannel.EventAiChatDone],
   ['ai.chat.error', IpcChannel.EventAiChatError],

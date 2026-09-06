@@ -8,6 +8,8 @@ from typing import Any
 
 from refora_server.cli_runtime.registry import CliRuntimeRegistry
 from refora_server.cli_runtime.tool_broker import CliToolBroker
+from refora_server.services.agent_memory import curated_memory_context
+from refora_server.services.agent_events import _message_media
 
 
 def _message_text(value: Any) -> str:
@@ -119,6 +121,12 @@ def _build_prompt(request: dict[str, Any], resumed: bool) -> str:
     system_prompt = request.get("systemPrompt")
     if isinstance(system_prompt, str) and system_prompt.strip():
         parts.append(f"[System instructions]\n{system_prompt.strip()}")
+    memories = curated_memory_context(
+        request.get("memories"),
+        include_research=request.get("includeResearchMemory") is True,
+    )
+    if memories:
+        parts.append(f"[Saved memory]\n{memories}")
     for message in messages:
         if not isinstance(message, dict):
             continue
@@ -127,7 +135,7 @@ def _build_prompt(request: dict[str, Any], resumed: bool) -> str:
         text = _message_text(message.get("content"))
         if text:
             parts.append(f"[{label}]\n{text}")
-    if resumed and not parts and isinstance(request.get("cliApprovalReplay"), list):
+    if resumed and not messages and isinstance(request.get("cliApprovalReplay"), list):
         parts.append(
             "[User]\nContinue the interrupted task. Repeat any pending Refora tool call "
             "that is still required; its recorded user decision will be applied once."
@@ -177,10 +185,16 @@ class CliRuntimeAgent:
         runtime_id = profile["cliRuntimeId"]
         adapter = self._registry.get(runtime_id)
         session = None
-        if request.get("replaceLastExchange") is not True:
+        continuing_run = bool(request.get("decisions") or request.get("cliApprovalReplay"))
+        if continuing_run or (
+            request.get("replaceLastExchange") is not True
+            and request.get("cliContinueSession") is not False
+        ):
             session = self._sessions["get"](
                 request["threadId"], profile["id"], runtime_id
             )
+        else:
+            self._sessions["delete"](request["threadId"], profile["id"], runtime_id)
         session_id = session.get("sessionId") if isinstance(session, dict) else None
         prompt = _build_prompt(request, bool(session_id))
         self._mcp = self._broker.open_run(
@@ -344,6 +358,16 @@ class CliRuntimeAgent:
                         if separator:
                             event = {**event, "delta": separator + event["delta"]}
                     yield event
+                media_value = None
+                if payload.get("type") == "message" and payload.get("role") in {"assistant", "model"}:
+                    media_value = payload
+                elif payload.get("type") == "item.completed" and isinstance(payload.get("item"), dict) and payload["item"].get("type") in {"agent_message", "image_generation_call"}:
+                    media_value = payload["item"]
+                elif payload.get("type") == "result":
+                    media_value = payload.get("response") or payload.get("result")
+                media = _message_media(media_value, request["runId"])
+                if media:
+                    yield {"event": "media", "media": media}
                 result_text = adapter.result_text(payload)
                 if result_text and not self._final_text:
                     self._final_text.append(result_text)

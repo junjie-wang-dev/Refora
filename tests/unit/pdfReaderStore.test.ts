@@ -749,4 +749,29 @@ describe('PDF reader state', () => {
       fullscreen: false
     })
   })
+
+  it('opens evidence in the built-in reader and preserves the latest navigation request', async () => {
+    await openDocumentPdf('paper', { page: 4, search: 'quoted evidence' })
+    expect(api.documents.openPdf).toHaveBeenLastCalledWith('paper', false)
+    const first = usePdfReaderStore.getState().navigationRequest!
+    expect(first).toEqual({ documentId: 'paper', page: 4, search: 'quoted evidence' })
+    await openDocumentPdf('paper', { forceBuiltin: true, search: 'other evidence' })
+    usePdfReaderStore.getState().consumeNavigationRequest(first)
+    const latest = usePdfReaderStore.getState().navigationRequest!
+    expect(latest.search).toBe('other evidence')
+    usePdfReaderStore.getState().consumeNavigationRequest(latest)
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+  })
+
+  it('clears citation navigation when its document closes or the library changes', async () => {
+    await openDocumentPdf('paper', { page: 2 })
+    usePdfReaderStore.getState().close('paper')
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+    await openDocumentPdf('paper', { page: 2 })
+    usePdfReaderStore.getState().closeAll()
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+    await openDocumentPdf('paper', { page: 2 })
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    expect(usePdfReaderStore.getState().navigationRequest).toBeNull()
+  })
 })

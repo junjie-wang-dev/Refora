@@ -44,6 +44,7 @@ from refora_server.services.agent_events import (
     _event_key,
     _interrupt_actions,
     _message_text,
+    _message_media,
     _persist_tool_history,
     _result_text,
     _resume_decision,
@@ -51,6 +52,7 @@ from refora_server.services.agent_events import (
     _serializable,
     _state_snapshot,
     _streamed_tool_call_previews,
+    _structured_tool_result,
     _subagent_name,
     _token_usage,
     _tool_event_key,
@@ -64,6 +66,7 @@ from refora_server.services.agent_events import (
     _without_secrets,
 )
 from refora_server.services.thread_title import derive_thread_title
+from refora_server.services.chat_attachments import normalize_media
 
 
 def _now_ms() -> int:
@@ -100,6 +103,24 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     cancel_run = deps.get("cancelRun") or deps.get("cancel_run")
     finish_run = deps.get("finishRun") or deps.get("finish_run")
     state_machine = RunStateMachine(repos["agentRuns"], repos["agentTraces"], clock)
+
+    def persisted_media(run_id: str) -> list[dict[str, Any]]:
+        snapshots = [
+            step["result"]["media"]
+            for step in repos["agentTraces"]["listByRun"](run_id)
+            if step.get("kind") == "run" and isinstance(step.get("result"), dict) and isinstance(step["result"].get("media"), list)
+        ]
+        return normalize_media([item for snapshot in reversed(snapshots) for item in snapshot])
+
+    def assistant_metadata(request: dict[str, Any]) -> dict[str, Any]:
+        if active_by_thread.get(request["threadId"]) not in {None, request["runId"]}:
+            return {}
+        media = normalize_media(request["_media"]) if "_media" in request else persisted_media(request["runId"])
+        attachments = [
+            {"type": "asset", "assetId": item["source"]["assetId"], **({"title": item["title"]} if item.get("title") else {})}
+            for item in media if item["source"]["type"] == "asset"
+        ]
+        return {"media": media, **({"attachments": attachments} if attachments else {})} if media else {}
 
     async def emit_event(name: str, payload: dict[str, Any]) -> None:
         safe_payload = _without_secrets(_serializable(payload))
@@ -210,12 +231,12 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
     def runtime_config(request: dict[str, Any]) -> dict[str, Any]:
         configurable = {"thread_id": request["threadId"]}
         checkpoint = request.get("checkpointBefore")
-        if (
-            request.get("recoverLatestCheckpoint") is not True
-            and isinstance(checkpoint, str)
-            and checkpoint
-        ):
-            configurable["checkpoint_id"] = checkpoint
+        if request.get("recoverLatestCheckpoint") is not True:
+            configurable["checkpoint_id"] = (
+                checkpoint
+                if isinstance(checkpoint, str) and checkpoint
+                else "00000000-0000-0000-0000-000000000000"
+            )
         return {
             "configurable": configurable,
             "recursion_limit": int(request.get("recursionLimit") or 500),
@@ -353,13 +374,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             TRACE_STATUS_CANCELLED,
             "Tool call did not start",
         )
-        text = _result_text(result) or partial or "No response generated."
+        metadata = assistant_metadata(request)
+        text = _result_text(result) or partial or ("" if metadata.get("media") else "No response generated.")
         _persist_tool_history(
             repos,
             request["threadId"],
             [*tool_history, *_tool_history_records(result, state)],
         )
-        message = repos["chat"]["addMessage"](request["threadId"], "assistant", text)
+        message = repos["chat"]["addMessage"](request["threadId"], "assistant", text, *([metadata] if metadata else []))
         checkpoint = _checkpoint_id(state) or request.get("checkpointBefore")
         repos["chat"]["updateAgentState"](request["threadId"], checkpoint, int(deps.get("agentStateVersion", 1)))
         run, _trace = state_machine.transition(
@@ -377,7 +399,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         title = request.get("_derivedThreadTitle")
         await emit_event(
             "ai.chat.done",
-            {"runId": run_id, "threadId": request["threadId"], "finalText": text},
+            {"runId": run_id, "threadId": request["threadId"], "finalText": text, **metadata},
         )
         await emit_status(run_id, RUN_STATUS_COMPLETED)
         title_source = deps.get("generateTitle") or deps.get("generate_title")
@@ -466,10 +488,11 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             persisted = repos["agentRuns"]["get"](run_id)
             current = persisted["status"] if persisted else current
         final_text = partial
+        metadata = assistant_metadata(request)
         assistant_message = None
-        if final_text:
+        if final_text or metadata.get("media"):
             assistant_message = repos["chat"]["addMessage"](
-                request["threadId"], "assistant", final_text
+                request["threadId"], "assistant", final_text, *([metadata] if metadata else [])
             )
         patch = {"endedAt": clock(), "error": error}
         if assistant_message is not None:
@@ -494,13 +517,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 "ai.chat.error",
                 error_payload,
             )
-        if final_text:
+        if final_text or metadata.get("media"):
             await emit_event(
                 "ai.chat.done",
                 {
                     "runId": run_id,
                     "threadId": request["threadId"],
                     "finalText": final_text,
+                    **metadata,
                 },
             )
         await emit_status(run_id, status)
@@ -600,6 +624,54 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             if mode == "recover"
             else ""
         )
+        if existing_run:
+            request["_media"] = persisted_media(run_id)
+        else:
+            request["_media"] = []
+
+        async def observe_media(value: Any) -> None:
+            incoming = _message_media(value, run_id)
+            existing = normalize_media(request.get("_media"))
+            seen = {item["id"] for item in existing}
+            incoming = [item for item in incoming if item["id"] not in seen]
+            if not incoming or len(existing) >= 64:
+                return
+            persist = deps.get("persistMedia")
+            if callable(persist):
+                try:
+                    incoming = await _await(persist(incoming, request))
+                except Exception:
+                    incoming = [
+                        {**item, "source": {"type": "unavailable", "reason": "The returned media could not be saved locally."}}
+                        if item["source"]["type"] == "inline" else item
+                        for item in incoming
+                    ]
+            request["_media"] = normalize_media([*existing, *incoming])
+            if run_trace is not None:
+                repos["agentTraces"]["updateStep"](run_trace["id"], {"result": {"media": request["_media"]}})
+            await emit_event("ai.chat.media", {"runId": run_id, "threadId": thread_id, "media": request["_media"]})
+
+        async def observe_tool_media(value: Any, name: str | None) -> None:
+            if _is_academic_tool_name(name):
+                return
+            await observe_media(value)
+            structured = _structured_tool_result(value, name)
+            published = structured.get("published") if isinstance(structured, dict) else None
+            if not isinstance(published, list):
+                return
+            for artifact in published[:64]:
+                if not isinstance(artifact, dict) or not isinstance(artifact.get("assetId"), str):
+                    continue
+                assets = repos.get("workspaceAssets")
+                asset = assets["get"](artifact["assetId"]) if isinstance(assets, dict) and callable(assets.get("get")) else None
+                mime = (asset or {}).get("mimeType") or artifact.get("mimeType") or ""
+                kind = mime.split("/", 1)[0] if isinstance(mime, str) else "file"
+                await observe_media([{
+                    "kind": kind if kind in {"image", "audio", "video"} else "file",
+                    "source": {"type": "asset", "assetId": artifact["assetId"]},
+                    "title": artifact.get("fileName") or (asset or {}).get("fileName"),
+                    "mimeType": mime,
+                }])
 
         def is_current() -> bool:
             return active_by_thread.get(thread_id) == run_id
@@ -649,8 +721,14 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                             int(deps.get("agentStateVersion", 1)),
                         )
                     if user_content:
+                        metadata = {
+                            "displayContent": request["userText"],
+                            "attachments": request.get("attachments") or [],
+                            "activeDocumentId": request.get("activeDocumentId"),
+                        } if isinstance(request.get("userText"), str) else None
                         user_message = repos["chat"]["addMessage"](
-                            thread_id, "user", user_content
+                            thread_id, "user", user_content,
+                            *([metadata] if metadata is not None else []),
                         )
                     repos["agentRuns"]["create"](
                         {
@@ -840,6 +918,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 if event_name in {"token", "on_chat_model_stream", "on_tool_call_chunk"}:
                     event_data = event.get("data")
                     if isinstance(event_data, dict):
+                        await observe_media(event_data.get("chunk", event_data))
                         await observe_streamed_tool_calls(
                             event_data.get("chunk", event_data), event
                         )
@@ -874,6 +953,9 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         if step_id is not None:
                             payload["stepId"] = step_id
                         await emit_event("ai.chat.token", payload)
+                    continue
+                if event_name == "media":
+                    await observe_media(event.get("media") or event.get("data"))
                     continue
                 if event_name in {"reasoning", "thinking"}:
                     delta = _event_delta(event, True)
@@ -911,6 +993,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     detail = event.get("error")
                     event_data = event.get("data")
                     if isinstance(event_data, dict):
+                        if not failed:
+                            await observe_media(event_data.get("output"))
                         await observe_streamed_tool_calls(event_data.get("output"), event)
                     if detail is None and isinstance(event_data, dict):
                         detail = event_data.get("error") or event_data.get("output")
@@ -966,6 +1050,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     continue
                 if event_name in {"done", "complete", "result"}:
                     result = event.get("result", event.get("data"))
+                    await observe_media(result)
                     candidate_state = event.get("state")
                     if isinstance(candidate_state, dict):
                         state = candidate_state
@@ -1021,6 +1106,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         tool_history.append(record)
                     name = _tool_event_name(event)
                     _, trace_output = _tool_event_values(event)
+                    await observe_tool_media(trace_output, name)
+                    structured_result = _structured_tool_result(trace_output, name)
                     safe_output = (
                         ACADEMIC_PERSISTENCE_REDACTION
                         if _is_academic_tool_name(name)
@@ -1038,6 +1125,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                                 "status": status,
                                 "output": _truncate(safe_output),
                                 "endedAt": clock(),
+                                "result": structured_result,
                             },
                         )
                     else:
@@ -1053,6 +1141,8 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                             _checkpoint_id(event),
                         )
                         seq += 1
+                        if structured_result is not None:
+                            step = repos["agentTraces"]["updateStep"](step["id"], {"result": structured_result})
                     if step is not None:
                         await emit_trace(request, step)
                     continue
@@ -1175,6 +1265,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
             if interrupted or _interrupt_actions(state):
                 await finish_active_content()
                 return await finish_interrupted(request, state, run_trace)
+            await observe_media(result)
             await finish_active_content()
             return await finish_completed(
                 request,

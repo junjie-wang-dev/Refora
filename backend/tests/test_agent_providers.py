@@ -474,6 +474,39 @@ def test_only_builtin_execute_is_disabled() -> None:
     assert providers._DISABLED_BUILTIN_TOOLS == {"execute"}
 
 
+@pytest.mark.parametrize("native_search", [False, True])
+def test_research_subagents_can_read_external_evidence_without_write_tools(
+    monkeypatch, native_search
+):
+    captured = {}
+    monkeypatch.setattr(
+        providers,
+        "create_deep_agent",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    tool_names = {
+        "search_documents", "web_search", "web_fetch", "search_arxiv",
+        "get_arxiv_paper", "get_related_academic_papers", "explore_research_frontier",
+        "generate_report", "prepare_paper_ocr", "propose_workspace_memory_update", "__execute",
+    }
+    providers.create_agent(
+        object(),
+        [SimpleNamespace(name=name) for name in tool_names],
+        {"sandboxRoot": "/tmp/refora-sandbox", "useNativeWebSearch": native_search},
+    )
+
+    for subagent in captured["subagents"]:
+        allowed = {tool.name for tool in subagent["tools"] if hasattr(tool, "name")}
+        assert {
+            "search_documents", "web_fetch", "search_arxiv", "get_arxiv_paper",
+            "get_related_academic_papers", "explore_research_frontier",
+        } <= allowed
+        assert not allowed & {
+            "generate_report", "prepare_paper_ocr", "propose_workspace_memory_update", "__execute",
+        }
+        assert ("web_search" in allowed) is (not native_search)
+
+
 def test_real_deep_agent_uses_stateful_todos_and_restricted_subagents(tmp_path) -> None:
     responses = [
         AIMessage(
@@ -539,7 +572,7 @@ def test_real_deep_agent_uses_stateful_todos_and_restricted_subagents(tmp_path) 
             name for name in available if name in {tool.name for tool in tools}
         }
         assert refora_names
-        assert all(classify(name) is RiskClass.READ for name in refora_names)
+        assert all(classify(name) in {RiskClass.READ, RiskClass.NETWORK_READ} for name in refora_names)
         assert {
             "ls",
             "read_file",

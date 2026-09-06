@@ -675,8 +675,56 @@ export interface ChatThread {
 }
 
 export type ChatAttachment =
-  | { type: 'document'; docId: string }
+  | { type: 'document'; docId: string; title?: string }
+  | { type: 'asset'; assetId: string; title?: string }
+
+export type ChatMediaKind = 'image' | 'audio' | 'video' | 'file'
+
+export type ChatMediaSource =
   | { type: 'asset'; assetId: string }
+  | { type: 'ocr'; documentId: string; resultKey: string; path: string }
+  | { type: 'remote'; url: string }
+  | { type: 'inline'; dataUrl: string }
+  | { type: 'sandbox'; runId: string; path: string }
+  | { type: 'cached'; mediaId: string }
+  | { type: 'unavailable'; reason: string }
+
+export interface ChatMediaItem {
+  id: string
+  kind: ChatMediaKind
+  source: ChatMediaSource
+  title?: string
+  mimeType?: string
+}
+
+export interface ChatMediaContext {
+  runId?: string
+  documentId?: string
+  resultKey?: string
+}
+
+export interface ChatMediaRequest {
+  source: ChatMediaSource
+  kind?: ChatMediaKind
+  fileName?: string
+  runId?: string
+}
+
+export interface ChatMediaResource {
+  id: string
+  url: string
+  kind: ChatMediaKind
+  fileName: string
+  mimeType: string
+  byteLength: number
+  sourceUrl?: string
+}
+
+export interface ChatMediaEvent {
+  threadId: string
+  runId: string
+  media: ChatMediaItem[]
+}
 
 export interface ChatMessage {
   id: string
@@ -686,6 +734,27 @@ export interface ChatMessage {
   createdAt: number
   runId?: string
   runStatus?: AgentRunStatus
+  attachments?: ChatAttachment[]
+  media?: ChatMediaItem[]
+  activeDocumentId?: string | null
+}
+
+export interface ChatHistoryPageRequest {
+  before?: string
+  limit?: number
+}
+
+export interface ChatHistoryPage {
+  messages: ChatMessage[]
+  traces: AgentTraceStep[]
+  nextCursor: string | null
+  activeRun: AgentRun | null
+}
+
+export interface ChatRunSnapshot {
+  run: AgentRun
+  traces: AgentTraceStep[]
+  revision: number
 }
 
 export interface AgentTurnIntent {
@@ -722,6 +791,8 @@ export type AgentTraceStepStatus = 'running' | 'done' | 'error' | 'interrupted' 
 
 export interface AgentTraceStep {
   id: string
+  revision?: number
+  result?: unknown
   threadId: string
   runId: string
   kind: AgentTraceStepKind
@@ -842,6 +913,7 @@ export interface ChatDoneEvent {
   threadId: string
   finalText: string
   runId?: string
+  media?: ChatMediaItem[]
 }
 
 export interface ChatInterruptedEvent {
@@ -861,6 +933,7 @@ export interface ChatErrorEvent {
   message: string
   runId?: string
   partialText?: string
+  media?: ChatMediaItem[]
 }
 
 export interface ChatTraceEvent {
@@ -901,6 +974,7 @@ export interface DocumentEvents {
   onAiSummaryUpdated(cb: (docId: string) => void): () => void
   onAiSummaryError(cb: (payload: SummaryErrorEvent) => void): () => void
   onAiChatToken(cb: (payload: ChatTokenEvent) => void): () => void
+  onAiChatMedia(cb: (payload: ChatMediaEvent) => void): () => void
   onAiChatReasoning(cb: (payload: ChatReasoningEvent) => void): () => void
   onAiChatDone(cb: (payload: ChatDoneEvent) => void): () => void
   onAiChatError(cb: (payload: ChatErrorEvent) => void): () => void
@@ -1087,6 +1161,14 @@ export interface ReforaApi {
     summaryGet(docId: string): Promise<AiSummary | null>
     chatSend(req: ChatSendRequest): Promise<{ threadId: string; runId: string }>
     chatHistory(threadId: string): Promise<ChatMessage[]>
+    chatHistoryPage(threadId: string, options?: ChatHistoryPageRequest): Promise<ChatHistoryPage>
+    chatRunSnapshot(runId: string, afterRevision?: number): Promise<ChatRunSnapshot>
+    resolveMedia(request: ChatMediaRequest): Promise<ChatMediaResource>
+    mediaTextPreview(id: string): Promise<{ content: string; truncated: boolean }>
+    openMedia(id: string): Promise<void>
+    revealMedia(id: string): Promise<void>
+    saveMedia(id: string): Promise<boolean>
+    copyMedia(id: string): Promise<void>
     chatThreads(workspaceId: string | null): Promise<ChatThread[]>
     usageStats(): Promise<AiUsageStats>
     chatTraces(threadId: string): Promise<AgentTraceStep[]>

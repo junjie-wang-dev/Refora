@@ -6,7 +6,7 @@ from typing import TypedDict
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import interrupt
 
 from conftest import insert_doc, insert_thread, make_workspaces_repo, open_migrated_db
@@ -552,6 +552,70 @@ def test_runtime_attaches_async_sqlite_checkpointer_to_async_graph(
         ).fetchone()[0] > 0
     finally:
         connection.close()
+
+
+def test_first_exchange_regeneration_starts_empty_and_continues_the_new_branch(
+    repos, db, tmp_path
+):
+    insert_thread(db)
+    seen_messages = []
+
+    def answer(state: MessagesState):
+        seen_messages.append([message.content for message in state["messages"]])
+        return {"messages": [AIMessage(content=f"Answer {len(seen_messages)}")]}
+
+    def create_agent(*_args):
+        builder = StateGraph(MessagesState)
+        builder.add_node("answer", answer)
+        builder.add_edge(START, "answer")
+        builder.add_edge("answer", END)
+        return builder.compile()
+
+    runtime = createAgentRuntime(
+        repos,
+        {
+            "createTools": lambda req: [],
+            "createAgent": create_agent,
+        },
+    )
+    checkpoint_path = str(tmp_path / "regeneration.sqlite")
+
+    async def exercise():
+        first = await runtime["send"](
+            request(checkpointPath=checkpoint_path, checkpointBefore=None)
+        )
+        assert first["status"] == "completed"
+        second = await runtime["send"](
+            request(
+                runId="run-2",
+                checkpointPath=checkpoint_path,
+                checkpointBefore=None,
+                replaceLastExchange=True,
+                replaceRunId="run-1",
+            )
+        )
+        assert second["status"] == "completed"
+        new_checkpoint = repos["chat"]["getThread"]("thread-1")["headCheckpointId"]
+        third = await runtime["send"](
+            request(
+                runId="run-3",
+                checkpointPath=checkpoint_path,
+                checkpointBefore=new_checkpoint,
+                messages=[{"role": "user", "content": "Continue"}],
+            )
+        )
+        assert third["status"] == "completed"
+
+    asyncio.run(exercise())
+
+    assert seen_messages == [
+        ["Explain this"],
+        ["Explain this"],
+        ["Explain this", "Answer 2", "Continue"],
+    ]
+    assert [message["content"] for message in repos["chat"]["listMessages"]("thread-1")] == [
+        "Explain this", "Answer 2", "Continue", "Answer 3"
+    ]
 
 
 def test_recover_continues_existing_run_from_latest_checkpoint(repos, db, tmp_path):

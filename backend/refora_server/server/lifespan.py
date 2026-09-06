@@ -44,6 +44,7 @@ from refora_server.services.agent_runtime import createAgentRuntime
 from refora_server.services.agent_profiles import createAgentProfilesService
 from refora_server.services.agent_intent import assemble_recovery
 from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
+from refora_server.services.chat_media import create_chat_media_service
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
 from refora_server.services.chat_history import createChatHistoryService
@@ -85,6 +86,7 @@ def create_lifespan(
         events: Any | None = None
         connector: Any | None = None
         model_http_clients: dict[str, Any] | None = None
+        services: dict[str, Any] = {}
         mineru: dict[str, Any] | None = None
         ocr: dict[str, Any] | None = None
         watcher: dict[str, Any] = {}
@@ -881,6 +883,9 @@ def create_lifespan(
                     return cli_runtime.create_agent(tools, request)
                 return create_agent(model, tools, request)
 
+            services["chatMedia"] = create_chat_media_service(
+                app.state.local_data_folder, repos, services, proxy=proxy_url
+            )
             agent_runtime = createAgentRuntime(
                 repos,
                 {
@@ -899,6 +904,7 @@ def create_lifespan(
                         "checkpoints-python.sqlite",
                     ),
                     "agentStateVersion": 2,
+                    "persistMedia": services["chatMedia"]["persistMedia"],
                 },
             )
             app.state.repos = repos
@@ -1000,6 +1006,8 @@ def create_lifespan(
                 await destroy_summary()
             if agent_runtime is not None:
                 await agent_runtime["destroy"]()
+            if "chatMedia" in services:
+                await services["chatMedia"]["destroy"]()
             if cli_runtime is not None:
                 await cli_runtime.destroy()
             if model_http_clients is not None:

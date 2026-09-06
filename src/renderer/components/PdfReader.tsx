@@ -223,6 +223,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const { t } = useTranslation()
   const tabs = usePdfReaderStore((state) => state.tabs)
   const activeDocumentId = usePdfReaderStore((state) => state.activeDocumentId)
+  const navigationRequest = usePdfReaderStore((state) => state.navigationRequest)
   const annotationMap = usePdfReaderStore((state) => state.annotations)
   const annotationLoadStatus = usePdfReaderStore((state) => state.loadStatus)
   const tool = usePdfReaderStore((state) => state.tool)
@@ -899,6 +900,19 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   })
   runPdfSearchRef.current = pdfSearch.run
 
+  useEffect(() => {
+    if (!active || !pdf || !navigationRequest ||
+      navigationRequest.documentId !== activeDocumentId ||
+      loadedDocumentRef.current !== activeDocumentId ||
+      usePdfReaderStore.getState().navigationRequest !== navigationRequest) return
+    usePdfReaderStore.getState().consumeNavigationRequest(navigationRequest)
+    const page = navigationRequest.page === undefined
+      ? undefined : Math.max(1, Math.min(pdf.numPages, navigationRequest.page))
+    if (page !== undefined) navigateToPage(page)
+    pdfSearch.updateQuery(navigationRequest.search ?? '', page)
+    if (navigationRequest.search) setSearchOpen(true)
+  }, [active, activeDocumentId, navigateToPage, navigationRequest, pdf, pdfSearch.updateQuery])
+
   const runPdfSearch = useCallback(() => {
     if (searchDebounceRef.current !== null) {
       window.clearTimeout(searchDebounceRef.current)
@@ -922,7 +936,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       window.clearTimeout(searchDebounceRef.current)
       searchDebounceRef.current = null
     }
-  }, [pdfSearch.query])
+  }, [pdfSearch.query, pdfSearch.queryRevision])
 
   const searchMatchesByPage = useMemo(() => {
     const grouped = new Map<number, Array<{

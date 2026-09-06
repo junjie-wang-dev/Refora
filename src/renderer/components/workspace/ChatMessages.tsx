@@ -1,5 +1,7 @@
 import {
   useState,
+  useRef,
+  useLayoutEffect,
   useEffect,
   useMemo,
   memo,
@@ -27,18 +29,26 @@ import { useDocumentStore } from '../../store/documentStore'
 import { useSettingsModalStore } from '../../store/settingsModalStore'
 import { Button as UiButton } from '../ui'
 import { AgentTraceStepItem } from './AgentTrace'
+import { ToolResultCards } from './ToolResultCards'
 import AgentTodoList from './AgentTodoList'
-import type { AgentTraceStep, AiProvider } from '../../../shared/ipc-types'
+import { ChatMedia, ChatMediaCard, ChatMediaContextProvider } from './ChatMedia'
+import type { AgentTraceStep, AiProvider, ChatAttachment, ChatMediaItem, ChatMediaContext } from '../../../shared/ipc-types'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
+import { api } from '../../ipc'
 import {
   enrichChatMessages,
   type ChatTerminalStatus,
   type ChatTimelineMessage
 } from '../../utils/chatUtils'
 
+function messageMediaContext(runId?: string | null, media?: ChatMediaItem[], documentId?: string | null): ChatMediaContext {
+  const ocr = media?.find((item) => item.source.type === 'ocr')?.source
+  return { ...(runId ? { runId } : {}), ...(documentId ? { documentId } : {}), ...(ocr?.type === 'ocr' ? { documentId: ocr.documentId, resultKey: ocr.resultKey } : {}) }
+}
+
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => openDocumentPdf(docId),
+  openDocumentPdf,
   () => useDocumentStore.getState().showToast(
     i18n.t('workspace.openDocFailed') as string
   )
@@ -47,6 +57,40 @@ const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
 const StreamingMarkdown = memo(function StreamingMarkdown({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS} urlTransform={urlTransform}>{content}</ReactMarkdown>
+  )
+})
+
+const MessageAttachments = memo(function MessageAttachments({ attachments }: { attachments: ChatAttachment[] }) {
+  const { t } = useTranslation()
+  const [titles, setTitles] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(attachments.flatMap((attachment) => attachment.type === 'document' && !attachment.title
+      ? [api.documents.get(attachment.docId).then((document) => [attachment.docId, document?.title || document?.fileName || ''] as const).catch(() => [attachment.docId, ''] as const)]
+      : [])).then((entries) => {
+      if (!cancelled) setTitles(Object.fromEntries(entries))
+    })
+    return () => { cancelled = true }
+  }, [attachments])
+  return (
+    <div className="mt-2 flex max-w-full flex-wrap justify-end gap-2" aria-label={t('workspace.chat.messageAttachments', 'Attachments')}>
+      {attachments.map((attachment) => {
+        const id = attachment.type === 'document' ? attachment.docId : attachment.assetId
+        const title = attachment.title || titles[id] || t(attachment.type === 'document' ? 'workspace.chat.attachedPaper' : 'workspace.chat.attachedFile')
+        if (attachment.type === 'asset') return <ChatMediaCard key={`asset:${id}`} item={{ id, kind: 'file', title: attachment.title, source: { type: 'asset', assetId: attachment.assetId } }} />
+        return (
+          <button
+            key={`${attachment.type}:${id}`}
+            type="button"
+            className="max-w-full truncate rounded-lg border border-border bg-panel-2 px-3 py-1.5 text-xs text-foreground hover:border-accent"
+            title={title}
+            onClick={() => void openDocumentPdf(attachment.docId).catch(() => useDocumentStore.getState().showToast(t('workspace.openDocFailed')))}
+          >
+            {title}
+          </button>
+        )
+      })}
+    </div>
   )
 })
 
@@ -300,6 +344,7 @@ function RunTimeline({
           </div>
         )}
       </div>
+      {!open && ordered.filter((step) => step.kind === 'tool' && step.status === 'done').map((step) => <ToolResultCards key={step.id} step={step} />)}
       {(finalAnswer || terminalStatus === 'cancelled' || terminalStatus === 'failed') && (
         <AnswerSegment
           content={finalAnswer}
@@ -330,9 +375,14 @@ export interface ChatMessagesProps {
   streaming: boolean
   streamingText: string
   streamingReasoning: string
+  streamingMedia?: ChatMediaItem[]
   activeRunId: string | null
   elapsedSeconds: number
   loadingHistory: boolean
+  loadingEarlier?: boolean
+  hasEarlierMessages?: boolean
+  onLoadEarlier?: () => Promise<void>
+  regenerateDisabled?: boolean
   providers: AiProvider[]
   onRegenerate: () => void
   onSuggestionClick: (text: string) => void
@@ -347,9 +397,14 @@ export default function ChatMessages({
   streaming,
   streamingText,
   streamingReasoning,
+  streamingMedia = [],
   activeRunId,
   elapsedSeconds,
   loadingHistory,
+  loadingEarlier = false,
+  hasEarlierMessages = false,
+  onLoadEarlier,
+  regenerateDisabled = false,
   providers,
   onRegenerate,
   onSuggestionClick,
@@ -358,6 +413,7 @@ export default function ChatMessages({
   stickToBottomRef
 }: ChatMessagesProps) {
   const { t } = useTranslation()
+  const prependScrollRef = useRef<{ height: number; top: number } | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   const handleMessageContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
@@ -395,7 +451,7 @@ export default function ChatMessages({
     () => enrichChatMessages(messages, traceSteps).filter((message) => message.role !== 'tool'),
     [messages, traceSteps]
   )
-  const showEmpty = displayMessages.length === 0 && !streaming && !streamingText && !streamingReasoning
+  const showEmpty = displayMessages.length === 0 && !streaming && !streamingText && !streamingReasoning && !streamingMedia.length
   const visibleTodoRunId = useMemo(() => {
     if (activeRunId) return activeRunId
     const orderedRuns = traceSteps
@@ -437,10 +493,18 @@ export default function ChatMessages({
     return -1
   })()
 
+  useLayoutEffect(() => {
+    const before = prependScrollRef.current
+    const element = scrollRef.current
+    if (!before || !element) return
+    element.scrollTop = before.top + element.scrollHeight - before.height
+    prependScrollRef.current = null
+  }, [messages, scrollRef])
+
   useEffect(() => {
     const el = scrollRef.current
     if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [messages, streamingText, streamingReasoning, traceSteps])
+  }, [messages, streamingText, streamingReasoning, streamingMedia, traceSteps])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -525,10 +589,25 @@ export default function ChatMessages({
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-[768px] flex-col gap-3">
+            {hasEarlierMessages && onLoadEarlier && (
+              <UiButton
+                variant="ghost"
+                size="sm"
+                disabled={loadingEarlier}
+                onClick={() => {
+                  const element = scrollRef.current
+                  if (element) prependScrollRef.current = { height: element.scrollHeight, top: element.scrollTop }
+                  stickToBottomRef.current = false
+                  void onLoadEarlier()
+                }}
+              >
+                {t(loadingEarlier ? 'workspace.chat.loadingEarlier' : 'workspace.chat.loadEarlier', loadingEarlier ? 'Loading…' : 'Load earlier messages')}
+              </UiButton>
+            )}
             {displayMessages.map((m, idx) => {
               const runSteps = m.runId ? (runTraceGroups.get(m.runId) ?? []) : []
               const showRegenerate =
-                m.role === 'assistant' && idx === lastAssistantIdx && !streaming
+                m.role === 'assistant' && idx === lastAssistantIdx && !streaming && !activeRunId && !regenerateDisabled
 
               if (m.role === 'user') {
                 return (
@@ -540,6 +619,8 @@ export default function ChatMessages({
                     <div className="chat-user-message">
                       {m.content}
                     </div>
+                    {m.attachments && m.attachments.length > 0 && <MessageAttachments attachments={m.attachments.filter((attachment) => attachment.type !== 'asset' || !m.media?.some((item) => item.source.type === 'asset' && item.source.assetId === attachment.assetId))} />}
+                    <ChatMedia media={m.media} context={messageMediaContext(m.runId, m.media, m.activeDocumentId)} />
                     <CopyButton text={m.content} className="mt-1 text-muted opacity-0 group-hover:opacity-100" />
                   </div>
                 )
@@ -551,6 +632,7 @@ export default function ChatMessages({
                   className="chat-response-group"
                   onContextMenu={handleMessageContextMenu}
                 >
+                  <ChatMediaContextProvider value={messageMediaContext(m.runId, m.media, m.activeDocumentId)} media={m.media}>
                   <RunTimeline
                     steps={runSteps}
                     fallbackAnswer={m.content}
@@ -559,6 +641,9 @@ export default function ChatMessages({
                     streaming={false}
                     elapsedSeconds={0}
                   />
+                  <ChatMedia media={m.media} excludeMarkdown={m.content} />
+                  {m.attachments && m.attachments.length > 0 && <MessageAttachments attachments={m.attachments.filter((attachment) => attachment.type !== 'asset' || !m.media?.some((item) => item.source.type === 'asset' && item.source.assetId === attachment.assetId))} />}
+                  </ChatMediaContextProvider>
                   <div className="chat-message-actions">
                     <CopyButton text={m.content} />
                     {showRegenerate && (
@@ -576,19 +661,22 @@ export default function ChatMessages({
                 </article>
               )
             })}
-            {streaming && (
+            {(streaming || activeRunId && (streamingText || streamingReasoning || streamingMedia.length > 0)) && (
               <article
                 className="chat-response-group"
                 aria-live="polite"
                 onContextMenu={handleMessageContextMenu}
               >
+                <ChatMediaContextProvider value={messageMediaContext(activeRunId, streamingMedia)} media={streamingMedia}>
                 <RunTimeline
                   steps={streamingSteps}
                   fallbackAnswer={streamingText}
                   fallbackReasoning={streamingReasoning}
-                  streaming
+                  streaming={streaming}
                   elapsedSeconds={elapsedSeconds}
                 />
+                <ChatMedia media={streamingMedia} excludeMarkdown={streamingText} />
+                </ChatMediaContextProvider>
               </article>
             )}
           </div>

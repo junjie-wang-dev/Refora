@@ -38,6 +38,15 @@ export type PdfTool =
 export type PdfAnnotationSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 export type PdfAnnotationLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
+export interface PdfNavigationTarget {
+  page?: number
+  search?: string
+}
+
+interface PdfNavigationRequest extends PdfNavigationTarget {
+  documentId: string
+}
+
 interface PdfAnnotationHistory {
   past: PdfAnnotation[][]
   future: PdfAnnotation[][]
@@ -68,7 +77,9 @@ interface PdfReaderState {
   textEditor: { documentId: string; annotationId: string } | null
   pendingCommentFocusId: string | null
   lastDeletion: PdfAnnotationDeletion | null
-  open: (document: Document) => Promise<void>
+  navigationRequest: PdfNavigationRequest | null
+  open: (document: Document, target?: PdfNavigationTarget) => Promise<void>
+  consumeNavigationRequest: (request: PdfNavigationRequest) => void
   close: (documentId: string) => void
   closeAll: () => void
   activate: (documentId: string) => void
@@ -392,6 +403,7 @@ function resetForLibrarySwitch(): void {
     selectedAnnotationIds: [],
     textEditor: null,
     pendingCommentFocusId: null,
+    navigationRequest: null,
     lastDeletion: null
   })
 }
@@ -419,8 +431,9 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   textEditor: null,
   pendingCommentFocusId: null,
   lastDeletion: null,
+  navigationRequest: null,
 
-  open: async (document) => {
+  open: async (document, target) => {
     get().finishTextEditing()
     const previousDocumentId = get().activeDocumentId
     if (previousDocumentId && previousDocumentId !== document.id) {
@@ -435,6 +448,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
         ? state.tabs.map((tab) => tab.id === document.id ? document : tab)
         : [...state.tabs, document],
       activeDocumentId: document.id,
+      navigationRequest: target ? { ...target, documentId: document.id } : null,
       selectedAnnotationId: null,
       selectedAnnotationIds: [],
       pendingCommentFocusId: null
@@ -477,6 +491,10 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     }
   },
 
+  consumeNavigationRequest: (request) => {
+    if (get().navigationRequest === request) set({ navigationRequest: null })
+  },
+
   close: (documentId) => {
     get().finishTextEditing(documentId)
     endHistoryGroup(documentId)
@@ -490,6 +508,8 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
       return {
         tabs,
         activeDocumentId,
+        navigationRequest: state.navigationRequest?.documentId === documentId
+          ? null : state.navigationRequest,
         selectedAnnotationId: null,
         selectedAnnotationIds: [],
         pendingCommentFocusId: null
@@ -516,6 +536,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     set({
       tabs: [],
       activeDocumentId: null,
+      navigationRequest: null,
       selectedAnnotationId: null,
       selectedAnnotationIds: [],
       pendingCommentFocusId: null

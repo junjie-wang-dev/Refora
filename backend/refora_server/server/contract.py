@@ -11,6 +11,7 @@ PROTOCOL_VERSION = 1
 WEBSOCKET_PATH = "/ws"
 SERVER_EVENTS = (
     "ai.chat.token",
+    "ai.chat.media",
     "ai.chat.reasoning",
     "ai.chat.done",
     "ai.chat.error",

@@ -72,6 +72,10 @@ describe('server AI IPC handlers', () => {
         terminated: true
       }),
       aiChatHistory: vi.fn().mockResolvedValue([]),
+      aiMediaResolve: vi.fn().mockResolvedValue({ id: 'media-1', url: 'refora-asset://media/media-1' }),
+      aiMediaTextPreview: vi.fn().mockResolvedValue({ content: 'a,b', truncated: false }),
+      aiChatHistoryPage: vi.fn().mockResolvedValue({ messages: [], traces: [], nextCursor: null, activeRun: null }),
+      aiChatRunSnapshot: vi.fn().mockResolvedValue({ run: { id: 'run-1', status: 'running' }, traces: [], revision: 0 }),
       aiChatThreads: vi.fn().mockResolvedValue([]),
       aiUsageStats: vi.fn().mockResolvedValue({ totalTokens: 0 }),
       aiChatTraces: vi.fn().mockResolvedValue([]),
@@ -207,6 +211,26 @@ describe('server AI IPC handlers', () => {
     })
   })
 
+  it('forwards paging cursors and incremental trace revisions through typed envelopes', async () => {
+    const revised = { ...traceStep, revision: 12 }
+    http.aiChatHistoryPage.mockResolvedValue({
+      messages: [{ id: 'message-1', content: 'Read this', attachments: [{ type: 'document', docId: 'doc-1', title: 'Paper' }] }],
+      traces: [revised], nextCursor: 'older', activeRun: null
+    })
+    const page = await handlers[IpcChannel.AiChatHistoryPage]('thread-1', { before: 'cursor', limit: 20 })
+    expect(http.aiChatHistoryPage).toHaveBeenCalledWith('thread-1', { before: 'cursor', limit: 20 })
+    expect(page).toMatchObject({ ok: true, data: { nextCursor: 'older', traces: [revised] } })
+    http.aiChatRunSnapshot.mockResolvedValue({ run: { id: 'run-1' }, traces: [revised], revision: 12 })
+    await expect(handlers[IpcChannel.AiChatRunSnapshot]('run-1', 10)).resolves.toMatchObject({
+      ok: true, data: { revision: 12, traces: [revised] }
+    })
+    expect(http.aiChatRunSnapshot).toHaveBeenCalledWith('run-1', 10)
+    http.aiChatRunSnapshot.mockRejectedValue(Object.assign(new Error('Missing run'), { code: 'not_found' }))
+    await expect(handlers[IpcChannel.AiChatRunSnapshot]('missing', 0)).resolves.toMatchObject({
+      ok: false, error: { code: 'not_found' }
+    })
+  })
+
   it('rejects chat resume requests with invalid decisions before forwarding', async () => {
     await expect(handlers[IpcChannel.AiChatResume]({
       threadId: 'thread-1',
@@ -237,5 +261,23 @@ describe('server AI IPC handlers', () => {
       ok: false,
       error: { code: 'unavailable', message: 'Unavailable' }
     })
+  })
+
+  it('resolves media and forwards native actions without exposing paths in the renderer API', async () => {
+    const mediaActions = {
+      open: vi.fn().mockResolvedValue(undefined), reveal: vi.fn().mockResolvedValue(undefined),
+      save: vi.fn().mockResolvedValue(false), copy: vi.fn().mockRejectedValue(new Error('Clipboard unavailable'))
+    }
+    const mediaHandlers = createServerAiHandlers({ serverClient: { http } as unknown as ServerClient, mediaActions })
+    const request = { source: { type: 'asset' as const, assetId: 'asset-1' } }
+    await expect(mediaHandlers[IpcChannel.AiMediaResolve](request)).resolves.toMatchObject({ ok: true, data: { id: 'media-1' } })
+    expect(http.aiMediaResolve).toHaveBeenCalledWith(request)
+    await expect(mediaHandlers[IpcChannel.AiMediaTextPreview]('media-1')).resolves.toMatchObject({ ok: true, data: { content: 'a,b' } })
+    await expect(mediaHandlers[IpcChannel.AiMediaOpen]('media-1')).resolves.toEqual({ ok: true, data: undefined })
+    await expect(mediaHandlers[IpcChannel.AiMediaReveal]('media-1')).resolves.toEqual({ ok: true, data: undefined })
+    await expect(mediaHandlers[IpcChannel.AiMediaSave]('media-1')).resolves.toEqual({ ok: true, data: false })
+    await expect(mediaHandlers[IpcChannel.AiMediaCopy]('media-1')).resolves.toMatchObject({ ok: false, error: { message: 'Clipboard unavailable' } })
+    expect(mediaActions.open).toHaveBeenCalledWith('media-1')
+    expect(mediaActions.reveal).toHaveBeenCalledWith('media-1')
   })
 })

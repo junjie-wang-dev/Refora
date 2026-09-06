@@ -94,6 +94,13 @@ def createAgentRunsRepository(db):
         )
         return [_map_run(row) for row in cur.fetchall()]
 
+    def latestByThread(threadId: str) -> dict[str, Any] | None:
+        row = db.execute(
+            "SELECT * FROM agent_runs WHERE threadId = ? ORDER BY startedAt DESC, rowid DESC LIMIT 1",
+            [threadId],
+        ).fetchone()
+        return _map_run(row) if row is not None else None
+
     def update(id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         existing = get(id)
         if existing is None:
@@ -137,6 +144,7 @@ def createAgentRunsRepository(db):
         "get": get,
         "listByThread": listByThread,
         "listActive": listActive,
+        "latestByThread": latestByThread,
         "update": update,
         "reconcileRunning": reconcileRunning,
     }

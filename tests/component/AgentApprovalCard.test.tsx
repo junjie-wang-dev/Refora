@@ -141,14 +141,14 @@ describe('AgentApprovalCard', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save and approve' }))
 
-    await waitFor(() => expect(onResolve).toHaveBeenCalledWith('edit', [{
+    await waitFor(() => expect(onResolve).toHaveBeenCalledWith([{ type: 'edit', editedAction: {
       name: 'propose_workspace_memory_update',
       args: {
         path: '/decisions.md',
         content: 'Updated research goal',
         rationale: 'Continue this project later'
       }
-    }]))
+    } }]))
     expect(screen.getAllByRole('button')).toHaveLength(2)
   })
 
@@ -180,4 +180,33 @@ describe('AgentApprovalCard', () => {
     expect(card).toHaveTextContent('second')
     expect(card.querySelector('pre')).toBeNull()
   })
+})
+
+it('supports independent decisions and edits memory alongside a non-editable action', async () => {
+  initI18n('en')
+  await i18n.changeLanguage('en')
+  const onResolve = vi.fn(async () => undefined)
+  const onCancel = vi.fn()
+  render(<AgentApprovalCard
+    interrupt={interrupt([
+      { name: 'prepare_paper_ocr', args: { docId: 'paper' }, allowedDecisions: ['approve', 'reject'] },
+      { name: 'propose_workspace_memory_update', args: { path: '/brief.md', content: 'Original', rationale: 'For later' }, allowedDecisions: ['approve', 'reject', 'edit'] }
+    ])}
+    activeWorkspaceId="ws-1"
+    streaming={false}
+    onResolve={onResolve}
+    onCancel={onCancel}
+  />)
+  fireEvent.change(screen.getByLabelText('Decision for Run paper OCR'), { target: { value: 'reject' } })
+  const memory = screen.getByLabelText('Information to remember')
+  expect(memory).not.toBeDisabled()
+  fireEvent.change(memory, { target: { value: 'Corrected' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue with these decisions' }))
+  expect(onResolve).toHaveBeenCalledWith([
+    { type: 'reject' },
+    { type: 'edit', editedAction: { name: 'propose_workspace_memory_update', args: { path: '/brief.md', content: 'Corrected', rationale: 'For later' } } }
+  ])
+  fireEvent.click(screen.getByRole('button', { name: 'End task' }))
+  expect(onCancel).toHaveBeenCalledOnce()
+  cleanup()
 })

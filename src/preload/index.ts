@@ -23,6 +23,12 @@ import type {
   ChatErrorEvent,
   ChatInterruptedEvent,
   ChatMessage,
+  ChatHistoryPage,
+  ChatHistoryPageRequest,
+  ChatRunSnapshot,
+  ChatMediaRequest,
+  ChatMediaResource,
+  ChatMediaEvent,
   ChatReasoningEvent,
   ChatRunStatusEvent,
   ChatSendRequest,
@@ -430,6 +436,16 @@ const api: ReforaApi = {
     chatSend: (req: ChatSendRequest) =>
       invoke<{ threadId: string; runId: string }>(IpcChannel.AiChatSend, req),
     chatHistory: (threadId: string) => invoke<ChatMessage[]>(IpcChannel.AiChatHistory, threadId),
+    chatHistoryPage: (threadId: string, options?: ChatHistoryPageRequest) =>
+      invoke<ChatHistoryPage>(IpcChannel.AiChatHistoryPage, threadId, options),
+    chatRunSnapshot: (runId: string, afterRevision?: number) =>
+      invoke<ChatRunSnapshot>(IpcChannel.AiChatRunSnapshot, runId, afterRevision),
+    resolveMedia: (request: ChatMediaRequest) => invoke<ChatMediaResource>(IpcChannel.AiMediaResolve, request),
+    mediaTextPreview: (id: string) => invoke<{ content: string; truncated: boolean }>(IpcChannel.AiMediaTextPreview, id),
+    openMedia: (id: string) => invoke<void>(IpcChannel.AiMediaOpen, id),
+    revealMedia: (id: string) => invoke<void>(IpcChannel.AiMediaReveal, id),
+    saveMedia: (id: string) => invoke<boolean>(IpcChannel.AiMediaSave, id),
+    copyMedia: (id: string) => invoke<void>(IpcChannel.AiMediaCopy, id),
     chatThreads: (workspaceId: string | null) =>
       invoke<ChatThread[]>(IpcChannel.AiChatThreads, workspaceId),
     usageStats: () => invoke<AiUsageStats>(IpcChannel.AiUsageStats),
@@ -504,6 +520,8 @@ const api: ReforaApi = {
       subscribe(IpcChannel.EventAiSummaryError, cb),
     onAiChatToken: (cb: (payload: ChatTokenEvent) => void) =>
       subscribe(IpcChannel.EventAiChatToken, cb),
+    onAiChatMedia: (cb: (payload: ChatMediaEvent) => void) =>
+      subscribe(IpcChannel.EventAiChatMedia, cb),
     onAiChatReasoning: (cb: (payload: ChatReasoningEvent) => void) =>
       subscribe(IpcChannel.EventAiChatReasoning, cb),
     onAiChatDone: (cb: (payload: ChatDoneEvent) => void) =>

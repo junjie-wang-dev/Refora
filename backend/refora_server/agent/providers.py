@@ -222,7 +222,9 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
     ]
     native_tools = [{"type": "web_search"}] if use_native_web_search else []
     read_tools = [
-        tool for tool in refora_tools if classify(tool.name) is RiskClass.READ
+        tool
+        for tool in refora_tools
+        if classify(tool.name) in {RiskClass.READ, RiskClass.NETWORK_READ}
     ]
     subagent_tools = [*read_tools, *native_tools]
     agent_tools = [*refora_tools, *native_tools]

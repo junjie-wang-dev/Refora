@@ -20,6 +20,11 @@ import type {
   BootstrapData,
   Category,
   ChatMessage,
+  ChatHistoryPage,
+  ChatHistoryPageRequest,
+  ChatRunSnapshot,
+  ChatMediaRequest,
+  ChatMediaResource,
   ChatCancelResult,
   ChatThread,
   Document,
@@ -398,6 +403,11 @@ export interface ServerHttp {
   aiChatThreads(query?: ChatThreadsQuery): Promise<ChatThread[]>
   aiUsageStats(): Promise<AiUsageStats>
   aiChatHistory(threadId: string): Promise<ChatMessage[]>
+  aiChatHistoryPage(threadId: string, options?: ChatHistoryPageRequest): Promise<ChatHistoryPage>
+  aiChatRunSnapshot(runId: string, afterRevision?: number): Promise<ChatRunSnapshot>
+  aiMediaResolve(request: ChatMediaRequest): Promise<ChatMediaResource>
+  aiMediaTextPreview(id: string): Promise<{ content: string; truncated: boolean }>
+  aiMediaFile(id: string): Promise<ChatMediaResource & { path: string }>
   aiChatTraces(threadId: string): Promise<unknown[]>
   aiChatRun(runId: string): Promise<AgentRun>
   aiChatPendingInterrupt(runId: string): Promise<unknown | null>
@@ -696,6 +706,11 @@ export function createServerClient(
     aiChatThreads: (query) => get<ChatThread[]>('/ai/chat/threads', query),
     aiUsageStats: () => get<AiUsageStats>('/ai/usage'),
     aiChatHistory: (id) => get<ChatMessage[]>(`/ai/chat/threads/${pathSegment(id)}/history`),
+    aiChatHistoryPage: (id, options) => get<ChatHistoryPage>(`/ai/chat/threads/${pathSegment(id)}/history-page`, { ...options }),
+    aiChatRunSnapshot: (id, afterRevision) => get<ChatRunSnapshot>(`/ai/chat/runs/${pathSegment(id)}/snapshot`, { afterRevision }),
+    aiMediaResolve: (request) => post<ChatMediaResource>('/ai/media/resolve', request),
+    aiMediaTextPreview: (id) => get<{ content: string; truncated: boolean }>(`/ai/media/${pathSegment(id)}/text`),
+    aiMediaFile: (id) => get<ChatMediaResource & { path: string }>(`/ai/media/${pathSegment(id)}`),
     aiChatTraces: (id) => get<unknown[]>(`/ai/chat/threads/${pathSegment(id)}/traces`),
     aiChatRun: (id) => get<AgentRun>(`/ai/chat/runs/${pathSegment(id)}`),
     aiChatPendingInterrupt: (id) => get<unknown | null>(`/ai/chat/runs/${pathSegment(id)}/pending-interrupt`),

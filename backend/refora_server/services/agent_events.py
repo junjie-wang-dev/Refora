@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import re
 import uuid
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from refora_server.services.agent_checkpoint import _is_academic_tool_name
 from refora_server.services.agent_memory import (
@@ -10,6 +13,7 @@ from refora_server.services.agent_memory import (
     normalize_memory_path,
 )
 from refora_server.services.chat_history import parseToolPayload
+from refora_server.services.chat_attachments import normalize_media
 
 
 _SECRET_KEYS = {"apiKey", "api_key", "authorization", "Authorization"}
@@ -104,6 +108,167 @@ def _result_text(result: Any) -> str:
             if key in result:
                 return _message_text(result[key])
     return _message_text(result)
+
+
+def _media_url_source(url: Any, run_id: str | None = None) -> dict[str, str] | None:
+    if not isinstance(url, str) or not url:
+        return None
+    if url.startswith("data:"):
+        return {"type": "inline", "dataUrl": url}
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+    if parsed.scheme in {"http", "https"}:
+        return {"type": "remote", "url": url}
+    if parsed.scheme == "refora-asset":
+        asset_id = unquote(parsed.path.strip("/"))
+        if not asset_id or "/" in asset_id or "\\" in asset_id:
+            return None
+        if parsed.netloc == "asset":
+            return {"type": "asset", "assetId": asset_id}
+        if parsed.netloc == "media" and re.fullmatch(r"[a-f0-9]{64}", asset_id):
+            return {"type": "cached", "mediaId": asset_id}
+        return None
+    if parsed.scheme == "refora-document" and parsed.netloc == "ocr":
+        parts = parsed.path.strip("/").split("/", 2)
+        if len(parts) == 3:
+            return {"type": "ocr", "documentId": unquote(parts[0]), "resultKey": unquote(parts[1]), "path": unquote(parts[2])}
+    if run_id and url.lstrip("/").startswith("outputs/"):
+        return {"type": "sandbox", "runId": run_id, "path": url.lstrip("/")}
+    return None
+
+
+def _message_media(value: Any, run_id: str | None = None) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+
+    def visit(block: Any, depth: int = 0) -> None:
+        if depth > 12 or len(found) >= 64 or block is None:
+            return
+        if isinstance(block, (list, tuple)):
+            for item in block[:128]:
+                visit(item, depth + 1)
+            return
+        mapping = block if isinstance(block, dict) else _as_mapping(block)
+        if not mapping:
+            content = getattr(block, "content", None)
+            if content is not None and content is not block:
+                visit(content, depth + 1)
+            return
+        if isinstance(mapping.get("kind"), str) and mapping["kind"] in {"image", "audio", "video", "file"} and isinstance(mapping.get("source"), dict):
+            found.append(mapping)
+            return
+        inline = mapping.get("inlineData") or mapping.get("inline_data")
+        file_data = mapping.get("fileData") or mapping.get("file_data")
+        typed_data = inline if isinstance(inline, dict) else file_data if isinstance(file_data, dict) else None
+        if typed_data is not None:
+            mime = typed_data.get("mimeType") or typed_data.get("mime_type") or "application/octet-stream"
+            inferred = mime.split("/", 1)[0] if isinstance(mime, str) else "file"
+            visit({"type": inferred if inferred in {"image", "audio", "video"} else "file", "mime_type": mime, "data": typed_data.get("data"), "url": typed_data.get("fileUri") or typed_data.get("file_uri")}, depth + 1)
+            return
+        block_type = mapping.get("type")
+        block_type = block_type if isinstance(block_type, str) else ""
+        kind = next((kind for kind in ("image", "audio", "video", "file") if block_type in {kind, f"input_{kind}", f"output_{kind}", f"{kind}_url"}), None)
+        if block_type == "image_generation_call":
+            kind = "image"
+        if kind:
+            nested = mapping.get(kind) or mapping.get(f"input_{kind}") or mapping.get(f"output_{kind}")
+            body = {**mapping, **nested} if isinstance(nested, dict) else mapping
+            raw_source = body.get("source")
+            raw_source = raw_source if isinstance(raw_source, dict) else {}
+            url = body.get("url") or body.get(f"{kind}_url") or raw_source.get("url")
+            if isinstance(url, dict):
+                url = url.get("url")
+            mime = body.get("mime_type") or body.get("mimeType") or raw_source.get("media_type") or raw_source.get("mime_type")
+            if not mime:
+                format_name = body.get("format") or body.get("output_format")
+                mime = f"{kind}/{format_name or ('png' if kind == 'image' else 'wav')}" if kind in {"image", "audio", "video"} else mimetypes.guess_type(body.get("filename") or "")[0]
+            binary = body.get("base64") or body.get("data") or body.get("file_data") or raw_source.get("data")
+            if block_type == "image_generation_call":
+                binary = body.get("result")
+            if isinstance(binary, str) and binary:
+                url = binary if binary.startswith("data:") else f"data:{mime or 'application/octet-stream'};base64,{binary}"
+            source = _media_url_source(url, run_id)
+            if source is None:
+                source = {"type": "unavailable", "reason": "The provider returned media without a supported downloadable source."}
+            item = {"kind": kind, "source": source}
+            title = body.get("title") or body.get("filename") or body.get("alt")
+            if isinstance(title, str):
+                item["title"] = title
+            if isinstance(mime, str):
+                item["mimeType"] = mime
+            found.append(item)
+            return
+        messages = mapping.get("messages")
+        if isinstance(messages, list) and messages:
+            visit(messages[-1], depth + 1)
+            return
+        for key in ("content", "content_blocks", "output", "media", "parts"):
+            nested = mapping.get(key)
+            if nested is not None and nested is not block:
+                visit(nested, depth + 1)
+        kwargs = mapping.get("additional_kwargs")
+        if isinstance(kwargs, dict) and isinstance(kwargs.get("audio"), dict):
+            visit({"type": "audio", **kwargs["audio"]}, depth + 1)
+
+    visit(value)
+    return normalize_media(found)
+
+
+def _structured_tool_result(value: Any, name: str | None = None) -> Any:
+    if value is None or _is_academic_tool_name(name):
+        return None
+    safe = _without_secrets(_serializable(value))
+    if isinstance(safe, dict) and isinstance(safe.get("structuredContent"), (dict, list)):
+        safe = safe["structuredContent"]
+    elif isinstance(safe, dict) and "content" in safe:
+        content = safe["content"]
+        text = _message_text(content)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, (dict, list)):
+                safe = _without_secrets(parsed)
+        except (TypeError, ValueError):
+            pass
+    elif isinstance(safe, str):
+        try:
+            safe = _without_secrets(json.loads(safe))
+        except (TypeError, ValueError):
+            pass
+    serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) <= 256 * 1024:
+        return safe
+    budget = 240 * 1024
+
+    def bounded(item: Any, depth: int = 0) -> Any:
+        nonlocal budget
+        if budget <= 0 or depth > 10:
+            return None
+        if isinstance(item, dict):
+            result = {}
+            for key, nested in list(item.items())[:200]:
+                budget -= len(str(key).encode("utf-8")) + 10
+                if budget <= 0:
+                    break
+                result[str(key)[:500]] = bounded(nested, depth + 1)
+            return result
+        if isinstance(item, list):
+            result = []
+            for nested in item[:200]:
+                if budget <= 0:
+                    break
+                budget -= 10
+                result.append(bounded(nested, depth + 1))
+            return result
+        if isinstance(item, str):
+            encoded = item.encode("utf-8")[:min(64000, max(0, budget // 6))]
+            budget -= len(encoded) * 6 + 10
+            return encoded.decode("utf-8", errors="ignore")
+        budget -= 40
+        return item
+
+    clipped = bounded(safe)
+    return {**clipped, "_truncated": True} if isinstance(clipped, dict) else {"value": clipped, "_truncated": True}
 
 
 def _tool_history_records(

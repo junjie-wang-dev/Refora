@@ -1,13 +1,14 @@
 import type {
   AgentInterrupt,
   AgentInterruptDecision,
+  AgentInterruptDecisionEntry,
   AgentRunStatus,
   AgentTraceStep
 } from '../../shared/ipc-types'
 
 export interface ResumeRetryContext {
   interrupt: AgentInterrupt
-  decision: AgentInterruptDecision
+  decision: AgentInterruptDecision | AgentInterruptDecisionEntry[]
   editedActions?: Array<{ name: string; args: Record<string, unknown> }>
 }
 
@@ -61,13 +62,23 @@ export function replaceRunTraceSnapshot(
   ].sort((left, right) => left.startedAt - right.startedAt || left.seq - right.seq)
 }
 
+export function interruptDecisions(context: ResumeRetryContext): AgentInterruptDecisionEntry[] {
+  if (Array.isArray(context.decision)) return context.decision
+  return context.interrupt.actions.map((action, index) => context.decision === 'edit'
+    ? {
+        type: 'edit',
+        editedAction: context.editedActions?.[index] ?? { name: action.name, args: action.args }
+      }
+    : { type: context.decision as AgentInterruptDecision })
+}
+
 export function reviewedOcrDocumentId(context: ResumeRetryContext): string | null {
-  if (context.decision === 'reject') return null
-  const action = context.interrupt.actions.find((candidate) => candidate.name === 'prepare_paper_ocr')
-  if (!action) return null
-  const edited = context.decision === 'edit'
-    ? context.editedActions?.find((candidate) => candidate.name === action.name)
-    : null
-  const docId = (edited?.args ?? action.args).docId
-  return typeof docId === 'string' && docId.trim() ? docId.trim() : null
+  const decisions = interruptDecisions(context)
+  for (const [index, action] of context.interrupt.actions.entries()) {
+    const decision = decisions[index]
+    if (action.name !== 'prepare_paper_ocr' || !decision || decision.type === 'reject') continue
+    const docId = (decision.editedAction?.args ?? action.args).docId
+    if (typeof docId === 'string' && docId.trim()) return docId.trim()
+  }
+  return null
 }

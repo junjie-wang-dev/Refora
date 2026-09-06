@@ -34,7 +34,7 @@ interface MarkdownDraft {
 }
 
 const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  (docId) => openDocumentPdf(docId),
+  openDocumentPdf,
   () => useDocumentStore.getState().showToast(
     i18n.t('workspace.openDocFailed') as string
   )

@@ -426,11 +426,23 @@ export const createMockReforaApi = (): ReforaApi => ({
   },
 
   ai: {
+    resolveMedia: async () => { throw new Error('Media unavailable in test') },
+    mediaTextPreview: async () => ({ content: '', truncated: false }),
+    openMedia: noop,
+    saveMedia: async () => true,
+    copyMedia: noop,
+    revealMedia: noop,
     docTextGet: async () => '',
     summarize: noop,
     summaryGet: async () => null,
     chatSend: async () => ({ threadId: 't', runId: 'r' }),
     chatHistory: async () => [],
+    chatHistoryPage: async () => ({ messages: [], traces: [], nextCursor: null, activeRun: null }),
+    chatRunSnapshot: async (runId: string) => ({
+      run: await createMockReforaApi().ai.chatRun(runId),
+      traces: [],
+      revision: 0
+    }),
     chatThreads: async () => [],
     usageStats: async () => ({
       totalTokens: 0,
@@ -505,6 +517,7 @@ export const createMockReforaApi = (): ReforaApi => ({
     onWorkspaceItemsChanged: (_cb: unknown) => noopDisposer,
     onAiChatToken: (_cb: unknown) => noopDisposer,
     onAiChatReasoning: (_cb: unknown) => noopDisposer,
+    onAiChatMedia: (_cb: unknown) => noopDisposer,
     onAiChatDone: (_cb: unknown) => noopDisposer,
     onAiChatError: (_cb: unknown) => noopDisposer,
     onAiChatTrace: (_cb: unknown) => noopDisposer,

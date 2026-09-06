@@ -16,7 +16,7 @@ import i18n from '../../i18n'
 
 export const MARKDOWN_COMPONENTS: ReturnType<typeof createReforaDocMarkdownComponents> =
   createReforaDocMarkdownComponents(
-  (docId) => openDocumentPdf(docId),
+  openDocumentPdf,
   () => useDocumentStore.getState().showToast(
     i18n.t('workspace.openDocFailed') as string
   )

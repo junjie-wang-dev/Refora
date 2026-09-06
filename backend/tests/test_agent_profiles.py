@@ -225,6 +225,39 @@ def test_codex_resumed_prompt_refreshes_workspace_system_instructions():
     )
 
 
+@pytest.mark.parametrize("resumed", [False, True])
+def test_cli_prompt_includes_current_saved_memory_on_every_turn(resumed):
+    prompt = _build_prompt(
+        {
+            "systemPrompt": "Research carefully.",
+            "messages": [{"role": "user", "content": "Continue"}],
+            "memories": {
+                "/preferences.md": "始终使用中文。",
+                "/decisions.md": "Compare robustness before speed.",
+                "/research.md": "The next experiment uses held-out data.",
+            },
+            "includeResearchMemory": True,
+        },
+        resumed,
+    )
+
+    assert "始终使用中文。" in prompt
+    assert "Compare robustness before speed." in prompt
+    assert "The next experiment uses held-out data." in prompt
+    assert "read-only context" in prompt
+    assert "propose_workspace_memory_update" in prompt
+    assert prompt.index("[Saved memory]") < prompt.index("[User]")
+
+
+def test_global_cli_prompt_omits_research_and_unknown_memory_paths():
+    prompt = _build_prompt(
+        {"memories": {"/research.md": "Workspace research", "/other.md": "Unknown"}},
+        False,
+    )
+
+    assert prompt == ""
+
+
 def test_refora_mcp_initialization_guides_workspace_tool_usage():
     response = _handle(
         {},
@@ -673,6 +706,53 @@ async def test_cli_engine_separates_complete_assistant_messages(tmp_path):
     assert events[-1]["result"]["content"] == (
         "Checking sources.\n\nFinal answer."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("continue_session", [False, True])
+async def test_cli_engine_restarts_stale_session_with_full_visible_history(
+    tmp_path, continue_session
+):
+    captured = {}
+    sessions = {"sessionId": "old-cli-session"}
+
+    class RecordingAdapter(_SegmentAdapter):
+        def build_invocation(self, profile, request, prompt, session_id, mcp):
+            captured.update(prompt=prompt, sessionId=session_id)
+            return super().build_invocation(profile, request, prompt, session_id, mcp)
+
+    broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
+    engine = CliRuntimeEngine(
+        CliRuntimeRegistry([RecordingAdapter()]),
+        broker,
+        {
+            "get": lambda *_args: sessions or None,
+            "put": lambda *_args: None,
+            "delete": lambda *_args: sessions.clear(),
+        },
+        {"update": lambda *_args: None},
+    )
+    request = {
+        "runId": "run-new",
+        "threadId": "thread-1",
+        "sandboxRoot": str(tmp_path),
+        "cliContinueSession": continue_session,
+        "messages": [
+            {"role": "user", "content": "Research robust training"},
+            {"role": "assistant", "content": "Compare distribution shifts"},
+            {"role": "user", "content": "Continue"},
+        ],
+        "agentProfile": {"id": "profile-1", "cliRuntimeId": "segment-test"},
+    }
+
+    events = [event async for event in engine.create_agent([], request).astream_events({})]
+
+    assert events[-1]["result"]["content"]
+    assert captured["sessionId"] == ("old-cli-session" if continue_session else None)
+    assert bool(sessions) is continue_session
+    assert ("Research robust training" in captured["prompt"]) is (not continue_session)
+    assert ("Compare distribution shifts" in captured["prompt"]) is (not continue_session)
+    assert "[User]\nContinue" in captured["prompt"]
 
 
 @pytest.mark.asyncio

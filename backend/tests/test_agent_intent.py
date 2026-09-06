@@ -118,3 +118,69 @@ async def test_recovery_rebuilds_the_persisted_active_reader_context(
     assert result["activeDocumentId"] == "doc-reader"
     assert "A paper is open in the active reader tab" in result["systemPrompt"]
     assert "docId=doc-reader | Reader paper" in result["systemPrompt"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous", "selected", "expected_checkpoint", "continue_cli"),
+    [
+        ("api-one", "cli-one", None, False),
+        ("cli-one", "api-one", None, False),
+        ("cli-one", "cli-two", None, False),
+        ("cli-one", "cli-one", None, True),
+        ("api-one", "api-one", "api-checkpoint", True),
+        ("api-one", "api-two", "api-checkpoint", False),
+        ("deleted-profile", "api-one", None, False),
+    ],
+)
+async def test_turn_context_follows_execution_backend_compatibility(
+    monkeypatch, tmp_path, previous, selected, expected_checkpoint, continue_cli
+):
+    async def provider_config(*_args, **_kwargs):
+        return {"model": "test-model"}
+
+    monkeypatch.setattr(agent_intent, "agent_profile_config", provider_config)
+    monkeypatch.setattr(agent_intent, "ensure_memory_files", lambda *_args: None)
+    monkeypatch.setattr(agent_intent, "read_memories", lambda *_args: {})
+    profiles = {
+        name: {
+            "id": name,
+            "kind": name.split("-")[0],
+            "apiProviderId": name if name.startswith("api") else None,
+            "cliRuntimeId": "codex" if name.startswith("cli") else None,
+        }
+        for name in ("api-one", "api-two", "cli-one", "cli-two")
+    }
+    thread = {
+        "id": "thread-1",
+        "workspaceId": None,
+        "providerId": previous,
+        "agentProfileId": previous,
+        "agentStateVersion": agent_intent.AGENT_STATE_VERSION,
+        "headCheckpointId": "api-checkpoint",
+    }
+    history = [
+        {"role": "user", "content": "Research robust training"},
+        {"role": "assistant", "content": "Compare distribution shifts"},
+    ]
+    repos = {
+        "agentProfiles": {"get": profiles.get},
+        "chat": {"getThread": lambda _id: thread, "listMessages": lambda _id: history},
+    }
+
+    result = await agent_intent.assemble_turn(
+        {"runId": "run-1", "threadId": "thread-1", "agentProfileId": selected, "text": "Continue"},
+        repos=repos,
+        services={},
+        connector=None,
+        db_path=str(tmp_path / "library.sqlite"),
+        library_folder=str(tmp_path),
+    )
+
+    assert result["checkpointBefore"] == expected_checkpoint
+    assert result["cliContinueSession"] is continue_cli
+    assert result["messages"] == (
+        [{"role": "user", "content": "Continue"}]
+        if expected_checkpoint
+        else [*history, {"role": "user", "content": "Continue"}]
+    )

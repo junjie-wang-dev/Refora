@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+import pytest
+
 from refora_server.academic.frontier import (
     ContinueFrontierInput,
     ExpandFrontierInput,
@@ -34,6 +36,7 @@ from conftest import (
     insert_run,
     insert_thread,
     make_workspaces_repo,
+    make_docs_repo,
     open_migrated_db,
 )
 from refora_server.repositories import create_repositories
@@ -253,23 +256,62 @@ def _library_executor(repos, deps_extra=None):
 
 
 def test_search_documents_queries_library_and_maps_doc_fields():
-    docs = Functions(search=lambda query, limit: [{"id": "d1", "title": "Quantum", "authors": ["A"], "year": 2021}, {"id": "d2", "fileName": "notes.pdf"}])
+    docs = Functions(search=lambda query, limit, offset, workspace_id: [{"id": "d1", "title": "Quantum", "authors": ["A"], "year": 2021}, {"id": "d2", "fileName": "notes.pdf"}])
     executor = _library_executor({"documents": docs})
 
     result = json.loads(executor.execute("search_documents", {"query": "quantum", "scope": "library"}))
 
-    assert result == [{"docId": "d1", "title": "Quantum", "authors": ["A"], "year": 2021, "hasSummary": False}, {"docId": "d2", "title": "notes.pdf", "authors": None, "year": None, "hasSummary": False}]
-    docs["search"].called_with = None
-    assert docs["search"]("quantum", 20) is not None
+    assert result["documents"] == [{"docId": "d1", "title": "Quantum", "authors": ["A"], "year": 2021, "hasSummary": False}, {"docId": "d2", "title": "notes.pdf", "authors": None, "year": None, "hasSummary": False}]
+    assert result["hasMore"] is False
+    assert result["nextOffset"] is None
 
 
 def test_search_documents_caps_library_results_at_twenty():
-    docs = Functions(search=lambda query, limit: [{"id": f"d{i}"} for i in range(limit)])
+    docs = Functions(search=lambda query, limit, offset, workspace_id: [{"id": f"d{i}"} for i in range(limit)])
     executor = _library_executor({"documents": docs})
 
     result = json.loads(executor.execute("search_documents", {"query": "x", "scope": "library"}))
 
-    assert len(result) == 20
+    assert len(result["documents"]) == 20
+    assert result["hasMore"] is True
+    assert result["nextOffset"] == 20
+
+
+@pytest.mark.parametrize("search_mode", ["like", "trigram"])
+@pytest.mark.parametrize("query", ["paper", ""])
+def test_workspace_document_search_filters_before_paging(search_mode, query):
+    db = open_migrated_db()
+    try:
+        repos = create_repositories(db)
+        repos["documents"] = make_docs_repo(db, search_mode=search_mode)
+        workspace = repos["workspaces"]["create"]("Research")
+        for index in range(56):
+            doc_id = f"paper-{index:02d}"
+            insert_doc(db, id=doc_id, added_at=1000 - index)
+        repos["workspaceItems"]["add"](
+            workspace["id"], "document", [f"paper-{index:02d}" for index in range(51, 56)]
+        )
+        executor = AgentToolExecutor(
+            AgentToolContext(run_id="run", workspace_id=workspace["id"]),
+            {"repos": repos},
+        )
+
+        def search(offset):
+            return json.loads(executor.execute(
+                "search_documents",
+                {"query": query, "scope": "workspace", "limit": 3, "offset": offset},
+            ))
+
+        first = search(0)
+        assert [doc["docId"] for doc in first["documents"]] == ["paper-51", "paper-52", "paper-53"]
+        assert first["hasMore"] is True
+        assert first["nextOffset"] == 3
+        second = search(first["nextOffset"])
+        assert [doc["docId"] for doc in second["documents"]] == ["paper-54", "paper-55"]
+        assert second["hasMore"] is False
+        assert second["nextOffset"] is None
+    finally:
+        db.close()
 
 
 def test_get_paper_context_returns_metadata_summary_or_not_found():
@@ -464,11 +506,11 @@ def test_find_related_papers_passes_doc_id_and_default_limit():
 
 
 def test_library_tools_route_through_repos_helper_not_direct_attribute_access():
-    docs = {"search": lambda q, limit: [{"id": "d1"}], "get": lambda doc_id: {"id": doc_id}}
+    docs = {"search": lambda q, limit, offset, workspace_id: [{"id": "d1"}], "get": lambda doc_id: {"id": doc_id}}
     repos = {"documents": docs, "aiSummaries": {"getSummary": lambda doc_id: {"content": "s"}}}
     executor = _library_executor(repos)
 
-    assert json.loads(executor.execute("search_documents", {"query": "x", "scope": "library"})) == [{"docId": "d1", "title": None, "authors": None, "year": None, "hasSummary": True}]
+    assert json.loads(executor.execute("search_documents", {"query": "x", "scope": "library"}))["documents"] == [{"docId": "d1", "title": None, "authors": None, "year": None, "hasSummary": True}]
     context = json.loads(executor.execute("get_paper_context", {"docId": "d1"}))
     assert context["id"] == "d1"
     assert context["summary"] == "s"

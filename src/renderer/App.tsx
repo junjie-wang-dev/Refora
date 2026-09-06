@@ -23,6 +23,7 @@ import { useDocumentStore } from './store/documentStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useOcrReaderStore } from './store/ocrReaderStore'
 import { useChatDraftStore } from './store/chatDraftStore'
+import { useChatQueueStore } from './store/chatQueueStore'
 import { usePdfReaderStore } from './store/pdfReaderStore'
 import { usePdfViewStore } from './store/pdfViewStore'
 import { SidebarVisibilityProvider } from './store/sidebarVisibility'
@@ -216,6 +217,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
       useOcrReaderStore.getState().close()
       usePdfViewStore.getState().reset()
       usePdfReaderStore.getState().resetForLibrarySwitch()
+      useChatQueueStore.getState().reset()
     }
     return api.events.onLibrarySwitched(reset)
   }, [])

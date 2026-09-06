@@ -2,6 +2,7 @@ import { ipcMain, nativeTheme, net, type BrowserWindow, type IpcMainInvokeEvent 
 import type { LibrarySwitchResult } from '../../shared/ipc-types'
 import { createServerAppHandlers } from './ipc/app'
 import { createServerAiHandlers } from './ipc/ai'
+import { createChatMediaActions } from '../services/chatMedia'
 import { createServerEventBridge, type ServerEventBridge } from './ipc/eventBridge'
 import { createServerLibraryHandlers } from './ipc/library'
 import { createServerWorkspaceHandlers } from './ipc/workspaces'
@@ -124,7 +125,14 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
         ...createServerWorkspaceHandlers(serverClient, {
           consumeFiles: deps.rendererPathCapabilities.consumeFiles
         }),
-        ...createServerAiHandlers({ serverClient })
+        ...createServerAiHandlers({
+          serverClient,
+          mediaActions: createChatMediaActions({
+            getFile: (id) => getClient().http.aiMediaFile(id),
+            managedRoots: deps.nativeManagedRoots ?? [],
+            getWin: deps.getWin
+          })
+        })
       }
       const registeredChannels = Object.keys(handlers)
       const expectedChannels = new Set(handlerChannels)

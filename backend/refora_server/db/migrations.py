@@ -319,6 +319,20 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
             "documents",
             "CASCADE",
         )
+    if version == 42:
+        return (
+            _has_columns(db, "chat_messages", ["media"])
+            and _has_columns(db, "agent_trace_steps", ["result"])
+            and db.has_object("trigger", "agent_trace_result_revision_update")
+        )
+    if version == 41:
+        return (
+            _has_columns(db, "chat_messages", ["displayContent", "attachments", "activeDocumentId"])
+            and _has_columns(db, "agent_trace_steps", ["revision"])
+            and db.has_object("table", "agent_trace_clock")
+            and db.has_object("trigger", "agent_trace_revision_insert")
+            and db.has_object("trigger", "agent_trace_revision_update")
+        )
     if version == 40:
         return _has_objects(
             db,

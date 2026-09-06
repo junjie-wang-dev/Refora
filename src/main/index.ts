@@ -379,13 +379,13 @@ function registerWorkspaceAssetProtocol(): void {
     try {
       const url = new URL(request.url)
       const id = decodeURIComponent(url.pathname.replace(/^\//, ''))
-      if (url.hostname !== 'asset' || !id || id.includes('/')) {
+      if (!['asset', 'media'].includes(url.hostname) || !id || id.includes('/')) {
         return new Response('Not found', { status: 404 })
       }
       const assembly = serverAssembly
       if (!assembly) return new Response('Server unavailable', { status: 503 })
       const response = await assembly.fetchResource(
-        `/workspace-assets/${encodeURIComponent(id)}/content`,
+        url.hostname === 'media' ? `/ai/media/${encodeURIComponent(id)}/content` : `/workspace-assets/${encodeURIComponent(id)}/content`,
         request.headers
       )
       const headers = new Headers(response.headers)

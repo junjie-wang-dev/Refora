@@ -20,6 +20,8 @@ import type {
   ChatErrorEvent,
   ChatInterruptedEvent,
   ChatMessage,
+  ChatMediaEvent,
+  ChatMediaItem,
   ChatReasoningEvent,
   ChatRunStatusEvent,
   ChatSendRequest,
@@ -42,6 +44,7 @@ vi.mock('react-i18next', () => ({
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
+import { useChatQueueStore } from '../../src/renderer/store/chatQueueStore'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
 import { useSettingsModalStore } from '../../src/renderer/store/settingsModalStore'
 import { useAgentCatalogStore } from '../../src/renderer/store/agentCatalogStore'
@@ -62,12 +65,15 @@ const AgentOcrProgress = (
 ).default
 
 const mockChatHistory = vi.fn()
+const mockChatHistoryPage = vi.fn()
+const mockChatRunSnapshot = vi.fn()
 const mockChatSend = vi.fn()
 const mockChatCancel = vi.fn()
 const mockChatResume = vi.fn()
 const mockChatRun = vi.fn()
 const mockChatTraces = vi.fn()
 const mockOpenPdf = vi.fn()
+let chatMediaHandler: ((payload: ChatMediaEvent) => void) | undefined
 let chatDoneHandler: ((payload: ChatDoneEvent) => void) | undefined
 let chatErrorHandler: ((payload: ChatErrorEvent) => void) | undefined
 let chatTokenHandler: ((payload: ChatTokenEvent) => void) | undefined
@@ -189,6 +195,17 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.settings.get = async (_key: string, defaultValue: unknown) => defaultValue
   w.api.settings.set = async () => undefined
   w.api.ai.chatHistory = mockChatHistory
+  w.api.ai.chatHistoryPage = mockChatHistoryPage
+  w.api.ai.chatRunSnapshot = mockChatRunSnapshot
+  mockChatHistoryPage.mockImplementation(async (threadId: string) => {
+    const [history, traces] = await Promise.all([mockChatHistory(threadId), mockChatTraces(threadId)])
+    const active = traces.findLast((step: AgentTraceStep) => step.kind === 'run' && ['running', 'interrupted'].includes(step.status))
+    return { messages: history, traces, nextCursor: null, activeRun: active ? makeRun({ id: active.runId, status: active.status === 'interrupted' ? 'interrupted' : 'running' }) : null }
+  })
+  mockChatRunSnapshot.mockImplementation(async (runId: string) => {
+    const [run, traces] = await Promise.all([mockChatRun(runId), mockChatTraces('thread-1')])
+    return { run, traces, revision: 1 }
+  })
   w.api.ai.chatSend = mockChatSend
   w.api.ai.chatCancel = mockChatCancel
   w.api.ai.chatRun = mockChatRun
@@ -197,6 +214,10 @@ function setupApi(messages: ChatMessage[]): void {
   w.api.ai.chatPendingInterrupt = async () => null
   w.api.ai.chatResume = mockChatResume
   w.api.documents.openPdf = mockOpenPdf
+  w.api.events.onAiChatMedia = (handler: (payload: ChatMediaEvent) => void) => {
+    chatMediaHandler = handler
+    return () => undefined
+  }
   w.api.events.onAiChatDone = (handler: (payload: ChatDoneEvent) => void) => {
     chatDoneHandler = handler
     return () => undefined
@@ -255,6 +276,7 @@ function setupStore(): void {
   useDocumentStore.setState({ showToast: vi.fn() })
   usePdfReaderStore.setState({ activeDocumentId: null })
   useChatDraftStore.setState({ pending: null })
+  useChatQueueStore.getState().reset()
   useSettingsModalStore.setState({
     settingsOpen: false,
     settingsPage: 'general',
@@ -265,6 +287,8 @@ function setupStore(): void {
 
 beforeEach(() => {
   mockChatHistory.mockReset()
+  mockChatHistoryPage.mockReset()
+  mockChatRunSnapshot.mockReset()
   mockChatSend.mockReset()
   mockChatCancel.mockReset()
   mockChatResume.mockReset().mockResolvedValue(undefined)
@@ -272,6 +296,7 @@ beforeEach(() => {
   mockChatTraces.mockReset()
   mockOpenPdf.mockReset()
   chatDoneHandler = undefined
+  chatMediaHandler = undefined
   chatErrorHandler = undefined
   chatTokenHandler = undefined
   chatReasoningHandler = undefined
@@ -292,6 +317,7 @@ afterEach(() => {
   })
   usePdfReaderStore.setState({ activeDocumentId: null })
   useChatDraftStore.setState({ pending: null })
+  useChatQueueStore.getState().reset()
 })
 
 describe('parseReforaDocLink', () => {
@@ -529,7 +555,7 @@ describe('ChatPanel OCR progress placement', () => {
     expect(approvalCard).toHaveTextContent('workspace.chat.approvalPrepareOcrDescription')
     expect(approvalCard).not.toHaveTextContent('prepare_paper_ocr')
     expect(approvalCard?.querySelector('pre')).toBeNull()
-    expect(within(approvalCard as HTMLElement).getAllByRole('button')).toHaveLength(2)
+    expect(within(approvalCard as HTMLElement).getAllByRole('button')).toHaveLength(3)
     expect(approvalCard).not.toHaveTextContent(
       'Run balanced local OCR for this paper and prepare a reusable structured full-text cache.'
     )
@@ -559,7 +585,7 @@ describe('ChatPanel citation links', () => {
     fireEvent.click(btn)
 
     await vi.waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('doc-123')
+      expect(mockOpenPdf).toHaveBeenCalledWith('doc-123', false)
     })
   })
 
@@ -596,12 +622,12 @@ describe('ChatPanel citation links', () => {
 
     fireEvent.click(btnA)
     await vi.waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('doc-a')
+      expect(mockOpenPdf).toHaveBeenCalledWith('doc-a', false)
     })
 
     fireEvent.click(btnB)
     await vi.waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('doc-b')
+      expect(mockOpenPdf).toHaveBeenCalledWith('doc-b', false)
     })
   })
 
@@ -611,11 +637,11 @@ describe('ChatPanel citation links', () => {
 
     const btn = await screen.findByRole('button', { name: /Title/i })
     expect(btn.tagName).toBe('BUTTON')
-    expect(btn.getAttribute('title')).toBe('q=some+quote')
+    expect(btn.getAttribute('title')).toBe('some quote')
 
     fireEvent.click(btn)
     await vi.waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('abc')
+      expect(mockOpenPdf).toHaveBeenCalledWith('abc', false)
     })
   })
 })
@@ -1994,7 +2020,7 @@ describe('ChatInput attachment loading', () => {
     const assetLabel = await screen.findByText('experiment.csv')
     fireEvent.click(within(assetLabel.closest('label')!).getByRole('checkbox'))
     const update = onSelectedAttachmentsChange.mock.calls[0][0]
-    expect(update([])).toEqual([{ type: 'asset', assetId: 'asset-1' }])
+    expect(update([])).toEqual([{ type: 'asset', assetId: 'asset-1', title: 'experiment.csv' }])
   })
 })
 
@@ -2081,7 +2107,7 @@ describe('useChatStream lifecycle', () => {
     expect(setChatStreaming).toHaveBeenLastCalledWith(false)
   })
 
-  it('keeps chat history when loading agent traces fails', async () => {
+  it('reports a failed history page atomically when its traces cannot load', async () => {
     const history = [makeMessage('Visible history')]
     setupApi(history)
     mockChatTraces.mockRejectedValue(new Error('trace unavailable'))
@@ -2097,12 +2123,12 @@ describe('useChatStream lifecycle', () => {
     }))
 
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))
-    expect(result.current.messages).toEqual(history)
+    expect(result.current.messages).toEqual([])
     expect(result.current.traceSteps).toEqual([])
     expect(result.current.error).toBe('trace unavailable')
   })
 
-  it('keeps agent traces when loading chat history fails', async () => {
+  it('reports a failed history page without stale partial traces', async () => {
     const traces = [makeRunStep('completed-run', 'done')]
     setupApi([])
     mockChatHistory.mockRejectedValue(new Error('history unavailable'))
@@ -2120,7 +2146,7 @@ describe('useChatStream lifecycle', () => {
 
     await waitFor(() => expect(result.current.loadingHistory).toBe(false))
     expect(result.current.messages).toEqual([])
-    expect(result.current.traceSteps).toEqual(traces)
+    expect(result.current.traceSteps).toEqual([])
     expect(result.current.error).toBe('history unavailable')
   })
 
@@ -3319,5 +3345,220 @@ describe('AgentTracePanel structure', () => {
     fireEvent.click(screen.getByText('workspace.chat.toolSearchLibraryDone'))
 
     expect(screen.getByText(/"query": "graph"/)).toBeInTheDocument()
+  })
+})
+
+describe('agent chat recovery and follow-ups', () => {
+  it('merges a completed snapshot by assistant id without duplicating its answer', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Question', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    const answer = { ...makeMessage('Persisted answer'), id: 'persisted-answer', runId }
+    mockChatRunSnapshot.mockResolvedValue({ run: makeRun({ id: runId, status: 'completed', assistantMessageId: answer.id }), traces: [], revision: 2 })
+    mockChatHistoryPage.mockResolvedValue({ messages: [answer], traces: [], nextCursor: null, activeRun: null })
+    act(() => { chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'completed' }) })
+    await waitFor(() => expect(result.current.streaming).toBe(false))
+    expect(result.current.messages.filter((message) => message.role === 'assistant')).toEqual([expect.objectContaining({ id: answer.id, content: answer.content, runId })])
+    act(() => { chatDoneHandler?.({ threadId: 'thread-1', runId, finalText: 'Persisted answer' }) })
+    expect(result.current.messages.filter((message) => message.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('keeps messages and traces unchanged when regenerating during approval', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Run OCR', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    act(() => {
+      chatTraceHandler?.({ threadId: 'thread-1', runId, step: makeRunStep(runId, 'interrupted') })
+      chatInterruptedHandler?.({ threadId: 'thread-1', runId, interrupt: {
+        id: 'pending', runId, threadId: 'thread-1', checkpointId: null,
+        actions: [{ name: 'prepare_paper_ocr', args: { docId: 'paper' }, allowedDecisions: ['approve', 'reject'] }],
+        status: 'pending', decision: null, createdAt: 1, resolvedAt: null
+      } })
+    })
+    const before = result.current.messages
+    const traces = result.current.traceSteps
+    act(() => { result.current.handleRegenerate() })
+    expect(result.current.messages).toBe(before)
+    expect(result.current.traceSteps).toBe(traces)
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+    expect(result.current.pendingInterrupt?.id).toBe('pending')
+  })
+
+  it('submits queued messages with their captured provider, model, document and attachments', async () => {
+    setupApi([])
+    const { result, rerender } = renderHook(({ providerId, documentId, model }) => useChatStream({
+      activeWorkspaceId: 'ws-1', activeThreadId: 'thread-1', activeProviderId: providerId,
+      activeDocumentId: documentId, requestModel: model, deepThinking: true, reasoningEffort: 'high',
+      setChatStreaming: vi.fn(), fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }), { initialProps: { providerId: 'original-provider', documentId: 'original-paper', model: 'original-model' } })
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Research', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    act(() => { result.current.queueFollowUp('Compare methods', [{ type: 'asset', assetId: 'data', title: 'Data.csv' }]) })
+    rerender({ providerId: 'changed-provider', documentId: 'changed-paper', model: 'changed-model' })
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+    act(() => { chatDoneHandler?.({ threadId: 'thread-1', runId, finalText: 'Research completed' }) })
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(2))
+    expect(mockChatSend.mock.calls[1][0]).toMatchObject({
+      text: 'Compare methods', workspaceId: 'ws-1', threadId: 'thread-1', activeDocumentId: 'original-paper',
+      providerId: 'original-provider', model: 'original-model', features: { deepThinking: true, reasoningEffort: 'high' },
+      attachments: [{ type: 'asset', assetId: 'data', title: 'Data.csv' }]
+    })
+    expect(result.current.queuedMessages).toEqual([])
+  })
+
+  it('pauses queued messages on failure and resumes them only after an explicit send', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Research', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    act(() => { result.current.queueFollowUp('Follow-up', []) })
+    act(() => { chatErrorHandler?.({ threadId: 'thread-1', runId, message: 'Provider offline' }) })
+    expect(result.current.queuePaused).toBe(true)
+    expect(result.current.queuedMessages).toHaveLength(1)
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+    act(() => { result.current.sendQueuedMessages() })
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(2))
+    expect(mockChatSend.mock.calls[1][0]).toMatchObject({ text: 'Follow-up' })
+  })
+
+  it('isolates queued messages across threads and lets the user remove them', async () => {
+    setupApi([])
+    const { result, rerender } = renderHook(({ threadId }) => useChatStream({
+      activeWorkspaceId: 'ws-1', activeThreadId: threadId, activeProviderId: 'p1', activeDocumentId: null,
+      requestModel: '', deepThinking: false, setChatStreaming: vi.fn(), fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }), { initialProps: { threadId: 'thread-1' } })
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Research', [], 'thread-1') })
+    act(() => { result.current.queueFollowUp('Private follow-up', []) })
+    rerender({ threadId: 'thread-2' })
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    expect(result.current.queuedMessages).toEqual([])
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+    rerender({ threadId: 'thread-1' })
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    expect(result.current.queuedMessages[0]?.text).toBe('Private follow-up')
+    act(() => { result.current.removeQueuedMessage(result.current.queuedMessages[0].id) })
+    expect(result.current.queuedMessages).toEqual([])
+  })
+
+  it('retains queued text after closing chat and requires explicit send when reopened', async () => {
+    const first = renderChatStream()
+    await waitFor(() => expect(first.result.current.loadingHistory).toBe(false))
+    await act(async () => { await first.result.current.sendText('Research', [], 'thread-1') })
+    act(() => { first.result.current.queueFollowUp('Keep this follow-up', []) })
+    first.unmount()
+    const reopened = renderChatStream()
+    await waitFor(() => expect(reopened.result.current.loadingHistory).toBe(false))
+    expect(reopened.result.current.queuedMessages[0]?.text).toBe('Keep this follow-up')
+    expect(reopened.result.current.queuePaused).toBe(true)
+    expect(mockChatSend).toHaveBeenCalledTimes(1)
+    act(() => { reopened.result.current.sendQueuedMessages() })
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(2))
+  })
+
+  it('loads history in pages and preserves earlier messages when reconciling the current run', async () => {
+    setupApi([])
+    const recent = { ...makeMessage('Recent answer'), id: 'recent', runId: 'recent-run' }
+    const older = { ...makeMessage('Older answer'), id: 'older', runId: 'older-run' }
+    mockChatHistoryPage.mockResolvedValueOnce({ messages: [recent], traces: [], nextCursor: 'older-cursor', activeRun: null })
+    const { result } = renderHook(() => useChatStream({
+      activeWorkspaceId: 'ws-1', activeThreadId: 'thread-1', activeProviderId: 'p1', activeDocumentId: null,
+      requestModel: '', deepThinking: false, setChatStreaming: vi.fn(), fetchThreads: vi.fn().mockResolvedValue(undefined)
+    }))
+    await waitFor(() => expect(result.current.hasEarlierMessages).toBe(true))
+    mockChatHistoryPage.mockResolvedValueOnce({ messages: [older], traces: [], nextCursor: null, activeRun: null })
+    await act(async () => { await result.current.loadEarlierMessages() })
+    expect(mockChatHistoryPage).toHaveBeenLastCalledWith('thread-1', { before: 'older-cursor', limit: 30 })
+    expect(result.current.messages.map((message) => message.id)).toEqual(['older', 'recent'])
+    expect(result.current.hasEarlierMessages).toBe(false)
+    expect(mockChatHistory).not.toHaveBeenCalled()
+    await act(async () => { await result.current.sendText('Newest question', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    const answer = { ...makeMessage('Newest answer'), id: 'newest', runId }
+    mockChatRunSnapshot.mockResolvedValue({ run: makeRun({ id: runId, status: 'completed', assistantMessageId: answer.id }), traces: [], revision: 3 })
+    mockChatHistoryPage.mockResolvedValue({ messages: [recent, answer], traces: [], nextCursor: 'older-cursor', activeRun: null })
+    act(() => { chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'completed' }) })
+    await waitFor(() => expect(result.current.streaming).toBe(false))
+    expect(result.current.messages.map((message) => message.id)).toEqual(['older', 'recent', 'newest'])
+  })
+
+  it('merges changed trace deltas using the previous revision without losing earlier steps', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Research', [], 'thread-1') })
+    const runId = result.current.activeRunId!
+    const first = { ...makeRunStep(runId, 'running'), id: 'first', kind: 'message' as const, output: 'First answer. ', seq: 1 }
+    const second = { ...first, id: 'second', output: 'Second answer.', seq: 2 }
+    mockChatRunSnapshot.mockResolvedValueOnce({ run: makeRun({ id: runId }), traces: [first], revision: 4 })
+    act(() => { chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'interrupted' }) })
+    await waitFor(() => expect(result.current.streamingText).toBe('First answer. '))
+    mockChatRunSnapshot.mockResolvedValueOnce({ run: makeRun({ id: runId }), traces: [second], revision: 5 })
+    act(() => { chatRunStatusHandler?.({ threadId: 'thread-1', runId, status: 'interrupted' }) })
+    await waitFor(() => expect(result.current.streamingText).toBe('First answer. Second answer.'))
+    expect(mockChatRunSnapshot).toHaveBeenLastCalledWith(runId, 4)
+    expect(result.current.traceSteps.map((step) => step.id)).toEqual(['first', 'second'])
+  })
+
+  it('renders attachment titles alongside clean message content', async () => {
+    const resolver = vi.spyOn(window.api.ai, 'resolveMedia').mockResolvedValue({
+      id: 'cached-csv', url: 'refora-asset://media/cached-csv', kind: 'file',
+      fileName: 'Experiment.csv', mimeType: 'text/csv', byteLength: 20
+    })
+    const message = { ...makeMessage('Analyze this file'), role: 'user' as const, attachments: [{ type: 'asset' as const, assetId: 'secret-internal-id', title: 'Experiment.csv' }] }
+    renderMessages({ messages: [message] })
+    expect(await screen.findByRole('button', { name: 'Experiment.csv' })).toBeInTheDocument()
+    expect(screen.getByText('Analyze this file')).toBeInTheDocument()
+    expect(screen.queryByText('secret-internal-id')).not.toBeInTheDocument()
+    resolver.mockRestore()
+  })
+})
+
+
+describe('conversation media streaming and recovery', () => {
+  const media: ChatMediaItem = { id: 'figure-1', kind: 'image', title: 'Generated figure', source: { type: 'asset', assetId: 'asset-1' } }
+
+  it('merges stream media once and keeps a pure-media completed assistant answer', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Draw a chart', [], 'thread-1') })
+    const runId = (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId!
+    act(() => {
+      chatMediaHandler?.({ threadId: 'thread-1', runId, media: [media] })
+      chatMediaHandler?.({ threadId: 'thread-1', runId, media: [media] })
+      chatMediaHandler?.({ threadId: 'thread-1', runId: 'unrelated-run', media: [{ ...media, id: 'wrong' }] })
+    })
+    expect(result.current.streamingMedia).toEqual([media])
+    act(() => { chatDoneHandler?.({ threadId: 'thread-1', runId, finalText: '', media: [media] }) })
+    expect(result.current.messages.filter((message) => message.role === 'assistant')).toMatchObject([{ content: '', media: [media] }])
+    expect(result.current.streamingMedia).toEqual([])
+  })
+
+  it('keeps partial media when the provider fails', async () => {
+    const { result } = renderChatStream()
+    await waitFor(() => expect(result.current.loadingHistory).toBe(false))
+    await act(async () => { await result.current.sendText('Create figures', [], 'thread-1') })
+    const runId = (mockChatSend.mock.calls[0][0] as ChatSendRequest).runId!
+    act(() => { chatErrorHandler?.({ threadId: 'thread-1', runId, message: 'Connection closed', media: [media] }) })
+    expect(result.current.messages.filter((message) => message.role === 'assistant')).toMatchObject([{ media: [media], terminalStatus: 'failed' }])
+  })
+
+  it('restores running media from persisted run traces after reopening a conversation', async () => {
+    setupApi([])
+    const run = makeRun({ id: 'run-media', status: 'running' })
+    const trace = { ...makeRunStep(run.id, 'running'), id: 'trace-media', kind: 'run' as const, runId: run.id, status: 'running' as const, result: { media: [media] } }
+    mockChatHistoryPage.mockResolvedValue({ messages: [], traces: [trace], nextCursor: null, activeRun: run })
+    mockChatRunSnapshot.mockResolvedValue({ run, traces: [trace], revision: 1 })
+    const { result } = renderHook(() => useChatStream({ activeWorkspaceId: 'ws-1', activeThreadId: 'thread-1', activeDocumentId: null, activeProviderId: 'p1', requestModel: 'gpt-4o', deepThinking: false, setChatStreaming: vi.fn(), fetchThreads: vi.fn().mockResolvedValue(undefined) }))
+    await waitFor(() => expect(result.current.streamingMedia).toEqual([media]))
+  })
+
+  it('renders media attached to persisted assistant messages and pending approvals', async () => {
+    window.api.ai.resolveMedia = vi.fn().mockResolvedValue({ id: 'cached', url: 'refora-asset://media/cached', kind: 'image', fileName: 'chart.png', mimeType: 'image/png', byteLength: 16 })
+    renderMessages({ messages: [{ ...makeMessage(''), media: [media] }], streaming: false, streamingMedia: [{ ...media, id: 'figure-2', title: 'Pending figure' }], activeRunId: 'run-active' })
+    expect(await screen.findByRole('img', { name: 'Generated figure' })).toBeInTheDocument()
+    expect(await screen.findByRole('img', { name: 'Pending figure' })).toBeInTheDocument()
   })
 })

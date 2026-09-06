@@ -1,7 +1,5 @@
-import { useState, useRef, type ComponentPropsWithoutRef } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Check, Copy } from '@phosphor-icons/react'
 import type { Components, Options } from 'react-markdown'
+import { useTranslation } from 'react-i18next'
 import { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -9,6 +7,10 @@ import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
+import type { PdfOpenOptions } from './openPdf'
+import { MarkdownCodeBlock, MarkdownTable } from '../components/markdown/RichMarkdown'
+import { MarkdownMediaComponents } from '../components/workspace/ChatMedia'
+import { isSafeMediaUrl } from './mediaSources'
 
 interface MarkdownAstNode {
   type: string
@@ -16,6 +18,15 @@ interface MarkdownAstNode {
   value?: string
   properties?: Record<string, unknown>
   children?: MarkdownAstNode[]
+}
+
+function containsMedia(node: MarkdownAstNode | undefined): boolean {
+  return Boolean(node && (['img', 'audio', 'video'].includes(node.tagName ?? '') || node.children?.some(containsMedia)))
+}
+
+function MediaSourceLabel() {
+  const { t } = useTranslation()
+  return <>{t('markdown.mediaSource')}</>
 }
 
 function inlineMathNodes(value: string): MarkdownAstNode[] {
@@ -59,8 +70,11 @@ export const REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
   rehypeRaw,
   [rehypeSanitize, {
     ...defaultSchema,
+    tagNames: [...(defaultSchema.tagNames ?? []), 'audio', 'video'],
     attributes: {
       ...defaultSchema.attributes,
+      audio: ['src', 'title', 'controls'],
+      video: ['src', 'title', 'controls', 'poster'],
       code: [
         ...(defaultSchema.attributes?.code ?? []),
         ['className', 'math-inline', 'math-display']
@@ -69,15 +83,17 @@ export const REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
     protocols: {
       ...defaultSchema.protocols,
       href: [...(defaultSchema.protocols?.href ?? []), 'refora'],
-      src: [...(defaultSchema.protocols?.src ?? []), 'refora-document']
+      src: [...(defaultSchema.protocols?.src ?? []), 'refora-document', 'refora-asset', 'data'],
+      poster: [...(defaultSchema.protocols?.src ?? []), 'refora-document', 'refora-asset', 'data']
     }
   }],
   rehypeTableMath,
   rehypeKatex
 ]
 
-export function urlTransform(url: string): string {
-  if (url.startsWith('refora://')) return url
+export function urlTransform(url: string, key?: string): string {
+  if ((!key || key === 'href') && parseReforaDocLink(url)) return url
+  if (key === 'src' || key === 'poster') return isSafeMediaUrl(url) ? url : ''
   return defaultUrlTransform(url)
 }
 
@@ -89,54 +105,37 @@ function safeDecode(value: string): string {
   }
 }
 
-export function parseReforaDocLink(href: string): { docId: string; query?: string } | null {
+export function parseReforaDocLink(href: string): {
+  docId: string
+  query?: string
+  page?: number
+  search?: string
+} | null {
   if (!href) return null
-  const match = href.match(/^refora:\/\/doc\/([^?]+)(?:\?(.*))?$/)
+  const match = href.match(/^refora:\/\/doc\/([^?#]+)(?:\?([^#]*))?(?:#.*)?$/)
   if (!match) return null
+  const parameters = new URLSearchParams(match[2] ?? '')
+  const pageValue = parameters.get('page')
+  const page = pageValue && /^\d+$/.test(pageValue) ? Number(pageValue) : undefined
+  const search = (parameters.get('quote') ?? parameters.get('search') ?? parameters.get('q') ??
+    (match[2] && !match[2].includes('=') ? safeDecode(match[2]) : undefined))?.trim()
   return {
     docId: safeDecode(match[1]),
-    query: match[2] ? safeDecode(match[2]) : undefined
+    query: match[2] ? safeDecode(match[2]) : undefined,
+    ...(page !== undefined && Number.isSafeInteger(page) && page > 0 ? { page } : {}),
+    ...(search ? { search } : {})
   }
 }
 
-function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<'pre'>) {
-  const { t } = useTranslation()
-  const ref = useRef<HTMLPreElement>(null)
-  const [copied, setCopied] = useState(false)
-
-  return (
-    <div className="group/code relative">
-      <button
-        type="button"
-        className="absolute right-1 top-1 z-10 rounded p-1 text-muted opacity-0 transition-opacity hover:text-foreground group-hover/code:opacity-100"
-        onClick={() => {
-          const text =
-            ref.current?.querySelector('code')?.textContent ??
-            ref.current?.textContent ??
-            ''
-          void navigator.clipboard.writeText(text).then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-          })
-        }}
-        aria-label={t('common.copyCode')}
-      >
-        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-      </button>
-      <pre ref={ref} {...props}>
-        {children}
-      </pre>
-    </div>
-  )
-}
-
 const BASE_MARKDOWN_COMPONENTS: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
+  ...MarkdownMediaComponents,
+  a: ({ href, children, node }) => containsMedia(node) ? (
+    <span className="markdown-linked-media">{children}<a href={href} target="_blank" rel="noopener noreferrer"><MediaSourceLabel /></a></span>
+  ) : (
+    <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
   ),
-  pre: CodeBlock
+  pre: MarkdownCodeBlock,
+  table: MarkdownTable
 }
 
 export const MARKDOWN_COMPONENTS: Components = BASE_MARKDOWN_COMPONENTS
@@ -148,36 +147,43 @@ export function createMarkdownComponents(
 }
 
 export function createReforaDocMarkdownComponents(
-  onOpenDocument: (docId: string) => Promise<unknown>,
+  onOpenDocument: (docId: string, options?: PdfOpenOptions) => Promise<unknown>,
   onOpenError?: () => void
 ): Components {
   return createMarkdownComponents({
-    a: ({ href, children }) => {
+    a: ({ href, children, node }) => {
       const parsed = href ? parseReforaDocLink(href) : null
+      const media = containsMedia(node)
       if (!parsed) {
+        if (media) return <span className="markdown-linked-media">{children}<a href={href} target="_blank" rel="noopener noreferrer"><MediaSourceLabel /></a></span>
         return (
           <a href={href} target="_blank" rel="noopener noreferrer">
             {children}
           </a>
         )
       }
-      return (
+      const link = (
         <button
           type="button"
           className="inline-flex cursor-pointer items-center gap-0.5 text-accent underline transition-opacity duration-150 hover:opacity-80"
           onClick={async (event) => {
             event.stopPropagation()
             try {
-              await onOpenDocument(parsed.docId)
+              await onOpenDocument(parsed.docId, {
+                forceBuiltin: true,
+                ...(parsed.page !== undefined ? { page: parsed.page } : {}),
+                ...(parsed.search ? { search: parsed.search } : {})
+              })
             } catch {
               onOpenError?.()
             }
           }}
-          title={parsed.query ?? undefined}
+          title={parsed.search ?? parsed.query ?? undefined}
         >
-          {children}
+          {media ? <MediaSourceLabel /> : children}
         </button>
       )
+      return media ? <span className="markdown-linked-media">{children}{link}</span> : link
     }
   })
 }

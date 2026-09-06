@@ -54,7 +54,7 @@ describe('WorkspaceMarkdownView', () => {
     fireEvent.click(link)
 
     await waitFor(() => {
-      expect(mockOpenPdf).toHaveBeenCalledWith('e9e71747-2fd1-4038-ab42-00553e68328c')
+      expect(mockOpenPdf).toHaveBeenCalledWith('e9e71747-2fd1-4038-ab42-00553e68328c', false)
     })
   })
 

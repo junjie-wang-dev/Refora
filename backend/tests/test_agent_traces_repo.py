@@ -173,6 +173,7 @@ def test_field_contract_matches_agent_trace_step_type(thread, db):
     step = repo["addStep"](_step_input(thread))
     assert set(step.keys()) == {
         "id",
+        "revision",
         "threadId",
         "runId",
         "kind",
@@ -480,6 +481,7 @@ def test_update_step_returns_complete_step(thread, db):
     updated = repo["updateStep"]("s1", {"status": "done"})
     assert set(updated.keys()) == {
         "id",
+        "revision",
         "threadId",
         "runId",
         "kind",

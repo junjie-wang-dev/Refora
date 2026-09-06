@@ -10,6 +10,11 @@ import type {
   AiUsageStats,
   ChatCancelResult,
   ChatMessage,
+  ChatHistoryPage,
+  ChatHistoryPageRequest,
+  ChatRunSnapshot,
+  ChatMediaRequest,
+  ChatMediaResource,
   ChatSendRequest,
   ChatThread,
   Result,
@@ -27,12 +32,31 @@ import { resultify as asyncWrap } from './result'
 
 export interface ServerAiHandlerDeps {
   serverClient: ServerClient
+  mediaActions?: {
+    open: (id: string) => Promise<void>
+    reveal: (id: string) => Promise<void>
+    save: (id: string) => Promise<boolean>
+    copy: (id: string) => Promise<void>
+  }
 }
 
 export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
   const { http } = deps.serverClient
 
+  async function mediaAction<T>(name: 'open' | 'reveal' | 'save' | 'copy', id: string): Promise<T> {
+    if (!deps.mediaActions) throw new Error('Media actions are unavailable')
+    return await deps.mediaActions[name](id) as T
+  }
+
   return {
+    [IpcChannel.AiMediaResolve]: (request: ChatMediaRequest): Promise<Result<ChatMediaResource>> =>
+      asyncWrap(() => http.aiMediaResolve(request)),
+    [IpcChannel.AiMediaTextPreview]: (id: string): Promise<Result<{ content: string; truncated: boolean }>> =>
+      asyncWrap(() => http.aiMediaTextPreview(id)),
+    [IpcChannel.AiMediaOpen]: (id: string): Promise<Result<void>> => asyncWrap(() => mediaAction('open', id)),
+    [IpcChannel.AiMediaReveal]: (id: string): Promise<Result<void>> => asyncWrap(() => mediaAction('reveal', id)),
+    [IpcChannel.AiMediaSave]: (id: string): Promise<Result<boolean>> => asyncWrap(() => mediaAction('save', id)),
+    [IpcChannel.AiMediaCopy]: (id: string): Promise<Result<void>> => asyncWrap(() => mediaAction('copy', id)),
     [IpcChannel.AiDocTextGet]: (documentId: string): Promise<Result<string>> =>
       asyncWrap(async () => (await http.aiDocTextGet(documentId)).text),
     [IpcChannel.AiSummarize]: (documentId: string): Promise<Result<void>> =>
@@ -61,6 +85,22 @@ export function createServerAiHandlers(deps: ServerAiHandlerDeps) {
       asyncWrap(() => http.aiChatCancel({ runId })),
     [IpcChannel.AiChatHistory]: (threadId: string): Promise<Result<ChatMessage[]>> =>
       asyncWrap(() => http.aiChatHistory(threadId)),
+    [IpcChannel.AiChatHistoryPage]: (
+      threadId: string,
+      options?: ChatHistoryPageRequest
+    ): Promise<Result<ChatHistoryPage>> =>
+      asyncWrap(async () => {
+        const page = await http.aiChatHistoryPage(threadId, options)
+        return { ...page, traces: expectAgentTraces(page.traces) }
+      }),
+    [IpcChannel.AiChatRunSnapshot]: (
+      runId: string,
+      afterRevision?: number
+    ): Promise<Result<ChatRunSnapshot>> =>
+      asyncWrap(async () => {
+        const snapshot = await http.aiChatRunSnapshot(runId, afterRevision)
+        return { ...snapshot, traces: expectAgentTraces(snapshot.traces) }
+      }),
     [IpcChannel.AiChatThreads]: (workspaceId: string | null): Promise<Result<ChatThread[]>> =>
       asyncWrap(() => http.aiChatThreads(workspaceId === null ? {} : { workspaceId })),
     [IpcChannel.AiUsageStats]: (): Promise<Result<AiUsageStats>> =>

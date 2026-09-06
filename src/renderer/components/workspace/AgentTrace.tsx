@@ -19,6 +19,7 @@ import {
   GlobeHemisphereWest
 } from '@phosphor-icons/react'
 import type { AgentTraceStep } from '../../../shared/ipc-types'
+import { ToolResultCards } from './ToolResultCards'
 
 type TFunc = ReturnType<typeof useTranslation>['t']
 
@@ -702,6 +703,7 @@ function TraceStepRow({
             />
           )}
         </button>
+        {step.kind === 'tool' && step.status === 'done' && <ToolResultCards step={step} />}
         {open && hasBody && (
           <div className="agent-trace-details">
             {step.input && (

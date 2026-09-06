@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from refora_server.services.agent_intent import (
     assemble_resume,
@@ -20,6 +20,7 @@ from refora_server.services.agent_memory import (
     normalize_memory_path,
     update_memory as update_scoped_memory,
 )
+from refora_server.services.chat_attachments import display_message
 from refora_server.server.services.result import (
     error_response as _error_response,
     success as _success,
@@ -130,6 +131,53 @@ def create_ai_router(deps: Any) -> APIRouter:
             if response.status_code >= 500:
                 logger.exception("AI route failed")
             return response
+
+    @router.post("/ai/media/resolve")
+    async def resolve_media(
+        request: Request,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        async def action() -> dict[str, Any]:
+            body = await _read_body(request)
+            if set(body) - {"source", "kind", "fileName", "runId"}:
+                raise RouteError("validation", "Unsupported media request fields")
+            service = _value(services, "chatMedia")
+            if service is None:
+                raise RouteError("unavailable", "Media service is unavailable", 503)
+            return await _resolve(_value(service, "resolve")(body))
+
+        return await execute(authorization, action)
+
+    @router.get("/ai/media/{media_id}")
+    async def get_media_file(
+        media_id: str,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        return await execute(authorization, lambda: _value(_value(services, "chatMedia"), "getFile")(media_id))
+
+    @router.get("/ai/media/{media_id}/text")
+    async def media_text_preview(
+        media_id: str,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        return await execute(authorization, lambda: _value(_value(services, "chatMedia"), "textPreview")(media_id))
+
+    @router.get("/ai/media/{media_id}/content")
+    async def media_content(
+        media_id: str,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> Any:
+        if authorization is not None:
+            return authorization
+        try:
+            resource = _value(_value(services, "chatMedia"), "getFile")(media_id)
+            return FileResponse(
+                resource["path"],
+                media_type=resource["mimeType"] if resource["kind"] in {"image", "audio", "video"} else "application/octet-stream",
+                headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=31536000, immutable"},
+            )
+        except Exception as error:
+            return _error_response(error)
 
     @router.get("/ai/doc-text/{document_id}")
     async def get_doc_text(
@@ -442,7 +490,49 @@ def create_ai_router(deps: Any) -> APIRouter:
         def action() -> list[dict[str, Any]]:
             _thread_scope(repos, thread_id)
             messages = _value(_value(repos, "chat"), "listMessages")(thread_id)
-            return [message for message in messages if message.get("role") != "tool"]
+            return [display_message(message) for message in messages if message.get("role") != "tool"]
+
+        return await execute(authorization, action)
+
+    @router.get("/ai/chat/threads/{thread_id}/history-page")
+    async def get_history_page(
+        thread_id: str,
+        before: str | None = None,
+        limit: int = 30,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        def action() -> dict[str, Any]:
+            _thread_scope(repos, thread_id)
+            page = _value(_value(repos, "chat"), "listMessagesPage")(thread_id, before, limit)
+            messages = page["messages"]
+            latest_run = _value(_value(repos, "agentRuns"), "latestByThread")(thread_id) if before is None else None
+            run_ids = {message["runId"] for message in messages if message.get("runId")}
+            if latest_run is not None:
+                run_ids.add(latest_run["id"])
+            traces = _value(_value(repos, "agentTraces"), "listByRuns")(thread_id, sorted(run_ids))
+            return {
+                "messages": [display_message(message) for message in messages],
+                "traces": traces,
+                "nextCursor": page["nextCursor"],
+                "activeRun": latest_run if latest_run and latest_run["status"] in {"queued", "running", "interrupted"} else None,
+            }
+
+        return await execute(authorization, action)
+
+    @router.get("/ai/chat/runs/{run_id}/snapshot")
+    async def get_run_snapshot(
+        run_id: str,
+        afterRevision: int = 0,
+        authorization: JSONResponse | None = Depends(authorize),
+    ) -> JSONResponse:
+        def action() -> dict[str, Any]:
+            if not 0 <= afterRevision <= 9_007_199_254_740_991:
+                raise RouteError("validation", "Trace revision must be a non-negative safe integer")
+            run = _value(_value(repos, "agentRuns"), "get")(run_id)
+            if run is None:
+                raise RouteError("not_found", f"run not found: {run_id}", 404)
+            changes = _value(_value(repos, "agentTraces"), "listRunChanges")(run_id, afterRevision)
+            return {"run": run, **changes}
 
         return await execute(authorization, action)
 

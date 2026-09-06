@@ -26,7 +26,7 @@ def test_unsafe_document_id_migration_rewrites_all_reserved_characters(
     migrated = db.execute(
         "SELECT id FROM documents WHERE title = ?", [unsafe_id]
     ).fetchone()["id"]
-    assert result.to_version == 40
+    assert result.to_version == 42
     assert migrated != unsafe_id
     assert is_safe_document_id(migrated)
     assert db.execute(
@@ -107,7 +107,7 @@ def test_unsafe_document_id_migration_preserves_all_document_associations() -> N
     migrated_id = db.execute(
         "SELECT id FROM documents WHERE title = 'Unsafe legacy document'"
     ).fetchone()["id"]
-    assert result.to_version == 40
+    assert result.to_version == 42
     assert is_safe_document_id(migrated_id)
     assert db.execute(
         "SELECT id FROM documents WHERE id = 'safe-document'"

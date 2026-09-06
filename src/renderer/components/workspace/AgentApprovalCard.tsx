@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import type {
   AgentInterrupt,
   AgentInterruptAction,
-  AgentInterruptDecision
+  AgentInterruptDecision,
+  AgentInterruptDecisionEntry
 } from '../../../shared/ipc-types'
 import { api } from '../../ipc'
 import { Button as UiButton } from '../ui'
@@ -12,8 +13,9 @@ interface AgentApprovalCardProps {
   interrupt: AgentInterrupt
   activeWorkspaceId: string | null
   streaming: boolean
+  onCancel?: () => void
   onResolve: (
-    decision: AgentInterruptDecision,
+    decision: AgentInterruptDecision | AgentInterruptDecisionEntry[],
     editedActions?: Array<{ name: string; args: Record<string, unknown> }>
   ) => Promise<void>
 }
@@ -319,15 +321,18 @@ export default function AgentApprovalCard({
   interrupt,
   activeWorkspaceId,
   streaming,
+  onCancel,
   onResolve
 }: AgentApprovalCardProps) {
   const { t } = useTranslation()
   const [drafts, setDrafts] = useState<Array<Record<string, unknown>>>([])
+  const [decisions, setDecisions] = useState<AgentInterruptDecision[]>([])
   const [documentTitles, setDocumentTitles] = useState<Record<string, string>>({})
   const [validationError, setValidationError] = useState<string | null>(null)
 
   useEffect(() => {
     setDrafts(interrupt.actions.map((action) => ({ ...action.args })))
+    setDecisions(interrupt.actions.map((action) => action.allowedDecisions.includes('approve') ? 'approve' : action.allowedDecisions[0]))
     setValidationError(null)
   }, [interrupt.id])
 
@@ -360,10 +365,6 @@ export default function AgentApprovalCard({
     () => MEMORY_PATHS.filter((path) => activeWorkspaceId || path !== '/research.md'),
     [activeWorkspaceId]
   )
-  const canEditAll = interrupt.actions.every((action) =>
-    action.allowedDecisions.includes('edit')
-  )
-
   const updateDraft = (index: number, patch: Record<string, unknown>): void => {
     setDrafts((current) => current.map((draft, draftIndex) =>
       draftIndex === index ? { ...draft, ...patch } : draft
@@ -372,36 +373,31 @@ export default function AgentApprovalCard({
   }
 
   const approve = (): void => {
-    const changed = canEditAll && interrupt.actions.some(
-      (action, index) => JSON.stringify(action.args) !== JSON.stringify(drafts[index])
-    )
-    if (!changed) {
-      void onResolve('approve')
-      return
-    }
-    for (let index = 0; index < interrupt.actions.length; index++) {
-      if (interrupt.actions[index].name !== 'propose_workspace_memory_update') continue
-      const draft = drafts[index] ?? {}
-      if (!stringValue(draft.rationale).trim()) {
+    const entries: AgentInterruptDecisionEntry[] = []
+    for (const [index, action] of interrupt.actions.entries()) {
+      const selected = decisions[index] ?? 'approve'
+      const draft = drafts[index] ?? action.args
+      const changed = selected !== 'reject' && action.allowedDecisions.includes('edit') &&
+        JSON.stringify(action.args) !== JSON.stringify(draft)
+      if (changed && action.name === 'propose_workspace_memory_update' && !stringValue(draft.rationale).trim()) {
         setValidationError(t(
           'workspace.chat.approvalMemoryRationaleRequired',
           'Explain briefly why this information should be remembered.'
         ))
         return
       }
+      entries.push(changed || selected === 'edit'
+        ? { type: 'edit', editedAction: { name: action.name, args: draft } }
+        : { type: selected })
     }
-    void onResolve(
-      'edit',
-      interrupt.actions.map((action, index) => ({
-        name: action.name,
-        args: drafts[index] ?? action.args
-      }))
-    )
+    void onResolve(entries)
   }
 
-  const hasEditedDraft = canEditAll && interrupt.actions.some(
-    (action, index) => JSON.stringify(action.args) !== JSON.stringify(drafts[index])
+  const hasEditedDraft = interrupt.actions.some((action, index) =>
+    decisions[index] !== 'reject' && action.allowedDecisions.includes('edit') &&
+    JSON.stringify(action.args) !== JSON.stringify(drafts[index] ?? action.args)
   )
+  const hasRejectedAction = decisions.some((decision) => decision === 'reject')
 
   return (
     <div
@@ -420,12 +416,29 @@ export default function AgentApprovalCard({
             const copy = actionCopy(action, t, documentTitles, activeWorkspaceId)
             const draft = drafts[index] ?? action.args
             const isMemoryUpdate = action.name === 'propose_workspace_memory_update'
+            const canEdit = action.allowedDecisions.includes('edit') && decisions[index] !== 'reject' && !streaming
             return (
               <div key={`${action.name}-${index}`} className="space-y-3">
                 <div>
                   <div className="text-sm font-medium">{copy.name}</div>
                   <p className="mt-1 text-xs leading-5 text-muted">{copy.description}</p>
                 </div>
+                <label className="flex items-center justify-between gap-3 text-xs font-medium">
+                  <span>{t('workspace.chat.approvalDecision', 'Decision')}</span>
+                  <select
+                    aria-label={t('workspace.chat.approvalDecisionFor', { action: copy.name, defaultValue: 'Decision for {{action}}' })}
+                    className="rounded-lg border border-border bg-background px-3 py-2 text-xs"
+                    value={decisions[index] ?? 'approve'}
+                    disabled={streaming}
+                    onChange={(event) => setDecisions((current) => current.map((decision, decisionIndex) => decisionIndex === index ? event.target.value as AgentInterruptDecision : decision))}
+                  >
+                    {action.allowedDecisions.filter((decision) => decision !== 'edit' || !action.allowedDecisions.includes('approve')).map((decision) => (
+                      <option key={decision} value={decision}>
+                        {t(decision === 'reject' ? 'workspace.chat.rejectAction' : 'workspace.chat.approveAction')}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {copy.details.length > 0 && (
                   <dl className="grid gap-3 rounded-lg border border-border bg-panel p-3">
                     {copy.details.map((detail) => (
@@ -456,7 +469,7 @@ export default function AgentApprovalCard({
                       <select
                         className="h-9 rounded-lg border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={memoryPath(draft.path)}
-                        disabled={!canEditAll}
+                        disabled={!canEdit}
                         onChange={(event) => updateDraft(index, { path: event.target.value })}
                       >
                         {memoryOptions.map((path) => (
@@ -472,7 +485,7 @@ export default function AgentApprovalCard({
                         className="min-h-24 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs font-normal leading-5 text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={stringValue(draft.content)}
                         maxLength={16_384}
-                        disabled={!canEditAll}
+                        disabled={!canEdit}
                         onChange={(event) => updateDraft(index, { content: event.target.value })}
                       />
                     </label>
@@ -482,7 +495,7 @@ export default function AgentApprovalCard({
                         className="min-h-16 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs font-normal leading-5 text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={stringValue(draft.rationale)}
                         maxLength={1000}
-                        disabled={!canEditAll}
+                        disabled={!canEdit}
                         onChange={(event) => updateDraft(index, { rationale: event.target.value })}
                       />
                     </label>
@@ -495,12 +508,17 @@ export default function AgentApprovalCard({
         {validationError && (
           <p className="mt-3 text-xs text-error">{validationError}</p>
         )}
-        <div className="mt-4 flex justify-end gap-3">
+        <div className="mt-4 flex flex-wrap justify-end gap-3">
+          {onCancel && (
+            <UiButton variant="ghost" size="md" disabled={streaming} onClick={onCancel}>
+              {t('workspace.chat.endTask', 'End task')}
+            </UiButton>
+          )}
           <UiButton
             variant="ghost"
             size="md"
             className="min-w-20 text-foreground hover:bg-hover active:bg-active"
-            disabled={streaming}
+            disabled={streaming || !interrupt.actions.every((action) => action.allowedDecisions.includes('reject'))}
             onClick={() => void onResolve('reject')}
           >
             {t('workspace.chat.rejectAction', 'Reject')}
@@ -512,7 +530,9 @@ export default function AgentApprovalCard({
             disabled={streaming}
             onClick={approve}
           >
-            {hasEditedDraft
+            {hasRejectedAction
+              ? t('workspace.chat.submitDecisions', 'Continue with these decisions')
+              : hasEditedDraft
               ? t('workspace.chat.applyEditAction', 'Save and approve')
               : t('workspace.chat.approveAction', 'Approve')}
           </UiButton>

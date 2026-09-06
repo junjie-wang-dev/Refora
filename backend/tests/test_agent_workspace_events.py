@@ -198,7 +198,7 @@ def test_workspace_search_reports_summary_availability():
         )
     )
 
-    assert result[0]["hasSummary"] is True
+    assert result["documents"][0]["hasSummary"] is True
 
 
 def test_workspace_context_enriches_cards_and_connections():

@@ -4,11 +4,13 @@ import type { Dispatch, SetStateAction, MutableRefObject } from 'react'
 import type {
   AgentInterrupt,
   AgentInterruptDecision,
+  AgentInterruptDecisionEntry,
   AgentRunStatus,
   AgentTraceStep,
   AiReasoningEffort,
   ChatAttachment,
-  ChatMessage
+  ChatMessage,
+  ChatMediaItem
 } from '../../shared/ipc-types'
 
 const RECENT_MODELS_KEY = 'chatRecentModels'
@@ -25,7 +27,21 @@ export type ChatSendContext = {
   persisted: boolean
 }
 
+export type QueuedChatMessage = {
+  id: string
+  text: string
+  attachments: ChatAttachment[]
+  workspaceId: string | null
+  threadId: string | null
+  activeDocumentId: string | null
+  providerId: string
+  model: string
+  deepThinking: boolean
+  reasoningEffort?: AiReasoningEffort
+}
+
 export type ChatReplacementOptions = {
+  configuration?: QueuedChatMessage
   replaceLastExchange?: boolean
   replaceRunId?: string | null
   activeDocumentId?: string | null
@@ -59,6 +75,7 @@ export interface UseChatStreamReturn {
   streaming: boolean
   streamingText: string
   streamingReasoning: string
+  streamingMedia: ChatMediaItem[]
   activeRunId: string | null
   elapsedSeconds: number
   error: string | null
@@ -66,6 +83,14 @@ export interface UseChatStreamReturn {
   clearError: () => void
   canRetry: boolean
   loadingHistory: boolean
+  loadingEarlier: boolean
+  hasEarlierMessages: boolean
+  loadEarlierMessages: () => Promise<void>
+  queuedMessages: QueuedChatMessage[]
+  queuePaused: boolean
+  queueFollowUp: (text: string, attachments: ChatAttachment[]) => void
+  removeQueuedMessage: (id: string) => void
+  sendQueuedMessages: () => void
   displayMessages: ChatTimelineMessage[]
   pendingInterrupt: AgentInterrupt | null
   activeOcrDocumentId: string | null
@@ -79,7 +104,7 @@ export interface UseChatStreamReturn {
   handleRetry: () => void
   handleRegenerate: () => void
   resolveInterrupt: (
-    decision: AgentInterruptDecision,
+    decision: AgentInterruptDecision | AgentInterruptDecisionEntry[],
     editedActions?: Array<{ name: string; args: Record<string, unknown> }>
   ) => Promise<void>
   stickToBottomRef: MutableRefObject<boolean>
@@ -119,7 +144,7 @@ export function localMessage(
   threadId: string,
   role: ChatMessage['role'],
   content: string,
-  metadata: Pick<ChatTimelineMessage, 'runId' | 'terminalStatus'> = {}
+  metadata: Pick<ChatTimelineMessage, 'runId' | 'terminalStatus' | 'attachments' | 'activeDocumentId' | 'media'> = {}
 ): ChatTimelineMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

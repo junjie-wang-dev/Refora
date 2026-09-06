@@ -24,6 +24,7 @@ export function usePdfSearch({
   navigateToPage
 }: PdfSearchOptions) {
   const [query, setQuery] = useState('')
+  const [queryRevision, setQueryRevision] = useState(0)
   const [searching, setSearching] = useState(false)
   const [matches, setMatches] = useState<PdfSearchMatch[]>([])
   const [index, setIndex] = useState(0)
@@ -32,6 +33,7 @@ export function usePdfSearch({
   const [pagesSearched, setPagesSearched] = useState(0)
   const [failedPages, setFailedPages] = useState(0)
   const generationRef = useRef(0)
+  const preferredPageRef = useRef<number | undefined>(undefined)
   const textCacheRef = useRef<{
     key: string
     pdf: PDFDocumentProxy | null
@@ -44,6 +46,7 @@ export function usePdfSearch({
       textCacheRef.current = { key: cacheKey, pdf, pages: new Map() }
     }
     setQuery('')
+    preferredPageRef.current = undefined
     setMatches([])
     setIndex(0)
     setError(null)
@@ -60,9 +63,11 @@ export function usePdfSearch({
     setCompleted(false)
   }, [])
 
-  const updateQuery = useCallback((value: string) => {
+  const updateQuery = useCallback((value: string, preferredPage?: number) => {
     generationRef.current += 1
+    preferredPageRef.current = preferredPage
     setQuery(value)
+    setQueryRevision((revision) => revision + 1)
     setMatches([])
     setIndex(0)
     setSearching(false)
@@ -92,8 +97,15 @@ export function usePdfSearch({
     const pageTextCache = textCacheRef.current.pages
     const nextMatches: PdfSearchMatch[] = []
     let failures = 0
+    const preferredPage = preferredPageRef.current
+    const pageNumbers = Array.from({ length: pdf.numPages }, (_, pageIndex) => pageIndex + 1)
+    if (preferredPage !== undefined && Number.isInteger(preferredPage) &&
+      preferredPage >= 1 && preferredPage <= pdf.numPages) {
+      pageNumbers.splice(preferredPage - 1, 1)
+      pageNumbers.unshift(preferredPage)
+    }
     try {
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      for (const [pageIndex, pageNumber] of pageNumbers.entries()) {
         if (generationRef.current !== generation) return
         const previousMatchCount = nextMatches.length
         try {
@@ -113,7 +125,7 @@ export function usePdfSearch({
           setFailedPages(failures)
           setError(failureMessage)
         }
-        setPagesSearched(pageNumber)
+        setPagesSearched(pageIndex + 1)
         if (nextMatches.length > previousMatchCount) {
           setMatches([...nextMatches])
           if (previousMatchCount === 0) navigateToPage(nextMatches[0].page)
@@ -137,7 +149,7 @@ export function usePdfSearch({
   }, [index, matches, navigateToPage])
 
   return {
-    query, searching, matches, index, error, completed, pagesSearched, failedPages,
+    query, queryRevision, searching, matches, index, error, completed, pagesSearched, failedPages,
     noResults: completed && matches.length === 0 && failedPages === 0,
     updateQuery, run, cycle, cancel
   }

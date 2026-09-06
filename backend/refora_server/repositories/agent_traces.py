@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
@@ -24,8 +25,9 @@ _UNSET = object()
 
 
 def _map_step(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    step = {
         "id": row["id"],
+        "revision": row["revision"],
         "threadId": row["threadId"],
         "runId": row["runId"],
         "kind": row["kind"],
@@ -45,6 +47,12 @@ def _map_step(row: sqlite3.Row) -> dict[str, Any]:
         "depth": row["depth"] if row["depth"] is not None else 0,
         "checkpointId": row["checkpointId"],
     }
+    if "result" in row.keys() and row["result"] is not None:
+        try:
+            step["result"] = json.loads(row["result"])
+        except (TypeError, ValueError):
+            pass
+    return step
 
 
 def createAgentTracesRepository(db):
@@ -57,8 +65,8 @@ def createAgentTracesRepository(db):
         db.execute(
             "INSERT INTO agent_trace_steps "
             "(id, threadId, runId, kind, name, input, output, status, startedAt, endedAt, seq, "
-            "inputTokens, outputTokens, totalTokens, parentStepId, agentName, namespace, depth, checkpointId) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "inputTokens, outputTokens, totalTokens, parentStepId, agentName, namespace, depth, checkpointId, result) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 id,
                 input["threadId"],
@@ -79,6 +87,7 @@ def createAgentTracesRepository(db):
                 input.get("namespace"),
                 input.get("depth") or 0,
                 input.get("checkpointId"),
+                json.dumps(input["result"], ensure_ascii=False) if input.get("result") is not None else None,
             ],
         )
         row = _fetch_step(id)
@@ -104,6 +113,10 @@ def createAgentTracesRepository(db):
 
         sets = ["input = ?", "output = ?", "status = ?", "endedAt = ?"]
         params: list[Any] = [trace_input, output, status, endedAt]
+
+        if "result" in patch:
+            sets.append("result = ?")
+            params.append(json.dumps(patch["result"], ensure_ascii=False) if patch["result"] is not None else None)
 
         for col in ("inputTokens", "outputTokens", "totalTokens"):
             value = patch.get(col, _UNSET)
@@ -135,6 +148,27 @@ def createAgentTracesRepository(db):
         )
         rows = cur.fetchall()
         return [_map_step(r) for r in rows]
+
+    def listRunChanges(runId: str, afterRevision: int = 0) -> dict[str, Any]:
+        rows = db.execute(
+            "SELECT * FROM agent_trace_steps WHERE runId = ? AND revision > ? ORDER BY revision",
+            [runId, afterRevision],
+        ).fetchall()
+        return {
+            "traces": [_map_step(row) for row in rows],
+            "revision": max([afterRevision, *(row["revision"] for row in rows)]),
+        }
+
+    def listByRuns(threadId: str, runIds: list[str]) -> list[dict[str, Any]]:
+        if not runIds:
+            return []
+        placeholders = ",".join("?" for _ in runIds)
+        rows = db.execute(
+            f"SELECT * FROM agent_trace_steps WHERE threadId = ? AND runId IN ({placeholders}) "
+            "ORDER BY startedAt, seq, id",
+            [threadId, *runIds],
+        ).fetchall()
+        return [_map_step(row) for row in rows]
 
     def deleteByThread(threadId: str) -> int:
         cur = db.execute(
@@ -255,6 +289,8 @@ def createAgentTracesRepository(db):
         "updateStep": updateStep,
         "listByThread": listByThread,
         "listByRun": listByRun,
+        "listRunChanges": listRunChanges,
+        "listByRuns": listByRuns,
         "deleteByThread": deleteByThread,
         "deleteByRun": deleteByRun,
         "deleteOlderThan": deleteOlderThan,

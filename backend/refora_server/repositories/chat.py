@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
 import time
 import uuid
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.services.chat_attachments import display_message, normalize_attachments, normalize_media
 
 
 def _now_ms() -> int:
@@ -38,6 +41,24 @@ def _map_message(row: sqlite3.Row) -> dict[str, Any]:
         "createdAt": row["createdAt"],
     }
     keys = row.keys()
+    if "displayContent" in keys and row["displayContent"] is not None:
+        message["displayContent"] = row["displayContent"]
+    if "attachments" in keys:
+        try:
+            attachments = normalize_attachments(json.loads(row["attachments"]))
+        except (ValueError, TypeError):
+            attachments = []
+        if attachments:
+            message["attachments"] = attachments
+    if "activeDocumentId" in keys and (row["activeDocumentId"] is not None or row["displayContent"] is not None):
+        message["activeDocumentId"] = row["activeDocumentId"]
+    if "media" in keys:
+        try:
+            media = normalize_media(json.loads(row["media"]))
+        except (ValueError, TypeError):
+            media = []
+        if media:
+            message["media"] = media
     if "runId" in keys and row["runId"] is not None:
         message["runId"] = row["runId"]
     if "runStatus" in keys and row["runStatus"] is not None:
@@ -79,12 +100,25 @@ def createChatRepository(db):
             return None
         return _map_thread(row)
 
-    def addMessage(threadId: str, role: str, content: str) -> dict[str, Any]:
+    def addMessage(
+        threadId: str,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         id = _new_id()
         now = _now_ms()
+        metadata = metadata or {}
         db.execute(
-            "INSERT INTO chat_messages (id, threadId, role, content, createdAt) VALUES (?, ?, ?, ?, ?)",
-            [id, threadId, role, content, now],
+            "INSERT INTO chat_messages (id, threadId, role, content, createdAt, displayContent, attachments, activeDocumentId, media) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                id, threadId, role, content, now,
+                metadata.get("displayContent"),
+                json.dumps(normalize_attachments(metadata.get("attachments")), ensure_ascii=False),
+                metadata.get("activeDocumentId"),
+                json.dumps(normalize_media(metadata.get("media")), ensure_ascii=False),
+            ],
         )
         cur = db.execute("SELECT * FROM chat_messages WHERE id = ?", [id])
         row = cur.fetchone()
@@ -106,6 +140,47 @@ def createChatRepository(db):
         rows = cur.fetchall()
         return [_map_message(r) for r in rows]
 
+    def listMessagesPage(
+        threadId: str, before: str | None = None, limit: int = 30
+    ) -> dict[str, Any]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise RepoError("validation", "History page size must be between 1 and 100")
+        clause = ""
+        parameters: list[Any] = [threadId]
+        if before is not None:
+            try:
+                if not isinstance(before, str) or len(before) > 500:
+                    raise ValueError()
+                scope, created_at, row_id = json.loads(base64.urlsafe_b64decode(before).decode())
+                if scope != threadId or any(type(value) is not int for value in (created_at, row_id)):
+                    raise ValueError()
+            except (ValueError, TypeError, UnicodeError):
+                raise RepoError("validation", "Invalid history cursor") from None
+            clause = " AND (m.createdAt < ? OR (m.createdAt = ? AND m.rowid < ?))"
+            parameters.extend([created_at, created_at, row_id])
+        parameters.append(limit + 1)
+        rows = db.execute(
+            "SELECT m.*, m.rowid AS timelineRowId, r.id AS runId, r.status AS runStatus "
+            "FROM chat_messages m LEFT JOIN agent_runs r ON r.id = ("
+            "SELECT candidate.id FROM agent_runs candidate "
+            "WHERE candidate.assistantMessageId = m.id OR candidate.userMessageId = m.id "
+            "ORDER BY candidate.startedAt DESC, candidate.rowid DESC LIMIT 1) "
+            "WHERE m.threadId = ? AND m.role IN ('user', 'assistant')"
+            f"{clause} ORDER BY m.createdAt DESC, m.rowid DESC LIMIT ?",
+            parameters,
+        ).fetchall()
+        selected = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit:
+            last = selected[-1]
+            next_cursor = base64.urlsafe_b64encode(json.dumps(
+                [threadId, last["createdAt"], last["timelineRowId"]], separators=(",", ":")
+            ).encode()).decode()
+        return {
+            "messages": [_map_message(row) for row in reversed(selected)],
+            "nextCursor": next_cursor,
+        }
+
     def search(q: str, limit: int = 10) -> list[dict[str, Any]]:
         trimmed = q.strip()
         if not trimmed:
@@ -116,14 +191,14 @@ def createChatRepository(db):
         rows = db.execute(
             """
             WITH matching_messages AS (
-              SELECT m.threadId, m.role, m.content, m.createdAt,
+              SELECT m.threadId, m.role, COALESCE(m.displayContent, m.content) AS content, m.createdAt,
                      ROW_NUMBER() OVER (
                        PARTITION BY m.threadId
                        ORDER BY m.createdAt DESC, m.rowid DESC
                      ) AS matchRank
               FROM chat_messages m
               WHERE m.role IN ('user', 'assistant')
-                AND m.content LIKE ? ESCAPE '\\'
+                AND COALESCE(m.displayContent, m.content) LIKE ? ESCAPE '\\'
             )
             SELECT t.id AS threadId, t.workspaceId, w.name AS workspaceName, t.title,
                    m.role, m.content, COALESCE(m.createdAt, t.createdAt) AS matchedAt
@@ -145,7 +220,7 @@ def createChatRepository(db):
             if thread_id in seen:
                 continue
             seen.add(thread_id)
-            content = (row["content"] or "").strip()
+            content = display_message({"role": row["role"], "content": row["content"] or ""})["content"].strip()
             match_index = content.lower().find(normalized)
             start = 0 if match_index < 0 else max(0, match_index - 80)
             excerpt = content[start : start + 240].strip()
@@ -225,6 +300,7 @@ def createChatRepository(db):
         "getThread": getThread,
         "addMessage": addMessage,
         "listMessages": listMessages,
+        "listMessagesPage": listMessagesPage,
         "search": search,
         "deleteLastExchange": deleteLastExchange,
         "deleteThread": deleteThread,
