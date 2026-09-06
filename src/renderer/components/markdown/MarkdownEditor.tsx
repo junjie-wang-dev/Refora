@@ -7,6 +7,7 @@ import { api } from '../../ipc'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import { REMARK_PLUGINS, REHYPE_PLUGINS } from '../../utils/markdown'
 import { continueMarkdownList, indentMarkdown, markdownMatches, markdownTableAt, replaceMarkdown, serializeMarkdownTable, wrapMarkdown, type MarkdownEdit, type MarkdownSelection } from '../../utils/markdownEditing'
+import MarkdownSearchControls from './MarkdownSearchControls'
 import './markdownEditor.css'
 
 export interface MarkdownEditorPosition extends MarkdownSelection { scrollTop: number }
@@ -25,6 +26,10 @@ interface MarkdownEditorProps {
   onPositionChange?: (position: MarkdownEditorPosition) => void
   onScroll?: (ratio: number) => void
   className?: string
+  searchContainer?: HTMLElement | null
+  searchOpen?: boolean
+  onSearchOpenChange?: (open: boolean) => void
+  compactSearch?: boolean
   disabled?: boolean
 }
 type InsertDialog = { type: 'formula'; selection: MarkdownSelection; formula: string } | { type: 'table'; selection: MarkdownSelection; rows: string[][]; alignments: string[] }
@@ -32,7 +37,7 @@ type InsertDialog = { type: 'formula'; selection: MarkdownSelection; formula: st
 const MAX_IMAGE_SIZE = 15 * 1024 * 1024
 const IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp|avif)$/
 
-const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor({ value, onChange, ariaLabel, initialPosition, onPositionChange, onScroll, className = '', disabled = false }, ref) {
+const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor({ value, onChange, ariaLabel, initialPosition, onPositionChange, onScroll, className = '', disabled = false, searchContainer, searchOpen, onSearchOpenChange, compactSearch = true }, ref) {
   const { t } = useTranslation()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightsRef = useRef<HTMLDivElement>(null)
@@ -45,7 +50,9 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(fun
   const pendingSelection = useRef<MarkdownSelection | null>(null)
   const history = useRef<Array<MarkdownEdit>>([])
   const future = useRef<Array<MarkdownEdit>>([])
-  const [findOpen, setFindOpen] = useState(false)
+  const [localFindOpen, setLocalFindOpen] = useState(false)
+  const findOpen = searchOpen ?? localFindOpen
+  const setFindOpen = useCallback((open: boolean) => { setLocalFindOpen(open); onSearchOpenChange?.(open) }, [onSearchOpenChange])
   const [query, setQuery] = useState('')
   const [replacement, setReplacement] = useState('')
   const [activeMatch, setActiveMatch] = useState(0)
@@ -228,22 +235,15 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(fun
     { key: 'find', Icon: MagnifyingGlass, shortcut: '⌘F', action: () => { setFindOpen(true); window.requestAnimationFrame(() => findRef.current?.focus()) } }
   ]
 
+  const search = <MarkdownSearchControls inputRef={findRef} query={query} total={matches.length} index={matchIndex} label={t('markdown.editor.findText')} previousLabel={t('markdown.editor.previous')} nextLabel={t('markdown.editor.next')} closeLabel={t('markdown.editor.closeFind')} closable={compactSearch} onQueryChange={(next) => { setQuery(next); setActiveMatch(0); const first = markdownMatches(value, next)[0]; if (first !== undefined) revealSelection(first, first + next.length, false) }} onNavigate={navigateMatch} onClose={() => { setFindOpen(false); textareaRef.current?.focus() }} />
+
   return <div className={`markdown-editor ${className}`}>
     <div className="markdown-editor-toolbar" role="toolbar" aria-label={t('markdown.editor.toolbar')}>
-      {toolbar.map(({ key, Icon, shortcut, action }) => <button key={key} type="button" disabled={disabled || (key === 'image' && imageBusy)} aria-label={t(`markdown.editor.${key}`)} title={`${t(`markdown.editor.${key}`)}${shortcut ? ` (${shortcut})` : ''}`} onMouseDown={(event) => event.preventDefault()} onClick={action}><Icon className="h-4 w-4" /></button>)}
+      {toolbar.filter(({ key }) => !searchContainer || key !== 'find').map(({ key, Icon, shortcut, action }) => <button key={key} type="button" disabled={disabled || (key === 'image' && imageBusy)} aria-label={t(`markdown.editor.${key}`)} title={`${t(`markdown.editor.${key}`)}${shortcut ? ` (${shortcut})` : ''}`} onMouseDown={(event) => event.preventDefault()} onClick={action}><Icon className="h-4 w-4" /></button>)}
       <input ref={fileRef} className="hidden" tabIndex={-1} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" onChange={(event) => { const file = event.target.files?.[0]; if (file) void insertImage(file, imageSelectionRef.current); imageSelectionRef.current = null; event.target.value = '' }} />
     </div>
-    {findOpen && <div className="markdown-editor-find" role="search" aria-label={t('markdown.editor.find')} onKeyDown={(event) => {
-      if (event.nativeEvent.isComposing) return
-      if (event.key === 'Escape') { event.stopPropagation(); setFindOpen(false); textareaRef.current?.focus() }
-      if (event.key === 'Enter') { event.preventDefault(); navigateMatch(event.shiftKey ? -1 : 1) }
-    }}>
-      <div><input ref={findRef} aria-label={t('markdown.editor.findText')} placeholder={t('markdown.editor.findText')} value={query} onChange={(event) => { const next = event.target.value; setQuery(next); setActiveMatch(0); const first = markdownMatches(value, next)[0]; if (first !== undefined) revealSelection(first, first + next.length, false) }} />
-        <span role="status">{matches.length ? `${matchIndex + 1}/${matches.length}` : '0/0'}</span>
-        <button type="button" disabled={!matches.length} onClick={() => navigateMatch(-1)} aria-label={t('markdown.editor.previous')}>↑</button>
-        <button type="button" disabled={!matches.length} onClick={() => navigateMatch(1)} aria-label={t('markdown.editor.next')}>↓</button>
-        <button type="button" onClick={() => { setFindOpen(false); textareaRef.current?.focus() }} aria-label={t('markdown.editor.closeFind')}><X className="h-4 w-4" /></button>
-      </div>
+    {findOpen && (searchContainer ? createPortal(search, searchContainer) : search)}
+    {findOpen && query && <div className="markdown-editor-find">
       <div><input aria-label={t('markdown.editor.replaceText')} placeholder={t('markdown.editor.replaceText')} value={replacement} onChange={(event) => setReplacement(event.target.value)} />
         <button type="button" disabled={!matches.length || disabled} onClick={() => { const start = matches[matchIndex]; applyEdit(replaceMarkdown(value, { start, end: start + query.length }, replacement)) }}>{t('markdown.editor.replace')}</button>
         <button type="button" disabled={!matches.length || disabled} onClick={() => {

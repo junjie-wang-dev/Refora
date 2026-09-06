@@ -8,7 +8,7 @@
 .markdown-editor-input-region > textarea { display:block; position:relative; height:100%; width:100%; min-height:100px; resize:none; border:0; outline:none; background:transparent; color:var(--color-foreground); padding:14px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:24px; tab-size:2; }
 .markdown-editor-find { padding:6px; border-bottom:1px solid var(--color-border); display:grid; gap:5px; font-size:12px; background:var(--color-panel); }
 .markdown-editor-find > div { display:flex; gap:4px; align-items:center; }
-.markdown-editor-find input { min-width:0; flex:1; width:80px; border:1px solid var(--color-border); border-radius:5px; padding:4px 6px; background:var(--color-background); color:var(--color-foreground); }
+.markdown-editor-find input { min-width:0; flex:1; width:80px; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:4px 6px; background:var(--color-background); color:var(--color-foreground); }
 .markdown-editor-find button { flex-shrink:0; white-space:nowrap; }
 .markdown-editor-find span { color:var(--color-muted); font-variant-numeric:tabular-nums; }
 .markdown-editor-status { margin:0; padding:6px 12px; font-size:12px; }

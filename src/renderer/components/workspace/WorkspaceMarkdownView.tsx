@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
-import { BookOpen, Copy, PencilSimple, SelectionAll, List, MagnifyingGlass, Columns, DownloadSimple, ClockCounterClockwise, X, FilePdf } from '@phosphor-icons/react'
+import { BookOpen, Copy, PencilSimple, SelectionAll, SidebarSimple, MagnifyingGlass, Columns, DownloadSimple, ClockCounterClockwise, X, FilePdf } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import { REMARK_PLUGINS, REHYPE_PLUGINS, createReforaDocMarkdownComponents, urlTransform } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
@@ -13,6 +13,7 @@ import WorkspaceNavigationControls from './WorkspaceNavigationControls'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
 import { useMarkdownDraft } from '../../hooks/useMarkdownDraft'
+import { useMarkdownReaderLayout } from '../../hooks/useMarkdownReaderLayout'
 import { useMarkdownViewState } from '../../hooks/useMarkdownViewState'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import MarkdownEditor, { type MarkdownEditorHandle } from '../markdown/MarkdownEditor'
@@ -58,6 +59,8 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
   const scrollRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
+  const compact = useMarkdownReaderLayout(surfaceRef)
+  const [searchContainer, setSearchContainer] = useState<HTMLDivElement | null>(null)
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const dialogRef = useModalDialog<HTMLDivElement>(Boolean(dialog), () => setDialog(null))
   const pendingOffset = useRef<number | null>(null)
@@ -76,8 +79,11 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
 
   const openFind = useCallback(() => {
     if (mode === 'edit') editorRef.current?.openFind()
-    else setFindOpen(true)
-  }, [mode])
+    else {
+      setFindOpen(true)
+      window.requestAnimationFrame(() => { const input = searchContainer?.querySelector('input'); input?.focus(); input?.select() })
+    }
+  }, [mode, searchContainer])
 
   useEffect(() => {
     const surface = surfaceRef.current
@@ -208,7 +214,7 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
 
   const handleBack = async () => { if (!exporting && await draft.flush()) onBack() }
   const handleClose = async () => { if (!exporting && await draft.flush()) onClose?.() }
-  const button = (label: string, icon: React.ReactNode, action: () => void, pressed?: boolean, disabled = false) => <IconTooltip label={label} appearance="sidebar"><button type="button" className="sidebar-header-btn" aria-label={label} aria-pressed={pressed} disabled={disabled || exporting} onClick={action}>{icon}</button></IconTooltip>
+  const button = (label: string, icon: React.ReactNode, action: () => void, pressed?: boolean, disabled = false) => <IconTooltip label={label} appearance="sidebar"><button type="button" className="markdown-reader-button" aria-label={label} aria-pressed={pressed} disabled={disabled || exporting} onClick={action}>{icon}</button></IconTooltip>
   const modeActions = editable ? <div className="flex shrink-0 items-center gap-1" role="group" aria-label={t('workspace.markdownMode')}>
     {button(t('workspace.markdownRead'), <BookOpen size={17} />, () => void changeMode('read'), mode === 'read')}
     {button(t('workspace.markdownEdit'), <PencilSimple size={17} />, () => void changeMode('edit'), mode === 'edit')}
@@ -228,16 +234,18 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void draft.flush() }
   }}>
-    {!embedded && <PanelTabHeader title={draft.draftTitle || draft.savedDraft.title} onClose={onClose ? () => void handleClose() : undefined} closeLabel={t('workspace.close')} leading={<WorkspaceNavigationControls onBack={() => void handleBack()} />} actions={modeActions} />}
-    <div className="markdown-workspace-toolbar" data-testid={embedded ? 'markdown-floating-actions' : undefined}>
+    {!embedded && <PanelTabHeader title={draft.draftTitle || draft.savedDraft.title} onClose={onClose ? () => void handleClose() : undefined} closeLabel={t('workspace.close')} leading={<WorkspaceNavigationControls onBack={() => void handleBack()} />}  />}
+    <div className="markdown-workspace-toolbar" data-compact={compact || undefined} data-testid={embedded ? 'markdown-floating-actions' : undefined}>
       <div className="markdown-toolbar-group">
-        {embedded && modeActions}
-        {button(t('markdown.findDocument'), <MagnifyingGlass size={17} />, openFind)}
-        {(mode === 'read' || view.preview) && button(t('markdown.outline'), <List size={17} />, () => setOutlineOpen((open) => !open), outlineOpen)}
+        {button(t('markdown.outline'), <SidebarSimple size={16} />, () => setOutlineOpen((open) => !open), outlineOpen)}
+        <span className="markdown-toolbar-divider" />
+        {modeActions}
         {mode === 'edit' && button(t('markdown.livePreview'), <Columns size={17} />, () => updateView({ preview: !view.preview }), view.preview)}
+        {compact && button(t('markdown.findDocument'), <MagnifyingGlass size={16} />, () => { if (findOpen) setFindOpen(false); else openFind() }, findOpen)}
       </div>
+      <div ref={setSearchContainer} className={`markdown-search-slot ${compact ? 'is-compact' : ''}`} hidden={compact && !findOpen} />
       <div className="markdown-toolbar-group">
-        {editable && <span className={`markdown-save-state ${draft.status === 'error' || draft.status === 'conflict' ? 'text-error' : ''}`} role="status">{t(exporting ? 'markdown.exporting' : `markdown.saveState.${draft.status}`)}</span>}
+        {(exporting || (editable && draft.status !== 'saved' && draft.status !== 'recovering')) && <span className={`markdown-save-state ${draft.status === 'error' || draft.status === 'conflict' ? 'text-error' : ''}`} role="status">{t(exporting ? 'markdown.exporting' : `markdown.saveState.${draft.status}`)}</span>}
         {editable && button(t('markdown.versionHistory'), <ClockCounterClockwise size={17} />, () => { setVersionId(null); setDialog('history') })}
         {button(t('markdown.copyMarkdown'), <Copy size={17} />, () => void copyDraft())}
         {button(t('markdown.exportMarkdown'), <DownloadSimple size={17} />, () => downloadMarkdown(draft.draftTitle, draft.draftContent))}
@@ -259,18 +267,18 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
       <button type="button" onClick={() => { draft.backupDraft(); downloadMarkdown(draft.draftTitle, draft.draftContent) }}>{t('markdown.saveDraftCopy')}</button>
     </div>}
     {draft.recoveredDraft && <div className="markdown-recovery-notice">{t('markdown.draftRecovered')}{mode === 'read' && <button type="button" onClick={() => void changeMode('edit')}>{t('workspace.markdownEdit')}</button>}</div>}
-    <div className="markdown-content-region">
-      <MarkdownNavigation articleRef={articleRef} content={renderedContent} findOpen={findOpen} outlineOpen={outlineOpen && (mode === 'read' || view.preview)} onCloseFind={() => setFindOpen(false)} onCloseOutline={() => setOutlineOpen(false)} onNavigate={(offset) => { editorRef.current?.revealOffset(offset); setOutlineOpen(false) }} />
-      {mode === 'edit' ? <div className={`markdown-edit-layout ${view.preview ? 'with-preview' : ''}`}>
+    <div className="markdown-content-region markdown-reader-body">
+      <MarkdownNavigation articleRef={articleRef} content={renderedContent} findOpen={mode === 'read' && (!compact || findOpen)} searchContainer={searchContainer} compact={compact} outlineOpen={outlineOpen} sourceOutline={mode === 'edit' && !view.preview} onCloseFind={() => setFindOpen(false)} onCloseOutline={() => setOutlineOpen(false)} onNavigate={(offset) => editorRef.current?.revealOffset(offset)} />
+      <div className="markdown-document-area">{mode === 'edit' ? <div className={`markdown-edit-layout ${view.preview ? 'with-preview' : ''}`}>
         <div className="markdown-editor-pane">
           <Input variant="borderless" inputSize="md" className="h-11 px-0 text-xl font-semibold hover:bg-transparent focus:bg-transparent focus:ring-0 focus-visible:outline-none" value={draft.draftTitle} onChange={(event) => draft.setDraftTitle(event.target.value)} aria-label={titleLabel} />
-          <MarkdownEditor ref={editorRef} value={draft.draftContent} onChange={draft.setDraftContent} ariaLabel={contentLabel} initialPosition={view.position} onPositionChange={(position) => updateView({ position })} onScroll={(ratio) => {
+          <MarkdownEditor ref={editorRef} searchContainer={searchContainer} searchOpen={!compact || findOpen} onSearchOpenChange={setFindOpen} compactSearch={compact} value={draft.draftContent} onChange={draft.setDraftContent} ariaLabel={contentLabel} initialPosition={view.position} onPositionChange={(position) => updateView({ position })} onScroll={(ratio) => {
             const preview = previewRef.current
             if (preview) preview.scrollTop = ratio * Math.max(0, preview.scrollHeight - preview.clientHeight)
           }} />
         </div>
         {view.preview && <div ref={previewRef} className="markdown-preview-pane" aria-label={t('markdown.livePreview')}>{renderArticle()}</div>}
-      </div> : <div ref={scrollRef} className="markdown-reading-scroll" onScroll={(event) => updateView({ scrollTop: event.currentTarget.scrollTop })}>{renderArticle()}</div>}
+      </div> : <div ref={scrollRef} className="markdown-reading-scroll" onScroll={(event) => updateView({ scrollTop: event.currentTarget.scrollTop })}>{renderArticle()}</div>}</div>
     </div>
     {dialog && createPortal(<div className="markdown-dialog-backdrop" onClick={() => setDialog(null)}><div ref={dialogRef} className="markdown-history-dialog" role="dialog" aria-modal="true" aria-label={t(dialog === 'history' ? 'markdown.versionHistory' : 'markdown.compareVersions')} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
       <div className="markdown-dialog-heading"><strong>{t(dialog === 'history' ? 'markdown.versionHistory' : 'markdown.compareVersions')}</strong><button type="button" aria-label={t('common.close')} onClick={() => setDialog(null)}><X size={20} /></button></div>

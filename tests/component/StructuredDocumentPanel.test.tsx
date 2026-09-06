@@ -65,22 +65,25 @@ describe('StructuredDocumentPanel', () => {
     const surface = container.querySelector('[data-markdown-surface]')!
     fireEvent.keyDown(surface, { key: 'f', metaKey: true })
     const input = screen.getByRole('textbox', { name: 'markdown.findDocument' })
-    expect(input).toHaveFocus()
+    await waitFor(() => expect(input).toHaveFocus())
     fireEvent.change(input, { target: { value: 'alpha' } })
     await waitFor(() => expect(screen.getByRole('button', { name: 'markdown.nextMatch' })).not.toBeDisabled())
-    fireEvent.click(screen.getByRole('button', { name: 'markdown.closeFind' }))
-    expect(screen.queryByRole('search')).not.toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input).toHaveValue('')
+    expect(input).not.toHaveFocus()
     act(() => surface.dispatchEvent(new Event('refora-markdown-find')))
     expect(screen.getByRole('search')).toBeInTheDocument()
   })
 
-  it('navigates shared heading outlines and closes the overlay after choosing a section', async () => {
+  it('keeps the wide outline sidebar open when navigating between sections', async () => {
     api.ocr.readMarkdown = vi.fn().mockResolvedValue('# Findings\n\n## Results\n\nBody')
     render(<StructuredDocumentPanel />)
     await screen.findByRole('heading', { name: 'Results' })
     fireEvent.click(screen.getByRole('button', { name: 'markdown.outline' }))
     expect(screen.getByRole('navigation', { name: 'markdown.outline' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Results' }))
+    expect(screen.getByRole('navigation')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.closeOutline' }))
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
   })
 

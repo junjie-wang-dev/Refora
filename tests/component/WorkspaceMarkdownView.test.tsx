@@ -332,7 +332,7 @@ describe('WorkspaceMarkdownView', () => {
     expect(title).toHaveClass('bg-transparent', 'border-transparent', 'hover:bg-transparent', 'focus:bg-transparent', 'focus:ring-0', 'focus-visible:outline-none')
     expect(content).toHaveAttribute('spellcheck', 'false')
     expect(screen.getByRole('toolbar', { name: 'markdown.editor.toolbar' })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.')
+    expect(screen.queryByText('markdown.saveState.saved')).not.toBeInTheDocument()
 
     fireEvent.change(content, { target: { value: 'Autosaved content' } })
 
@@ -494,13 +494,14 @@ describe('WorkspaceMarkdownView', () => {
       fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownRead' }))
       await waitFor(() => expect(updateApi).toHaveBeenCalledTimes(1))
       expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Writing that must survive')
-      expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.saving')
+      expect(screen.getByText('markdown.saveState.saving')).toHaveAttribute('role', 'status')
       await act(async () => { rejectSave(new Error('Disk unavailable')); await Promise.resolve() })
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('workspace.noteSaveFailed'))
       expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Persisted body')
       expect(content).toHaveValue('Writing that must survive')
       fireEvent.click(screen.getByRole('button', { name: 'markdown.retrySave' }))
-      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.saved'))
+      await waitFor(() => expect(screen.queryByText('markdown.saveState.saving')).not.toBeInTheDocument())
+      expect(screen.queryByText('markdown.saveState.saved')).not.toBeInTheDocument()
       expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Writing that must survive')
       expect(content).toHaveValue('Writing that must survive')
     } finally {
@@ -613,6 +614,64 @@ describe('WorkspaceMarkdownView', () => {
     expect(within(restoredHistory).getByRole('button', { name: /Research notes/ })).toBeInTheDocument()
     expect(within(restoredHistory).getByText(current.contentMd, { normalizer: (text) => text })).toBeInTheDocument()
     expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('puts outline first, keeps search in the toolbar and hides idle save feedback', async () => {
+    const { container } = renderView({ embedded: true })
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'markdown.findDocument' })).toBeInTheDocument())
+    const toolbar = container.querySelector('.markdown-workspace-toolbar')!
+    expect(within(toolbar as HTMLElement).getAllByRole('button')[0]).toHaveAccessibleName('markdown.outline')
+    expect(within(toolbar as HTMLElement).getByRole('search')).toBeInTheDocument()
+    expect(screen.queryByText('markdown.saveState.saved')).not.toBeInTheDocument()
+    const input = screen.getByRole('textbox', { name: 'markdown.findDocument' })
+    expect(input).not.toHaveFocus()
+    fireEvent.keyDown(container.querySelector('[data-markdown-surface]')!, { key: 'f', metaKey: true })
+    await waitFor(() => expect(input).toHaveFocus())
+    fireEvent.change(input, { target: { value: 'Initial' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input).toHaveValue('')
+    expect(input).not.toHaveFocus()
+    expect(screen.getByRole('search')).toBeInTheDocument()
+  })
+
+  it('navigates a source outline without enabling live preview and retains the wide sidebar', async () => {
+    renderView({ initialMode: 'edit', contentMd: 'Introduction\n============\n\n## **Results**\n\n```md\n# Not a heading\n```\n\nReference[^1]\n\n[^1]: Source' })
+    await screen.findByRole('textbox', { name: 'workspace.noteContentLabel' })
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.outline' }))
+    const outline = screen.getByRole('navigation')
+    expect(within(outline).queryByRole('button', { name: 'Not a heading' })).not.toBeInTheDocument()
+    expect(within(outline).queryByRole('button', { name: 'Footnotes' })).not.toBeInTheDocument()
+    expect(within(outline).getByRole('button', { name: 'Introduction' })).toBeInTheDocument()
+    fireEvent.click(within(outline).getByRole('button', { name: 'Results' }))
+    const editor = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' }) as HTMLTextAreaElement
+    expect(editor).toHaveFocus()
+    expect(editor.selectionStart).toBe(27)
+    expect(screen.getByRole('button', { name: 'markdown.livePreview' })).toHaveAttribute('aria-pressed', 'false')
+    expect(outline).toBeInTheDocument()
+  })
+
+  it('expands compact search on demand and closes the overlay after heading navigation', async () => {
+    const original = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { this.callback([{ target, contentRect: { width: 340 } } as ResizeObserverEntry], this as unknown as ResizeObserver) }
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver
+    try {
+      renderView({ embedded: true })
+      expect(screen.queryByRole('search')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'markdown.findDocument' }))
+      const input = screen.getByRole('textbox', { name: 'markdown.findDocument' })
+      expect(input).toHaveFocus()
+      fireEvent.change(input, { target: { value: 'Initial' } })
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(screen.queryByRole('search')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'markdown.outline' }))
+      expect(screen.getByRole('navigation')).toHaveClass('is-overlay')
+      fireEvent.click(screen.getByRole('button', { name: 'Findings' }))
+      expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+    } finally { globalThis.ResizeObserver = original }
   })
 
 })

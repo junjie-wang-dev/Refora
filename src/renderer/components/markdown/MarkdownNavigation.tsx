@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CaretDown, CaretUp, X } from '@phosphor-icons/react'
+import { X } from '@phosphor-icons/react'
+
+import { createPortal } from 'react-dom'
+import ReactMarkdown from 'react-markdown'
+import { MARKDOWN_COMPONENTS, REMARK_PLUGINS, REHYPE_PLUGINS } from '../../utils/markdown'
+import MarkdownSearchControls from './MarkdownSearchControls'
 
 interface Heading {
   id: string
@@ -16,30 +21,34 @@ interface Props {
   outlineOpen: boolean
   onCloseFind: () => void
   onCloseOutline: () => void
+  searchContainer?: HTMLElement | null
+  compact?: boolean
+  sourceOutline?: boolean
   onNavigate?: (offset: number) => void
 }
 
-export default function MarkdownNavigation({ articleRef, content, findOpen, outlineOpen, onCloseFind, onCloseOutline, onNavigate }: Props) {
+export default function MarkdownNavigation({ articleRef, content, findOpen, outlineOpen, onCloseFind, onCloseOutline, onNavigate, searchContainer, compact = true, sourceOutline = false }: Props) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [headings, setHeadings] = useState<Heading[]>([])
   const [matches, setMatches] = useState<Range[]>([])
   const [index, setIndex] = useState(0)
+  const sourceRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    const article = articleRef.current
-    setHeadings(article ? Array.from(article.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')).filter((heading) => !heading.closest('[hidden], .sr-only')).map((heading) => ({
+    const article = sourceOutline ? sourceRef.current : articleRef.current
+    setHeadings(article ? Array.from(article.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')).filter((heading) => !heading.closest('.sr-only') && (sourceOutline || !heading.closest('[hidden]'))).map((heading) => ({
       id: heading.id,
       text: heading.textContent ?? '',
       level: Number(heading.tagName.slice(1)),
       offset: Number(heading.dataset.sourceOffset ?? 0)
     })).filter((heading) => heading.text) : [])
-  }, [articleRef, content, outlineOpen])
+  }, [articleRef, content, outlineOpen, sourceOutline])
 
   useEffect(() => {
-    if (findOpen) inputRef.current?.focus()
-  }, [findOpen])
+    if (findOpen && compact) inputRef.current?.focus()
+  }, [findOpen, compact])
 
   useEffect(() => {
     const article = articleRef.current
@@ -107,23 +116,18 @@ export default function MarkdownNavigation({ articleRef, content, findOpen, outl
     if (matches.length) setIndex((current) => (current + direction + matches.length) % matches.length)
   }
 
+  const search = <MarkdownSearchControls inputRef={inputRef} query={query} total={matches.length} index={index} label={t('markdown.findDocument')} previousLabel={t('markdown.previousMatch')} nextLabel={t('markdown.nextMatch')} closeLabel={t('markdown.closeFind')} onQueryChange={setQuery} onNavigate={navigate} closable={compact} onClose={() => { onCloseFind(); inputRef.current?.blur() }} />
+
   return <>
-    {findOpen && <div className="markdown-find-bar" role="search" aria-label={t('markdown.findDocument')}>
-      <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t('markdown.findDocument')} placeholder={t('markdown.findDocument')} onKeyDown={(event) => {
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCloseFind() }
-        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1) }
-      }} />
-      <span role="status">{query ? t('markdown.matchCount', { current: matches.length ? index + 1 : 0, total: matches.length }) : ''}</span>
-      <button type="button" disabled={!matches.length} aria-label={t('markdown.previousMatch')} onClick={() => navigate(-1)}><CaretUp size={16} /></button>
-      <button type="button" disabled={!matches.length} aria-label={t('markdown.nextMatch')} onClick={() => navigate(1)}><CaretDown size={16} /></button>
-      <button type="button" aria-label={t('markdown.closeFind')} onClick={onCloseFind}><X size={16} /></button>
-    </div>}
-    {outlineOpen && <nav className="markdown-outline" aria-label={t('markdown.outline')}>
+    {sourceOutline && outlineOpen && <div ref={sourceRef} hidden><ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS} allowedElements={['h1', 'h2', 'h3', 'h4', 'h5', 'h6']} unwrapDisallowed>{content}</ReactMarkdown></div>}
+    {findOpen && (searchContainer ? createPortal(search, searchContainer) : search)}
+    {outlineOpen && <nav className={`markdown-outline ${compact ? 'is-overlay' : ''}`} aria-label={t('markdown.outline')}>
       <div className="markdown-outline-title"><strong>{t('markdown.outline')}</strong><button type="button" aria-label={t('markdown.closeOutline')} onClick={onCloseOutline}><X size={16} /></button></div>
       {headings.length ? headings.map((heading) => <button key={heading.id} type="button" style={{ paddingInlineStart: `${12 + (heading.level - 1) * 12}px` }} onClick={() => {
         const target = Array.from(articleRef.current?.querySelectorAll<HTMLElement>('[id]') ?? []).find((element) => element.id === heading.id)
-        target?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+        if (!sourceOutline) target?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
         onNavigate?.(heading.offset)
+        if (compact) onCloseOutline()
       }}>{heading.text}</button>) : <p>{t('markdown.noHeadings')}</p>}
     </nav>}
   </>

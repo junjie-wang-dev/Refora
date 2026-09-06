@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import { Copy, DownloadSimple, FilePdf, FileText, List, MagnifyingGlass } from '@phosphor-icons/react'
+import { Copy, DownloadSimple, FilePdf, FileText, SidebarSimple, MagnifyingGlass } from '@phosphor-icons/react'
+import { useMarkdownReaderLayout } from '../hooks/useMarkdownReaderLayout'
 import { api } from '../ipc'
 import { useOcrReaderStore } from '../store/ocrReaderStore'
 import {
@@ -32,13 +33,15 @@ export default function StructuredDocumentPanel() {
   const [exporting, setExporting] = useState(false)
   const articleRef = useRef<HTMLElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
+  const compact = useMarkdownReaderLayout(surfaceRef)
+  const [searchContainer, setSearchContainer] = useState<HTMLDivElement | null>(null)
+  const openFind = () => { setFindOpen(true); window.requestAnimationFrame(() => { const input = surfaceRef.current?.querySelector<HTMLInputElement>('.markdown-search-controls input'); input?.focus(); input?.select() }) }
   const scrollRef = useRef<HTMLDivElement>(null)
   const positionKey = `${documentId}:${resultKey}`
   const documentTitle = title || t('ocr.title')
 
   useEffect(() => {
     const surface = surfaceRef.current
-    const openFind = () => setFindOpen(true)
     surface?.addEventListener('refora-markdown-find', openFind)
     return () => surface?.removeEventListener('refora-markdown-find', openFind)
   }, [])
@@ -86,7 +89,7 @@ export default function StructuredDocumentPanel() {
 
   const action = (label: string, icon: ReactNode, onClick: () => void, pressed?: boolean) => (
     <IconTooltip label={label} appearance="sidebar">
-      <button type="button" className="sidebar-header-btn" aria-label={label} aria-pressed={pressed} disabled={loading || failed || exporting} onClick={onClick}>{icon}</button>
+      <button type="button" className="markdown-reader-button" aria-label={label} aria-pressed={pressed} disabled={loading || failed || exporting} onClick={onClick}>{icon}</button>
     </IconTooltip>
   )
 
@@ -116,15 +119,16 @@ export default function StructuredDocumentPanel() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !event.nativeEvent.isComposing) {
         event.preventDefault()
         event.stopPropagation()
-        setFindOpen(true)
+        openFind()
       }
     }}>
       <PanelHeader title={documentTitle} onClose={close} />
-      <div className="markdown-workspace-toolbar">
+      <div className="markdown-workspace-toolbar" data-compact={compact || undefined}>
         <div className="markdown-toolbar-group">
-          {action(t('markdown.findDocument'), <MagnifyingGlass size={17} />, () => setFindOpen(true))}
-          {action(t('markdown.outline'), <List size={17} />, () => setOutlineOpen((open) => !open), outlineOpen)}
+          {action(t('markdown.outline'), <SidebarSimple size={16} />, () => setOutlineOpen((open) => !open), outlineOpen)}
+          {compact && action(t('markdown.findDocument'), <MagnifyingGlass size={16} />, () => { if (findOpen) setFindOpen(false); else openFind() }, findOpen)}
         </div>
+        <div ref={setSearchContainer} className={`markdown-search-slot ${compact ? 'is-compact' : ''}`} hidden={compact && !findOpen} />
         <div className="markdown-toolbar-group">
           {exporting && <span role="status" className="markdown-save-state">{t('markdown.exporting')}</span>}
           {action(t('markdown.copyMarkdown'), <Copy size={17} />, () => void copyMarkdown())}
@@ -132,8 +136,8 @@ export default function StructuredDocumentPanel() {
           {action(t('markdown.exportPdf'), <FilePdf size={17} />, () => void exportPdf())}
         </div>
       </div>
-      <div className="markdown-content-region">
-        <MarkdownNavigation articleRef={articleRef} content={markdown} findOpen={findOpen} outlineOpen={outlineOpen} onCloseFind={() => setFindOpen(false)} onCloseOutline={() => setOutlineOpen(false)} onNavigate={() => setOutlineOpen(false)} />
+      <div className="markdown-content-region markdown-reader-body">
+        <MarkdownNavigation articleRef={articleRef} content={markdown} findOpen={!loading && !failed && (!compact || findOpen)} searchContainer={searchContainer} compact={compact} outlineOpen={outlineOpen} onCloseFind={() => setFindOpen(false)} onCloseOutline={() => setOutlineOpen(false)} />
         <div ref={scrollRef} className="markdown-reading-scroll" onScroll={(event) => {
           if (loading) return
           readingPositions.delete(positionKey)

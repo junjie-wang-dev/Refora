@@ -85,7 +85,7 @@ describe('MarkdownEditor', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'markdown.editor.replaceText' }), { target: { value: '$&' } })
     fireEvent.click(screen.getByRole('button', { name: 'markdown.editor.replaceAll' }))
     expect(textarea.value).toBe('$& $& $&')
-    expect(screen.getByRole('status')).toHaveTextContent('0/0')
+    expect(screen.getByRole('status')).toHaveTextContent('pdfReader.noResults')
   })
 
   it('edits an existing table without duplicating it and preserves alignment', () => {
