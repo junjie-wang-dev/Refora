@@ -1,59 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
+import type { PDFDocumentProxy, TextItem } from 'pdfjs-dist/types/src/display/api'
+import {
+  findPdfPageMatches,
+  normalizePdfSearchQuery,
+  searchablePdfPage,
+  type PdfSearchMatch,
+  type SearchablePdfPage
+} from '../utils/pdfSearchText'
 
-export interface PdfSearchFragment {
-  itemIndex: number
-  start: number
-  end: number
-}
-
-export interface PdfSearchMatch {
-  page: number
-  fragments: PdfSearchFragment[]
-}
-
-interface CachedPageText {
-  items: string[]
-  text: string
-  offsets: number[]
-}
+export type { PdfSearchFragment, PdfSearchMatch } from '../utils/pdfSearchText'
 
 interface PdfSearchOptions {
   pdf: PDFDocumentProxy | null
   cacheKey: string
   failureMessage: string
   navigateToPage: (page: number) => void
-}
-
-function searchablePage(items: string[]): CachedPageText {
-  const offsets: number[] = []
-  let text = ''
-  items.forEach((item, index) => {
-    if (index > 0) text += ' '
-    offsets.push(text.length)
-    text += item
-  })
-  return { items, text: text.toLocaleLowerCase(), offsets }
-}
-
-function pageMatches(page: number, cached: CachedPageText, query: string): PdfSearchMatch[] {
-  const matches: PdfSearchMatch[] = []
-  let matchStart = cached.text.indexOf(query)
-  while (matchStart >= 0) {
-    const matchEnd = matchStart + query.length
-    const fragments = cached.items.flatMap((item, itemIndex) => {
-      const itemStart = cached.offsets[itemIndex]
-      const itemEnd = itemStart + item.length
-      const start = Math.max(matchStart, itemStart)
-      const end = Math.min(matchEnd, itemEnd)
-      return end > start
-        ? [{ itemIndex, start: start - itemStart, end: end - itemStart }]
-        : []
-    })
-    if (fragments.length > 0) matches.push({ page, fragments })
-    matchStart = cached.text.indexOf(query, Math.max(matchEnd, matchStart + 1))
-  }
-  return matches
 }
 
 export function usePdfSearch({
@@ -67,25 +28,36 @@ export function usePdfSearch({
   const [matches, setMatches] = useState<PdfSearchMatch[]>([])
   const [index, setIndex] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [completed, setCompleted] = useState(false)
+  const [pagesSearched, setPagesSearched] = useState(0)
+  const [failedPages, setFailedPages] = useState(0)
   const generationRef = useRef(0)
-  const textCacheRef = useRef({ key: '', pages: new Map<number, CachedPageText>() })
-
-  useEffect(() => () => {
-    generationRef.current += 1
-  }, [pdf])
+  const textCacheRef = useRef<{
+    key: string
+    pdf: PDFDocumentProxy | null
+    pages: Map<number, SearchablePdfPage>
+  }>({ key: '', pdf: null, pages: new Map() })
 
   useEffect(() => {
     generationRef.current += 1
+    if (textCacheRef.current.key !== cacheKey || textCacheRef.current.pdf !== pdf) {
+      textCacheRef.current = { key: cacheKey, pdf, pages: new Map() }
+    }
     setQuery('')
     setMatches([])
     setIndex(0)
     setError(null)
     setSearching(false)
-  }, [cacheKey])
+    setCompleted(false)
+    setPagesSearched(0)
+    setFailedPages(0)
+    return () => { generationRef.current += 1 }
+  }, [cacheKey, pdf])
 
   const cancel = useCallback(() => {
     generationRef.current += 1
     setSearching(false)
+    setCompleted(false)
   }, [])
 
   const updateQuery = useCallback((value: string) => {
@@ -95,48 +67,63 @@ export function usePdfSearch({
     setIndex(0)
     setSearching(false)
     setError(null)
+    setCompleted(false)
+    setPagesSearched(0)
+    setFailedPages(0)
   }, [])
 
   const run = useCallback(async () => {
     const generation = ++generationRef.current
-    const normalizedQuery = query.trim().toLocaleLowerCase()
+    const normalizedQuery = normalizePdfSearchQuery(query)
+    setMatches([])
+    setIndex(0)
+    setError(null)
+    setCompleted(false)
+    setPagesSearched(0)
+    setFailedPages(0)
     if (!pdf || !normalizedQuery) {
-      setMatches([])
-      setIndex(0)
-      setError(null)
       setSearching(false)
       return
     }
     setSearching(true)
-    setError(null)
-    if (textCacheRef.current.key !== cacheKey) {
-      textCacheRef.current = { key: cacheKey, pages: new Map() }
+    if (textCacheRef.current.key !== cacheKey || textCacheRef.current.pdf !== pdf) {
+      textCacheRef.current = { key: cacheKey, pdf, pages: new Map() }
     }
     const pageTextCache = textCacheRef.current.pages
     const nextMatches: PdfSearchMatch[] = []
+    let failures = 0
     try {
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        let cached = pageTextCache.get(pageNumber)
-        if (!cached) {
-          const page = await pdf.getPage(pageNumber)
-          const content = await page.getTextContent()
+        if (generationRef.current !== generation) return
+        const previousMatchCount = nextMatches.length
+        try {
+          let cached = pageTextCache.get(pageNumber)
+          if (!cached) {
+            const page = await pdf.getPage(pageNumber)
+            if (generationRef.current !== generation) return
+            const content = await page.getTextContent()
+            if (generationRef.current !== generation) return
+            cached = searchablePdfPage(content.items.filter((item): item is TextItem => 'str' in item))
+            pageTextCache.set(pageNumber, cached)
+          }
+          nextMatches.push(...findPdfPageMatches(pageNumber, cached, normalizedQuery))
+        } catch {
           if (generationRef.current !== generation) return
-          cached = searchablePage(
-            content.items.map((item) => 'str' in item ? item.str : '')
-          )
-          pageTextCache.set(pageNumber, cached)
+          failures += 1
+          setFailedPages(failures)
+          setError(failureMessage)
         }
-        nextMatches.push(...pageMatches(pageNumber, cached, normalizedQuery))
+        setPagesSearched(pageNumber)
+        if (nextMatches.length > previousMatchCount) {
+          setMatches([...nextMatches])
+          if (previousMatchCount === 0) navigateToPage(nextMatches[0].page)
+        }
+        if (pageNumber % 8 === 0 || (previousMatchCount === 0 && nextMatches.length > 0)) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+        }
       }
       if (generationRef.current !== generation) return
-      setMatches(nextMatches)
-      setIndex(0)
-      if (nextMatches[0]) navigateToPage(nextMatches[0].page)
-    } catch {
-      if (generationRef.current !== generation) return
-      setMatches([])
-      setIndex(0)
-      setError(failureMessage)
+      setCompleted(true)
     } finally {
       if (generationRef.current === generation) setSearching(false)
     }
@@ -149,5 +136,9 @@ export function usePdfSearch({
     navigateToPage(matches[nextIndex].page)
   }, [index, matches, navigateToPage])
 
-  return { query, searching, matches, index, error, updateQuery, run, cycle, cancel }
+  return {
+    query, searching, matches, index, error, completed, pagesSearched, failedPages,
+    noResults: completed && matches.length === 0 && failedPages === 0,
+    updateQuery, run, cycle, cancel
+  }
 }

@@ -27,6 +27,7 @@ type PdfAnnotationPatch = Partial<Pick<
 >>
 
 export type PdfTool =
+  | 'select'
   | 'highlight'
   | 'underline'
   | 'strikeout'
@@ -37,6 +38,11 @@ export type PdfTool =
 
 export type PdfAnnotationSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 export type PdfAnnotationLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
+
+interface PdfAnnotationHistory {
+  past: PdfAnnotation[][]
+  future: PdfAnnotation[][]
+}
 
 interface PdfAnnotationDeletion {
   documentId: string
@@ -52,6 +58,7 @@ interface PdfReaderState {
   annotations: Record<string, PdfAnnotation[]>
   loadStatus: Record<string, PdfAnnotationLoadStatus>
   saveStatus: Record<string, PdfAnnotationSaveStatus>
+  annotationHistory: Record<string, PdfAnnotationHistory>
   tool: PdfTool | null
   color: string
   fontSize: number
@@ -88,6 +95,10 @@ interface PdfReaderState {
   consumeCommentFocus: () => void
   retryLoad: (documentId: string) => Promise<void>
   retrySave: (documentId: string) => void
+  undo: (documentId: string) => void
+  redo: (documentId: string) => void
+  beginHistoryGroup: (documentId: string) => void
+  endHistoryGroup: (documentId: string) => void
   undoLastDeletion: () => void
   clearLastDeletion: () => void
   flushPendingSaves: () => Promise<void>
@@ -111,6 +122,12 @@ interface AnnotationPersistQueue {
 const persistQueues = new Map<string, AnnotationPersistQueue>()
 const disposeAfterPersist = new Set<string>()
 const annotationLoadVersions = new Map<string, number>()
+const historyGroups = new Map<string, {
+  before: PdfAnnotation[]
+  recorded: boolean
+  previousHistory: PdfAnnotationHistory
+}>()
+const HISTORY_LIMIT = 100
 let libraryGeneration = 0
 let nextAnnotationLoadRequest = 0
 
@@ -128,12 +145,83 @@ function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T
 }
 
 function clearDocumentCache(documentId: string): void {
+  historyGroups.delete(documentId)
   usePdfReaderStore.setState((state) => ({
     annotations: withoutKey(state.annotations, documentId),
     loadStatus: withoutKey(state.loadStatus, documentId),
     saveStatus: withoutKey(state.saveStatus, documentId),
+    annotationHistory: withoutKey(state.annotationHistory, documentId),
     lastDeletion: state.lastDeletion?.documentId === documentId ? null : state.lastDeletion
   }))
+}
+
+function recordHistory(documentId: string): void {
+  const state = usePdfReaderStore.getState()
+  const group = historyGroups.get(documentId)
+  if (group?.recorded) return
+  if (group) group.recorded = true
+  const history = state.annotationHistory[documentId] ?? { past: [], future: [] }
+  usePdfReaderStore.setState({
+    annotationHistory: {
+      ...state.annotationHistory,
+      [documentId]: {
+        past: [...history.past, state.annotations[documentId] ?? []].slice(-HISTORY_LIMIT),
+        future: []
+      }
+    }
+  })
+}
+
+function endHistoryGroup(documentId: string): void {
+  const group = historyGroups.get(documentId)
+  historyGroups.delete(documentId)
+  if (!group?.recorded) return
+  const state = usePdfReaderStore.getState()
+  const history = state.annotationHistory[documentId]
+  if (
+    !history ||
+    history.past.at(-1) !== group.before ||
+    JSON.stringify(group.before) !== JSON.stringify(state.annotations[documentId])
+  ) return
+  usePdfReaderStore.setState({
+    annotationHistory: {
+      ...state.annotationHistory,
+      [documentId]: group.previousHistory
+    }
+  })
+}
+
+function applyHistory(documentId: string, direction: 'undo' | 'redo'): void {
+  endHistoryGroup(documentId)
+  const state = usePdfReaderStore.getState()
+  const history = state.annotationHistory[documentId]
+  const current = state.annotations[documentId]
+  if (!history || !current) return
+  const annotations = (direction === 'undo' ? history.past : history.future).at(-1)
+  if (!annotations) return
+  const previousIds = new Set(current.map((annotation) => annotation.id))
+  const restoredIds = annotations.filter((annotation) => !previousIds.has(annotation.id))
+    .map((annotation) => annotation.id)
+  usePdfReaderStore.setState({
+    annotations: { ...state.annotations, [documentId]: annotations },
+    annotationHistory: {
+      ...state.annotationHistory,
+      [documentId]: direction === 'undo'
+        ? {
+            past: history.past.slice(0, -1),
+            future: [...history.future, current].slice(-HISTORY_LIMIT)
+          }
+        : {
+            past: [...history.past, current].slice(-HISTORY_LIMIT),
+            future: history.future.slice(0, -1)
+          }
+    },
+    selectedAnnotationId: restoredIds.at(-1) ?? null,
+    selectedAnnotationIds: restoredIds,
+    pendingCommentFocusId: null,
+    lastDeletion: null
+  })
+  persist(documentId, annotations)
 }
 
 function finishPersistQueue(documentId: string, queue: AnnotationPersistQueue): void {
@@ -285,6 +373,7 @@ function resetForLibrarySwitch(): void {
   persistQueues.clear()
   disposeAfterPersist.clear()
   annotationLoadVersions.clear()
+  historyGroups.clear()
   nextAnnotationLoadRequest = 0
   usePdfReaderStore.setState({
     tabs: [],
@@ -292,6 +381,7 @@ function resetForLibrarySwitch(): void {
     annotations: {},
     loadStatus: {},
     saveStatus: {},
+    annotationHistory: {},
     tool: null,
     sidebarOpen: false,
     selectedAnnotationId: null,
@@ -313,6 +403,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   annotations: {},
   loadStatus: {},
   saveStatus: {},
+  annotationHistory: {},
   tool: null,
   color: '#f2c94c',
   fontSize: 14,
@@ -324,6 +415,10 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   lastDeletion: null,
 
   open: async (document) => {
+    const previousDocumentId = get().activeDocumentId
+    if (previousDocumentId && previousDocumentId !== document.id) {
+      endHistoryGroup(previousDocumentId)
+    }
     const generation = libraryGeneration
     disposeAfterPersist.delete(document.id)
     const alreadyLoaded = Object.hasOwn(get().annotations, document.id)
@@ -376,6 +471,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   close: (documentId) => {
+    endHistoryGroup(documentId)
     annotationLoadVersions.delete(documentId)
     set((state) => {
       const index = state.tabs.findIndex((tab) => tab.id === documentId)
@@ -429,12 +525,18 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     }
   },
 
-  activate: (documentId) => set({
-    activeDocumentId: documentId,
-    selectedAnnotationId: null,
-    selectedAnnotationIds: [],
-    pendingCommentFocusId: null
-  }),
+  activate: (documentId) => {
+    const previousDocumentId = get().activeDocumentId
+    if (previousDocumentId && previousDocumentId !== documentId) {
+      endHistoryGroup(previousDocumentId)
+    }
+    set({
+      activeDocumentId: documentId,
+      selectedAnnotationId: null,
+      selectedAnnotationIds: [],
+      pendingCommentFocusId: null
+    })
+  },
 
   setTool: (tool) => set((state) => ({
     tool,
@@ -466,6 +568,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
       createdAt: Date.now()
     }
     const annotations = [...(get().annotations[documentId] ?? []), annotation]
+    recordHistory(documentId)
     set((state) => ({
       annotations: { ...state.annotations, [documentId]: annotations },
       selectedAnnotationId: null,
@@ -485,9 +588,16 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     if (!Object.hasOwn(get().annotations, documentId) || annotationIds.length === 0) return
     const ids = new Set(annotationIds)
     const current = get().annotations[documentId] ?? []
-    const annotations = current.map((annotation) =>
-      ids.has(annotation.id) ? { ...annotation, ...patch } : annotation
-    )
+    let changed = false
+    const annotations = current.map((annotation) => {
+      if (!ids.has(annotation.id) || Object.entries(patch).every(([key, value]) =>
+        JSON.stringify(annotation[key as keyof PdfAnnotation]) === JSON.stringify(value)
+      )) return annotation
+      changed = true
+      return { ...annotation, ...patch }
+    })
+    if (!changed) return
+    recordHistory(documentId)
     set((state) => ({
       annotations: { ...state.annotations, [documentId]: annotations }
     }))
@@ -507,6 +617,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     )
     if (deleted.length === 0) return
     const annotations = currentAnnotations.filter((annotation) => !ids.has(annotation.id))
+    recordHistory(documentId)
     set((state) => {
       const selectedAnnotationIds = state.selectedAnnotationIds.filter(
         (id) => !ids.has(id)
@@ -537,26 +648,29 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     persist(documentId, get().annotations[documentId])
   },
 
+  beginHistoryGroup: (documentId) => {
+    endHistoryGroup(documentId)
+    historyGroups.set(documentId, {
+      before: get().annotations[documentId] ?? [],
+      recorded: false,
+      previousHistory: get().annotationHistory[documentId] ?? { past: [], future: [] }
+    })
+  },
+
+  endHistoryGroup,
+
+  undo: (documentId) => applyHistory(documentId, 'undo'),
+
+  redo: (documentId) => applyHistory(documentId, 'redo'),
+
   undoLastDeletion: () => {
     const deletion = get().lastDeletion
     if (!deletion) return
-    const current = [...(get().annotations[deletion.documentId] ?? [])]
-    deletion.annotations
-      .slice()
-      .sort((first, second) => first.index - second.index)
-      .forEach(({ annotation, index }) => {
-        current.splice(Math.min(index, current.length), 0, annotation)
-      })
-    const restoredIds = deletion.annotations.map(({ annotation }) => annotation.id)
-    set((state) => ({
-      annotations: { ...state.annotations, [deletion.documentId]: current },
+    get().undo(deletion.documentId)
+    set({
       activeDocumentId: deletion.documentId,
-      selectedAnnotationId: restoredIds.at(-1) ?? null,
-      selectedAnnotationIds: restoredIds,
-      tool: null,
-      lastDeletion: null
-    }))
-    persist(deletion.documentId, current)
+      tool: null
+    })
   },
 
   clearLastDeletion: () => set({ lastDeletion: null }),

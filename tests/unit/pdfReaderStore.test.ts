@@ -571,6 +571,108 @@ describe('PDF reader state', () => {
     })
   })
 
+  it('undoes and redoes creation, geometry, color, comments and deletion after saving', async () => {
+    await usePdfReaderStore.getState().open(document('paper'))
+    const store = usePdfReaderStore.getState()
+    const annotation = store.addAnnotation('paper', {
+      kind: 'note', page: 1, color: '#ff0', text: '', comment: '', point: { x: 0.1, y: 0.2 }
+    })!
+    store.updateAnnotation('paper', annotation.id, { point: { x: 0.3, y: 0.4 } })
+    store.updateAnnotation('paper', annotation.id, { color: '#f00', comment: 'Read again' })
+    store.removeAnnotation('paper', annotation.id)
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0]).toMatchObject({
+      color: '#f00', comment: 'Read again', point: { x: 0.3, y: 0.4 }
+    })
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0]).toMatchObject({ color: '#ff0', comment: '' })
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0].point).toEqual({ x: 0.1, y: 0.2 })
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    for (let index = 0; index < 4; index += 1) store.redo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    expect(usePdfReaderStore.getState().annotationHistory.paper.future).toHaveLength(0)
+    await store.flushPendingSaves()
+    expect(api.documents.setPdfAnnotations).toHaveBeenLastCalledWith('paper', [])
+  })
+
+  it('keeps document histories independent and discards redo only for the edited document', async () => {
+    const store = usePdfReaderStore.getState()
+    const draft = { kind: 'note' as const, page: 1, color: '#ff0', text: '', comment: '' }
+    await store.open(document('one'))
+    store.addAnnotation('one', draft)
+    await store.open(document('two'))
+    store.addAnnotation('two', draft)
+    store.undo('one')
+    store.undo('two')
+    store.addAnnotation('two', { ...draft, comment: 'New branch' })
+    store.redo('one')
+    store.redo('two')
+    expect(usePdfReaderStore.getState().annotations.one).toHaveLength(1)
+    expect(usePdfReaderStore.getState().annotations.two).toHaveLength(1)
+    expect(usePdfReaderStore.getState().annotations.two[0].comment).toBe('New branch')
+    expect(usePdfReaderStore.getState().activeDocumentId).toBe('two')
+  })
+
+  it('groups cross-page markup and continuous dragging into single undo steps', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    store.beginHistoryGroup('paper')
+    const first = store.addAnnotation('paper', {
+      kind: 'highlight', page: 1, color: '#ff0', text: 'First page', comment: '',
+      rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.04 }]
+    })!
+    store.addAnnotation('paper', {
+      kind: 'highlight', page: 2, color: '#ff0', text: 'Next page', comment: ''
+    })
+    store.endHistoryGroup('paper')
+    store.beginHistoryGroup('paper')
+    for (const y of [0.3, 0.4, 0.5]) {
+      store.updateAnnotation('paper', first.id, { rects: [{ x: 0.1, y, width: 0.3, height: 0.04 }] })
+    }
+    store.endHistoryGroup('paper')
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0].rects?.[0].y).toBe(0.2)
+    expect(usePdfReaderStore.getState().annotations.paper).toHaveLength(2)
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    store.redo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper).toHaveLength(2)
+  })
+
+  it('leaves no undo entry for an empty text edit and preserves earlier redo', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    const draft = { kind: 'text' as const, page: 1, color: '#ff0', text: '', comment: '' }
+    store.addAnnotation('paper', { ...draft, text: 'Earlier' })
+    store.undo('paper')
+    store.beginHistoryGroup('paper')
+    const empty = store.addAnnotation('paper', draft)!
+    store.removeAnnotation('paper', empty.id)
+    store.endHistoryGroup('paper')
+    expect(usePdfReaderStore.getState().annotationHistory.paper.past).toEqual([])
+    store.redo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0].text).toBe('Earlier')
+  })
+
+  it('bounds retained history and ignores edits that do not change an annotation', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    const annotation = store.addAnnotation('paper', {
+      kind: 'note', page: 1, color: '#ff0', text: '', comment: ''
+    })!
+    store.updateAnnotation('paper', annotation.id, { comment: '' })
+    store.updateAnnotation('paper', 'missing', { comment: 'Nothing' })
+    expect(usePdfReaderStore.getState().annotationHistory.paper.past).toHaveLength(1)
+    for (let index = 0; index < 110; index += 1) {
+      store.updateAnnotation('paper', annotation.id, { comment: String(index) })
+    }
+    expect(usePdfReaderStore.getState().annotationHistory.paper.past).toHaveLength(100)
+  })
+
   it('uses the system app by default and opens a local tab in built-in mode', async () => {
     await openDocumentPdf('system-paper')
     expect(api.documents.openPdf).toHaveBeenCalledWith('system-paper')

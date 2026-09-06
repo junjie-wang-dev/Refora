@@ -24,6 +24,7 @@ import { useWorkspaceStore } from './store/workspaceStore'
 import { useOcrReaderStore } from './store/ocrReaderStore'
 import { useChatDraftStore } from './store/chatDraftStore'
 import { usePdfReaderStore } from './store/pdfReaderStore'
+import { usePdfViewStore } from './store/pdfViewStore'
 import { SidebarVisibilityProvider } from './store/sidebarVisibility'
 import { api } from './ipc'
 import i18n from './i18n'
@@ -213,6 +214,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
   useEffect(() => {
     const reset = () => {
       useOcrReaderStore.getState().close()
+      usePdfViewStore.getState().reset()
       usePdfReaderStore.getState().resetForLibrarySwitch()
     }
     return api.events.onLibrarySwitched(reset)

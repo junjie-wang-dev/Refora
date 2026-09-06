@@ -49,9 +49,14 @@ export default function PdfAnnotationSidebar({
         String(annotation.page)
       ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
     })
-    .sort((first, second) =>
-      first.page - second.page || first.createdAt - second.createdAt
-    )
+    .sort((first, second) => {
+      const firstPoint = first.point ?? first.rects?.[0] ?? first.points?.[0]
+      const secondPoint = second.point ?? second.rects?.[0] ?? second.points?.[0]
+      return first.page - second.page ||
+        (firstPoint?.y ?? 0) - (secondPoint?.y ?? 0) ||
+        (firstPoint?.x ?? 0) - (secondPoint?.x ?? 0) ||
+        first.createdAt - second.createdAt
+    })
 
   useEffect(() => {
     if (!pendingCommentFocusId) return
@@ -63,7 +68,7 @@ export default function PdfAnnotationSidebar({
       ).find((element) => element.dataset.commentAnnotationId === pendingCommentFocusId)
       textarea?.focus()
       textarea?.scrollIntoView({ block: 'nearest' })
-      usePdfReaderStore.getState().consumeCommentFocus()
+      if (textarea) usePdfReaderStore.getState().consumeCommentFocus()
     })
     return () => window.cancelAnimationFrame(frame)
   }, [annotations, pendingCommentFocusId])
@@ -234,7 +239,9 @@ export default function PdfAnnotationSidebar({
               onFocus={() => {
                 usePdfReaderStore.getState().setTool(null)
                 usePdfReaderStore.getState().selectAnnotation(annotation.id)
+                usePdfReaderStore.getState().beginHistoryGroup(documentId)
               }}
+              onBlur={() => usePdfReaderStore.getState().endHistoryGroup(documentId)}
               onChange={(event) => updateAnnotation(
                 documentId,
                 annotation.id,

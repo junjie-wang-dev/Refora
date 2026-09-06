@@ -32,6 +32,8 @@ function createRegressionPdf(filePath: string): void {
     '(Refora searchable phrase page two) Tj',
     '0 -70 Td',
     '(Back to page one) Tj',
+    '0 -308 Td',
+    '(Precise destination section) Tj',
     'ET',
     padding
   ].join('\n')
@@ -43,18 +45,21 @@ function createRegressionPdf(filePath: string): void {
     'ET'
   ].join('\n')
   const objects = new Map<number, string>([
-    [1, '<< /Type /Catalog /Pages 2 0 R >>'],
+    [1, '<< /Type /Catalog /Pages 2 0 R /Outlines 13 0 R /PageMode /UseOutlines >>'],
     [2, '<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>'],
     [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R /Annots [10 0 R 11 0 R] >>'],
     [4, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 900] /Resources << /Font << /F1 6 0 R >> >> /Contents 8 0 R /Annots [12 0 R] >>'],
-    [5, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 9 0 R >>'],
+    [5, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 1400] /Rotate 90 /Resources << /Font << /F1 6 0 R >> >> /Contents 9 0 R >>'],
     [6, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],
     [7, pdfStream(pageOne)],
     [8, pdfStream(pageTwo)],
     [9, pdfStream(pageThree)],
-    [10, '<< /Type /Annot /Subtype /Link /Rect [70 642 290 668] /Border [0 0 1] /C [0 0 1] /Dest [4 0 R /Fit] >>'],
+    [10, '<< /Type /Annot /Subtype /Link /Rect [70 642 290 668] /Border [0 0 1] /C [0 0 1] /Dest [4 0 R /XYZ 72 470 null] >>'],
     [11, '<< /Type /Annot /Subtype /Link /Rect [70 607 255 633] /Border [0 0 1] /C [0 0 1] /A << /S /URI /URI (https://example.com/refora-e2e) >> >>'],
-    [12, '<< /Type /Annot /Subtype /Link /Rect [70 750 240 776] /Border [0 0 1] /C [0 0 1] /Dest [3 0 R /Fit] >>']
+    [12, '<< /Type /Annot /Subtype /Link /Rect [70 750 240 776] /Border [0 0 1] /C [0 0 1] /Dest [3 0 R /Fit] >>'],
+    [13, '<< /Type /Outlines /First 14 0 R /Last 15 0 R /Count 2 >>'],
+    [14, '<< /Title (Opening section) /Parent 13 0 R /Dest [3 0 R /XYZ 0 792 null] /Next 15 0 R >>'],
+    [15, '<< /Title (Precise destination section) /Parent 13 0 R /Dest [4 0 R /XYZ 72 470 null] /Prev 14 0 R >>']
   ])
   let output = '%PDF-1.7\n%\xe2\xe3\xcf\xd3\n'
   const offsets = new Map<number, number>()
@@ -80,6 +85,7 @@ test.describe('PDF reader regressions', () => {
   let libraryFolder: string
   let sourceFolder: string
   let documentId: string
+  let secondDocumentId: string
 
   test.beforeAll(async () => {
     userDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'refora-pdf-regression-user-'))
@@ -105,7 +111,8 @@ test.describe('PDF reader regressions', () => {
     page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     const authorizedPath = await authorizeFilePath(page, fixturePath)
-    const documents = await page.evaluate(async (pdfPath) => {
+    const secondPath = await authorizeFilePath(page, path.resolve(__dirname, '..', 'fixtures', 'valid.pdf'))
+    const documents = await page.evaluate(async (paths) => {
       const api = (window as unknown as {
         api: {
           import: { addFiles(paths: string[]): Promise<unknown> }
@@ -115,13 +122,14 @@ test.describe('PDF reader regressions', () => {
           }
         }
       }).api
-      await api.import.addFiles([pdfPath])
+      await api.import.addFiles(paths)
       await api.settings.set('pdfOpenMode', 'builtin')
       return api.documents.list({ mode: 'all' })
-    }, authorizedPath)
+    }, [authorizedPath, secondPath])
     documentId = documents.find((document) =>
       document.fileName === 'reader-regression.pdf'
     )?.id ?? ''
+    secondDocumentId = documents.find((document) => document.fileName === 'valid.pdf')?.id ?? ''
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
   })
@@ -155,6 +163,20 @@ test.describe('PDF reader regressions', () => {
       )).toBe(true)
     }
     await expect(page.getByRole('alert')).toHaveCount(0)
+    const widePage = page.locator('[data-page-number="3"]')
+    await expect(widePage).toHaveAttribute('data-page-rotation', '90')
+    await expect.poll(async () => {
+      const bounds = await widePage.boundingBox()
+      return bounds ? bounds.width / bounds.height : 0
+    }).toBeCloseTo(1400 / 612, 2)
+    expect(await widePage.evaluate((element) => {
+      const root = element.closest<HTMLElement>('[data-pdf-page-virtualizer]')?.parentElement
+      if (!root) return false
+      const bounds = element.getBoundingClientRect()
+      const rootBounds = root.getBoundingClientRect()
+      const left = bounds.left - rootBounds.left + root.scrollLeft
+      return left >= -1 && left + bounds.width <= root.scrollWidth + 1
+    })).toBe(true)
 
     await pageInput.fill('1')
     await pageInput.press('Enter')
@@ -166,11 +188,20 @@ test.describe('PDF reader regressions', () => {
       .toHaveAttribute('target', '_blank')
     await page.locator('[data-page-number="1"] .annotationLayer a[href="#"]').click()
     await expect(pageInput).toHaveValue('2')
+    const destinationText = page.locator('[data-page-number="2"] .textLayer span')
+      .filter({ hasText: 'Precise destination section' })
+    await expect(destinationText).toBeInViewport()
+    await page.getByRole('button', { name: 'Back to previous position' }).click()
+    await expect(pageInput).toHaveValue('1')
+    await page.getByRole('button', { name: 'Forward to next position' }).click()
+    await expect(pageInput).toHaveValue('2')
+    await expect(destinationText).toBeInViewport()
 
     const searchInput = page.getByPlaceholder('Search in PDF', { exact: true })
-    if (!await searchInput.isVisible()) {
-      await page.getByRole('button', { name: 'Search in PDF', exact: true }).click()
-    }
+    await page.keyboard.press('Meta+f')
+    await expect(searchInput).toBeFocused()
+    await searchInput.fill('phrase that does not occur')
+    await expect(page.locator('[data-pdf-search-status]')).toHaveText('No matches')
     await searchInput.fill('searchable phrase')
     await expect(page.getByText('1/3', { exact: true })).toBeVisible()
     await expect(page.locator('.textLayer .highlight.selected')).toHaveCount(1)
@@ -235,6 +266,7 @@ test.describe('PDF reader regressions', () => {
       const normalizedX = (clientX - positionedBounds.left) / positionedBounds.width
       const normalizedY = (clientY - positionedBounds.top) / positionedBounds.height
       const drifts: number[] = []
+      const samples: Array<{ x: number; y: number; scrollLeft: number; scrollTop: number }> = []
       for (let index = 0; index < 16; index += 1) {
         root.dispatchEvent(new WheelEvent('wheel', {
           bubbles: true,
@@ -247,6 +279,12 @@ test.describe('PDF reader regressions', () => {
         await frame()
         const nextPage = root.querySelector<HTMLElement>('[data-page-number="2"]')
         const nextBounds = nextPage?.getBoundingClientRect()
+        if (nextBounds) samples.push({
+          x: nextBounds.left + nextBounds.width * normalizedX - clientX,
+          y: nextBounds.top + nextBounds.height * normalizedY - clientY,
+          scrollLeft: root.scrollLeft,
+          scrollTop: root.scrollTop
+        })
         drifts.push(nextBounds
           ? Math.hypot(
               nextBounds.left + nextBounds.width * normalizedX - clientX,
@@ -256,7 +294,10 @@ test.describe('PDF reader regressions', () => {
       }
       await frame()
       await frame()
-      return { drifts }
+      return { drifts, samples }
+    })
+    await testInfo.attach('zoom-anchor-drift', {
+      body: Buffer.from(JSON.stringify(zoomContinuity)), contentType: 'application/json'
     })
     expect(Math.max(...zoomContinuity.drifts)).toBeLessThan(2)
     await zoomInput.fill('500')
@@ -381,6 +422,163 @@ test.describe('PDF reader regressions', () => {
       body: await scroller.screenshot(),
       contentType: 'image/png'
     })
+  })
+
+  test('navigates outline and thumbnails, fits resized panels, and restores document views and bookmarks', async () => {
+    test.setTimeout(90000)
+    const fullscreenExit = page.getByRole('button', { name: 'Exit fullscreen' })
+    if (await fullscreenExit.isVisible()) await fullscreenExit.click()
+    await page.locator(`[data-document-id="${documentId}"]`)
+      .getByRole('button', { name: 'Open' }).click()
+    const pageInput = page.getByRole('textbox', { name: 'Page number' })
+    const zoomInput = page.getByRole('textbox', { name: 'Zoom percentage' })
+    const goToPage = async (number: number) => {
+      await pageInput.fill(String(number))
+      await pageInput.press('Enter')
+      await expect(pageInput).toHaveValue(String(number))
+      await expect(page.locator(`[data-page-number="${number}"]`)).toBeVisible()
+    }
+    const scroller = page.locator('[data-pdf-page-virtualizer]').locator('..')
+    const relativePagePosition = (number: number) => page.locator(`[data-page-number="${number}"]`).evaluate((element) => {
+      const root = element.closest<HTMLElement>('[data-pdf-page-virtualizer]')!.parentElement!
+      const bounds = element.getBoundingClientRect()
+      const rootBounds = root.getBoundingClientRect()
+      return { x: bounds.left - rootBounds.left, y: bounds.top - rootBounds.top }
+    })
+    const savedRecord = () => page.evaluate(async (id) => {
+      const api = (window as unknown as {
+        api: { settings: { get(key: string, fallback: null): Promise<{
+          view: { page: number; scale: number; rotation: number; zoomMode: string }
+          bookmarks: Array<{ title: string; page: number }>
+        } | null> } }
+      }).api
+      return api.settings.get(`pdfReader.document.${id}`, null)
+    }, documentId)
+
+    await goToPage(1)
+    await zoomInput.fill('100')
+    await zoomInput.press('Enter')
+    await page.getByRole('button', { name: 'Enter fullscreen' }).click()
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(1440, 1000)
+    })
+    await page.getByRole('button', { name: 'Document navigation', exact: true }).click()
+    const navigation = page.locator('[data-pdf-navigation]')
+    await expect(navigation).toBeVisible()
+    await navigation.getByRole('button', { name: 'Precise destination section', exact: true }).click()
+    await expect(pageInput).toHaveValue('2')
+    await expect(page.locator('[data-page-number="2"] .textLayer span')
+      .filter({ hasText: 'Precise destination section' })).toBeInViewport()
+
+    await navigation.getByRole('tab', { name: 'Pages', exact: true }).click()
+    const thirdThumbnail = navigation.locator('[data-thumbnail-page="3"]')
+    await expect(thirdThumbnail.locator('canvas')).toBeVisible()
+    await expect.poll(async () => {
+      const bounds = await thirdThumbnail.locator('canvas').boundingBox()
+      return bounds ? bounds.width / bounds.height : 0
+    }).toBeCloseTo(1400 / 612, 2)
+    await thirdThumbnail.getByRole('button', { name: 'Page 3', exact: true }).click()
+    await expect(pageInput).toHaveValue('3')
+    await expect(thirdThumbnail.getByRole('button')).toHaveAttribute('aria-current', 'page')
+
+    const fitWidth = page.getByRole('button', { name: 'Fit page width' })
+    await fitWidth.click()
+    await expect(fitWidth).toHaveAttribute('aria-pressed', 'true')
+    const fitsCurrentPage = async (number: number) => {
+      await expect.poll(async () => {
+        const availableWidth = await scroller.evaluate((element) => element.clientWidth - 48)
+        const bounds = await page.locator(`[data-page-number="${number}"]`).boundingBox()
+        return bounds ? Math.abs(availableWidth - bounds.width) : Number.POSITIVE_INFINITY
+      }).toBeLessThan(2)
+    }
+    await fitsCurrentPage(3)
+    const wideScale = Number(await zoomInput.inputValue())
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(1240, 900)
+    })
+    await fitsCurrentPage(3)
+    await expect.poll(async () => Number(await zoomInput.inputValue())).toBeLessThan(wideScale)
+    await navigation.getByRole('button', { name: 'Close document navigation' }).click()
+    await fitsCurrentPage(3)
+    await goToPage(2)
+    await fitsCurrentPage(2)
+    const fullPanelScale = Number(await zoomInput.inputValue())
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+    await expect(page.locator('[data-annotation-sidebar]')).toBeVisible()
+    await fitsCurrentPage(2)
+    await expect.poll(async () => Number(await zoomInput.inputValue())).toBeLessThan(fullPanelScale)
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
+
+    await zoomInput.fill('140')
+    await zoomInput.press('Enter')
+    await expect(zoomInput).toHaveValue('140')
+    await expect(fitWidth).not.toHaveAttribute('aria-pressed', 'true')
+    await page.getByRole('button', { name: 'Rotate clockwise' }).click()
+    await expect(page.locator('[data-page-number="2"]')).toHaveAttribute('data-page-rotation', '90')
+    await goToPage(2)
+    await scroller.evaluate((root) => {
+      const target = root.querySelector<HTMLElement>('[data-page-number="2"]')!
+      root.scrollTop += target.getBoundingClientRect().top - root.getBoundingClientRect().top + 130
+      root.scrollLeft = 100
+    })
+    await page.getByRole('button', { name: 'Document navigation', exact: true }).click()
+    await navigation.getByRole('tab', { name: 'Bookmarks', exact: true }).click()
+    await navigation.getByRole('button', { name: 'Bookmark this position' }).click()
+    await navigation.getByRole('button', { name: 'Rename Page 2', exact: true }).click()
+    await navigation.getByRole('textbox', { name: 'Bookmark name' }).fill('Return to methods')
+    await navigation.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(navigation.getByRole('button', { name: 'Return to methods, Page 2', exact: true })).toBeVisible()
+    await expect.poll(async () => (await savedRecord())?.bookmarks).toContainEqual({
+      id: expect.any(String), title: 'Return to methods', page: 2, x: expect.any(Number), y: expect.any(Number)
+    })
+    await goToPage(1)
+    await navigation.getByRole('button', { name: 'Return to methods, Page 2', exact: true }).click()
+    await expect(pageInput).toHaveValue('2')
+    await navigation.getByRole('button', { name: 'Close document navigation' }).click()
+    await page.getByRole('button', { name: 'Exit fullscreen' }).click()
+    await expect.poll(async () => (await savedRecord())?.view).toMatchObject({
+      page: 2, scale: 1.4, rotation: 90, zoomMode: 'custom'
+    })
+    const readingPosition = await relativePagePosition(2)
+
+    await page.locator(`[data-document-id="${secondDocumentId}"]`).click()
+    await page.getByRole('button', { name: 'Open File', exact: true }).click()
+    await expect(page.locator('[data-reader-tab-kind="pdf"]')).toHaveCount(2)
+    await expect(pageInput).toHaveValue('1')
+    await expect(zoomInput).toHaveValue('115')
+    await expect(page.locator('[data-page-number="1"]')).toHaveAttribute('data-page-rotation', '0')
+    await zoomInput.fill('85')
+    await zoomInput.press('Enter')
+    const tabs = page.locator('[data-reader-tab-kind="pdf"]').getByRole('tab')
+    await tabs.first().click()
+    await expect(pageInput).toHaveValue('2')
+    await expect(zoomInput).toHaveValue('140')
+    await expect(page.locator('[data-page-number="2"]')).toHaveAttribute('data-page-rotation', '90')
+    await expect.poll(async () => {
+      const restored = await relativePagePosition(2)
+      return Math.hypot(restored.x - readingPosition.x, restored.y - readingPosition.y)
+    }).toBeLessThan(3)
+    await tabs.nth(1).click()
+    await expect(zoomInput).toHaveValue('85')
+    await tabs.first().click()
+    await expect(zoomInput).toHaveValue('140')
+    await expect.poll(async () => (await savedRecord())?.view).toMatchObject({ page: 2, scale: 1.4, rotation: 90 })
+
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    await page.locator(`[data-document-id="${documentId}"]`)
+      .getByRole('button', { name: 'Open' }).click()
+    await expect(pageInput).toHaveValue('2')
+    await expect(zoomInput).toHaveValue('140')
+    await expect(page.locator('[data-page-number="2"]')).toHaveAttribute('data-page-rotation', '90')
+    await page.getByRole('button', { name: 'Document navigation', exact: true }).click()
+    await navigation.getByRole('tab', { name: 'Bookmarks', exact: true }).click()
+    await expect(navigation.getByRole('button', { name: 'Return to methods, Page 2', exact: true })).toBeVisible()
+    await navigation.getByRole('button', { name: 'Remove Return to methods', exact: true }).click()
+    await expect(navigation.getByRole('button', { name: 'Return to methods, Page 2', exact: true })).toHaveCount(0)
+    await expect.poll(async () => (await savedRecord())?.bookmarks).toEqual([])
+    await expect(page.locator('[data-pdf-persistence-status]')).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
   })
 
 })

@@ -1,11 +1,15 @@
 import base64
+import copy
+import json
 import threading
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import refora_server.server.routes.library as library_routes
+from conftest import make_doc
 from refora_server.db.connection import open_database
 from refora_server.repositories import create_repositories
 from refora_server.server.routes.library import create_library_router
@@ -998,6 +1002,251 @@ def test_settings_roundtrip_uses_json_values():
     assert updated.json()["data"]["chatSelectedAgentProfileId"] == "profile-cli"
     assert fetched.json()["data"]["theme"] == "dark"
     assert fetched.json()["data"]["sidebarCollapsed"] is True
+
+
+def _pdf_reading_state():
+    return {
+        "view": {
+            "page": 7,
+            "x": -0.03,
+            "y": 0.42,
+            "scale": 0.15,
+            "rotation": 90,
+            "zoomMode": "width",
+        },
+        "bookmarks": [
+            {
+                "id": "bookmark-1",
+                "title": "关键公式 — Key equation",
+                "page": 9,
+                "x": 0.2,
+                "y": 0.65,
+            },
+        ],
+    }
+
+
+def _pdf_settings_client(tmp_path):
+    db, _ = open_database(str(tmp_path / "reading-state.db"))
+    repos = create_repositories(db)
+    repos["documents"]["insert"](make_doc(id="doc-1"))
+    repos["documents"]["insert"](make_doc(id="legacy.document:1", file_hash="other-hash"))
+    fakes = Fakes()
+    fakes.settings = repos["settings"]
+    fakes.documents = repos["documents"]
+    fakes.repos["transaction"] = repos["transaction"]
+    client, _ = make_client(fakes)
+    return client, repos, db
+
+
+def test_pdf_reading_settings_roundtrip_survives_reopening_database(tmp_path):
+    client, repos, db = _pdf_settings_client(tmp_path)
+    key = "pdfReader.document.doc-1"
+    payload = _pdf_reading_state()
+    try:
+        response = client.patch(
+            "/settings", headers={"X-Refora-Token": "test-token"}, json={key: payload}
+        )
+        assert response.status_code == 200
+        assert response.json()["data"][key] == payload
+        fetched = client.get("/settings", headers={"X-Refora-Token": "test-token"})
+        assert fetched.json()["data"][key] == payload
+        assert repos["settings"].get(key) == payload
+        raw = db.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()[0]
+        assert json.loads(raw) == payload
+    finally:
+        client.close()
+        db.close()
+    reopened, _ = open_database(str(tmp_path / "reading-state.db"))
+    try:
+        assert create_repositories(reopened)["settings"].get(key) == payload
+    finally:
+        reopened.close()
+
+
+def test_pdf_reading_settings_accepts_existing_safe_legacy_document_ids(tmp_path):
+    client, repos, db = _pdf_settings_client(tmp_path)
+    key = "pdfReader.document.legacy.document:1"
+    try:
+        response = client.patch(
+            "/settings", headers={"X-Refora-Token": "test-token"},
+            json={key: _pdf_reading_state()},
+        )
+        assert response.status_code == 200
+        assert repos["settings"].get(key) == _pdf_reading_state()
+    finally:
+        client.close()
+        db.close()
+
+
+@pytest.mark.parametrize("key", [
+    "pdfReader.document.",
+    "pdfReader.document../bad",
+    "pdfReader.document.doc 1",
+    "pdfReader.document.doc%2F1",
+    "pdfReader.document." + "a" * 129,
+    "pdfReader.documents.doc-1",
+    "pdfReader.other.doc-1",
+    "unknownKey",
+])
+def test_pdf_reading_settings_rejects_invalid_or_unapproved_keys_atomically(key):
+    client, fakes = make_client()
+    previous = copy.deepcopy(fakes.settings_values)
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token"},
+        json={"theme": "light", "pdfReader.document.doc-1": _pdf_reading_state(), key: _pdf_reading_state()},
+    )
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert fakes.settings_values == previous
+    assert fakes.transaction_calls == 0
+
+
+@pytest.mark.parametrize(("path", "invalid"), [
+    (("view", "page"), 0),
+    (("view", "page"), 1.5),
+    (("view", "page"), True),
+    (("view", "page"), 1_000_001),
+    (("view", "x"), -2.01),
+    (("view", "y"), 2.01),
+    (("view", "x"), "0.2"),
+    (("view", "scale"), 0),
+    (("view", "scale"), 5.1),
+    (("view", "scale"), True),
+    (("view", "rotation"), 45),
+    (("view", "rotation"), 360),
+    (("view", "rotation"), False),
+    (("view", "zoomMode"), "fit-page"),
+    (("view", "zoomMode"), []),
+    (("view", "extra"), "unexpected"),
+    (("bookmarks",), {}),
+    (("bookmarks", 0, "page"), -1),
+    (("bookmarks", 0, "x"), None),
+    (("bookmarks", 0, "y"), False),
+    (("bookmarks", 0, "id"), ""),
+    (("bookmarks", 0, "id"), "x" * 129),
+    (("bookmarks", 0, "title"), "   "),
+    (("bookmarks", 0, "title"), "x" * 501),
+    (("bookmarks", 0, "extra"), "unexpected"),
+])
+def test_pdf_reading_settings_rejects_malformed_fields_without_partial_writes(path, invalid):
+    client, fakes = make_client()
+    payload = _pdf_reading_state()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = invalid
+    previous = copy.deepcopy(fakes.settings_values)
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token"},
+        json={"theme": "light", "pdfReader.document.doc-1": payload},
+    )
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert fakes.settings_values == previous
+    assert fakes.transaction_calls == 0
+
+
+@pytest.mark.parametrize("payload", [None, [], {}, {"view": {}, "bookmarks": []}])
+def test_pdf_reading_settings_requires_complete_state_shape(payload):
+    client, fakes = make_client()
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token"},
+        json={"pdfReader.document.doc-1": payload},
+    )
+    assert response.status_code == 400
+    assert "pdfReader.document.doc-1" not in fakes.settings_values
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("field", ["x", "y", "scale"])
+def test_pdf_reading_settings_rejects_nonfinite_numbers(field, invalid):
+    client, fakes = make_client()
+    payload = _pdf_reading_state()
+    payload["view"][field] = invalid
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token", "Content-Type": "application/json"},
+        content=json.dumps({"pdfReader.document.doc-1": payload}),
+    )
+    assert response.status_code == 400
+    assert "pdfReader.document.doc-1" not in fakes.settings_values
+
+
+def test_pdf_reading_settings_rejects_custom_zoom_below_manual_limit():
+    client, _ = make_client()
+    payload = _pdf_reading_state()
+    payload["view"]["zoomMode"] = "custom"
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token"},
+        json={"pdfReader.document.doc-1": payload},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("problem", ["duplicate", "count", "bytes"])
+def test_pdf_reading_settings_rejects_duplicate_or_oversized_bookmarks(problem):
+    client, fakes = make_client()
+    payload = _pdf_reading_state()
+    original = payload["bookmarks"][0]
+    if problem == "duplicate":
+        payload["bookmarks"].append(dict(original))
+    elif problem == "count":
+        payload["bookmarks"] = [{**original, "id": f"bookmark-{index}"} for index in range(10_001)]
+    else:
+        payload["bookmarks"] = [
+            {**original, "id": f"bookmark-{index}", "title": "书" * 500}
+            for index in range(1500)
+        ]
+    response = client.patch(
+        "/settings", headers={"X-Refora-Token": "test-token"},
+        json={"pdfReader.document.doc-1": payload},
+    )
+    assert response.status_code == 400
+    assert "pdfReader.document.doc-1" not in fakes.settings_values
+
+
+def test_pdf_reading_settings_requires_existing_document_without_partial_writes(tmp_path):
+    client, repos, db = _pdf_settings_client(tmp_path)
+    try:
+        previous = dict(repos["settings"].list())
+        response = client.patch(
+            "/settings", headers={"X-Refora-Token": "test-token"},
+            json={
+                "theme": "light",
+                "pdfReader.document.doc-1": _pdf_reading_state(),
+                "pdfReader.document.missing": _pdf_reading_state(),
+            },
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "not_found"
+        assert dict(repos["settings"].list()) == previous
+    finally:
+        client.close()
+        db.close()
+
+
+def test_pdf_reading_settings_rolls_back_all_changes_when_storage_fails(tmp_path, monkeypatch):
+    client, repos, db = _pdf_settings_client(tmp_path)
+    try:
+        settings = repos["settings"]
+        previous = dict(settings.list())
+        original_set = settings.set
+
+        def failing_set(key, candidate):
+            original_set(key, candidate)
+            if key == "theme":
+                raise RuntimeError("Storage failed after mutation")
+
+        monkeypatch.setattr(settings, "set", failing_set)
+        response = client.patch(
+            "/settings", headers={"X-Refora-Token": "test-token"},
+            json={"pdfReader.document.doc-1": _pdf_reading_state(), "theme": "light"},
+        )
+        assert response.status_code == 500
+        assert dict(settings.list()) == previous
+    finally:
+        client.close()
+        db.close()
 
 
 def test_watch_rejects_paths_inside_or_containing_the_library(tmp_path):

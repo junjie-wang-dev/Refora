@@ -747,15 +747,50 @@
       "error": "保存失败"
     },
     "tools": {
-      "select": "框选批注",
+      "select": "编辑批注",
       "highlight": "高亮",
       "underline": "下划线",
       "strikeout": "删除线",
       "note": "添加便签",
       "text": "添加文字",
       "ink": "自由手绘",
-      "eraser": "擦除批注"
-    }
+      "eraser": "擦除批注",
+      "read": "选择文字"
+    },
+    "navigation": {
+      "title": "文档导航",
+      "close": "关闭文档导航",
+      "outline": "目录",
+      "pages": "页面",
+      "bookmarks": "书签",
+      "loadingOutline": "正在加载目录…",
+      "noOutline": "此 PDF 没有目录。",
+      "outlineError": "无法加载目录。",
+      "retry": "重试",
+      "expand": "展开{{title}}",
+      "collapse": "收起{{title}}",
+      "page": "第 {{page}} 页",
+      "thumbnailLoading": "正在加载预览…",
+      "thumbnailError": "预览不可用",
+      "addBookmark": "收藏当前位置",
+      "noBookmarks": "将阅读位置保存为书签，方便以后返回。",
+      "renameBookmark": "重命名{{title}}",
+      "removeBookmark": "删除{{title}}",
+      "bookmarkTitle": "书签名称",
+      "saveBookmark": "保存",
+      "cancelBookmark": "取消"
+    },
+    "navigationBack": "返回上一阅读位置",
+    "navigationForward": "前往下一阅读位置",
+    "navigationFailed": "无法跳转到此位置。",
+    "noResults": "无匹配结果",
+    "redo": "重做",
+    "editNote": "编辑便签",
+    "closeNote": "关闭便签",
+    "persistenceStatus": "阅读器保存状态",
+    "retryReadingState": "重试阅读状态",
+    "readingStateFailed": "阅读位置或书签未能加载或保存，请点击保存状态按钮重试。",
+    "annotationSaveFailed": "批注尚未保存，请点击保存状态按钮重试。"
   },
   "workspace": {
     "untitled": "未命名",

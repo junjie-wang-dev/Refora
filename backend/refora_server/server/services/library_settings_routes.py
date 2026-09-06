@@ -4,12 +4,14 @@ import asyncio
 import inspect
 import json
 import os
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter
 
 from refora_server.db.settings_seed import SETTING_KEYS
+from refora_server.library.document_ids import is_safe_document_id
 from refora_server.library.paths import resolveFromLibrary
 from refora_server.services.proxy import is_valid_proxy_url, normalize_proxy_rules
 from refora_server.web.types import WEB_SEARCH_PROVIDERS
@@ -32,12 +34,66 @@ from .library_route_support import (
 )
 
 
+PDF_READING_STATE_PREFIX = "pdfReader.document."
+PDF_READING_STATE_MAX_BYTES = 2 * 1024 * 1024
+PDF_READING_STATE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+
+
+def _pdf_reading_state(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or set(candidate) != {"view", "bookmarks"}:
+        raise ValueError("PDF reading state must contain view and bookmarks")
+
+    def position(payload: Any, fields: set[str]) -> None:
+        if not isinstance(payload, dict) or set(payload) != fields:
+            raise ValueError("PDF reading position has invalid fields")
+        page = payload["page"]
+        if type(page) is not int or not 1 <= page <= 1_000_000:
+            raise ValueError("PDF reading page must be an integer between 1 and 1000000")
+        for axis in ("x", "y"):
+            coordinate = payload[axis]
+            if type(coordinate) not in (int, float) or not -2 <= coordinate <= 2:
+                raise ValueError("PDF reading coordinates must be finite and between -2 and 2")
+
+    view = candidate["view"]
+    position(view, {"page", "x", "y", "scale", "rotation", "zoomMode"})
+    zoom_mode = view["zoomMode"]
+    if zoom_mode not in ("custom", "width"):
+        raise ValueError("PDF reading zoomMode must be custom or width")
+    scale = view["scale"]
+    minimum_scale = 0.01 if zoom_mode == "width" else 0.25
+    if type(scale) not in (int, float) or not minimum_scale <= scale <= 5:
+        raise ValueError("PDF reading scale is outside the supported range")
+    if type(view["rotation"]) is not int or view["rotation"] not in (0, 90, 180, 270):
+        raise ValueError("PDF reading rotation must be 0, 90, 180, or 270")
+
+    bookmarks = candidate["bookmarks"]
+    if not isinstance(bookmarks, list) or len(bookmarks) > 10_000:
+        raise ValueError("PDF reading state supports at most 10000 bookmarks")
+    bookmark_ids: set[str] = set()
+    for bookmark in bookmarks:
+        position(bookmark, {"id", "title", "page", "x", "y"})
+        bookmark_id = bookmark["id"]
+        if not isinstance(bookmark_id, str) or not PDF_READING_STATE_ID.fullmatch(bookmark_id):
+            raise ValueError("PDF bookmark id is invalid")
+        if bookmark_id in bookmark_ids:
+            raise ValueError("PDF bookmark ids must be unique")
+        bookmark_ids.add(bookmark_id)
+        title = bookmark["title"]
+        if not isinstance(title, str) or not title.strip() or len(title) > 500:
+            raise ValueError("PDF bookmark title must contain between 1 and 500 characters")
+    encoded = json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(encoded) > PDF_READING_STATE_MAX_BYTES:
+        raise ValueError("PDF reading state must not exceed 2 MiB")
+    return candidate
+
+
 def register_library_settings_routes(
     router: APIRouter,
     context: Mapping[str, Any],
 ) -> None:
     run = context["run"]
     settings = context["settings"]
+    documents = context["documents"]
     connector = context["connector"]
     transaction = context["transaction"]
     web_search = context["web_search"]
@@ -136,7 +192,16 @@ def register_library_settings_routes(
             for key, candidate in parsed.items():
                 if not isinstance(key, str) or not key:
                     raise ValueError("Settings keys must be non-empty strings")
-                if key not in SETTING_KEYS:
+                if key.startswith(PDF_READING_STATE_PREFIX):
+                    document_id = key[len(PDF_READING_STATE_PREFIX):]
+                    if not is_safe_document_id(document_id):
+                        raise ValueError("PDF reading state document id is invalid")
+                    candidate = _pdf_reading_state(candidate)
+                    if await call(documents, "get", document_id) is None:
+                        error = RuntimeError(f"document not found: {document_id}")
+                        error.code = "not_found"
+                        raise error
+                elif key not in SETTING_KEYS:
                     error = RuntimeError(f"Unknown setting key: {key}")
                     error.code = "forbidden_field"
                     raise error

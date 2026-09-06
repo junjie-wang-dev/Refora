@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Document } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import PdfAnnotationSidebar from '../../src/renderer/components/PdfAnnotationSidebar'
@@ -56,5 +56,45 @@ describe('PdfAnnotationSidebar', () => {
     })
     expect(api.documents.setPdfAnnotations).not.toHaveBeenCalled()
     expect(screen.getByText('pdfReader.noAnnotationsTitle')).toBeInTheDocument()
+  })
+
+  it('undoes an entire comment editing session and lists annotations in reading order', () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true, value: vi.fn()
+    })
+    usePdfReaderStore.setState({
+      loadStatus: { paper: 'loaded' },
+      annotations: { paper: [
+        {
+          id: 'lower', kind: 'note', page: 1, color: '#ff0', text: 'Lower note',
+          comment: '', createdAt: 1, point: { x: 0.1, y: 0.8 }
+        },
+        {
+          id: 'upper', kind: 'note', page: 1, color: '#ff0', text: 'Upper note',
+          comment: 'Original', createdAt: 2, point: { x: 0.1, y: 0.2 }
+        }
+      ] }
+    })
+    function Sidebar() {
+      const annotations = usePdfReaderStore((state) => state.annotations.paper)
+      return <PdfAnnotationSidebar
+        annotations={annotations}
+        documentId="paper"
+        overlay={false}
+        onClose={vi.fn()}
+        onNavigate={vi.fn()}
+      />
+    }
+    const view = render(<Sidebar />)
+    expect(Array.from(view.container.querySelectorAll<HTMLElement>('[data-annotation-card]'))
+      .map((element) => element.dataset.annotationCard)).toEqual(['upper', 'lower'])
+    const editor = screen.getByDisplayValue('Original')
+    fireEvent.focus(editor)
+    fireEvent.change(editor, { target: { value: 'First edit' } })
+    fireEvent.change(editor, { target: { value: 'Complete revised comment' } })
+    fireEvent.blur(editor)
+    expect(usePdfReaderStore.getState().annotationHistory.paper.past).toHaveLength(1)
+    act(() => usePdfReaderStore.getState().undo('paper'))
+    expect(editor).toHaveValue('Original')
   })
 })

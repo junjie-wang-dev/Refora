@@ -13,6 +13,8 @@ import type { Document as LibraryDocument } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import PdfReader from '../../src/renderer/components/PdfReader'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
+import { DEFAULT_PDF_VIEW, usePdfViewStore } from '../../src/renderer/store/pdfViewStore'
+import { invalidateRendererSettingWrites } from '../../src/renderer/persistence'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { MAX_PDF_RANGE_BYTES } from '../../src/shared/pdf-range'
@@ -25,11 +27,15 @@ const pdfMocks = vi.hoisted(() => {
     cancel: cancelRender
   }))
   const page = {
+    rotate: 0,
+    view: [0, 0, 612, 792],
     getViewport: vi.fn(({ scale, rotation = 0 }: { scale: number; rotation?: number }) => {
       const viewport = {
         width: 612 * scale,
         height: 792 * scale,
         rotation,
+        convertToViewportPoint: (x: number, y: number) => [x * scale, (792 - y) * scale],
+        convertToPdfPoint: (x: number, y: number) => [x / scale, 792 - y / scale],
         clone: vi.fn(() => viewport)
       }
       return viewport
@@ -43,7 +49,7 @@ const pdfMocks = vi.hoisted(() => {
   }
   const document = {
     numPages: 1,
-    getPage: vi.fn(async () => page),
+    getPage: vi.fn(async (_pageNumber: number) => page),
     getDestination: vi.fn(async () => null),
     getPageIndex: vi.fn(async () => 0),
     cachedPageNumber: vi.fn(() => null),
@@ -303,6 +309,9 @@ function document(): LibraryDocument {
 
 describe('PdfReader rendering visibility', () => {
   beforeEach(() => {
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    usePdfViewStore.getState().reset()
+    invalidateRendererSettingWrites()
     observers = []
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
     pdfMocks.renderPage.mockReset().mockImplementation(() => ({
@@ -349,6 +358,9 @@ describe('PdfReader rendering visibility', () => {
 
   afterEach(() => {
     cleanup()
+    usePdfReaderStore.getState().resetForLibrarySwitch()
+    usePdfViewStore.getState().reset()
+    invalidateRendererSettingWrites()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -702,7 +714,9 @@ describe('PdfReader rendering visibility', () => {
       )
     })
 
-    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('4')
+    await waitFor(() => expect(screen.getByRole('textbox', {
+      name: 'pdfReader.pageNumber'
+    })).toHaveValue('4'))
   })
 
   it('chooses the largest page in the real viewport regardless of preload callback order', async () => {
@@ -786,7 +800,7 @@ describe('PdfReader rendering visibility', () => {
 
     expect(screen.getByText('1/1')).toBeInTheDocument()
     expect(newerPage.getTextContent).toHaveBeenCalledTimes(1)
-    expect(olderPage.getTextContent).toHaveBeenCalledTimes(1)
+    expect(olderPage.getTextContent).not.toHaveBeenCalled()
   })
 
   it('reuses extracted page text across different searches', async () => {
@@ -871,7 +885,7 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.document.numPages = 2
     pdfMocks.page.getAnnotations.mockResolvedValue([
       { url: 'https://example.com/paper' },
-      { dest: [1] }
+      { dest: [1, { name: 'XYZ' }, 306, 396, 2] }
     ])
     const view = render(<PdfReader />)
 
@@ -888,6 +902,14 @@ describe('PdfReader rendering visibility', () => {
     fireEvent.click(links[1])
     await waitFor(() => expect(pdfVirtualizerMocks.getOffsetForIndex)
       .toHaveBeenCalledWith(1, 'start'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2')
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('200')
+    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.navigationBack' }))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('1')
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('115')
+    fireEvent.keyDown(window, { key: ']', metaKey: true })
+    expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2')
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('200')
   })
 
   it('supports precise zoom input and trackpad pinch zoom', async () => {
@@ -915,6 +937,7 @@ describe('PdfReader rendering visibility', () => {
 
   it('moves a selected text mark with a pointer drag', async () => {
     usePdfReaderStore.setState({
+      tool: 'select',
       annotations: {
         paper: [{
           id: 'movable-highlight',
@@ -1016,7 +1039,7 @@ describe('PdfReader rendering visibility', () => {
     expect(usePdfReaderStore.getState().tool).toBe('highlight')
   })
 
-  it('uses text selection over text and annotation selection over page whitespace by default', async () => {
+  it('preserves text reading by default and enables annotation interaction with the select tool', async () => {
     const view = render(<PdfReader />)
     const pdfPage = await waitFor(() => {
       const element = view.container.querySelector<HTMLElement>('.pdf-reader-page')
@@ -1040,7 +1063,8 @@ describe('PdfReader rendering visibility', () => {
     text.textContent = 'Selectable PDF text'
     textLayer.append(text)
 
-    expect(view.container.querySelector('[aria-label="pdfReader.tools.read"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'pdfReader.tools.read' }))
+      .toHaveAttribute('aria-pressed', 'true')
     expect(pdfPage.querySelector('[data-annotation-input-layer]'))
       .toHaveClass('pointer-events-none')
 
@@ -1048,7 +1072,7 @@ describe('PdfReader rendering visibility', () => {
     expect(pdfPage.querySelector('[data-annotation-selection]')).toBeNull()
 
     fireEvent.pointerDown(pdfPage, { pointerId: 2, clientX: 10, clientY: 10 })
-    expect(pdfPage.querySelector('[data-annotation-selection]')).toBeVisible()
+    expect(pdfPage.querySelector('[data-annotation-selection]')).toBeNull()
     fireEvent.pointerUp(pdfPage, { pointerId: 2, clientX: 20, clientY: 20 })
 
     act(() => usePdfReaderStore.setState({
@@ -1085,15 +1109,25 @@ describe('PdfReader rendering visibility', () => {
       expect(element).not.toBeNull()
       return element!
     })
+    expect(markedText).toHaveClass('pointer-events-none')
+    expect(markedText).toHaveAttribute('tabindex', '-1')
+    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.tools.select' }))
+    expect(usePdfReaderStore.getState().tool).toBe('select')
     expect(markedText).toHaveClass('z-20', 'pointer-events-auto', 'cursor-move')
+    fireEvent.pointerDown(pdfPage, { pointerId: 3, clientX: 10, clientY: 10 })
+    expect(pdfPage.querySelector('[data-annotation-selection]')).toBeVisible()
+    fireEvent.pointerUp(pdfPage, { pointerId: 3, clientX: 20, clientY: 20 })
     expect(pdfPage.querySelector('svg[aria-label="pdfReader.annotations"]'))
       .toHaveStyle({ zIndex: '20' })
     fireEvent.click(markedText)
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['highlight-1'])
     fireEvent.keyDown(window, { key: 'Escape' })
+    expect(usePdfReaderStore.getState().tool).toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual([])
 
     const ink = pdfPage.querySelector<SVGPolylineElement>('[data-annotation-kind="ink"]')!
+    fireEvent.keyDown(window, { key: 'a' })
     fireEvent.keyDown(ink, { key: 'Enter' })
     expect(usePdfReaderStore.getState().selectedAnnotationIds).toEqual(['ink-1'])
     act(() => usePdfReaderStore.getState().setTool('eraser'))
@@ -1175,9 +1209,9 @@ describe('PdfReader rendering visibility', () => {
         '[data-pdf-annotation-toolbar]'
       )
       expect(toolbar).not.toBeNull()
-      expect(within(toolbar!).getAllByRole('button')).toHaveLength(7)
+      expect(within(toolbar!).getByRole('button', { name: 'pdfReader.tools.read' })).toBeEnabled()
       within(toolbar!).getAllByRole('button').forEach((button) => {
-        expect(button).toBeDisabled()
+        if (button.getAttribute('aria-label') !== 'pdfReader.tools.read') expect(button).toBeDisabled()
       })
 
       const pdfPage = await waitFor(() => {
@@ -1338,6 +1372,216 @@ describe('PdfReader rendering visibility', () => {
         rects: [{ x: 0.15, y: 0.1, width: 0.7, height: 20 / 300 }]
       })
     ])
+  })
+
+  it('undoes and redoes annotation creation and edits using the toolbar and keyboard', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    const undo = screen.getByRole('button', { name: 'pdfReader.undo' })
+    const redo = screen.getByRole('button', { name: 'pdfReader.redo' })
+    expect(undo).toBeDisabled()
+    expect(redo).toBeDisabled()
+    act(() => usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'highlight', page: 1, text: 'Important', comment: '', color: '#ff0',
+      rects: [{ x: 0.1, y: 0.1, width: 0.3, height: 0.04 }]
+    }))
+    expect(undo).toBeEnabled()
+    fireEvent.click(undo)
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    expect(redo).toBeEnabled()
+    fireEvent.click(redo)
+    const id = usePdfReaderStore.getState().annotations.paper[0].id
+    act(() => usePdfReaderStore.getState().updateAnnotation('paper', id, { color: '#f00' }))
+    fireEvent.keyDown(window, { key: 'z', metaKey: true })
+    expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#ff0')
+    fireEvent.keyDown(window, { key: 'z', metaKey: true, shiftKey: true })
+    expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#f00')
+    fireEvent.keyDown(screen.getByPlaceholderText('pdfReader.search'), { key: 'z', metaKey: true })
+    expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#f00')
+  })
+
+  it('shows annotation save failures and retries from the toolbar while the sidebar stays closed', async () => {
+    const save = vi.spyOn(api.documents, 'setPdfAnnotations')
+      .mockRejectedValueOnce(new Error('Disk full'))
+      .mockImplementation(async (_id, annotations) => annotations)
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    act(() => usePdfReaderStore.getState().addAnnotation('paper', {
+      kind: 'ink', page: 1, text: '', comment: '', color: '#ff0',
+      points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }]
+    }))
+    const status = screen.getByRole('button', { name: 'pdfReader.persistenceStatus' })
+    await waitFor(() => expect(status).toHaveTextContent('pdfReader.retrySave'))
+    expect(status).toBeEnabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed')
+    expect(view.container.querySelector('[data-annotation-sidebar]')).toBeNull()
+    fireEvent.click(status)
+    await waitFor(() => expect(status).toHaveTextContent('pdfReader.saveStatus.saved'))
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenLastCalledWith('paper', expect.arrayContaining([
+      expect.objectContaining({ kind: 'ink' })
+    ]))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('routes Command-F to PDF search and leaves it alone while the reader is hidden', async () => {
+    const globalFind = vi.fn()
+    window.addEventListener('keydown', globalFind)
+    try {
+      const view = render(<PdfReader />)
+      await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+      fireEvent.keyDown(window, { key: 'f', metaKey: true })
+      const input = screen.getByPlaceholderText('pdfReader.search')
+      await waitFor(() => expect(input).toHaveFocus())
+      expect(globalFind).not.toHaveBeenCalled()
+      view.rerender(<PdfReader active={false} />)
+      input.blur()
+      fireEvent.keyDown(window, { key: 'f', metaKey: true })
+      expect(input).not.toHaveFocus()
+      expect(globalFind).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', globalFind)
+    }
+  })
+
+  it('restores each document page, zoom and rotation when switching tabs', async () => {
+    pdfMocks.document.numPages = 3
+    usePdfReaderStore.setState({
+      tabs: [document(), { ...document(), id: 'paper-2', title: 'Second paper' }],
+      annotations: { paper: [], 'paper-2': [] },
+      loadStatus: { paper: 'loaded', 'paper-2': 'loaded' }
+    })
+    usePdfViewStore.setState({
+      documents: {
+        paper: { view: { ...DEFAULT_PDF_VIEW, page: 2, y: 0.35, scale: 1.4, rotation: 90 }, bookmarks: [] },
+        'paper-2': { view: { ...DEFAULT_PDF_VIEW, page: 3, y: 0.7, scale: 0.8, rotation: 180 }, bookmarks: [] }
+      },
+      loadStatus: { paper: 'loaded', 'paper-2': 'loaded' }
+    })
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('140')
+    expect(view.container.querySelector('.pdf-reader-page')).toHaveAttribute('data-page-rotation', '90')
+    fireEvent.click(screen.getByRole('tab', { name: 'Second paper' }))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('3'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('80')
+    expect(view.container.querySelector('.pdf-reader-page')).toHaveAttribute('data-page-rotation', '180')
+    fireEvent.click(screen.getByRole('tab', { name: 'Paper' }))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })).toHaveValue('2'))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('140')
+    expect(usePdfViewStore.getState().documents.paper.view.y).toBe(0.35)
+  })
+
+  it('keeps fit width responsive to the scroller and the current page of a mixed-size PDF', async () => {
+    const resizeObservers: Array<{ callback: ResizeObserverCallback; target: Element }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { resizeObservers.push({ callback: this.callback, target }) }
+      disconnect() {}
+      unobserve() {}
+    })
+    const widePage = {
+      ...pdfMocks.page,
+      rotate: 90,
+      getViewport: vi.fn(({ scale, rotation = 90 }: { scale: number; rotation?: number }) => {
+        const viewport = {
+          width: 1000 * scale, height: 600 * scale, rotation,
+          convertToViewportPoint: (x: number, y: number) => [x * scale, y * scale],
+          convertToPdfPoint: (x: number, y: number) => [x / scale, y / scale],
+          clone: vi.fn(() => viewport)
+        }
+        return viewport
+      })
+    }
+    pdfMocks.document.numPages = 2
+    pdfMocks.document.getPage.mockImplementation(async (pageNumber) => pageNumber === 2 ? widePage : pdfMocks.page)
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelectorAll('.pdf-reader-page')).toHaveLength(2))
+    const virtualizer = view.container.querySelector<HTMLElement>('[data-pdf-page-virtualizer]')!
+    const scroller = virtualizer.parentElement!
+    let width = 900
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => width },
+      clientHeight: { configurable: true, value: 700 }
+    })
+    const resize = () => {
+      const observer = resizeObservers.find((item) => item.target === scroller)!
+      observer.callback([], observer as unknown as ResizeObserver)
+    }
+    act(resize)
+    await waitFor(() => expect(view.container.querySelector('[data-page-number="2"]'))
+      .toHaveStyle({ width: '1150px' }))
+    expect(virtualizer).toHaveStyle({ width: '1198px' })
+    const fit = screen.getByRole('button', { name: 'pdfReader.fitWidth' })
+    fireEvent.click(fit)
+    const pageWidth = (page: number) => Number.parseFloat(view.container
+      .querySelector<HTMLElement>(`[data-page-number="${page}"]`)!.style.width)
+    await waitFor(() => expect(pageWidth(1)).toBeCloseTo(852, 0))
+    width = 600
+    act(resize)
+    await waitFor(() => expect(pageWidth(1)).toBeCloseTo(552, 0))
+    const pageInput = screen.getByRole('textbox', { name: 'pdfReader.pageNumber' })
+    fireEvent.change(pageInput, { target: { value: '2' } })
+    fireEvent.submit(pageInput.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(view.container.querySelector('[data-page-number="2"]'))
+      .toHaveStyle({ width: '552px' }))
+    expect(fit).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('55.2')
+    width = 200
+    act(resize)
+    await waitFor(() => expect(pageWidth(2)).toBeCloseTo(152, 0))
+    expect(screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })).toHaveValue('15.2')
+    fireEvent.click(screen.getByRole('button', { name: 'pdfReader.zoomIn' }))
+    expect(fit).not.toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('keeps a typed zoom value when a delayed fit-width calculation finishes after resizing', async () => {
+    const resizeObservers: Array<{ callback: ResizeObserverCallback; target: Element }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { resizeObservers.push({ callback: this.callback, target }) }
+      disconnect() {}
+      unobserve() {}
+    })
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    const page = view.container.querySelector<HTMLElement>('.pdf-reader-page')!
+    const scroller = view.container.querySelector('[data-pdf-page-virtualizer]')!.parentElement!
+    let width = 900
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => width },
+      clientHeight: { configurable: true, value: 700 }
+    })
+    const resize = () => {
+      const observer = resizeObservers.find((item) => item.target === scroller)!
+      observer.callback([], observer as unknown as ResizeObserver)
+    }
+    act(resize)
+    const fit = screen.getByRole('button', { name: 'pdfReader.fitWidth' })
+    const zoom = screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })
+    fireEvent.click(fit)
+    await waitFor(() => expect(Number.parseFloat(page.style.width)).toBeCloseTo(852, 0))
+    let resolveFit: ((page: typeof pdfMocks.page) => void) | undefined
+    pdfMocks.document.getPage.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveFit = resolve
+    }))
+    width = 600
+    act(resize)
+    await waitFor(() => expect(resolveFit).toBeDefined())
+    fireEvent.change(zoom, { target: { value: '140' } })
+    expect(fit).not.toHaveAttribute('aria-pressed', 'true')
+    await act(async () => {
+      resolveFit!(pdfMocks.page)
+    })
+    expect(zoom).toHaveValue('140')
+    expect(Number.parseFloat(page.style.width)).toBeCloseTo(852, 0)
+    expect(usePdfViewStore.getState().documents.paper.view.zoomMode).toBe('custom')
+    fireEvent.submit(zoom.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(page).toHaveStyle({ width: '856.8px' }))
+    expect(zoom).toHaveValue('140')
+    expect(usePdfViewStore.getState().documents.paper.view).toMatchObject({
+      scale: 1.4, zoomMode: 'custom'
+    })
   })
 
   it('destroys the superseded loading task when switching documents', async () => {

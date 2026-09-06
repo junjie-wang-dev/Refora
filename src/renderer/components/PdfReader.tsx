@@ -11,10 +11,13 @@ import {
   ArrowCounterClockwise,
   ArrowClockwise,
   ArrowLeft,
+  ArrowRight,
   ArrowSquareOut,
   ArrowsOutSimple,
   CaretLeft,
   CaretRight,
+  CheckCircle,
+  Cursor,
   CursorText,
   Eraser,
   Highlighter,
@@ -24,10 +27,12 @@ import {
   NoteBlank,
   PencilSimple,
   Plus,
+  SidebarSimple,
   Textbox,
   TextStrikethrough,
   TextUnderline,
   Trash,
+  WarningCircle,
   X
 } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
@@ -47,7 +52,11 @@ import { api } from '../ipc'
 import { openDocumentPdf } from '../utils/openPdf'
 import PdfAnnotationSidebar from './PdfAnnotationSidebar'
 import PdfPage, { type PdfPageVisibility } from './PdfPage'
-import { usePdfSearch } from '../hooks/usePdfSearch'
+import { usePdfSearch, type PdfSearchMatch } from '../hooks/usePdfSearch'
+import PdfNavigationSidebar from './PdfNavigationSidebar'
+import { DEFAULT_PDF_VIEW, usePdfViewStore, type PdfReadingPosition, type PdfReadingView } from '../store/pdfViewStore'
+import { capturePdfPosition, resolvePdfDestination } from '../utils/pdfNavigation'
+import { pdfPointForRotation, pdfPointFromRotation, pdfRectForRotation } from '../utils/pdfAnnotationSelection'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -62,6 +71,7 @@ const PDF_PAGE_OVERSCAN = 2
 const PDF_ZOOM_GESTURE_SETTLE_MS = 400
 const PDF_NAVIGATION_SETTLE_MS = 250
 const PDF_SEARCH_DEBOUNCE_MS = 200
+const EMPTY_SEARCH_MATCHES: Array<{ match: PdfSearchMatch; selected: boolean }> = []
 
 function zoomPercent(value: number): string {
   return String(Number((value * 100).toFixed(1)))
@@ -152,6 +162,7 @@ async function readPdfRangeWithRetry(
 }
 
 const TOOL_ICONS = {
+  select: Cursor,
   highlight: Highlighter,
   underline: TextUnderline,
   strikeout: TextStrikethrough,
@@ -162,6 +173,7 @@ const TOOL_ICONS = {
 } satisfies Record<PdfTool, typeof CursorText>
 
 const TOOL_SHORTCUTS: Record<PdfTool, string> = {
+  select: 'A',
   highlight: 'H',
   underline: 'U',
   strikeout: 'S',
@@ -222,7 +234,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const strokeWidth = usePdfReaderStore((state) => state.strokeWidth)
   const sidebarOpen = usePdfReaderStore((state) => state.sidebarOpen)
   const selectedAnnotationIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
-  const lastDeletion = usePdfReaderStore((state) => state.lastDeletion)
+  const annotationHistory = usePdfReaderStore((state) => activeDocumentId ? state.annotationHistory[activeDocumentId] : undefined)
+  const saveStatus = usePdfReaderStore((state) => activeDocumentId ? state.saveStatus[activeDocumentId] : undefined)
+  const savedDocumentView = usePdfViewStore((state) => activeDocumentId ? state.documents[activeDocumentId] : undefined)
+  const viewLoadStatus = usePdfViewStore((state) => activeDocumentId ? state.loadStatus[activeDocumentId] : undefined)
+  const viewSaveStatus = usePdfViewStore((state) => activeDocumentId ? state.saveStatus[activeDocumentId] : undefined)
   const activeDocument = tabs.find((tab) => tab.id === activeDocumentId) ?? null
   const annotationsLoaded = !!activeDocumentId &&
     annotationLoadStatus[activeDocumentId] === 'loaded'
@@ -250,16 +266,24 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
   const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    effectiveTool !== null && effectiveTool !== 'eraser'
+    effectiveTool !== null && effectiveTool !== 'eraser' && effectiveTool !== 'select'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [scale, setScale] = useState(1.15)
   const [zoomInput, setZoomInput] = useState(() => zoomPercent(1.15))
   const [rotation, setRotation] = useState(0)
+  const [zoomMode, setZoomMode] = useState<'custom' | 'width'>('custom')
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const [navigationError, setNavigationError] = useState<string | null>(null)
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  const [measuredPageWidth, setMeasuredPageWidth] = useState(PDF_PAGE_WIDTH)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [searchNavigationRevision, setSearchNavigationRevision] = useState(0)
   const [compactLayout, setCompactLayout] = useState(false)
   const [devicePixelRatio, setDevicePixelRatio] = useState(
     () => window.devicePixelRatio || 1
@@ -277,16 +301,26 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     anchor: PdfZoomAnchor | null
   } | null>(null)
   const pageBaseHeightsRef = useRef(new Map<number, number>())
+  const pageBaseWidthsRef = useRef(new Map<number, number>())
+  const loadedDocumentRef = useRef<string | null>(null)
+  const pendingLocationRef = useRef<(PdfReadingPosition & { annotationId?: string }) | null>(null)
+  const initialViewRef = useRef<PdfReadingView | null>(null)
+  const persistViewRef = useRef<() => void>(() => undefined)
+  const navigationHistoryRef = useRef(new Map<string, { back: PdfReadingView[]; forward: PdfReadingView[] }>())
+  const navigationGenerationRef = useRef(0)
+  const fitGenerationRef = useRef(0)
+  const navigateRef = useRef<(page: number, annotationId?: string, position?: PdfReadingPosition, recordHistory?: boolean) => void>(() => undefined)
   const pageLayoutKeyRef = useRef('')
   const navigationTargetRef = useRef<number | null>(null)
   const navigationTimerRef = useRef<number | null>(null)
   const visiblePagesRef = useRef(new Map<number, PdfPageVisibility>())
+  const reconcileVisiblePageRef = useRef<() => void>(() => undefined)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchDebounceRef = useRef<number | null>(null)
   const runPdfSearchRef = useRef<() => Promise<void>>(async () => undefined)
   const rotated = Math.abs(rotation) % 180 !== 0
   const estimatedPageBaseHeight = rotated ? PDF_PAGE_WIDTH : PDF_PAGE_HEIGHT
-  const estimatedPageWidth = (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH) * scale
+  const estimatedPageWidth = measuredPageWidth * scale
   const estimatePageSize = useCallback((index: number) =>
     (pageBaseHeightsRef.current.get(index) ?? estimatedPageBaseHeight) * scale,
   [estimatedPageBaseHeight, scale])
@@ -307,8 +341,10 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   })
   const virtualPages = pageVirtualizer.getVirtualItems()
 
-  const handlePageSize = useCallback((pageNumber: number, baseHeight: number) => {
+  const handlePageSize = useCallback((pageNumber: number, baseHeight: number, baseWidth: number) => {
     pageBaseHeightsRef.current.set(pageNumber - 1, baseHeight)
+    pageBaseWidthsRef.current.set(pageNumber - 1, baseWidth)
+    setMeasuredPageWidth(Math.max(...pageBaseWidthsRef.current.values()))
     pageVirtualizer.resizeItem(pageNumber - 1, baseHeight * scaleRef.current)
   }, [pageVirtualizer])
 
@@ -399,30 +435,43 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     requestedScale: number,
     x?: number,
     y?: number,
-    preservedAnchor?: PdfZoomAnchor | null
+    preservedAnchor?: PdfZoomAnchor | null,
+    preserveZoomMode = false
   ) => {
+    if (!preserveZoomMode) {
+      fitGenerationRef.current += 1
+      setZoomMode('custom')
+      navigationGenerationRef.current += 1
+      pendingLocationRef.current = null
+      navigationTargetRef.current = null
+      if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
+      navigationTimerRef.current = null
+    }
     const nextScale = Math.round(
-      Math.max(MIN_SCALE, Math.min(MAX_SCALE, requestedScale)) * 1000
+      Math.max(preserveZoomMode && zoomMode === 'width' ? 0.01 : MIN_SCALE,
+        Math.min(MAX_SCALE, requestedScale)) * 1000
     ) / 1000
     const previousScale = scaleRef.current
     if (nextScale === previousScale) return
     if (preservedAnchor === undefined) wheelZoomAnchorRef.current = null
-    holdZoomAnchor(preservedAnchor ?? captureZoomAnchor(x, y))
+    holdZoomAnchor(pendingLocationRef.current ? null : preservedAnchor ?? captureZoomAnchor(x, y))
     scaleRef.current = nextScale
     flushSync(() => {
       setScale(nextScale)
       setZoomInput(zoomPercent(nextScale))
     })
-  }, [captureZoomAnchor, holdZoomAnchor])
+  }, [captureZoomAnchor, holdZoomAnchor, zoomMode])
 
   useLayoutEffect(() => {
     const layoutKey = `${activeDocumentId ?? ''}:${rotation}`
     if (pageLayoutKeyRef.current !== layoutKey) {
       pageLayoutKeyRef.current = layoutKey
       pageBaseHeightsRef.current.clear()
+      pageBaseWidthsRef.current.clear()
+      setMeasuredPageWidth(rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH)
     }
     pageVirtualizer.measure()
-  }, [activeDocumentId, pageVirtualizer, rotation, scale])
+  }, [activeDocumentId, pageVirtualizer, rotated, rotation, scale])
 
   useLayoutEffect(() => {
     correctZoomAnchor()
@@ -448,7 +497,17 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     const root = scrollRef.current
     if (!root) return
     const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return
+      if (!event.ctrlKey) {
+        navigationGenerationRef.current += 1
+        pendingLocationRef.current = null
+        navigationTargetRef.current = null
+        return
+      }
+      navigationGenerationRef.current += 1
+      pendingLocationRef.current = null
+      navigationTargetRef.current = null
+      if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
+      navigationTimerRef.current = null
       event.preventDefault()
       const factor = Math.exp(-event.deltaY * 0.01)
       const pendingZoom = pendingWheelZoomRef.current
@@ -505,6 +564,31 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   }, [])
 
   useEffect(() => {
+    const root = scrollRef.current
+    if (!root) return
+    const observer = new ResizeObserver(() => {
+      setContainerSize((previous) => root.clientWidth === previous.width && root.clientHeight === previous.height
+        ? previous : { width: root.clientWidth, height: root.clientHeight })
+    })
+    observer.observe(root)
+    let frame: number | null = null
+    const save = () => {
+      if (frame !== null) return
+      frame = window.requestAnimationFrame(() => {
+        frame = null
+        persistViewRef.current()
+      })
+    }
+    root.addEventListener('scroll', save, { passive: true })
+    return () => {
+      observer.disconnect()
+      root.removeEventListener('scroll', save)
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      persistViewRef.current()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!compactLayout || !usePdfReaderStore.getState().sidebarOpen) return
     usePdfReaderStore.getState().toggleSidebar()
   }, [activeDocumentId, compactLayout])
@@ -534,6 +618,10 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     }
     let cancelled = false
     let loadingTask: PDFDocumentLoadingTask | null = null
+    loadedDocumentRef.current = null
+    pendingLocationRef.current = null
+    navigationGenerationRef.current += 1
+    setNavigationError(null)
     setLoadingError(null)
     setPdf(null)
     setCurrentPage(1)
@@ -541,8 +629,17 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     visiblePagesRef.current.clear()
     void Promise.all([
       loadPdfRuntime(),
-      readPdfRangeWithRetry(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE)
-    ]).then(([runtime, initial]) => {
+      readPdfRangeWithRetry(activeDocument.id, 0, PDF_RANGE_CHUNK_SIZE),
+      usePdfViewStore.getState().load(activeDocument.id).catch(() => ({ view: DEFAULT_PDF_VIEW, bookmarks: [] }))
+    ]).then(([runtime, initial, saved]) => {
+      if (!cancelled) {
+        initialViewRef.current = saved.view
+        setScale(saved.view.scale)
+        scaleRef.current = saved.view.scale
+        setZoomInput(zoomPercent(saved.view.scale))
+        setRotation(saved.view.rotation)
+        setZoomMode(saved.view.zoomMode)
+      }
       const requestedDocumentId = activeDocument.id
       class IpcPdfRangeTransport extends runtime.PDFDataRangeTransport {
         private aborted = false
@@ -563,6 +660,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
               chunk.data.length !== expectedLength
             ) {
               this.abort()
+              if (!cancelled) setLoadingError(t('pdfReader.loadFailed'))
               void loadingTask?.destroy().catch(() => undefined)
               return
             }
@@ -570,6 +668,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           }).catch(() => {
             if (this.aborted) return
             this.abort()
+            if (!cancelled) setLoadingError(t('pdfReader.loadFailed'))
             void loadingTask?.destroy().catch(() => undefined)
           })
         }
@@ -588,6 +687,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       return task.promise
     }).then((nextDocument) => {
       if (cancelled) return
+      loadedDocumentRef.current = activeDocument.id
       setPdf(nextDocument)
     }).catch(() => {
       if (!cancelled) setLoadingError(t('pdfReader.loadFailed'))
@@ -596,10 +696,48 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       cancelled = true
       void loadingTask?.destroy()?.catch(() => undefined)
     }
-  }, [activeDocument?.id, activeDocument?.fileHash, activeDocument?.fileMtimeNs, t])
+  }, [activeDocument?.id, activeDocument?.fileHash, activeDocument?.fileMtimeNs, loadAttempt, t])
 
-  const navigateToPage = useCallback((page: number, annotationId?: string) => {
+  const captureView = useCallback((): PdfReadingView => ({
+    ...(scrollRef.current ? capturePdfPosition(scrollRef.current, currentPage) : null) ?? { page: currentPage, x: 0, y: 0 },
+    scale: scaleRef.current, rotation, zoomMode
+  }), [currentPage, rotation, zoomMode])
+
+  persistViewRef.current = () => {
+    if (!activeDocumentId || loadedDocumentRef.current !== activeDocumentId ||
+      !active || pendingLocationRef.current || initialViewRef.current) return
+    usePdfViewStore.getState().updateView(activeDocumentId, captureView())
+  }
+
+  useEffect(() => usePdfReaderStore.subscribe((state, previous) => {
+    if (state.activeDocumentId !== previous.activeDocumentId) persistViewRef.current()
+  }), [])
+
+  useEffect(() => {
+    persistViewRef.current()
+  }, [rotation, scale, zoomMode])
+
+  const navigateToPage = useCallback((
+    page: number,
+    annotationId?: string,
+    position?: PdfReadingPosition,
+    recordHistory = true
+  ) => {
+    navigationGenerationRef.current += 1
     const safePage = Math.max(1, Math.min(pdf?.numPages ?? 1, page))
+    if (recordHistory && activeDocumentId) {
+      const history = navigationHistoryRef.current.get(activeDocumentId) ?? { back: [], forward: [] }
+      history.back = [...history.back, captureView()].slice(-100)
+      history.forward = []
+      navigationHistoryRef.current.set(activeDocumentId, history)
+      setHistoryVersion((value) => value + 1)
+    }
+    pendingLocationRef.current = {
+      page: safePage,
+      x: position?.x ?? Number.NaN,
+      y: position?.y ?? 0,
+      annotationId
+    }
     wheelZoomAnchorRef.current = null
     zoomAnchorRef.current = null
     if (zoomAnchorTimerRef.current !== null) {
@@ -608,10 +746,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     }
     navigationTargetRef.current = safePage
     if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
-    navigationTimerRef.current = window.setTimeout(() => {
-      navigationTimerRef.current = null
-      navigationTargetRef.current = null
-    }, PDF_NAVIGATION_SETTLE_MS)
     const root = scrollRef.current
     const offset = pageVirtualizer.getOffsetForIndex(safePage - 1, 'start')?.[0]
     if (root && offset !== undefined) {
@@ -634,7 +768,124 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       usePdfReaderStore.getState().setTool(null)
       usePdfReaderStore.getState().selectAnnotation(annotationId)
     }
-  }, [pageVirtualizer, pdf?.numPages])
+  }, [activeDocumentId, captureView, pageVirtualizer, pdf?.numPages])
+  navigateRef.current = navigateToPage
+
+  useEffect(() => {
+    if (!pdf || !initialViewRef.current) return
+    const view = initialViewRef.current
+    initialViewRef.current = null
+    if (view.page !== 1 || view.x !== 0 || view.y !== 0) {
+      navigateRef.current(view.page, undefined, view, false)
+    }
+  }, [pdf])
+
+  useLayoutEffect(() => {
+    const location = pendingLocationRef.current
+    const root = scrollRef.current
+    if (!root || !location || !pdf || !pageBaseHeightsRef.current.has(location.page - 1)) return
+    const pageElement = root.querySelector<HTMLElement>(`[data-page-number="${location.page}"]`)
+    if (!pageElement) return
+    const bounds = pageElement.getBoundingClientRect()
+    const rootBounds = root.getBoundingClientRect()
+    let x = location.x
+    let y = location.y
+    if (location.annotationId) {
+      const annotation = annotations.find((item) => item.id === location.annotationId)
+      const canonicalRect = annotation?.rects?.[0] ?? (annotation?.point
+        ? { ...annotation.point, width: annotation.size?.width ?? 0.02, height: annotation.size?.height ?? 0.02 }
+        : annotation?.points?.[0] ? { ...annotation.points[0], width: 0.02, height: 0.02 } : null)
+      if (canonicalRect) {
+        const rect = pdfRectForRotation(canonicalRect, Number(pageElement.dataset.pageRotation) || 0)
+        x = rect.x + rect.width / 2 - root.clientWidth / (2 * bounds.width)
+        y = rect.y + rect.height / 2 - root.clientHeight / (2 * bounds.height)
+      }
+    }
+    if (Number.isFinite(x)) root.scrollLeft += bounds.left - rootBounds.left + x * bounds.width
+    else root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, bounds.width + PDF_PAGE_PADDING * 2 - root.clientWidth))
+    root.scrollTop += bounds.top - rootBounds.top + y * bounds.height
+    if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
+    navigationTimerRef.current = window.setTimeout(() => {
+      navigationTimerRef.current = null
+      pendingLocationRef.current = null
+      navigationTargetRef.current = null
+      reconcileVisiblePageRef.current()
+      persistViewRef.current()
+    }, PDF_NAVIGATION_SETTLE_MS)
+  })
+
+  const navigateToDestination = useCallback(async (destination: string | unknown[]) => {
+    const root = scrollRef.current
+    if (!pdf || !root) return
+    const generation = ++navigationGenerationRef.current
+    try {
+      const target = await resolvePdfDestination(pdf, destination, rotation, {
+        width: root.clientWidth, height: root.clientHeight
+      }, captureView())
+      if (generation !== navigationGenerationRef.current || !target) return
+      navigateToPage(target.page, undefined, target)
+      if (target.scale) setScaleAnchored(target.scale, undefined, undefined, undefined, true)
+      if (target.zoomMode) setZoomMode(target.zoomMode)
+      setNavigationError(null)
+    } catch {
+      if (generation === navigationGenerationRef.current) setNavigationError(t('pdfReader.navigationFailed'))
+    }
+  }, [captureView, navigateToPage, pdf, rotation, setScaleAnchored, t])
+
+  const handleSearchMatchVisible = useCallback((page: number) => {
+    pendingLocationRef.current = null
+    navigationTargetRef.current = null
+    if (navigationTimerRef.current !== null) window.clearTimeout(navigationTimerRef.current)
+    setCurrentPage(page)
+    setPageInput(String(page))
+    persistViewRef.current()
+  }, [])
+
+  const navigateFromSidebar = useCallback(async (page: number, position?: { x: number; y: number }) => {
+    if (!position || !pdf) {
+      navigateToPage(page)
+      return
+    }
+    const generation = ++navigationGenerationRef.current
+    try {
+      const pdfPage = await pdf.getPage(page)
+      if (generation !== navigationGenerationRef.current) return
+      const rotatedPosition = pdfPointForRotation(position, ((pdfPage.rotate ?? 0) + rotation) % 360)
+      navigateToPage(page, undefined, { page, ...rotatedPosition })
+    } catch {
+      if (generation === navigationGenerationRef.current) setNavigationError(t('pdfReader.navigationFailed'))
+    }
+  }, [navigateToPage, pdf, rotation, t])
+
+  const addBookmark = () => {
+    if (!activeDocumentId) return
+    const view = captureView()
+    const pageElement = scrollRef.current?.querySelector<HTMLElement>(`[data-page-number="${view.page}"]`)
+    if (!pageElement) return
+    const point = pdfPointFromRotation(view, Number(pageElement.dataset.pageRotation) || 0)
+    usePdfViewStore.getState().addBookmark(activeDocumentId, { page: view.page, ...point },
+      t('pdfReader.navigation.page', { page: view.page }))
+  }
+
+  const travelHistory = useCallback((direction: 'back' | 'forward') => {
+    if (!activeDocumentId) return
+    const history = navigationHistoryRef.current.get(activeDocumentId)
+    const target = history?.[direction].pop()
+    if (!history || !target) return
+    history[direction === 'back' ? 'forward' : 'back'].push(captureView())
+    setScale(target.scale)
+    scaleRef.current = target.scale
+    setZoomInput(zoomPercent(target.scale))
+    setRotation(target.rotation)
+    setZoomMode(target.zoomMode)
+    navigateToPage(target.page, undefined, target, false)
+    setHistoryVersion((value) => value + 1)
+  }, [activeDocumentId, captureView, navigateToPage])
+
+  const navigateSearchPage = useCallback((page: number) => {
+    navigateToPage(page)
+    setSearchNavigationRevision((value) => value + 1)
+  }, [navigateToPage])
 
   const pdfSearch = usePdfSearch({
     pdf,
@@ -642,7 +893,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       ? `${activeDocument.id}:${activeDocument.fileHash ?? ''}:${activeDocument.fileMtimeNs ?? ''}`
       : '',
     failureMessage: t('pdfReader.searchFailed'),
-    navigateToPage
+    navigateToPage: navigateSearchPage
   })
   runPdfSearchRef.current = pdfSearch.run
 
@@ -684,13 +935,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     return grouped
   }, [pdfSearch.index, pdfSearch.matches])
 
-  const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
-    if (visibility.isVisible && visibility.visibleArea > 0) {
-      visiblePagesRef.current.set(visibility.page, visibility)
-    } else {
-      visiblePagesRef.current.delete(visibility.page)
-    }
-    if (navigationTargetRef.current !== null) return
+  reconcileVisiblePageRef.current = () => {
     const primaryPage = [...visiblePagesRef.current.values()].sort((left, right) =>
       right.visibleArea - left.visibleArea ||
       left.viewportDistance - right.viewportDistance ||
@@ -699,6 +944,16 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     if (primaryPage === undefined) return
     setCurrentPage(primaryPage)
     setPageInput(String(primaryPage))
+  }
+
+  const handleVisiblePage = useCallback((visibility: PdfPageVisibility) => {
+    if (visibility.isVisible && visibility.visibleArea > 0) {
+      visiblePagesRef.current.set(visibility.page, visibility)
+    } else {
+      visiblePagesRef.current.delete(visibility.page)
+    }
+    if (navigationTargetRef.current !== null) return
+    reconcileVisiblePageRef.current()
   }, [])
 
   const addAnnotation = useCallback((draft: PdfAnnotationDraft) => {
@@ -714,12 +969,25 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     return annotation
   }, [activeDocumentId, compactLayout])
 
-  const fitWidth = async () => {
-    if (!pdf || !scrollRef.current) return
-    const page = await pdf.getPage(1)
-    const viewport = page.getViewport({ scale: 1, rotation })
-    const available = Math.max(320, scrollRef.current.clientWidth - 64)
-    setScaleAnchored(available / viewport.width)
+  useEffect(() => {
+    if (!pdf || zoomMode !== 'width' || containerSize.width <= 0) return
+    let cancelled = false
+    const generation = ++fitGenerationRef.current
+    void pdf.getPage(currentPage).then((page) => {
+      if (cancelled || generation !== fitGenerationRef.current) return
+      const viewport = page.getViewport({ scale: 1, rotation: ((page.rotate ?? 0) + rotation) % 360 })
+      const available = Math.max(1, containerSize.width - PDF_PAGE_PADDING * 2)
+      setScaleAnchored(available / viewport.width, undefined, undefined, undefined, true)
+    }).catch(() => {
+      if (!cancelled) setNavigationError(t('pdfReader.navigationFailed'))
+    })
+    return () => { cancelled = true }
+  }, [containerSize.width, currentPage, pdf, rotation, setScaleAnchored, t, zoomMode])
+
+  const rotateView = () => {
+    const anchor = captureZoomAnchor()
+    holdZoomAnchor(anchor ? { ...anchor, ...pdfPointForRotation(anchor, 90) } : null)
+    setRotation((value) => (value + 90) % 360)
   }
 
   const changeFontSize = (delta: number) => {
@@ -770,14 +1038,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   }
 
   useEffect(() => {
-    if (!lastDeletion) return
-    const timeout = window.setTimeout(() => {
-      usePdfReaderStore.getState().clearLastDeletion()
-    }, 6000)
-    return () => window.clearTimeout(timeout)
-  }, [lastDeletion])
-
-  useEffect(() => {
     if (!active) return
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target
@@ -793,11 +1053,13 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLocaleLowerCase() === 'z' &&
-        annotationShortcutsEnabled &&
-        usePdfReaderStore.getState().lastDeletion
+        annotationShortcutsEnabled
       ) {
         event.preventDefault()
-        usePdfReaderStore.getState().undoLastDeletion()
+        if (currentState.activeDocumentId) {
+          if (event.shiftKey) currentState.redo(currentState.activeDocumentId)
+          else currentState.undo(currentState.activeDocumentId)
+        }
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return
@@ -822,7 +1084,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         return
       }
       const shortcuts: Partial<Record<string, PdfTool | null>> = {
-        a: null,
+        a: 'select',
         h: 'highlight',
         u: 'underline',
         s: 'strikeout',
@@ -842,6 +1104,34 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [active])
 
+  useEffect(() => {
+    if (!active) return
+    const find = () => {
+      setSearchOpen(true)
+      window.requestAnimationFrame(() => searchInputRef.current?.focus())
+    }
+    const keydown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || document.querySelector('.dialog-overlay')) return
+      if (event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        find()
+      } else if (event.key === '[' || event.key === ']') {
+        const target = event.target
+        if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        travelHistory(event.key === '[' ? 'back' : 'forward')
+      }
+    }
+    window.addEventListener('keydown', keydown, true)
+    return () => window.removeEventListener('keydown', keydown, true)
+  }, [active, travelHistory])
+
+  const navigationHistory = useMemo(() => activeDocumentId
+    ? navigationHistoryRef.current.get(activeDocumentId) : undefined,
+  [activeDocumentId, historyVersion])
+
   if (!activeDocument) return null
 
   const handleCloseTab = (documentId: string) => {
@@ -852,6 +1142,21 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
 
   const pageControls = (
     <>
+      <ReaderButton label={t('pdfReader.navigation.title')} active={navigationOpen}
+        onClick={() => {
+          if (compactLayout && sidebarOpen) usePdfReaderStore.getState().toggleSidebar()
+          setNavigationOpen((open) => !open)
+        }}>
+        <SidebarSimple className="h-4 w-4" />
+      </ReaderButton>
+      <ReaderButton label={t('pdfReader.navigationBack')} shortcut="⌘["
+        disabled={!navigationHistory?.back.length} onClick={() => travelHistory('back')}>
+        <ArrowLeft className="h-4 w-4" />
+      </ReaderButton>
+      <ReaderButton label={t('pdfReader.navigationForward')} shortcut="⌘]"
+        disabled={!navigationHistory?.forward.length} onClick={() => travelHistory('forward')}>
+        <ArrowRight className="h-4 w-4" />
+      </ReaderButton>
       <ReaderButton
         label={t('pdfReader.previousPage')}
         disabled={currentPage <= 1}
@@ -903,9 +1208,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           inputMode="decimal"
           aria-label={t('pdfReader.zoomPercentage')}
           className="h-7 w-full rounded-md border border-border bg-panel pl-1 pr-4 text-center text-xs text-foreground"
-          onChange={(event) => setZoomInput(
-            event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1')
-          )}
+          onChange={(event) => {
+            fitGenerationRef.current += 1
+            setZoomMode('custom')
+            setZoomInput(event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1'))
+          }}
           onBlur={() => {
             setScaleAnchored((Number(zoomInput) || scaleRef.current * 100) / 100)
             setZoomInput(zoomPercent(scaleRef.current))
@@ -922,14 +1229,15 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       </ReaderButton>
       <ReaderButton
         label={t('pdfReader.rotate')}
-        onClick={() => setRotation((value) => (value + 90) % 360)}
+        onClick={rotateView}
       >
         <ArrowClockwise className="h-4 w-4" />
       </ReaderButton>
       <ReaderButton
         label={t('pdfReader.fitWidth')}
         disabled={!pdf}
-        onClick={() => void fitWidth()}
+        active={zoomMode === 'width'}
+        onClick={() => setZoomMode('width')}
       >
         <ArrowsOutSimple className="h-4 w-4" />
       </ReaderButton>
@@ -943,6 +1251,10 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         className="flex shrink-0 items-center gap-0.5"
         aria-label={t('pdfReader.annotationTools')}
       >
+        <ReaderButton label={t('pdfReader.tools.read')} active={effectiveTool === null}
+          shortcut="Esc" onClick={() => usePdfReaderStore.getState().setTool(null)}>
+          <CursorText className="h-4 w-4" />
+        </ReaderButton>
         {(Object.keys(TOOL_ICONS) as PdfTool[]).map((item) => {
           const Icon = TOOL_ICONS[item]
           return (
@@ -961,12 +1273,22 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           )
         })}
       </div>
+      <ReaderButton label={t('pdfReader.undo')} shortcut="⌘Z"
+        disabled={!annotationHistory?.past.length || !annotationsLoaded}
+        onClick={() => usePdfReaderStore.getState().undo(activeDocument.id)}>
+        <ArrowCounterClockwise className="h-4 w-4" />
+      </ReaderButton>
+      <ReaderButton label={t('pdfReader.redo')} shortcut="⇧⌘Z"
+        disabled={!annotationHistory?.future.length || !annotationsLoaded}
+        onClick={() => usePdfReaderStore.getState().redo(activeDocument.id)}>
+        <ArrowClockwise className="h-4 w-4" />
+      </ReaderButton>
       {compactLayout && (
         <span
           data-active-pdf-tool
           className="shrink-0 rounded-md bg-active px-2 py-1 text-label font-medium text-accent"
         >
-          {t(effectiveTool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${effectiveTool}`)}
+          {t(effectiveTool === null ? 'pdfReader.tools.read' : `pdfReader.tools.${effectiveTool}`)}
         </span>
       )}
       {(effectiveTool === 'text' || selectedTextAnnotations.length > 0) && (
@@ -1066,11 +1388,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       }`}
       onSubmit={(event) => {
         event.preventDefault()
-        if (pdfSearch.searching) return
         if (pdfSearch.matches.length > 0) {
           pdfSearch.cycle(1)
           return
         }
+        if (pdfSearch.searching) return
         runPdfSearch()
       }}
     >
@@ -1085,8 +1407,15 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           aria-invalid={pdfSearch.error ? true : undefined}
           onChange={(event) => pdfSearch.updateQuery(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === 'Enter' && event.shiftKey && pdfSearch.matches.length > 0) {
+              event.preventDefault()
+              pdfSearch.cycle(-1)
+              return
+            }
             if (event.key !== 'Escape') return
-            if (pdfSearch.searching) pdfSearch.cancel()
+            if (searchDebounceRef.current !== null) window.clearTimeout(searchDebounceRef.current)
+            searchDebounceRef.current = null
+            pdfSearch.cancel()
             if (compactLayout) setSearchOpen(false)
             event.currentTarget.blur()
           }}
@@ -1109,14 +1438,12 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       <span
         data-pdf-search-status
         className="min-w-10 text-center text-label text-muted"
+        role="status"
+        aria-live="polite"
       >
-        {pdfSearch.searching
-          ? '…'
-          : pdfSearch.error
-            ? <span className="text-error" role="status">{pdfSearch.error}</span>
-          : pdfSearch.matches.length > 0
-            ? `${pdfSearch.index + 1}/${pdfSearch.matches.length}`
-            : ''}
+        {pdfSearch.matches.length > 0 ? `${pdfSearch.index + 1}/${pdfSearch.matches.length}` : ''}
+        {pdfSearch.searching ? ' …' : pdfSearch.noResults ? t('pdfReader.noResults') : ''}
+        {pdfSearch.error && <span className="ml-1 text-error">{pdfSearch.error}</span>}
       </span>
       <ReaderButton
         label={t('pdfReader.previousResult')}
@@ -1135,8 +1462,32 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     </form>
   )
 
+  const retryReaderPersistence = () => {
+    if (annotationLoadStatus[activeDocument.id] === 'error') void usePdfReaderStore.getState().retryLoad(activeDocument.id)
+    if (saveStatus === 'error') usePdfReaderStore.getState().retrySave(activeDocument.id)
+    if (viewLoadStatus === 'error') setLoadAttempt((attempt) => attempt + 1)
+    if (viewSaveStatus === 'error') usePdfViewStore.getState().retrySave(activeDocument.id)
+  }
+
   const utilityControls = (
     <>
+      <button type="button" data-pdf-persistence-status
+        aria-label={t('pdfReader.persistenceStatus')}
+        disabled={annotationLoadStatus[activeDocument.id] !== 'error' && saveStatus !== 'error' &&
+          viewLoadStatus !== 'error' && viewSaveStatus !== 'error'}
+        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-label text-muted disabled:cursor-default"
+        onClick={retryReaderPersistence}>
+        {annotationLoadStatus[activeDocument.id] === 'error' || saveStatus === 'error' || viewLoadStatus === 'error' || viewSaveStatus === 'error'
+          ? <WarningCircle className="h-4 w-4 text-error" />
+          : <CheckCircle className="h-4 w-4" />}
+        <span aria-live="polite">
+          {annotationLoadStatus[activeDocument.id] === 'error' ? t('pdfReader.retryLoadAnnotations')
+            : saveStatus === 'error' ? t('pdfReader.retrySave')
+              : viewLoadStatus === 'error' || viewSaveStatus === 'error' ? t('pdfReader.retryReadingState')
+                : annotationLoadStatus[activeDocument.id] === 'loading' ? t('pdfReader.loadingAnnotations')
+                  : t(`pdfReader.saveStatus.${saveStatus === 'saving' || viewSaveStatus === 'saving' ? 'saving' : saveStatus ?? 'idle'}`)}
+        </span>
+      </button>
       <ReaderButton
         label={t('pdfReader.openInSystem')}
         onClick={() => void openDocumentPdf(activeDocument.id, { forceSystem: true })}
@@ -1146,7 +1497,10 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       <ReaderButton
         label={t('pdfReader.toggleAnnotations')}
         active={sidebarOpen}
-        onClick={() => usePdfReaderStore.getState().toggleSidebar()}
+        onClick={() => {
+          if (compactLayout) setNavigationOpen(false)
+          usePdfReaderStore.getState().toggleSidebar()
+        }}
       >
         <ListBullets className="h-4 w-4" />
       </ReaderButton>
@@ -1255,14 +1609,36 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           </div>
         )}
       </div>
+      {(annotationLoadStatus[activeDocument.id] === 'error' || saveStatus === 'error' ||
+        viewLoadStatus === 'error' || viewSaveStatus === 'error' || navigationError) && (
+        <div role="alert" className="flex shrink-0 items-center gap-3 border-b border-error/25 bg-error/10 px-3 py-2 text-xs text-error">
+          <span className="flex-1">{navigationError ?? (annotationLoadStatus[activeDocument.id] === 'error'
+            ? t('pdfReader.annotationLoadFailed') : saveStatus === 'error'
+              ? t('pdfReader.annotationSaveFailed') : t('pdfReader.readingStateFailed'))}</span>
+          {!navigationError && <button type="button" className="shrink-0 rounded border border-error/40 px-2 py-1 hover:bg-error/10"
+            onClick={retryReaderPersistence}>{t('common.retry')}</button>}
+        </div>
+      )}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {navigationOpen && pdf && (
+          <PdfNavigationSidebar pdf={pdf} currentPage={currentPage} rotation={rotation}
+            bookmarks={savedDocumentView?.bookmarks ?? []} overlay={compactLayout}
+            onClose={() => setNavigationOpen(false)}
+            onNavigate={navigateFromSidebar}
+            onNavigateDestination={(destination) => void navigateToDestination(destination)}
+            onAddBookmark={addBookmark}
+            onRenameBookmark={(id, title) => usePdfViewStore.getState().renameBookmark(activeDocument.id, id, title)}
+            onRemoveBookmark={(id) => usePdfViewStore.getState().removeBookmark(activeDocument.id, id)} />
+        )}
         <div
           ref={scrollRef}
           className="min-h-0 min-w-0 flex-1 overflow-auto bg-panel-2 [overflow-anchor:none]"
         >
           {loadingError ? (
-            <div className="flex h-full items-center justify-center text-sm text-error">
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-error" role="alert">
               {loadingError}
+              <button type="button" className="rounded border border-border px-3 py-1.5 text-xs text-foreground hover:bg-hover"
+                onClick={() => setLoadAttempt((attempt) => attempt + 1)}>{t('common.retry')}</button>
             </div>
           ) : !pdf ? (
             <div className="flex h-full items-center justify-center text-sm text-muted">
@@ -1285,12 +1661,15 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                     ref={pageVirtualizer.measureElement}
                     data-index={virtualPage.index}
                     data-virtual-page={pageNumber}
-                    className="absolute left-1/2 top-0 w-max"
+                    className="absolute top-0 w-max"
                     style={{
+                      left: Math.max(containerSize.width / 2,
+                        (pageBaseWidthsRef.current.get(virtualPage.index) ?? (rotated ? PDF_PAGE_HEIGHT : PDF_PAGE_WIDTH)) * scale / 2 + PDF_PAGE_PADDING),
                       transform: `translate(-50%, ${virtualPage.start}px)`
                     }}
                   >
                     <PdfPage
+                      active={active}
                       pdf={pdf}
                       pageNumber={pageNumber}
                       scale={scale}
@@ -1305,11 +1684,14 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       color={displayedColor}
                       fontSize={fontSize}
                       strokeWidth={strokeWidth}
-                      searchMatches={searchMatchesByPage.get(pageNumber) ?? []}
+                      searchMatches={searchMatchesByPage.get(pageNumber) ?? EMPTY_SEARCH_MATCHES}
+                      searchNavigationRevision={searchNavigationRevision}
                       onAddAnnotation={addAnnotation}
                       onPageSize={handlePageSize}
                       onPageVisible={handleVisiblePage}
                       onNavigateToPage={navigateToPage}
+                      onNavigateToDestination={navigateToDestination}
+                      onSearchMatchVisible={handleSearchMatchVisible}
                     />
                   </div>
                 )
@@ -1327,26 +1709,6 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           />
         )}
       </div>
-      {lastDeletion?.documentId === activeDocument.id && (
-        <div
-          role="status"
-          className="absolute bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-foreground px-3 py-2 text-xs text-background shadow-xl"
-        >
-          <span>
-            {t('pdfReader.deletedAnnotations', {
-              count: lastDeletion.annotations.length
-            })}
-          </span>
-          <button
-            type="button"
-            className="flex items-center gap-1 rounded px-1.5 py-1 font-medium text-accent hover:bg-background/10"
-            onClick={() => usePdfReaderStore.getState().undoLastDeletion()}
-          >
-            <ArrowCounterClockwise className="h-3.5 w-3.5" />
-            {t('pdfReader.undo')}
-          </button>
-        </div>
-      )}
     </div>
   )
 }

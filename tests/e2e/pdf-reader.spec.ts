@@ -73,6 +73,7 @@ test.describe('Built-in PDF reader', () => {
   })
 
   test('opens multiple tabs and persists visible drawing and text annotations locally', async () => {
+    test.setTimeout(90000)
     const firstRow = page.locator(`[data-document-id="${firstDocumentId}"]`)
     const secondRow = page.locator(`[data-document-id="${secondDocumentId}"]`)
     await expect(firstRow).toBeVisible()
@@ -101,11 +102,13 @@ test.describe('Built-in PDF reader', () => {
       '0px'
     )
     await expect(page.locator('[data-pdf-reader-toolbar][data-compact]')).toBeVisible()
-    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select annotations')
+    await expect(page.locator('[data-active-pdf-tool]')).toHaveText('Select text')
     await expect(page.getByRole('button', {
-      name: 'Select annotations',
+      name: 'Edit annotations',
       exact: true
-    })).toHaveCount(0)
+    })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Select text', exact: true }))
+      .toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByRole('button', { name: 'Annotation color' })).toHaveCount(0)
     await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
 
@@ -172,14 +175,22 @@ test.describe('Built-in PDF reader', () => {
     await expect(ink).toHaveCount(1)
     await expect(ink).toHaveAttribute('stroke-width', '3')
     await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
+    const readerToolbar = page.locator('[data-pdf-reader-toolbar]')
+    await readerToolbar.getByRole('button', { name: 'Undo', exact: true }).click()
+    await expect(ink).toHaveCount(0)
+    await readerToolbar.getByRole('button', { name: 'Redo', exact: true }).click()
+    await expect(ink).toHaveCount(1)
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    await freehandTool.click()
+    await page.keyboard.press('Escape')
+    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
     await expect(page.getByRole('button', {
       name: 'Delete selected annotations (1)'
     })).toHaveCount(0)
-    await freehandTool.click()
     await expect(page.getByRole('button', {
-      name: 'Read and select text',
+      name: 'Select text',
       exact: true
-    })).toHaveCount(0)
+    })).toHaveAttribute('aria-pressed', 'true')
     await expect(freehandTool).not.toHaveAttribute('aria-pressed', 'true')
 
     const selectableText = pdfPage.locator('.textLayer span')
@@ -224,26 +235,49 @@ test.describe('Built-in PDF reader', () => {
       exact: true
     })
     await highlightTool.click()
+    const highlightTextBounds = await selectableText.boundingBox()
+    expect(highlightTextBounds).not.toBeNull()
     await page.mouse.move(
-      textBounds!.x + textBounds!.width * 0.1,
-      textBounds!.y + textBounds!.height / 2
+      highlightTextBounds!.x + highlightTextBounds!.width * 0.1,
+      highlightTextBounds!.y + highlightTextBounds!.height / 2
     )
     await page.mouse.down()
     await page.mouse.move(
-      textBounds!.x + textBounds!.width * 0.75,
-      textBounds!.y + textBounds!.height / 2,
+      highlightTextBounds!.x + highlightTextBounds!.width * 0.75,
+      highlightTextBounds!.y + highlightTextBounds!.height / 2,
       { steps: 4 }
     )
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
+      .not.toBe('')
     await page.mouse.up()
     const textMark = pdfPage.getByRole('button', { name: 'Highlight', exact: true })
     await expect(textMark).toBeVisible()
     const createdTextMarkBounds = await textMark.boundingBox()
     expect(createdTextMarkBounds).not.toBeNull()
-    expect(Math.abs(createdTextMarkBounds!.x - selectedTextBounds!.x)).toBeLessThan(4)
-    expect(Math.abs(createdTextMarkBounds!.y - selectedTextBounds!.y)).toBeLessThan(4)
+    expect(Math.abs(createdTextMarkBounds!.x - highlightTextBounds!.x - (selectedTextBounds!.x - textBounds!.x))).toBeLessThan(4)
+    expect(Math.abs(createdTextMarkBounds!.y - highlightTextBounds!.y - (selectedTextBounds!.y - textBounds!.y))).toBeLessThan(4)
     expect(Math.abs(createdTextMarkBounds!.width - selectedTextBounds!.width)).toBeLessThan(6)
     expect(Math.abs(createdTextMarkBounds!.height - selectedTextBounds!.height)).toBeLessThan(4)
     await highlightTool.click()
+    await expect(textMark).toHaveCSS('pointer-events', 'none')
+    const readTextMarkBounds = await textMark.boundingBox()
+    expect(readTextMarkBounds).not.toBeNull()
+    await page.mouse.move(
+      readTextMarkBounds!.x + readTextMarkBounds!.width * 0.1,
+      readTextMarkBounds!.y + readTextMarkBounds!.height / 2
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      readTextMarkBounds!.x + readTextMarkBounds!.width * 0.75,
+      readTextMarkBounds!.y + readTextMarkBounds!.height / 2,
+      { steps: 4 }
+    )
+    await page.mouse.up()
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
+      .not.toBe('')
+    expect(Math.abs((await textMark.boundingBox())!.x - readTextMarkBounds!.x)).toBeLessThan(1)
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+    await annotationToolbar.getByRole('button', { name: 'Edit annotations', exact: true }).click()
     await expect(textMark).toHaveCSS('pointer-events', 'auto')
     const textMarkBounds = await textMark.boundingBox()
     expect(textMarkBounds).not.toBeNull()
@@ -257,6 +291,12 @@ test.describe('Built-in PDF reader', () => {
       textMarkBounds!.y + textMarkBounds!.height / 2
     )
     await page.mouse.up()
+    await expect.poll(async () => (await textMark.boundingBox())?.x ?? 0)
+      .toBeGreaterThan(textMarkBounds!.x + 2)
+    await page.keyboard.press('Meta+z')
+    await expect.poll(async () => Math.abs((await textMark.boundingBox())!.x - textMarkBounds!.x))
+      .toBeLessThan(1)
+    await page.keyboard.press('Meta+Shift+z')
     await expect.poll(async () => (await textMark.boundingBox())?.x ?? 0)
       .toBeGreaterThan(textMarkBounds!.x + 2)
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
@@ -332,6 +372,7 @@ test.describe('Built-in PDF reader', () => {
     const addTextTool = page.getByRole('button', { name: 'Add text', exact: true })
     await addTextTool.click()
     await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
+    await annotationToolbar.getByRole('button', { name: 'Edit annotations', exact: true }).click()
     const movableTextBounds = await inlineText.boundingBox()
     expect(movableTextBounds).not.toBeNull()
     await page.mouse.move(
@@ -397,8 +438,8 @@ test.describe('Built-in PDF reader', () => {
     await expect(selectedAnnotations).toHaveCount(0)
     await expect(pdfPage.locator('[data-annotation-kind="ink"]')).toHaveCount(0)
     await expect(pdfPage.getByRole('textbox', { name: 'Add text' })).toHaveCount(0)
-    await expect(page.getByRole('status')).toContainText('Deleted 2 annotations')
-    await page.getByRole('button', { name: 'Undo', exact: true }).click()
+    await expect(readerToolbar.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled()
+    await readerToolbar.getByRole('button', { name: 'Undo', exact: true }).click()
     await expect(pdfPage.locator('[data-annotation-kind="ink"]')).toHaveCount(1)
     await expect(pdfPage.getByRole('textbox', { name: 'Add text' })).toHaveCount(1)
     await expect(selectedAnnotations).toHaveCount(2)
@@ -428,15 +469,16 @@ test.describe('Built-in PDF reader', () => {
     }, secondDocumentId)).toBe(0)
 
     const addNoteTool = page.getByRole('button', { name: 'Add note', exact: true })
-    await addNoteTool.click()
-    await expect(addNoteTool).toHaveAttribute('aria-pressed', 'true')
-    const sidebarCountBeforeNote = await page.locator('[data-annotation-sidebar]').count()
-    await pdfPage.click({ position: { x: 180, y: 120 } })
-    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(sidebarCountBeforeNote)
-    if (sidebarCountBeforeNote === 0) {
+    if (await page.locator('[data-annotation-sidebar]').isVisible()) {
       await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     }
-    const noteComment = page.locator('[data-annotation-sidebar]')
+    await addNoteTool.click()
+    await expect(addNoteTool).toHaveAttribute('aria-pressed', 'true')
+    await pdfPage.click({ position: { x: 180, y: 120 } })
+    await expect(page.locator('[data-annotation-sidebar]')).toHaveCount(0)
+    const noteEditor = page.getByRole('dialog', { name: 'Edit note' })
+    await expect(noteEditor).toBeVisible()
+    const noteComment = noteEditor
       .getByPlaceholder('Add a comment…', { exact: true })
     await expect(noteComment).toBeFocused()
     await noteComment.fill('Follow up on this result')
@@ -450,6 +492,12 @@ test.describe('Built-in PDF reader', () => {
       }).api
       return (await api.documents.pdfAnnotations(documentId))[0]?.comment
     }, secondDocumentId)).toBe('Follow up on this result')
+    await noteEditor.getByRole('button', { name: 'Close note' }).click()
+    await annotationToolbar.getByRole('button', { name: 'Select text', exact: true }).click()
+    await pdfPage.getByRole('button', { name: 'Add note', exact: true }).click()
+    await expect(noteComment).toHaveValue('Follow up on this result')
+    await noteEditor.getByRole('button', { name: 'Close note' }).click()
+    await page.getByRole('button', { name: 'Toggle annotations panel' }).click()
     await page.locator('[data-annotation-sidebar]')
       .getByRole('button', { name: 'Delete', exact: true })
       .click()

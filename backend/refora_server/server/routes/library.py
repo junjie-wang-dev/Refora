@@ -849,6 +849,7 @@ def create_library_router(deps: Any) -> APIRouter:
         {
             "run": run,
             "settings": settings,
+            "documents": documents,
             "connector": connector,
             "transaction": transaction,
             "web_search": web_search,
