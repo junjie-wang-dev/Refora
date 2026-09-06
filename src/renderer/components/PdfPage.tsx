@@ -326,6 +326,7 @@ export default function PdfPage({
   rotation,
   devicePixelRatio,
   scrollRootRef,
+  textControlsRef,
   documentId,
   documentTitle,
   annotations,
@@ -350,6 +351,7 @@ export default function PdfPage({
   rotation: number
   devicePixelRatio: number
   scrollRootRef: RefObject<HTMLDivElement | null>
+  textControlsRef?: RefObject<HTMLDivElement | null>
   documentId: string
   documentTitle: string
   annotations: PdfAnnotation[]
@@ -1428,10 +1430,9 @@ export default function PdfPage({
           baseSize={baseSize}
           rect={textAnnotationRect(annotation)}
           selected={selectedAnnotationIds.includes(annotation.id)}
-          showControls={selectedAnnotationIds.length === 1 || editingTextAnnotationId === annotation.id}
           editing={editingTextAnnotationId === annotation.id}
           active={active}
-          scrollRootRef={scrollRootRef}
+          controlsRef={textControlsRef}
           interactive={tool === null || tool === 'text' || tool === 'eraser'}
           erasing={tool === 'eraser'}
           onSelect={() => {
@@ -1504,7 +1505,8 @@ export default function PdfPage({
           `note-editor-${editingNote.id}`
       )}
       {annotations
-        .filter((annotation) => annotation.kind !== 'text' && selectedAnnotationIds.includes(annotation.id))
+        .filter((annotation) => selectedAnnotationIds.includes(annotation.id) &&
+          !(annotation.kind === 'text' && editingTextAnnotationId === annotation.id))
         .flatMap((annotation) =>
           (annotation.kind === 'text'
             ? [textAnnotationRect(annotation)]

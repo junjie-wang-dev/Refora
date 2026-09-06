@@ -197,6 +197,30 @@ describe('PdfPage annotation interaction', () => {
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([highlight, ink])
   })
 
+  it('uses the shared annotation selection frame for text and hides it while editing', async () => {
+    usePdfReaderStore.setState({
+      annotations: { paper: [
+        { id: 'text', kind: 'text', page: 1, text: 'Editable', comment: '', color: '#f00',
+          point: { x: 0.2, y: 0.3 }, size: { width: 0.3, height: 0.05 }, createdAt: 0 },
+        { id: 'ink', kind: 'ink', page: 1, text: '', comment: '', color: '#f00',
+          points: [{ x: 0.1, y: 0.1 }, { x: 0.3, y: 0.4 }], createdAt: 0 }
+      ] },
+      selectedAnnotationIds: ['text', 'ink']
+    })
+    const view = render(<Harness />)
+    const page = await loadedPage(view.container)
+    const frame = page.querySelector<HTMLElement>('[data-selected-annotation="text"]')!
+    const inkFrame = page.querySelector<HTMLElement>('[data-selected-annotation="ink"]')!
+    expect(frame.className).toBe(inkFrame.className)
+    expect(frame.querySelectorAll('span')).toHaveLength(4)
+    const textarea = screen.getByRole('textbox', { name: 'pdfReader.tools.text' })
+    expect(textarea).toHaveClass('outline-none')
+    fireEvent.doubleClick(textarea)
+    expect(page.querySelector('[data-selected-annotation="text"]')).toBeNull()
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(page.querySelector('[data-selected-annotation="text"]')).toHaveClass('border-2', 'border-accent')
+  })
+
   it('opens a new note immediately, saves its comment and reopens it without a sidebar', async () => {
     usePdfReaderStore.getState().setTool('note')
     const view = render(<Harness />)

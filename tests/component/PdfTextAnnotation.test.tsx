@@ -1,7 +1,7 @@
-import { useRef, useState, type RefObject } from 'react'
+import { useRef, useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import PdfTextAnnotation, { type PdfTextAnnotationProps } from '../../src/renderer/components/PdfTextAnnotation'
 import type { PdfAnnotation } from '../../src/renderer/store/pdfReaderStore'
 
@@ -15,13 +15,6 @@ const textAnnotation: PdfAnnotation = {
   size: { width: 0.4, height: 0.05 }, createdAt: 0
 }
 
-function bounds(left: number, top: number, width: number, height: number): DOMRect {
-  return {
-    left, top, right: left + width, bottom: top + height, x: left, y: top, width, height,
-    toJSON: () => ({})
-  }
-}
-
 function props(overrides: Partial<PdfTextAnnotationProps> = {}): PdfTextAnnotationProps {
   return {
     annotation: textAnnotation,
@@ -32,7 +25,7 @@ function props(overrides: Partial<PdfTextAnnotationProps> = {}): PdfTextAnnotati
     selected: false,
     editing: false,
     active: true,
-    scrollRootRef: { current: null },
+    controlsRef: { current: null },
     interactive: true,
     erasing: false,
     onSelect: vi.fn(),
@@ -54,16 +47,21 @@ function EditorHarness({
   initialEditing?: boolean
   onFinish?: () => void
 }) {
-  const scrollRootRef = useRef<HTMLDivElement>(null)
+  const controlsRef = useRef<HTMLDivElement>(null)
   const [annotation, setAnnotation] = useState(initialAnnotation)
   const [editing, setEditing] = useState(initialEditing)
   const [selected, setSelected] = useState(initialEditing)
   return (
-    <div ref={scrollRootRef} data-reader="true">
+    <div data-reader="true">
+      <div ref={controlsRef} data-test-text-controls onPointerDown={(event) => event.preventDefault()}>
+        <button onClick={() => setAnnotation((current) => ({ ...current, fontSize: (current.fontSize ?? 14) + 2 }))}>Increase font</button>
+        <button onClick={() => setAnnotation((current) => ({ ...current, color: '#56ccf2' }))}>Change color</button>
+        <button onClick={() => editing ? setEditing(false) : setEditing(true)}>{editing ? 'Done' : 'Edit'}</button>
+      </div>
       <PdfTextAnnotation
         {...props()}
         annotation={annotation}
-        scrollRootRef={scrollRootRef}
+        controlsRef={controlsRef}
         selected={selected}
         editing={editing}
         onSelect={() => setSelected(true)}
@@ -77,19 +75,6 @@ function EditorHarness({
 }
 
 describe('PdfTextAnnotation editing experience', () => {
-  let anchor: DOMRect
-  let reader: DOMRect
-
-  beforeEach(() => {
-    anchor = bounds(150, 260, 240, 40)
-    reader = bounds(40, 100, 700, 600)
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      if (this instanceof HTMLTextAreaElement) return anchor
-      if (this.dataset.textAnnotationToolbar) return bounds(0, 0, 320, 42)
-      return reader
-    })
-  })
-
   afterEach(async () => {
     cleanup()
     await act(async () => {})
@@ -130,7 +115,7 @@ describe('PdfTextAnnotation editing experience', () => {
     expect(textarea.className).toBe(initialClass)
     expect(textarea.getAttribute('style')).toBe(initialStyle)
     expect(textarea.selectionStart).toBe(textarea.value.length)
-    expect(screen.getByRole('button', { name: 'pdfReader.finishEditingText' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Done' })).toBeVisible()
     expect(screen.queryByText('pdfReader.saveStatus.saved')).not.toBeInTheDocument()
   })
 
@@ -142,11 +127,11 @@ describe('PdfTextAnnotation editing experience', () => {
     await user.keyboard('new ')
     const caret = textarea.selectionStart
     expect(caret).toBe(6)
-    await user.click(screen.getByRole('button', { name: 'pdfReader.increaseFontSize' }))
+    await user.click(screen.getByRole('button', { name: 'Increase font' }))
     expect(textarea).toHaveFocus()
     expect(textarea.selectionStart).toBe(caret)
     expect(textarea).toHaveStyle({ fontSize: '16px' })
-    await user.click(screen.getByRole('button', { name: 'pdfReader.annotationColor #56ccf2' }))
+    await user.click(screen.getByRole('button', { name: 'Change color' }))
     expect(textarea).toHaveFocus()
     expect(textarea.selectionStart).toBe(caret)
     expect(textarea).toHaveStyle({ color: '#56ccf2' })
@@ -175,7 +160,7 @@ describe('PdfTextAnnotation editing experience', () => {
     expect(textarea).toHaveAttribute('readonly')
   })
 
-  it.each(['blur', 'outside', 'done'] as const)('commits the current composed DOM text before finishing on %s', (completion) => {
+  it.each(['blur', 'outside', 'keyboard'] as const)('commits the current composed DOM text before finishing on %s', (completion) => {
     const events: string[] = []
     const callbacks = props({
       editing: true,
@@ -191,7 +176,7 @@ describe('PdfTextAnnotation editing experience', () => {
     textarea.value = '输入法最终内容'
     if (completion === 'blur') fireEvent.blur(textarea, { relatedTarget: document.body })
     else if (completion === 'outside') fireEvent.pointerDown(document.body)
-    else fireEvent.click(screen.getByRole('button', { name: 'pdfReader.finishEditingText' }))
+    else { fireEvent.compositionEnd(textarea); fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true }) }
     expect(events).toEqual(['text:输入法最终内容', 'finish'])
     expect(latestUpdate).toHaveBeenCalledOnce()
     expect(callbacks.onUpdate).not.toHaveBeenCalled()
@@ -206,42 +191,27 @@ describe('PdfTextAnnotation editing experience', () => {
     expect(outside).toHaveFocus()
     expect(onFinish).toHaveBeenCalledOnce()
     fireEvent.doubleClick(screen.getByRole('textbox', { name: 'pdfReader.tools.text' }))
-    await user.click(screen.getByRole('button', { name: 'pdfReader.finishEditingText' }))
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     expect(onFinish).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole('textbox', { name: 'pdfReader.tools.text' })).not.toHaveFocus()
-    expect(screen.getByRole('button', { name: 'pdfReader.editText' })).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'pdfReader.tools.text' })).toHaveAttribute('readonly')
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeVisible()
   })
 
-  it('allows keyboard focus in formatting controls before finishing when focus leaves', () => {
-    const callbacks = props({ selected: true, editing: true })
-    render(<PdfTextAnnotation {...callbacks} />)
+  it('allows focus in top formatting controls and finishes when focus leaves those controls', () => {
+    const controls = document.createElement('div')
+    const increase = document.createElement('button')
+    controls.append(increase)
+    document.body.append(controls)
+    const callbacks = props({ selected: true, editing: true, controlsRef: { current: controls } })
+    const view = render(<PdfTextAnnotation {...callbacks} />)
     const textarea = screen.getByRole('textbox')
-    const increase = screen.getByRole('button', { name: 'pdfReader.increaseFontSize' })
+    fireEvent.pointerDown(increase)
     fireEvent.blur(textarea, { relatedTarget: increase })
     expect(callbacks.onFinishEditing).not.toHaveBeenCalled()
     fireEvent.blur(increase, { relatedTarget: document.body })
     expect(callbacks.onFinishEditing).toHaveBeenCalledOnce()
-  })
-
-  it('clamps the floating toolbar to reader edges and follows scrolling and zoom', () => {
-    const root = document.createElement('div')
-    document.body.append(root)
-    const scrollRootRef: RefObject<HTMLDivElement | null> = { current: root }
-    anchor = bounds(680, 106, 60, 40)
-    const view = render(<PdfTextAnnotation {...props({ selected: true, scrollRootRef })} />)
-    const toolbar = screen.getByRole('toolbar')
-    expect(toolbar).toHaveStyle({ left: '412px', top: '154px', maxWidth: '684px' })
-    anchor = bounds(150, 600, 240, 40)
-    fireEvent.scroll(root)
-    expect(toolbar).toHaveStyle({ left: '150px', top: '550px' })
-    anchor = bounds(150, 200, 480, 80)
-    view.rerender(<PdfTextAnnotation {...props({ selected: true, scrollRootRef, scale: 2 })} />)
-    expect(toolbar).toHaveStyle({ top: '150px' })
-    expect(screen.getByRole('textbox')).toHaveStyle({ width: '480px', height: '80px' })
-    anchor = bounds(150, -100, 480, 80)
-    fireEvent.scroll(root)
-    expect(toolbar).not.toBeVisible()
-    root.remove()
+    view.unmount()
+    controls.remove()
   })
 
   it('keeps formatting controls out of reading mode and closes when the PDF is hidden or unmounted', async () => {
@@ -249,7 +219,7 @@ describe('PdfTextAnnotation editing experience', () => {
     const view = render(<PdfTextAnnotation {...callbacks} />)
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
     view.rerender(<PdfTextAnnotation {...callbacks} selected editing />)
-    expect(screen.getByRole('toolbar')).toBeVisible()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
     view.rerender(<PdfTextAnnotation {...callbacks} selected editing active={false} />)
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
     expect(callbacks.onFinishEditing).toHaveBeenCalledOnce()
@@ -259,21 +229,15 @@ describe('PdfTextAnnotation editing experience', () => {
     expect(callbacks.onFinishEditing).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps rotated geometry stable on entry and bounds font size without changing edit mode', async () => {
-    const user = userEvent.setup()
+  it('keeps rotated geometry stable on entry without creating floating controls', () => {
     const callbacks = props({ annotation: { ...textAnnotation, fontSize: 8 }, selected: true, rotation: 90 })
     const view = render(<PdfTextAnnotation {...callbacks} />)
     const textarea = screen.getByRole('textbox')
     const style = textarea.getAttribute('style')
     expect(textarea).toHaveStyle({ transform: 'translateX(40px) rotate(90deg)' })
-    expect(screen.getByRole('button', { name: 'pdfReader.decreaseFontSize' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'pdfReader.increaseFontSize' }))
-    expect(callbacks.onUpdate).toHaveBeenLastCalledWith({ fontSize: 10 })
-    expect(callbacks.onStartEditing).not.toHaveBeenCalled()
     view.rerender(<PdfTextAnnotation {...callbacks} editing />)
     expect(textarea.getAttribute('style')).toBe(style)
-    view.rerender(<PdfTextAnnotation {...callbacks} annotation={{ ...textAnnotation, fontSize: 72 }} editing />)
-    expect(screen.getByRole('button', { name: 'pdfReader.increaseFontSize' })).toBeDisabled()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 
   it('erases text without opening an editor or its formatting controls', () => {
@@ -289,11 +253,12 @@ describe('PdfTextAnnotation editing experience', () => {
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 
-  it('preserves selected text outlines in a multi-selection without duplicating toolbars', () => {
-    render(<PdfTextAnnotation {...props({ selected: true, showControls: false })} />)
+  it('leaves selection framing to the shared annotation layer', () => {
+    render(<PdfTextAnnotation {...props({ selected: true })} />)
     const textarea = screen.getByRole('textbox')
     expect(textarea).toHaveAttribute('data-text-selected', 'true')
-    expect(textarea).toHaveClass('outline', 'outline-accent')
+    expect(textarea).toHaveClass('outline-none')
+    expect(textarea).not.toHaveClass('outline-accent')
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 })

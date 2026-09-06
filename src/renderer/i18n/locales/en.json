@@ -793,7 +793,6 @@
     "editTextHint": "Double-click or press Enter to edit; drag to move",
     "readingStateLoadFailed": "Reading position and bookmarks could not be loaded.",
     "readingStateSaveFailed": "Reading position and bookmarks have not been saved.",
-    "textAnnotationToolbar": "Text annotation controls",
     "editText": "Edit text",
     "finishEditingText": "Done"
   },

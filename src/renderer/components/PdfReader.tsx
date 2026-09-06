@@ -16,6 +16,7 @@ import {
   ArrowsOutSimple,
   CaretLeft,
   CaretRight,
+  Check,
   CursorText,
   Eraser,
   Highlighter,
@@ -230,6 +231,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const strokeWidth = usePdfReaderStore((state) => state.strokeWidth)
   const sidebarOpen = usePdfReaderStore((state) => state.sidebarOpen)
   const selectedAnnotationIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
+  const textEditor = usePdfReaderStore((state) => state.textEditor)
   const annotationHistory = usePdfReaderStore((state) => activeDocumentId ? state.annotationHistory[activeDocumentId] : undefined)
   const saveStatus = usePdfReaderStore((state) => activeDocumentId ? state.saveStatus[activeDocumentId] : undefined)
   const savedDocumentView = usePdfViewStore((state) => activeDocumentId ? state.documents[activeDocumentId] : undefined)
@@ -259,11 +261,13 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     (annotation) => annotation.kind === 'ink'
   )
   const singleTextSelection = selectedAnnotationIds.length === 1 && selectedTextAnnotations.length === 1
+  const editingSelectedText = singleTextSelection && textEditor?.documentId === activeDocumentId &&
+    textEditor.annotationId === selectedTextAnnotations[0].id
   const displayedFontSize = selectedTextAnnotations[0]?.fontSize ?? fontSize
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
-  const showAnnotationStyleControls = (selectedAnnotations.length > 0 && !singleTextSelection) || (
-    effectiveTool !== null && effectiveTool !== 'eraser' && effectiveTool !== 'text'
+  const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
+    effectiveTool !== null && effectiveTool !== 'eraser'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -286,6 +290,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     () => window.devicePixelRatio || 1
   )
   const readerRootRef = useRef<HTMLDivElement>(null)
+  const textControlsRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const scaleRef = useRef(scale)
   const zoomAnchorRef = useRef<PdfZoomAnchor | null>(null)
@@ -1294,7 +1299,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           {t(effectiveTool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${effectiveTool}`)}
         </span>
       )}
-      {selectedTextAnnotations.length > 0 && !singleTextSelection && (
+      <div ref={textControlsRef} data-pdf-text-controls className="contents"
+        onPointerDown={(event) => {
+          if (textEditor?.documentId === activeDocumentId) event.preventDefault()
+        }}>
+      {(effectiveTool === 'text' || selectedTextAnnotations.length > 0) && (
         <div className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md bg-panel px-0.5">
           <ReaderButton
             label={t('pdfReader.decreaseFontSize')}
@@ -1342,7 +1351,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           </ReaderButton>
         </div>
       )}
-      {selectedAnnotationIds.length > 0 && !singleTextSelection && (
+      {selectedAnnotationIds.length > 0 && (
         <div className="ml-1 flex shrink-0 items-center gap-1 rounded-md bg-active pl-2 pr-0.5">
           <span className="text-label font-medium text-accent">
             {t('pdfReader.selectedCount', { count: selectedAnnotationIds.length })}
@@ -1381,6 +1390,22 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           ))}
         </div>
       )}
+      {singleTextSelection && (
+        <ReaderButton
+          label={t(editingSelectedText ? 'pdfReader.finishEditingText' : 'pdfReader.editText')}
+          disabled={!annotationsLoaded}
+          onClick={() => {
+            const store = usePdfReaderStore.getState()
+            const id = selectedTextAnnotations[0].id
+            if (editingSelectedText) {
+              scrollRef.current?.querySelector<HTMLTextAreaElement>(`[data-text-annotation-id="${id}"]`)?.blur()
+              store.finishTextEditing(activeDocument.id, id)
+            } else store.startTextEditing(activeDocument.id, id)
+          }}>
+          {editingSelectedText ? <Check className="h-4 w-4" /> : <PencilSimple className="h-4 w-4" />}
+        </ReaderButton>
+      )}
+      </div>
     </>
   )
 
@@ -1674,6 +1699,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       rotation={rotation}
                       devicePixelRatio={devicePixelRatio}
                       scrollRootRef={scrollRef}
+                      textControlsRef={textControlsRef}
                       documentId={activeDocument.id}
                       documentTitle={activeDocument.title || activeDocument.fileName}
                       annotations={annotationsByPage.get(pageNumber) ?? []}

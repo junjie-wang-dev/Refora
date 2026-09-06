@@ -190,6 +190,18 @@ test.describe('Built-in PDF reader', () => {
     await readerToolbar.getByRole('button', { name: 'Redo', exact: true }).click()
     await expect(ink).toHaveCount(1)
     await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
+    const inkSelectionAppearance = await pdfPage.locator('[data-selected-annotation]')
+      .evaluate((element) => {
+        const style = window.getComputedStyle(element)
+        return {
+          className: element.className,
+          border: style.border,
+          background: style.backgroundColor,
+          shadow: style.boxShadow,
+          corners: Array.from(element.children).map((corner) => corner.className)
+        }
+      })
+    expect(inkSelectionAppearance.corners).toHaveLength(4)
     await freehandTool.click()
     await page.keyboard.press('Escape')
     await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
@@ -324,20 +336,27 @@ test.describe('Built-in PDF reader', () => {
     await expectSilentPersistence()
 
     const addTextTool = page.getByRole('button', { name: 'Add text', exact: true })
+    const floatingTextToolbar = page.locator('[data-text-annotation-toolbar]')
+    const increaseFontSize = readerToolbar.getByRole('button', { name: 'Increase font size' })
+    const decreaseFontSize = readerToolbar.getByRole('button', { name: 'Decrease font size' })
+    const textColors = readerToolbar.getByRole('button', { name: 'Annotation color', exact: true })
     await addTextTool.click()
+    await expect(floatingTextToolbar).toHaveCount(0)
+    await expect(increaseFontSize).toBeVisible()
+    await expect(decreaseFontSize).toBeVisible()
+    await expect(textColors).toHaveCount(5)
     await pdfPage.click({ position: { x: 120, y: 210 } })
     const inlineText = pdfPage.getByRole('textbox', { name: 'Add text' })
-    const textToolbar = page.locator('[data-text-annotation-toolbar]')
     await expect(inlineText).toBeVisible()
     await expect(inlineText).toBeFocused()
     await expect(inlineText).toHaveAttribute('data-text-editing', 'true')
     await expect(inlineText).toHaveAttribute('data-text-selected', 'true')
     await expect(addTextTool).not.toHaveAttribute('aria-pressed', 'true')
-    await expect(textToolbar).toBeVisible()
-    await expect(readerToolbar.getByRole('button', { name: 'Increase font size' })).toHaveCount(0)
-    await textToolbar.getByRole('button', { name: 'Increase font size' }).click()
+    await expect(floatingTextToolbar).toHaveCount(0)
+    await expect(increaseFontSize).toBeVisible()
+    await increaseFontSize.click()
     await expect(inlineText).toBeFocused()
-    await textToolbar.getByRole('button', { name: 'Annotation color #eb5757', exact: true }).click()
+    await textColors.nth(4).click()
     await expect(inlineText).toBeFocused()
     await expect.poll(() => inlineText.evaluate((element) =>
       window.getComputedStyle(element, '::placeholder').color
@@ -365,9 +384,9 @@ test.describe('Built-in PDF reader', () => {
     await expect(inlineText).toHaveCSS('font-size', '18.4px')
     await expect(inlineText).toHaveCSS('color', 'rgb(235, 87, 87)')
     await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(0)
-    await expect(page.getByRole('button', {
+    await expect(readerToolbar.getByRole('button', {
       name: 'Delete selected annotations (1)'
-    })).toHaveCount(0)
+    })).toBeVisible()
     await expectSilentPersistence()
 
     const editorAppearance = () => inlineText.evaluate((element: HTMLTextAreaElement) => {
@@ -390,11 +409,11 @@ test.describe('Built-in PDF reader', () => {
       }
     })
     const initialEditorAppearance = await editorAppearance()
-    await expect(inlineText).toHaveCSS('outline-style', 'solid')
+    await expect(inlineText).toHaveCSS('outline-style', 'none')
     const firstEntryScreenshot = testInfo.outputPath('text-editor-first-entry.png')
     await page.screenshot({ path: firstEntryScreenshot })
     await testInfo.attach('text-editor-first-entry', { path: firstEntryScreenshot, contentType: 'image/png' })
-    const initialEditorActions = await textToolbar.getByRole('button')
+    const initialEditorActions = await readerToolbar.getByRole('button')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute('aria-label')))
 
     await expect.poll(() => page.evaluate(async (documentId) => {
@@ -422,29 +441,55 @@ test.describe('Built-in PDF reader', () => {
       )
     }, secondDocumentId)).toBe(true)
     await expectSilentPersistence()
-    await textToolbar.getByRole('button', { name: 'Done', exact: true }).click()
+    await readerToolbar.getByRole('button', { name: 'Done', exact: true }).click()
     await expect(inlineText).toHaveAttribute('readonly', '')
     await inlineText.click()
     await expect(inlineText).toHaveAttribute('readonly', '')
-    await expect(textToolbar.getByRole('button', { name: 'Edit text', exact: true })).toBeVisible()
+    await expect(floatingTextToolbar).toHaveCount(0)
+    await expect(increaseFontSize).toBeVisible()
+    await expect(decreaseFontSize).toBeVisible()
+    await expect(textColors).toHaveCount(5)
+    await expect(readerToolbar.getByRole('button', { name: 'Edit text', exact: true })).toBeVisible()
+    await increaseFontSize.click()
+    await expect(inlineText).toHaveAttribute('readonly', '')
+    await expect(inlineText).toHaveCSS('font-size', '20.7px')
+    await decreaseFontSize.click()
+    await expect(inlineText).toHaveCSS('font-size', '18.4px')
+    const textSelection = pdfPage.locator(`[data-selected-annotation="${initialEditorAppearance.id}"]`)
+    await expect(textSelection).toHaveCount(1)
+    expect(await textSelection.evaluate((element) => {
+      const style = window.getComputedStyle(element)
+      return {
+        className: element.className,
+        border: style.border,
+        background: style.backgroundColor,
+        shadow: style.boxShadow,
+        corners: Array.from(element.children).map((corner) => corner.className)
+      }
+    })).toEqual(inkSelectionAppearance)
+    const selectedTextScreenshot = testInfo.outputPath('text-annotation-selected.png')
+    await page.screenshot({ path: selectedTextScreenshot })
+    await testInfo.attach('text-annotation-selected', { path: selectedTextScreenshot, contentType: 'image/png' })
     await inlineText.dblclick()
     await expect(inlineText).toBeEditable()
     await expect(inlineText).toBeFocused()
     await expect(inlineText).toHaveAttribute('data-text-editing', 'true')
     await expect(inlineText).toHaveAttribute('data-text-selected', 'true')
+    await expect(textSelection).toHaveCount(0)
+    await expect(floatingTextToolbar).toHaveCount(0)
     await expect.poll(editorAppearance).toEqual(initialEditorAppearance)
     const reentryScreenshot = testInfo.outputPath('text-editor-reentry.png')
     await page.screenshot({ path: reentryScreenshot })
     await testInfo.attach('text-editor-reentry', { path: reentryScreenshot, contentType: 'image/png' })
-    expect(await textToolbar.getByRole('button')
+    expect(await readerToolbar.getByRole('button')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute('aria-label'))))
       .toEqual(initialEditorActions)
     await inlineText.press('ArrowLeft')
     const caretBeforeFormatting = await inlineText.evaluate((element: HTMLTextAreaElement) => ({
       start: element.selectionStart, end: element.selectionEnd
     }))
-    for (const name of ['Increase font size', 'Decrease font size', 'Annotation color #f2c94c', 'Annotation color #eb5757']) {
-      await textToolbar.getByRole('button', { name, exact: true }).click()
+    for (const control of [increaseFontSize, decreaseFontSize, textColors.nth(0), textColors.nth(4)]) {
+      await control.click()
       await expect(inlineText).toBeFocused()
       expect(await inlineText.evaluate((element: HTMLTextAreaElement) => ({
         start: element.selectionStart, end: element.selectionEnd
@@ -457,7 +502,7 @@ test.describe('Built-in PDF reader', () => {
     await inlineText.click()
     await expect(inlineText).toHaveAttribute('readonly', '')
     await expect(inlineText).toHaveValue('Updated inline PDF annotation')
-    await textToolbar.getByRole('button', { name: 'Edit text', exact: true }).click()
+    await readerToolbar.getByRole('button', { name: 'Edit text', exact: true }).click()
     await expect(inlineText).toBeFocused()
     await expect(inlineText).toBeEditable()
     await inlineText.fill('Edited again')
@@ -468,6 +513,14 @@ test.describe('Built-in PDF reader', () => {
       return annotations.find((annotation) => annotation.kind === 'text')?.text
     }, secondDocumentId)).toBe('Edited again')
     await expectSilentPersistence()
+    await inlineText.press('Enter')
+    await expect(inlineText).toBeEditable()
+    await expect(inlineText).toBeFocused()
+    await expect(textSelection).toHaveCount(0)
+    await inlineText.press('Escape')
+    await expect(inlineText).toHaveAttribute('readonly', '')
+    await expect(inlineText).toHaveValue('Edited again')
+    await expect(floatingTextToolbar).toHaveCount(0)
     const movableTextBounds = await inlineText.boundingBox()
     expect(movableTextBounds).not.toBeNull()
     await page.mouse.move(
@@ -527,11 +580,14 @@ test.describe('Built-in PDF reader', () => {
     await page.mouse.move(selectionEnd.x, selectionEnd.y, { steps: 6 })
     await expect(pdfPage.locator('[data-annotation-selection]')).toBeVisible()
     await page.mouse.up()
-    const selectedAnnotations = pdfPage.locator('[data-selected-annotation], [data-text-selected="true"]')
+    const selectedAnnotations = pdfPage.locator('[data-selected-annotation]')
     await expect(selectedAnnotations).toHaveCount(2)
-    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCount(1)
-    await expect(pdfPage.locator('[data-selected-annotation]')).toHaveCSS('border-top-width', '2px')
+    for (const selection of await selectedAnnotations.all()) {
+      await expect(selection).toHaveCSS('border-top-width', '2px')
+      await expect(selection.locator(':scope > span')).toHaveCount(4)
+    }
     await expect(inlineText).toHaveAttribute('data-text-selected', 'true')
+    await expect(floatingTextToolbar).toHaveCount(0)
 
     const deleteSelected = page.getByRole('button', {
       name: 'Delete selected annotations (2)'
