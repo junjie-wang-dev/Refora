@@ -22,12 +22,15 @@ export function useAppShortcuts(): void {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (document.getElementsByClassName('dialog-overlay').length > 0) return
+      if (e.defaultPrevented || document.querySelectorAll('[aria-modal="true"], .dialog-overlay').length > 0) return
       const mod = e.metaKey || e.ctrlKey
 
       if (mod && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault()
-        focusSearch()
+        const focusedSurface = e.target instanceof HTMLElement ? e.target.closest<HTMLElement>('[data-markdown-surface]') : null
+        const surface = focusedSurface ?? Array.from(document.querySelectorAll<HTMLElement>('[data-markdown-surface]')).find((element) => !element.closest('.hidden, [hidden]'))
+        if (surface) surface.dispatchEvent(new Event('refora-markdown-find'))
+        else focusSearch()
         return
       }
       const documentList = document.querySelector<HTMLElement>('.document-list')

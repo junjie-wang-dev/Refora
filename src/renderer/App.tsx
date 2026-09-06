@@ -16,6 +16,7 @@ import SettingsModalHost from './components/SettingsModalHost'
 import StructuredDocumentPanel from './components/StructuredDocumentPanel'
 import FirstRunWizard from './components/FirstRunWizard'
 import { Toast } from './components/ui'
+import { resetMarkdownViewStates } from './hooks/useMarkdownViewState'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useTheme, AppThemeProvider } from './hooks/useTheme'
 import { getAntdTokenOverrides } from './theme/tokens'
@@ -216,6 +217,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
     const reset = () => {
       useOcrReaderStore.getState().close()
       usePdfViewStore.getState().reset()
+      resetMarkdownViewStates()
       usePdfReaderStore.getState().resetForLibrarySwitch()
       useChatQueueStore.getState().reset()
     }

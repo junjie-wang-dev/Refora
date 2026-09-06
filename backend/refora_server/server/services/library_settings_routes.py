@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -84,6 +85,75 @@ def _pdf_reading_state(candidate: Any) -> dict[str, Any]:
     encoded = json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if len(encoded) > PDF_READING_STATE_MAX_BYTES:
         raise ValueError("PDF reading state must not exceed 2 MiB")
+    return candidate
+
+
+
+MARKDOWN_DRAFT_PREFIX = "markdown.document."
+MARKDOWN_VIEW_PREFIX = "markdown.view."
+MARKDOWN_DRAFT_MAX_BYTES = 16 * 1024 * 1024
+MARKDOWN_RECOVERY_MAX_BYTES = 40 * 1024 * 1024
+
+
+def _markdown_state_key(key: str, prefix: str, kinds: set[str]) -> None:
+    kind, separator, document_id = key[len(prefix):].partition(".")
+    if not separator or kind not in kinds or not is_safe_document_id(document_id):
+        raise ValueError("Markdown state document key is invalid")
+
+
+def _markdown_view_state(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or set(candidate) != {"mode", "preview", "scrollTop", "position"}:
+        raise ValueError("Markdown view state has invalid fields")
+    if candidate["mode"] not in ("read", "edit") or type(candidate["preview"]) is not bool:
+        raise ValueError("Markdown view mode or preview is invalid")
+    position = candidate["position"]
+    if not isinstance(position, dict) or set(position) != {"start", "end", "scrollTop"}:
+        raise ValueError("Markdown cursor position has invalid fields")
+    for offset in (position["start"], position["end"]):
+        if type(offset) is not int or not 0 <= offset <= 2**53 - 1:
+            raise ValueError("Markdown cursor offset must be a non-negative safe integer")
+    if position["end"] < position["start"]:
+        raise ValueError("Markdown selection end precedes its start")
+    for offset in (candidate["scrollTop"], position["scrollTop"]):
+        if type(offset) not in (int, float) or not math.isfinite(offset) or not 0 <= offset <= 2**53 - 1:
+            raise ValueError("Markdown scroll position must be finite and non-negative")
+    return candidate
+
+
+def _markdown_recovery_state(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or set(candidate) != {"draft", "base", "history"}:
+        raise ValueError("Markdown recovery state has invalid fields")
+
+    def draft(payload: Any, fields: set[str]) -> None:
+        if not isinstance(payload, dict) or set(payload) != fields:
+            raise ValueError("Markdown draft has invalid fields")
+        if not isinstance(payload["title"], str) or len(payload["title"]) > 10_000:
+            raise ValueError("Markdown draft title must be a string of at most 10000 characters")
+        content = payload["contentMd"]
+        if not isinstance(content, str) or len(content.encode("utf-8")) > MARKDOWN_DRAFT_MAX_BYTES:
+            raise ValueError("Markdown draft content must be a string of at most 16 MiB")
+
+    draft(candidate["draft"], {"title", "contentMd"})
+    draft(candidate["base"], {"title", "contentMd"})
+    history = candidate["history"]
+    if not isinstance(history, list) or len(history) > 20:
+        raise ValueError("Markdown recovery history supports at most 20 versions")
+    version_ids: set[str] = set()
+    history_size = 0
+    for version in history:
+        draft(version, {"id", "title", "contentMd", "createdAt", "reason"})
+        if not is_safe_document_id(version["id"]) or version["id"] in version_ids:
+            raise ValueError("Markdown history ids must be valid and unique")
+        version_ids.add(version["id"])
+        if type(version["createdAt"]) is not int or not 0 <= version["createdAt"] <= 8_640_000_000_000_000:
+            raise ValueError("Markdown history timestamp is invalid")
+        if version["reason"] not in ("saved", "backup", "conflict", "recovered", "restored"):
+            raise ValueError("Markdown history reason is invalid")
+        history_size += len(version["title"]) + len(version["contentMd"])
+    if history_size > 2_000_000:
+        raise ValueError("Markdown recovery history exceeds 2000000 characters")
+    if len(json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode("utf-8")) > MARKDOWN_RECOVERY_MAX_BYTES:
+        raise ValueError("Markdown recovery state must not exceed 40 MiB")
     return candidate
 
 
@@ -201,6 +271,12 @@ def register_library_settings_routes(
                         error = RuntimeError(f"document not found: {document_id}")
                         error.code = "not_found"
                         raise error
+                elif key.startswith(MARKDOWN_DRAFT_PREFIX):
+                    _markdown_state_key(key, MARKDOWN_DRAFT_PREFIX, {"note", "report"})
+                    candidate = _markdown_recovery_state(candidate)
+                elif key.startswith(MARKDOWN_VIEW_PREFIX):
+                    _markdown_state_key(key, MARKDOWN_VIEW_PREFIX, {"note", "report", "summary"})
+                    candidate = _markdown_view_state(candidate)
                 elif key not in SETTING_KEYS:
                     error = RuntimeError(f"Unknown setting key: {key}")
                     error.code = "forbidden_field"

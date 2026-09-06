@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { showContextMenu } from '@lobehub/ui'
 import WorkspaceMarkdownView from '../../src/renderer/components/workspace/WorkspaceMarkdownView'
-import { flushRendererPersistence } from '../../src/renderer/persistence'
+import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
+import type { WorkspaceNote } from '../../src/shared/ipc-types'
+import { flushRendererPersistence, invalidateRendererSettingWrites } from '../../src/renderer/persistence'
 
 vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
 
@@ -10,13 +12,20 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key })
 }))
 
+let testNoteId = ''
+let testIndex = 0
+
+beforeEach(() => {
+  testNoteId = `markdown-view-${++testIndex}`
+})
+
 function renderView(overrides: Partial<React.ComponentProps<typeof WorkspaceMarkdownView>> = {}) {
   const onBack = vi.fn()
   const onUpdate = vi.fn().mockResolvedValue(true)
   const view = render(
     <WorkspaceMarkdownView
       kind="note"
-      id="note-1"
+      id={testNoteId}
       title="Research notes"
       contentMd={'# Findings\n\nInitial content'}
       timestamp={1}
@@ -33,6 +42,7 @@ const mockOpenPdf = vi.fn()
 
 afterEach(() => {
   cleanup()
+  invalidateRendererSettingWrites()
   vi.useRealTimers()
   vi.mocked(showContextMenu).mockReset()
   vi.restoreAllMocks()
@@ -149,7 +159,7 @@ describe('WorkspaceMarkdownView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.close' }))
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('note-1', {
+      expect(onUpdate).toHaveBeenCalledWith(testNoteId, {
         title: 'Research notes',
         contentMd: 'Saved before close'
       })
@@ -166,7 +176,7 @@ describe('WorkspaceMarkdownView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.navigateBack' }))
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('note-1', {
+      expect(onUpdate).toHaveBeenCalledWith(testNoteId, {
         title: 'Research notes',
         contentMd: 'Saved before navigating back'
       })
@@ -184,7 +194,7 @@ describe('WorkspaceMarkdownView', () => {
       await flushRendererPersistence()
     })
 
-    expect(onUpdate).toHaveBeenCalledWith('note-1', {
+    expect(onUpdate).toHaveBeenCalledWith(testNoteId, {
       title: 'Research notes',
       contentMd: 'Saved during flush'
     })
@@ -209,7 +219,7 @@ describe('WorkspaceMarkdownView', () => {
     const { rerender } = render(
       <WorkspaceMarkdownView
         kind="note"
-        id="note-1"
+        id={testNoteId}
         title="Original title"
         contentMd="Original content"
         timestamp={1}
@@ -221,7 +231,7 @@ describe('WorkspaceMarkdownView', () => {
     rerender(
       <WorkspaceMarkdownView
         kind="note"
-        id="note-1"
+        id={testNoteId}
         title="External title"
         contentMd="External content"
         timestamp={2}
@@ -241,7 +251,7 @@ describe('WorkspaceMarkdownView', () => {
     const { rerender } = render(
       <WorkspaceMarkdownView
         kind="note"
-        id="note-1"
+        id={testNoteId}
         title="Original title"
         contentMd="Original content"
         timestamp={1}
@@ -256,7 +266,7 @@ describe('WorkspaceMarkdownView', () => {
     rerender(
       <WorkspaceMarkdownView
         kind="note"
-        id="note-1"
+        id={testNoteId}
         title="External title"
         contentMd="External content"
         timestamp={2}
@@ -300,7 +310,7 @@ describe('WorkspaceMarkdownView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownRead' }))
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('note-1', {
+      expect(onUpdate).toHaveBeenCalledWith(testNoteId, {
         title: 'Research notes',
         contentMd: 'Updated content'
       })
@@ -309,9 +319,10 @@ describe('WorkspaceMarkdownView', () => {
     expect(screen.getByText('Updated content')).toBeInTheDocument()
   })
 
-  it('automatically saves changes after 800ms without editor field labels or a save button', async () => {
+  it('automatically saves changes after 800ms with editor tools and save feedback', async () => {
     vi.useFakeTimers()
     const { onUpdate } = renderView({ initialMode: 'edit' })
+    await act(async () => { await Promise.resolve() })
     const title = screen.getByRole('textbox', { name: 'workspace.noteTitleLabel' })
     const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
 
@@ -319,7 +330,9 @@ describe('WorkspaceMarkdownView', () => {
     expect(screen.queryByText('workspace.noteContentLabel')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'workspace.noteSave' })).not.toBeInTheDocument()
     expect(title).toHaveClass('bg-transparent', 'border-transparent', 'hover:bg-transparent', 'focus:bg-transparent', 'focus:ring-0', 'focus-visible:outline-none')
-    expect(content).toHaveClass('bg-transparent', 'border-transparent', 'hover:bg-transparent', 'focus:bg-transparent', 'focus:ring-0', 'focus-visible:outline-none')
+    expect(content).toHaveAttribute('spellcheck', 'false')
+    expect(screen.getByRole('toolbar', { name: 'markdown.editor.toolbar' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.')
 
     fireEvent.change(content, { target: { value: 'Autosaved content' } })
 
@@ -331,7 +344,7 @@ describe('WorkspaceMarkdownView', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1)
     })
-    expect(onUpdate).toHaveBeenCalledWith('note-1', {
+    expect(onUpdate).toHaveBeenCalledWith(testNoteId, {
       title: 'Research notes',
       contentMd: 'Autosaved content'
     })
@@ -340,6 +353,7 @@ describe('WorkspaceMarkdownView', () => {
   it('queues a newer automatic save until an earlier save finishes', async () => {
     vi.useFakeTimers()
     const { onUpdate } = renderView({ initialMode: 'edit' })
+    await act(async () => { await Promise.resolve() })
     let resolveFirstSave: (saved: boolean) => void = () => undefined
     let resolveSecondSave: (saved: boolean) => void = () => undefined
     onUpdate
@@ -355,7 +369,7 @@ describe('WorkspaceMarkdownView', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(800)
     })
-    expect(onUpdate).toHaveBeenLastCalledWith('note-1', {
+    expect(onUpdate).toHaveBeenLastCalledWith(testNoteId, {
       title: 'Research notes',
       contentMd: 'First version'
     })
@@ -371,7 +385,7 @@ describe('WorkspaceMarkdownView', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(onUpdate).toHaveBeenLastCalledWith('note-1', {
+    expect(onUpdate).toHaveBeenLastCalledWith(testNoteId, {
       title: 'Research notes',
       contentMd: 'Second version'
     })
@@ -400,6 +414,7 @@ describe('WorkspaceMarkdownView', () => {
     const { rerender } = render(
       <WorkspaceMarkdownView {...props} contentMd="Initial" />
     )
+    await act(async () => { await Promise.resolve() })
     const content = screen.getByRole('textbox', { name: 'workspace.reportContentLabel' })
 
     fireEvent.change(content, { target: { value: 'First version' } })
@@ -455,4 +470,149 @@ describe('WorkspaceMarkdownView', () => {
     expect(screen.queryByRole('button', { name: 'workspace.markdownEdit' })).not.toBeInTheDocument()
     expect(screen.queryByTestId('panel-tab-actions')).not.toBeInTheDocument()
   })
+
+  it('retains the draft when the actual note store rolls back an optimistic save, then retries', async () => {
+    const originalState = useWorkspaceStore.getState()
+    const note: WorkspaceNote = {
+      id: testNoteId, workspaceId: 'workspace-markdown-test', noteType: 'markdown',
+      color: 'sand', title: 'Store note', contentMd: 'Persisted body', createdAt: 1, updatedAt: 1
+    }
+    let rejectSave!: (error: Error) => void
+    const updateApi = vi.spyOn(window.api.workspaceNotes, 'update')
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+      .mockImplementation(async (_id, patch) => ({ ...note, ...patch, updatedAt: 2 }))
+    useWorkspaceStore.setState({ activeWorkspaceId: note.workspaceId, notes: [note] })
+    function StoredNote() {
+      const current = useWorkspaceStore((state) => state.notes.find((entry) => entry.id === note.id)!)
+      const update = useWorkspaceStore((state) => state.updateNote)
+      return <WorkspaceMarkdownView kind="note" id={current.id} title={current.title} contentMd={current.contentMd} timestamp={current.updatedAt} initialMode="edit" onBack={vi.fn()} onUpdate={update} />
+    }
+    try {
+      render(<StoredNote />)
+      const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
+      fireEvent.change(content, { target: { value: 'Writing that must survive' } })
+      fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownRead' }))
+      await waitFor(() => expect(updateApi).toHaveBeenCalledTimes(1))
+      expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Writing that must survive')
+      expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.saving')
+      await act(async () => { rejectSave(new Error('Disk unavailable')); await Promise.resolve() })
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('workspace.noteSaveFailed'))
+      expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Persisted body')
+      expect(content).toHaveValue('Writing that must survive')
+      fireEvent.click(screen.getByRole('button', { name: 'markdown.retrySave' }))
+      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('markdown.saveState.saved'))
+      expect(useWorkspaceStore.getState().notes[0].contentMd).toBe('Writing that must survive')
+      expect(content).toHaveValue('Writing that must survive')
+    } finally {
+      cleanup()
+      useWorkspaceStore.setState(originalState)
+    }
+  })
+
+  it('keeps closing pending until text entered during the first save is also confirmed', async () => {
+    let resolveFirst!: (saved: boolean) => void
+    let resolveSecond!: (saved: boolean) => void
+    const onUpdate = vi.fn()
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => { resolveSecond = resolve }))
+    const onClose = vi.fn()
+    renderView({ initialMode: 'edit', onClose, onUpdate })
+    const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
+    fireEvent.change(content, { target: { value: 'First draft' } })
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.close' }))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    fireEvent.change(content, { target: { value: 'New text during save' } })
+    await act(async () => { resolveFirst(true); await Promise.resolve() })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onUpdate).toHaveBeenLastCalledWith(testNoteId, { title: 'Research notes', contentMd: 'New text during save' })
+    await act(async () => { resolveSecond(true); await Promise.resolve() })
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('previews unsaved Markdown alongside the editor and renders the saved draft in reading mode', async () => {
+    const { onUpdate } = renderView({ initialMode: 'edit' })
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.livePreview' }))
+    const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
+    fireEvent.change(content, { target: { value: '## Live section\n\n**Preview text**' } })
+    expect(screen.getByRole('heading', { name: 'Live section' })).toBeInTheDocument()
+    expect(screen.getByText('Preview text').tagName).toBe('STRONG')
+    expect(onUpdate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.markdownRead' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'workspace.markdownRead' })).toHaveAttribute('aria-pressed', 'true'))
+    expect(onUpdate).toHaveBeenCalledWith(testNoteId, { title: 'Research notes', contentMd: '## Live section\n\n**Preview text**' })
+    expect(screen.getByRole('heading', { name: 'Live section' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'workspace.noteContentLabel' })).not.toBeInTheDocument()
+  })
+
+  it('compares conflicting versions and preserves the local draft in history when loading external content', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(true)
+    const onBack = vi.fn()
+    const props = { kind: 'note' as const, id: testNoteId, title: 'Research notes', timestamp: 1, initialMode: 'edit' as const, onBack, onUpdate }
+    const { rerender } = render(<WorkspaceMarkdownView {...props} contentMd="Original body" />)
+    const content = screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })
+    fireEvent.change(content, { target: { value: 'Local draft to keep' } })
+    rerender(<WorkspaceMarkdownView {...props} contentMd="External body" timestamp={2} />)
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.compareVersions' }))
+    const comparison = screen.getByRole('dialog', { name: 'markdown.compareVersions' })
+    expect(within(comparison).getByText('Local draft to keep')).toBeInTheDocument()
+    expect(within(comparison).getByText('External body')).toBeInTheDocument()
+    fireEvent.click(within(comparison).getByRole('button', { name: 'workspace.reloadExternalUpdate' }))
+    expect(content).toHaveValue('External body')
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.versionHistory' }))
+    const history = screen.getByRole('dialog', { name: 'markdown.versionHistory' })
+    expect(within(history).getByText('Local draft to keep')).toBeInTheDocument()
+    fireEvent.click(within(history).getByRole('button', { name: 'markdown.restoreVersion' }))
+    expect(content).toHaveValue('Local draft to keep')
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('offers recovered drafts without silently overwriting a changed saved document', async () => {
+    vi.spyOn(window.api.settings, 'get').mockImplementation(async (key, fallback) => (
+      key === `markdown.document.note.${testNoteId}` ? {
+        draft: { title: 'Recovered title', contentMd: 'Recovered body' },
+        base: { title: 'Earlier title', contentMd: 'Earlier body' }, history: []
+      } : fallback
+    ) as never)
+    const { onUpdate } = renderView({ initialMode: 'edit' })
+    await waitFor(() => expect(screen.getByText('markdown.draftRecovered')).toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toHaveValue('Recovered body')
+    expect(screen.getByRole('alert')).toHaveTextContent('workspace.externalUpdateConflict')
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.compareVersions' }))
+    const comparison = screen.getByRole('dialog', { name: 'markdown.compareVersions' })
+    fireEvent.click(within(comparison).getByRole('button', { name: 'markdown.keepLocalVersion' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(onUpdate).toHaveBeenCalledWith(testNoteId, { title: 'Recovered title', contentMd: 'Recovered body' })
+  })
+
+  it('copies the selected historical version and preserves current content when restoring it', async () => {
+    const current = { title: 'Research notes', contentMd: '# Findings\n\nInitial content' }
+    vi.spyOn(window.api.settings, 'get').mockImplementation(async (key, fallback) => (
+      key === `markdown.document.note.${testNoteId}` ? {
+        draft: current, base: current,
+        history: [
+          { id: 'recent-version', title: 'Recent version', contentMd: 'Recent historical body', createdAt: 2000, reason: 'saved' },
+          { id: 'older-version', title: 'Older version', contentMd: 'Historical text to copy', createdAt: 1000, reason: 'saved' }
+        ]
+      } : fallback
+    ) as never)
+    const writeText = vi.spyOn(window.api.clipboard, 'writeText').mockResolvedValue()
+    const { onUpdate } = renderView({ initialMode: 'edit' })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.versionHistory' }))
+    const history = screen.getByRole('dialog', { name: 'markdown.versionHistory' })
+    fireEvent.click(within(history).getByRole('button', { name: /Older version/ }))
+    expect(within(history).getByText('Historical text to copy')).toBeInTheDocument()
+    fireEvent.click(within(history).getByRole('button', { name: 'markdown.copyMarkdown' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('# Older version\n\nHistorical text to copy'))
+    expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toHaveValue(current.contentMd)
+    fireEvent.click(within(history).getByRole('button', { name: 'markdown.restoreVersion' }))
+    expect(screen.getByRole('textbox', { name: 'workspace.noteTitleLabel' })).toHaveValue('Older version')
+    expect(screen.getByRole('textbox', { name: 'workspace.noteContentLabel' })).toHaveValue('Historical text to copy')
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.versionHistory' }))
+    const restoredHistory = screen.getByRole('dialog', { name: 'markdown.versionHistory' })
+    expect(within(restoredHistory).getByRole('button', { name: /Research notes/ })).toBeInTheDocument()
+    expect(within(restoredHistory).getByText(current.contentMd, { normalizer: (text) => text })).toBeInTheDocument()
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
 })

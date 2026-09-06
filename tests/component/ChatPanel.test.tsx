@@ -286,6 +286,7 @@ function setupStore(): void {
 }
 
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
   mockChatHistory.mockReset()
   mockChatHistoryPage.mockReset()
   mockChatRunSnapshot.mockReset()
@@ -364,6 +365,15 @@ describe('parseReforaDocLink', () => {
 })
 
 describe('ChatPanel tab header', () => {
+  it('refreshes conversation history when chat opens and its workspace changes', async () => {
+    setupApi([])
+    useWorkspaceStore.setState({ activeWorkspaceId: null, activeThreadId: null })
+    const fetchThreads = useWorkspaceStore.getState().fetchThreads
+    render(<ChatPanel />)
+    await waitFor(() => expect(fetchThreads).toHaveBeenCalledTimes(1))
+    act(() => { useWorkspaceStore.setState({ activeWorkspaceId: 'ws-other' }) })
+    await waitFor(() => expect(fetchThreads).toHaveBeenCalledTimes(2))
+  })
   it('keeps the close control in the tab and the chat actions on the right', () => {
     const onClose = vi.fn()
     setupApi([])
@@ -999,6 +1009,43 @@ function renderMessages(overrides: Partial<Parameters<typeof ChatMessages>[0]> =
 }
 
 describe('ChatMessages presentation', () => {
+  it('keeps tool results inside both disclosure levels while preserving the final answer', () => {
+    const tool: AgentTraceStep = {
+      ...makeRunStep('run-results', 'done'), id: 'tool-results', kind: 'tool', name: 'get_paper_context',
+      result: { docId: 'paper', title: 'Tool-only paper', abstract: 'Tool-only abstract' },
+      input: null, output: null, seq: 1
+    }
+    const props = {
+      messages: [{ id: 'answer', threadId: 'thread-1', role: 'assistant' as const, content: 'Final synthesis', runId: 'run-results', createdAt: 3,
+        media: [{ id: 'final-file', kind: 'file' as const, title: 'Final deliverable', source: { type: 'unavailable' as const, reason: 'Fixture resource' } }]
+      }],
+      traceSteps: [makeRunStep('run-results', 'done'), tool], streaming: false, activeRunId: null
+    }
+    const { container, rerender } = renderMessages(props)
+    const runToggle = container.querySelector('.chat-run-toggle') as HTMLButtonElement
+    expect(screen.getByText('Final synthesis')).toBeInTheDocument()
+    expect(screen.getByText('Final deliverable')).toBeInTheDocument()
+    expect(screen.queryByText('Tool-only paper')).not.toBeInTheDocument()
+    fireEvent.click(runToggle)
+    const stepToggle = container.querySelector('.agent-trace-step-trigger') as HTMLButtonElement
+    expect(stepToggle).toBeEnabled()
+    expect(screen.queryByText('Tool-only abstract')).not.toBeInTheDocument()
+    fireEvent.click(stepToggle)
+    expect(screen.getByText('Tool-only abstract')).toBeInTheDocument()
+    fireEvent.click(stepToggle)
+    expect(screen.queryByText('Tool-only abstract')).not.toBeInTheDocument()
+    fireEvent.click(stepToggle)
+    fireEvent.click(runToggle)
+    expect(screen.queryByText('Tool-only paper')).not.toBeInTheDocument()
+    expect(screen.getByText('Final synthesis')).toBeInTheDocument()
+    rerender(<ChatMessages
+      {...props} traceSteps={[...props.traceSteps, { ...tool, id: 'tool-later', seq: 2 }]}
+      streamingText="" streamingReasoning="" elapsedSeconds={0} loadingHistory={false}
+      providers={[]} onRegenerate={vi.fn()} onSuggestionClick={vi.fn()} scrollRef={{ current: null }} inputAreaHeight={0} stickToBottomRef={{ current: true }}
+    />)
+    expect(screen.queryByText('Tool-only paper')).not.toBeInTheDocument()
+    expect(screen.getByText('Final synthesis')).toBeInTheDocument()
+  })
   it('associates repeated assistant text with the run that finished before each message', () => {
     const messages: ChatMessage[] = [
       { id: 'a1', threadId: 't1', role: 'assistant', content: 'Same answer', createdAt: 10 },
@@ -3344,6 +3391,9 @@ describe('AgentTracePanel structure', () => {
     fireEvent.click(screen.getByRole('button', { name: /workspace.chat.trace/ }))
     fireEvent.click(screen.getByText('workspace.chat.toolSearchLibraryDone'))
 
+    expect(screen.queryByText(/"query": "graph"/)).not.toBeInTheDocument()
+    expect(screen.getByText('graph')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.toolDetails.technical' }))
     expect(screen.getByText(/"query": "graph"/)).toBeInTheDocument()
   })
 })

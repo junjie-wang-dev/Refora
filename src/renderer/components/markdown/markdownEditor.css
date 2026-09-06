@@ -1,0 +1,32 @@
+.markdown-editor { display:flex; flex-direction:column; min-height:320px; height:100%; min-width:0; flex:1; border:1px solid var(--color-border); border-radius:10px; overflow:hidden; }
+.markdown-editor-toolbar { display:flex; flex-wrap:wrap; gap:2px; padding:6px; border-bottom:1px solid var(--color-border); background:var(--color-panel); }
+.markdown-editor button { border-radius:5px; min-width:28px; min-height:28px; padding:4px 6px; color:var(--color-muted); }
+.markdown-editor button:hover, .markdown-editor-dialog button:hover { background:var(--color-hover); color:var(--color-foreground); }
+.markdown-editor button:focus-visible, .markdown-editor-dialog button:focus-visible { outline:2px solid var(--color-accent); outline-offset:1px; }
+.markdown-editor button:disabled, .markdown-editor-dialog button:disabled { opacity:.4; cursor:default; }
+.markdown-editor-input-region { position:relative; min-height:100px; min-width:0; flex:1; overflow:hidden; }
+.markdown-editor-input-region > textarea { display:block; position:relative; height:100%; width:100%; min-height:100px; resize:none; border:0; outline:none; background:transparent; color:var(--color-foreground); padding:14px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:24px; tab-size:2; }
+.markdown-editor-find { padding:6px; border-bottom:1px solid var(--color-border); display:grid; gap:5px; font-size:12px; background:var(--color-panel); }
+.markdown-editor-find > div { display:flex; gap:4px; align-items:center; }
+.markdown-editor-find input { min-width:0; flex:1; width:80px; border:1px solid var(--color-border); border-radius:5px; padding:4px 6px; background:var(--color-background); color:var(--color-foreground); }
+.markdown-editor-find button { flex-shrink:0; white-space:nowrap; }
+.markdown-editor-find span { color:var(--color-muted); font-variant-numeric:tabular-nums; }
+.markdown-editor-status { margin:0; padding:6px 12px; font-size:12px; }
+.markdown-editor-dialog-backdrop { position:fixed; inset:0; z-index:160; display:flex; justify-content:center; align-items:center; background:rgb(0 0 0 / .35); padding:24px; }
+.markdown-editor-dialog { width:min(720px,100%); max-height:85vh; overflow:auto; background:var(--color-background); color:var(--color-foreground); padding:20px; border:1px solid var(--color-border); border-radius:14px; box-shadow:0 16px 60px #0003; display:flex; flex-direction:column; gap:14px; }
+.markdown-editor-dialog-title { display:flex; align-items:center; justify-content:space-between; font-weight:600; }
+.markdown-editor-dialog button { border-radius:6px; min-height:30px; padding:5px 10px; font-size:12px; }
+.markdown-editor-dialog textarea, .markdown-editor-dialog input { border:1px solid var(--color-border); border-radius:5px; padding:8px; background:var(--color-panel); color:var(--color-foreground); }
+.markdown-editor-dialog textarea { width:100%; font-family:ui-monospace,monospace; resize:vertical; }
+.markdown-editor-formula-preview { min-height:70px; overflow:auto; padding:12px; background:var(--color-panel); border-radius:6px; }
+.markdown-editor-table-scroll { overflow:auto; }
+.markdown-editor-table-scroll table { border-collapse:separate; border-spacing:4px; }
+.markdown-editor-table-scroll input { min-width:100px; width:100%; font-size:13px; }
+.markdown-editor-table-scroll tr:first-child input { font-weight:600; }
+.markdown-editor-table-actions, .markdown-editor-dialog-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.markdown-editor-dialog-actions { justify-content:flex-end; }
+.markdown-editor-dialog-actions button:last-child { color:var(--color-background); background:var(--color-accent); }
+
+.markdown-editor-highlights { position:absolute; inset:0; overflow:auto; pointer-events:none; padding:14px; white-space:pre-wrap; overflow-wrap:break-word; color:transparent; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:24px; tab-size:2; scrollbar-width:none; }
+.markdown-editor-highlights mark { color:transparent; background:#f8d96170; border-radius:2px; }
+.markdown-editor-highlights mark[data-active='true'] { background:#f19d46bb; }

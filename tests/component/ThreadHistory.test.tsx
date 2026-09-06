@@ -117,7 +117,9 @@ describe('ThreadHistory', () => {
     mocks.state.threads = []
     const { container } = renderHistory()
     expect(screen.getByText('No conversations yet')).toBeInTheDocument()
-    expect(container.querySelector('.right-0.top-full')).toBeInTheDocument()
+    const popup = screen.getByRole('region', { name: 'Thread history' })
+    expect(popup).toBeInTheDocument()
+    expect(container).not.toContainElement(popup)
   })
 
   it('selects and exports the active thread', async () => {

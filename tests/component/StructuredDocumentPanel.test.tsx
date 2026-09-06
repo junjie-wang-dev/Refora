@@ -1,8 +1,11 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import StructuredDocumentPanel from '../../src/renderer/components/StructuredDocumentPanel'
 import { useOcrReaderStore } from '../../src/renderer/store/ocrReaderStore'
+import { downloadMarkdown, exportMarkdownPdf } from '../../src/renderer/utils/markdownExport'
 import type { ReforaApi } from '../../src/shared/ipc-types'
+
+vi.mock('../../src/renderer/utils/markdownExport', async (original) => ({ ...await original<typeof import('../../src/renderer/utils/markdownExport')>(), downloadMarkdown: vi.fn(), exportMarkdownPdf: vi.fn().mockResolvedValue(true) }))
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key })
@@ -54,4 +57,56 @@ describe('StructuredDocumentPanel', () => {
     expect(container.querySelector('iframe')).toBeNull()
     expect(container.querySelector('script')).toBeNull()
   })
+
+  it('finds within the OCR document using Cmd+F and the routed native event', async () => {
+    api.ocr.readMarkdown = vi.fn().mockResolvedValue('# Findings\n\nAlpha alpha')
+    const { container } = render(<StructuredDocumentPanel />)
+    await screen.findByRole('heading', { name: 'Findings' })
+    const surface = container.querySelector('[data-markdown-surface]')!
+    fireEvent.keyDown(surface, { key: 'f', metaKey: true })
+    const input = screen.getByRole('textbox', { name: 'markdown.findDocument' })
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: 'alpha' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'markdown.nextMatch' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.closeFind' }))
+    expect(screen.queryByRole('search')).not.toBeInTheDocument()
+    act(() => surface.dispatchEvent(new Event('refora-markdown-find')))
+    expect(screen.getByRole('search')).toBeInTheDocument()
+  })
+
+  it('navigates shared heading outlines and closes the overlay after choosing a section', async () => {
+    api.ocr.readMarkdown = vi.fn().mockResolvedValue('# Findings\n\n## Results\n\nBody')
+    render(<StructuredDocumentPanel />)
+    await screen.findByRole('heading', { name: 'Results' })
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.outline' }))
+    expect(screen.getByRole('navigation', { name: 'markdown.outline' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Results' }))
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+  })
+
+  it('copies and exports the current OCR Markdown and renders PDF from the article', async () => {
+    api.ocr.readMarkdown = vi.fn().mockResolvedValue('# Findings\n\nBody')
+    const writeText = vi.spyOn(api.clipboard, 'writeText').mockResolvedValue()
+    render(<StructuredDocumentPanel />)
+    await screen.findByRole('heading', { name: 'Findings' })
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.copyMarkdown' }))
+    expect(writeText).toHaveBeenCalledWith('# Paper\n\n# Findings\n\nBody')
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.exportMarkdown' }))
+    expect(downloadMarkdown).toHaveBeenCalledWith('Paper', '# Findings\n\nBody')
+    fireEvent.click(screen.getByRole('button', { name: 'markdown.exportPdf' }))
+    await waitFor(() => expect(exportMarkdownPdf).toHaveBeenCalledWith(screen.getByRole('article'), 'Paper'))
+  })
+
+  it('restores OCR reading position when reopened', async () => {
+    api.ocr.readMarkdown = vi.fn().mockResolvedValue('# Findings\n\nBody')
+    const first = render(<StructuredDocumentPanel />)
+    await screen.findByRole('heading', { name: 'Findings' })
+    const scroll = first.container.querySelector('.markdown-reading-scroll')!
+    fireEvent.scroll(scroll, { target: { scrollTop: 340 } })
+    first.unmount()
+    const second = render(<StructuredDocumentPanel />)
+    await screen.findByRole('heading', { name: 'Findings' })
+    expect(second.container.querySelector('.markdown-reading-scroll')?.scrollTop).toBe(340)
+  })
+
 })

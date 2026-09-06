@@ -97,6 +97,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const startNewChat = useWorkspaceStore((s) => s.startNewChat)
   const threads = useWorkspaceStore((s) => s.threads)
   const fetchThreads = useWorkspaceStore((s) => s.fetchThreads)
+  useEffect(() => { void fetchThreads() }, [activeWorkspaceId, fetchThreads])
   const pendingChatDraft = useChatDraftStore((s) => s.pending)
   const consumeChatDraft = useChatDraftStore((s) => s.consume)
 
@@ -603,7 +604,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       )}
 
       {chat.queuedMessages.length > 0 && (
-        <div className="shrink-0 px-3 pb-2" data-testid="chat-follow-up-queue">
+        <div className="shrink-0 pb-2" style={{ paddingInline: 'clamp(12px, 7cqi, 64px)' }} data-testid="chat-follow-up-queue">
           <div className="mx-auto max-w-[768px] rounded-lg border border-border bg-panel-2 p-3 text-xs">
             <p className="mb-2 text-muted">
               {t(chat.queuePaused ? 'workspace.chat.queuePaused' : 'workspace.chat.queueWaiting', chat.queuePaused ? 'Follow-ups paused. Send when you are ready.' : 'Queued follow-ups will send after the current response completes.')}
@@ -617,7 +618,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
               ))}
             </ol>
             {!chat.streaming && !chat.pendingInterrupt && !chat.activeRunId && (
-              <UiButton variant="ghost" size="sm" onClick={chat.sendQueuedMessages}>{t('workspace.chat.sendQueued', 'Send queued messages')}</UiButton>
+              <UiButton variant="ghost" size="sm" onClick={() => { textareaRef.current?.focus(); chat.sendQueuedMessages() }}>{t('workspace.chat.sendQueued', 'Send queued messages')}</UiButton>
             )}
           </div>
         </div>

@@ -230,6 +230,7 @@ export const createMockReforaApi = (): ReforaApi => ({
   getPathForFile: async (_file: unknown) => '',
 
   export: {
+    markdownPdf: async () => true,
     toBibtex: async () => undefined,
     toBibtexString: async () => '',
   },

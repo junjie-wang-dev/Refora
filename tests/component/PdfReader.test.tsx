@@ -1597,7 +1597,7 @@ describe('PdfReader rendering visibility', () => {
     act(resize)
     await waitFor(() => expect(view.container.querySelector('[data-page-number="2"]'))
       .toHaveStyle({ width: '1150px' }))
-    expect(virtualizer).toHaveStyle({ width: '1198px' })
+    await waitFor(() => expect(virtualizer).toHaveStyle({ width: '1198px' }))
     const fit = screen.getByRole('button', { name: 'pdfReader.fitWidth' })
     fireEvent.click(fit)
     const pageWidth = (page: number) => Number.parseFloat(view.container

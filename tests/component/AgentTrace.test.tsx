@@ -170,7 +170,8 @@ describe('AgentTracePanel', () => {
     expect(screen.queryByText(/"timeoutSeconds": 10/)).toBeNull()
 
     fireEvent.click(screen.getByText('Ran command').closest('button')!)
-
+    expect(screen.queryByText(/"timeoutSeconds": 10/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.toolDetails.technical' }))
     const details = document.querySelectorAll('.agent-trace-detail-value')
     expect(details[0].textContent).toBe(JSON.stringify(JSON.parse(input), null, 2))
     expect(details[1].textContent).toBe('{\n  "exitCode": 0\n}')
@@ -196,7 +197,8 @@ describe('AgentTracePanel', () => {
     expect(screen.queryByText(/token=secret/)).toBeNull()
 
     fireEvent.click(screen.getByText('Accessed website').closest('button')!)
-
+    expect(screen.queryByText(/token=secret/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.chat.toolDetails.technical' }))
     expect(screen.getByText(/token=secret/)).toBeInTheDocument()
   })
 

@@ -312,6 +312,7 @@ const api: ReforaApi = {
   },
 
   export: {
+    markdownPdf: (title: string) => invoke<boolean>(IpcChannel.ExportMarkdownPdf, title),
     toBibtex: (ids: string[]) => invoke<void>(IpcChannel.ExportToBibtex, ids),
     toBibtexString: (ids: string[]) => invoke<string>(IpcChannel.ExportBibtexString, ids)
   },

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ReactMarkdown from 'react-markdown'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { initI18n } from '../../src/renderer/i18n'
+import i18n, { initI18n } from '../../src/renderer/i18n'
 import { MarkdownCodeBlock, MarkdownTable } from '../../src/renderer/components/markdown/RichMarkdown'
 import { REHYPE_PLUGINS, REMARK_PLUGINS } from '../../src/renderer/utils/markdown'
 
@@ -73,6 +73,17 @@ describe('rich Markdown', () => {
     expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument()
   })
 
+  it('preserves diagram dimensions so small diagrams are not stretched to fill the chat', async () => {
+    mermaid.render.mockResolvedValue({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 120 180"><text>Paper</text></svg>' })
+    render(<Markdown>{'```mermaid\ngraph TD\nA --> B\n```'}</Markdown>)
+    const image = await screen.findByRole('img', { name: 'Mermaid diagram' })
+    const svg = decodeURIComponent(image.getAttribute('src')!.split(',').slice(1).join(','))
+    const root = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+    expect(root.getAttribute('width')).toBe('120')
+    expect(root.getAttribute('height')).toBe('180')
+    expect(root.getAttribute('viewBox')).toBe('0 0 120 180')
+  })
+
   it('does not run diagram directives that change its security configuration', async () => {
     render(<Markdown>{'```mermaid\n%%{init: { "securityLevel": "loose" }}%%\ngraph TD\nA --> B\n```'}</Markdown>)
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Diagram preview is unavailable'))
@@ -106,4 +117,37 @@ describe('rich Markdown', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy table' })))
     expect(writeText).toHaveBeenCalledWith('Formula\nz^2')
   })
+
+  it('enlarges diagrams, zooms, exports SVG and PNG, and restores keyboard focus', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const makeUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:diagram')
+    const context = { fillStyle: '', fillRect: vi.fn(), drawImage: vi.fn() }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(new Blob(['png'], { type: 'image/png' })))
+    render(<Markdown>{'```mermaid\ngraph TD\nA --> B\n```'}</Markdown>)
+    const expand = await screen.findByRole('button', { name: i18n.t('markdown.expandDiagram') })
+    expand.focus()
+    fireEvent.click(expand)
+    const dialog = screen.getByRole('dialog', { name: 'Mermaid diagram' })
+    const diagram = within(dialog).getByRole('img')
+    Object.defineProperties(diagram, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 }, complete: { value: true } })
+    const viewport = within(dialog).getByRole('region')
+    Object.defineProperties(viewport, { clientWidth: { value: 800 }, clientHeight: { value: 600 } })
+    fireEvent.load(diagram)
+    expect(within(dialog).getByLabelText(i18n.t('markdown.zoomLevel'))).toHaveTextContent('100%')
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('markdown.zoomIn') }))
+    expect(within(dialog).getByLabelText(i18n.t('markdown.zoomLevel'))).toHaveTextContent('125%')
+    fireEvent.keyDown(viewport, { key: '0' })
+    expect(within(dialog).getByLabelText(i18n.t('markdown.zoomLevel'))).toHaveTextContent('100%')
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('markdown.exportDiagramSvg') }))
+    expect(click.mock.instances.at(-1)).toHaveAttribute('download', 'diagram.svg')
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('markdown.exportDiagramPng') }))
+    await waitFor(() => expect(makeUrl).toHaveBeenCalledWith(expect.any(Blob)))
+    expect(click.mock.instances.at(-1)).toHaveAttribute('download', 'diagram.png')
+    expect(context.drawImage).toHaveBeenCalledWith(diagram, 0, 0, 800, 600)
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(expand)
+  })
+
 })

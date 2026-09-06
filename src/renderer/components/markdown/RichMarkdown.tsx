@@ -8,6 +8,7 @@ import hljs from 'highlight.js/lib/common'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import { tableCsv, tableRows } from '../../utils/markdownTable'
 import './richMarkdown.css'
+import { DiagramViewer } from './DiagramViewer'
 
 function nodeText(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -45,6 +46,13 @@ async function renderDiagram(id: string, source: string): Promise<string> {
       FORBID_TAGS: ['script', 'foreignObject', 'a', 'image', 'iframe', 'use'],
       FORBID_ATTR: ['href', 'xlink:href']
     })
+    const root = new DOMParser().parseFromString(clean, 'image/svg+xml').documentElement
+    const viewBox = root.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(Number)
+    if (root.localName === 'svg' && viewBox?.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0) {
+      root.setAttribute('width', String(viewBox[2]))
+      root.setAttribute('height', String(viewBox[3]))
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`
+    }
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(clean)}`
   } finally {
     container.remove()
@@ -56,6 +64,7 @@ function MermaidDiagram({ source }: { source: string }) {
   const id = useId().replace(/[^a-zA-Z0-9]/g, '')
   const [preview, setPreview] = useState<{ source: string; image?: string; failed?: boolean }>()
   const [showSource, setShowSource] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const current = preview?.source === source ? preview : undefined
 
   useEffect(() => {
@@ -77,8 +86,9 @@ function MermaidDiagram({ source }: { source: string }) {
   }, [id, source])
 
   return (
-    <div className="markdown-diagram">
-      {current?.image && <img className="markdown-diagram-image" src={current.image} alt={t('markdown.diagram')} />}
+    <div className="markdown-diagram" data-markdown-pending={!current ? 'true' : undefined}>
+      {current?.image && <button type="button" className="markdown-diagram-preview" aria-label={t('markdown.expandDiagram')} onClick={() => setExpanded(true)}><img className="markdown-diagram-image" src={current.image} alt={t('markdown.diagram')} /><span className="markdown-format-button"><ArrowsOut size={14} />{t('markdown.expandDiagram')}</span></button>}
+      {expanded && current?.image && <DiagramViewer image={current.image} onClose={() => setExpanded(false)} />}
       {!current?.image && <p role="status" className="markdown-format-status">{t(current?.failed ? 'markdown.diagramUnavailable' : 'markdown.diagramLoading')}</p>}
       {current?.image && (
         <button type="button" className="markdown-format-button" aria-expanded={showSource} onClick={() => setShowSource((value) => !value)}>
@@ -117,7 +127,7 @@ export function MarkdownCodeBlock({ children, node: _node, ...props }: Component
   useEffect(() => () => window.clearTimeout(resetTimer.current), [])
 
   return (
-    <div className="markdown-code-block">
+    <div className="markdown-code-block" data-source-offset={_node?.position?.start.offset}>
       <div className="markdown-format-toolbar">
         <span className="markdown-code-language">{language ?? t('markdown.plainText')}</span>
         <div className="markdown-format-actions">

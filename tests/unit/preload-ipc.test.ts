@@ -61,6 +61,7 @@ describe('preload IPC bridge', () => {
 
   it('forwards every request method to its shared IPC channel', async () => {
     const cases: InvocationCase[] = [
+      { channel: IpcChannel.ExportMarkdownPdf, args: ['Research note'], invoke: (value) => value.export.markdownPdf('Research note') },
       { channel: IpcChannel.Bootstrap, args: [], invoke: (value) => value.getBootstrap() },
       { channel: IpcChannel.DocumentsList, args: [{ mode: 'all' }], invoke: (value) => value.documents.list({ mode: 'all' }) },
       { channel: IpcChannel.DocumentsCount, args: [], invoke: (value) => value.documents.counts() },

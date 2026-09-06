@@ -695,6 +695,7 @@ export interface ChatMediaItem {
   source: ChatMediaSource
   title?: string
   mimeType?: string
+  toolStepId?: string
 }
 
 export interface ChatMediaContext {
@@ -1082,6 +1083,7 @@ export interface ReforaApi {
   }
   getPathForFile(file: unknown): Promise<string>
   export: {
+    markdownPdf(title: string): Promise<boolean>
     toBibtex(ids: string[]): Promise<void>
     toBibtexString(ids: string[]): Promise<string>
   }

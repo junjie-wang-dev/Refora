@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
   ClockCounterClockwise,
@@ -6,7 +7,6 @@ import {
   Download,
   Trash
 } from '@phosphor-icons/react'
-import { useClickOutside } from '../../hooks/useClickOutside'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useConfirmStore } from '../../store/confirmStore'
 import { Button as UiButton, Input as UiInput } from '../ui'
@@ -34,10 +34,45 @@ export default function ThreadHistory({
   const showConfirm = useConfirmStore((s) => s.show)
 
   const threadMenuRef = useRef<HTMLDivElement | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
+  const popupId = useId()
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 288, maxHeight: 360 })
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
 
-  useClickOutside(threadMenuRef, () => onMenuOpenChange(false), menuOpen)
+  useLayoutEffect(() => {
+    if (!menuOpen) return
+    const update = () => {
+      const bounds = threadMenuRef.current?.getBoundingClientRect()
+      if (!bounds) return
+      const width = Math.min(288, window.innerWidth - 16)
+      const top = Math.min(bounds.bottom + 6, window.innerHeight - 80)
+      setPosition({ top, left: Math.max(8, Math.min(bounds.right - width, window.innerWidth - width - 8)), width, maxHeight: Math.max(64, Math.min(360, window.innerHeight - top - 12)) })
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [menuOpen])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const outside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      const titleTab = threadMenuRef.current?.closest('[data-testid="panel-tab-header"]')?.querySelector('[data-testid="panel-tab"]')
+      if (!threadMenuRef.current?.contains(target) && !popupRef.current?.contains(target) && !titleTab?.contains(target)) onMenuOpenChange(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      onMenuOpenChange(false)
+      threadMenuRef.current?.querySelector('button')?.focus()
+    }
+    document.addEventListener('mousedown', outside)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', outside)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [menuOpen, onMenuOpenChange])
 
   return (
     <>
@@ -49,11 +84,13 @@ export default function ThreadHistory({
           onClick={() => onMenuOpenChange(!menuOpen)}
           title={t('workspace.chat.threadHistory', 'Thread history')}
           aria-label={t('workspace.chat.threadHistory', 'Thread history')}
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? popupId : undefined}
         >
           <ClockCounterClockwise className="h-4 w-4" />
         </UiButton>
-        {menuOpen && (
-          <div className="absolute right-0 top-full z-50 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-border bg-panel shadow-lg">
+        {menuOpen && createPortal(
+          <div ref={popupRef} id={popupId} role="region" aria-label={t('workspace.chat.threadHistory', 'Thread history')} className="no-drag fixed z-[100] overflow-y-auto rounded-xl border border-border bg-panel p-1 shadow-lg" style={position}>
             {threads.length === 0 ? (
               <p className="px-3 py-2 text-label text-muted">
                 {t('workspace.chat.noThreads', 'No conversations yet')}
@@ -84,6 +121,7 @@ export default function ThreadHistory({
                         }
                         if (e.key === 'Escape') {
                           e.preventDefault()
+                          e.stopPropagation()
                           setRenamingThreadId(null)
                         }
                       }}
@@ -164,7 +202,7 @@ export default function ThreadHistory({
                 {t('workspace.chat.exportChat', 'Export conversation')}
               </button>
             )}
-          </div>
+          </div>, document.body
         )}
       </div>
     </>

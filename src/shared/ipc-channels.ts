@@ -76,6 +76,7 @@ export const IpcChannel = {
   OcrReadMarkdown: 'ocr:readMarkdown',
 
   ExportToBibtex: 'export:toBibtex',
+  ExportMarkdownPdf: 'export:markdownPdf',
   ExportBibtexString: 'export:bibtexString',
 
   ClipboardWriteText: 'clipboard:writeText',

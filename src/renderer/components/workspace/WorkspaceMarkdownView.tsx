@@ -1,44 +1,29 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState
-} from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '@lobehub/ui'
 import type { ContextMenuItem } from '@lobehub/ui'
-import { BookOpen, Copy, PencilSimple, SelectionAll } from '@phosphor-icons/react'
+import { BookOpen, Copy, PencilSimple, SelectionAll, List, MagnifyingGlass, Columns, DownloadSimple, ClockCounterClockwise, X, FilePdf } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
-import {
-  REMARK_PLUGINS,
-  REHYPE_PLUGINS,
-  createReforaDocMarkdownComponents,
-  urlTransform
-} from '../../utils/markdown'
+import { REMARK_PLUGINS, REHYPE_PLUGINS, createReforaDocMarkdownComponents, urlTransform } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
 import { formatDate } from '../../utils/format'
-import { IconTooltip, Input, PanelTabHeader, Textarea } from '../ui'
+import { IconTooltip, Input, PanelTabHeader } from '../ui'
 import WorkspaceNavigationControls from './WorkspaceNavigationControls'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
-import { registerRendererFlushTask } from '../../persistence'
+import { useMarkdownDraft } from '../../hooks/useMarkdownDraft'
+import { useMarkdownViewState } from '../../hooks/useMarkdownViewState'
+import { useModalDialog } from '../../hooks/useModalDialog'
+import MarkdownEditor, { type MarkdownEditorHandle } from '../markdown/MarkdownEditor'
+import MarkdownNavigation from '../markdown/MarkdownNavigation'
+import { downloadMarkdown, exportMarkdownPdf, markdownDocument } from '../../utils/markdownExport'
+import '../markdown/markdownWorkspace.css'
 
 export type WorkspaceMarkdownViewKind = 'note' | 'report' | 'summary'
 export type WorkspaceMarkdownViewMode = 'read' | 'edit'
 
-interface MarkdownDraft {
-  title: string
-  contentMd: string
-}
-
-const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(
-  openDocumentPdf,
-  () => useDocumentStore.getState().showToast(
-    i18n.t('workspace.openDocFailed') as string
-  )
-)
+const MARKDOWN_COMPONENTS = createReforaDocMarkdownComponents(openDocumentPdf, () => useDocumentStore.getState().showToast(i18n.t('workspace.openDocFailed')))
 
 interface WorkspaceMarkdownViewProps {
   kind: WorkspaceMarkdownViewKind
@@ -58,196 +43,112 @@ export interface WorkspaceMarkdownViewHandle {
   requestClose: () => Promise<boolean>
 }
 
-const WorkspaceMarkdownView = forwardRef<
-  WorkspaceMarkdownViewHandle,
-  WorkspaceMarkdownViewProps
->(function WorkspaceMarkdownView({
-  kind,
-  id,
-  title,
-  contentMd,
-  timestamp,
-  initialMode = 'read',
-  fullscreen = false,
-  embedded = false,
-  onBack,
-  onClose,
-  onUpdate
-}, ref) {
+const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceMarkdownViewProps>(function WorkspaceMarkdownView({ kind, id, title, contentMd, timestamp, initialMode = 'read', fullscreen = false, embedded = false, onBack, onClose, onUpdate }, ref) {
   const { t } = useTranslation()
-  const [mode, setMode] = useState<WorkspaceMarkdownViewMode>(
-    kind === 'summary' ? 'read' : initialMode
-  )
-  const [draftTitle, setDraftTitle] = useState(title)
-  const [draftContent, setDraftContent] = useState(contentMd)
-  const [savedDraft, setSavedDraft] = useState({ title, contentMd })
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [externalConflict, setExternalConflict] = useState(false)
-  const savedDraftRef = useRef<MarkdownDraft>({ title, contentMd })
-  const draftRef = useRef<MarkdownDraft>({ title, contentMd })
-  const incomingDraftRef = useRef({ id, draft: { title, contentMd } })
-  const ownSaveDraftsRef = useRef<Array<{ id: string; draft: MarkdownDraft }>>([])
-  const externalConflictRef = useRef(false)
-  const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true))
-  const articleRef = useRef<HTMLElement>(null)
-
-  const isReport = kind === 'report'
+  const [view, updateView, viewReady] = useMarkdownViewState(`${kind}.${id}`, initialMode)
   const editable = kind !== 'summary' && Boolean(onUpdate)
+  const mode = editable ? view.mode : 'read'
+  const [findOpen, setFindOpen] = useState(false)
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const [dialog, setDialog] = useState<'history' | 'conflict' | null>(null)
+  const [versionId, setVersionId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [pendingPdf, setPendingPdf] = useState(false)
+  const articleRef = useRef<HTMLElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<MarkdownEditorHandle>(null)
+  const dialogRef = useModalDialog<HTMLDivElement>(Boolean(dialog), () => setDialog(null))
+  const pendingOffset = useRef<number | null>(null)
+  const isReport = kind === 'report'
   const titleLabel = t(isReport ? 'workspace.reportTitleLabel' : 'workspace.noteTitleLabel')
   const contentLabel = t(isReport ? 'workspace.reportContentLabel' : 'workspace.noteContentLabel')
-  const saveFailed = t(isReport ? 'workspace.reportSaveFailed' : 'workspace.noteSaveFailed')
-  const externalConflictMessage = t('workspace.externalUpdateConflict')
-  const typeLabel = t(kind === 'summary'
-    ? 'workspace.aiSummary'
-    : isReport ? 'workspace.cardTypeReport' : 'workspace.cardTypeNote')
-  const isDirty = draftTitle !== savedDraft.title || draftContent !== savedDraft.contentMd
-  draftRef.current = { title: draftTitle, contentMd: draftContent }
+  const typeLabel = t(kind === 'summary' ? 'workspace.aiSummary' : isReport ? 'workspace.cardTypeReport' : 'workspace.cardTypeNote')
+  const draft = useMarkdownDraft({ kind, id, title, contentMd, editable, autoSave: mode === 'edit', onUpdate, messages: {
+    saveFailed: t(isReport ? 'workspace.reportSaveFailed' : 'workspace.noteSaveFailed'),
+    titleRequired: t('workspace.titleRequired'),
+    externalConflict: t('workspace.externalUpdateConflict'),
+    recoveryFailed: t('markdown.recoveryFailed')
+  } })
+
+  useImperativeHandle(ref, () => ({ requestClose: () => exporting ? Promise.resolve(false) : draft.requestClose() }), [draft.requestClose, exporting])
+
+  const openFind = useCallback(() => {
+    if (mode === 'edit') editorRef.current?.openFind()
+    else setFindOpen(true)
+  }, [mode])
 
   useEffect(() => {
-    const incoming = { title, contentMd }
-    const previousIncoming = incomingDraftRef.current
-    if (
-      previousIncoming.id === id &&
-      previousIncoming.draft.title === incoming.title &&
-      previousIncoming.draft.contentMd === incoming.contentMd
-    ) return
-    incomingDraftRef.current = { id, draft: incoming }
-    const currentDraft = draftRef.current
-    const currentSaved = savedDraftRef.current
-    const dirty =
-      currentDraft.title !== currentSaved.title ||
-      currentDraft.contentMd !== currentSaved.contentMd
-    const incomingMatchesDraft =
-      (incoming.title === currentDraft.title || incoming.title === currentDraft.title.trim()) &&
-      incoming.contentMd === currentDraft.contentMd
-    const ownSaveIndex = ownSaveDraftsRef.current.findIndex((entry) =>
-      entry.id === id &&
-      entry.draft.title === incoming.title &&
-      entry.draft.contentMd === incoming.contentMd
-    )
-    const incomingMatchesOwnSave = ownSaveIndex >= 0
-    if (incomingMatchesOwnSave) {
-      ownSaveDraftsRef.current.splice(ownSaveIndex, 1)
-    }
-    if (incomingMatchesOwnSave && dirty && !incomingMatchesDraft) {
-      savedDraftRef.current = incoming
-      setSavedDraft(incoming)
-      externalConflictRef.current = false
-      setExternalConflict(false)
-      setSaveError(null)
-      return
-    }
-    if (previousIncoming.id !== id || !dirty || incomingMatchesDraft) {
-      savedDraftRef.current = incoming
-      setSavedDraft(incoming)
-      setDraftTitle(incoming.title)
-      setDraftContent(incoming.contentMd)
-      externalConflictRef.current = false
-      setExternalConflict(false)
-      setSaveError(null)
-      return
-    }
-    externalConflictRef.current = true
-    setExternalConflict(true)
-    setSaveError(externalConflictMessage)
-  }, [contentMd, externalConflictMessage, id, title])
-
-  const save = useCallback((draft: MarkdownDraft) => {
-    if (!onUpdate) return Promise.resolve(true)
-    if (externalConflictRef.current) {
-      setSaveError(externalConflictMessage)
-      return Promise.resolve(false)
-    }
-    const nextTitle = draft.title.trim()
-    if (!nextTitle) {
-      setSaveError(t('workspace.titleRequired'))
-      return Promise.resolve(false)
-    }
-
-    const nextDraft = { title: nextTitle, contentMd: draft.contentMd }
-    const run = async () => {
-      if (
-        savedDraftRef.current.title === nextDraft.title &&
-        savedDraftRef.current.contentMd === nextDraft.contentMd
-      ) {
-        return true
-      }
-      setSaveError(null)
-      let saved: boolean
-      const ownSave = { id, draft: nextDraft }
-      ownSaveDraftsRef.current.push(ownSave)
-      if (ownSaveDraftsRef.current.length > 8) ownSaveDraftsRef.current.shift()
-      try {
-        saved = await onUpdate(id, nextDraft)
-      } catch {
-        ownSaveDraftsRef.current = ownSaveDraftsRef.current.filter((entry) => entry !== ownSave)
-        setSaveError(saveFailed)
-        return false
-      }
-      if (!saved) {
-        ownSaveDraftsRef.current = ownSaveDraftsRef.current.filter((entry) => entry !== ownSave)
-        setSaveError(saveFailed)
-        return false
-      }
-      savedDraftRef.current = nextDraft
-      setSavedDraft(nextDraft)
-      setDraftTitle((currentTitle) => currentTitle === draft.title ? nextTitle : currentTitle)
-      return true
-    }
-    const queuedSave = saveQueueRef.current.then(run, run)
-    saveQueueRef.current = queuedSave
-    return queuedSave
-  }, [externalConflictMessage, id, onUpdate, saveFailed, t])
-
-  const reloadExternalDraft = () => {
-    const incoming = incomingDraftRef.current.draft
-    savedDraftRef.current = incoming
-    setSavedDraft(incoming)
-    setDraftTitle(incoming.title)
-    setDraftContent(incoming.contentMd)
-    externalConflictRef.current = false
-    setExternalConflict(false)
-    setSaveError(null)
-  }
+    const surface = surfaceRef.current
+    const handler = () => openFind()
+    surface?.addEventListener('refora-markdown-find', handler)
+    return () => surface?.removeEventListener('refora-markdown-find', handler)
+  }, [openFind])
 
   useEffect(() => {
-    if (!editable || mode !== 'edit' || !isDirty || !draftTitle.trim()) return
-    const timeout = window.setTimeout(() => {
-      void save({ title: draftTitle, contentMd: draftContent })
-    }, 800)
-    return () => window.clearTimeout(timeout)
-  }, [draftContent, draftTitle, editable, isDirty, mode, save])
-
-  const saveCurrentDraft = useCallback(
-    () => save({ title: draftTitle, contentMd: draftContent }),
-    [draftContent, draftTitle, save]
-  )
-
-  const flushDraft = useCallback(async () => {
-    if (!isDirty) return
-    if (!await saveCurrentDraft()) throw new Error(saveFailed)
-  }, [isDirty, saveCurrentDraft, saveFailed])
-
-  useEffect(() => {
-    if (!editable) return
-    return registerRendererFlushTask(flushDraft)
-  }, [editable, flushDraft])
-
-  const requestClose = async () => {
-    if (!isDirty) return true
-    return saveCurrentDraft()
-  }
-
-  useImperativeHandle(ref, () => ({ requestClose }))
+    if (!viewReady) return
+    if (mode === 'read' && scrollRef.current) scrollRef.current.scrollTop = view.scrollTop
+    if (mode === 'edit' && pendingOffset.current !== null) {
+      editorRef.current?.revealOffset(pendingOffset.current)
+      pendingOffset.current = null
+    }
+  }, [mode, viewReady])
 
   const changeMode = async (nextMode: WorkspaceMarkdownViewMode) => {
     if (nextMode === mode) return
-    if (nextMode === 'read' && isDirty) {
-      if (await saveCurrentDraft()) setMode('read')
-      return
+    if (nextMode === 'read') {
+      const position = editorRef.current?.getPosition()
+      if (!await draft.flush()) return
+      pendingOffset.current = position?.start ?? 0
+      updateView({ mode: 'read', ...(position ? { position } : {}) })
+    } else {
+      const top = scrollRef.current?.getBoundingClientRect().top ?? 0
+      const blocks = Array.from(articleRef.current?.querySelectorAll<HTMLElement>('[data-source-offset]') ?? [])
+      const visible = blocks.filter((element) => { const rect = element.getBoundingClientRect(); return rect.top <= top && rect.bottom >= top }).at(-1) ?? blocks.find((element) => element.getBoundingClientRect().top >= top)
+      pendingOffset.current = visible ? Number(visible.dataset.sourceOffset) : view.position.start
+      updateView({ mode: 'edit' })
     }
-    setSaveError(null)
-    setMode(nextMode)
+    setFindOpen(false)
+  }
+
+  useEffect(() => {
+    if (mode !== 'read' || pendingOffset.current === null) return
+    const offset = pendingOffset.current
+    pendingOffset.current = null
+    const targets = Array.from(articleRef.current?.querySelectorAll<HTMLElement>('[data-source-offset]') ?? [])
+    const target = targets.filter((element) => Number(element.dataset.sourceOffset) <= offset).at(-1)
+    target?.scrollIntoView?.({ block: 'start' })
+  }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'edit' || !view.preview) return
+    const preview = previewRef.current
+    const offset = editorRef.current?.getPosition().start ?? 0
+    const target = Array.from(articleRef.current?.querySelectorAll<HTMLElement>('[data-source-offset]') ?? []).filter((element) => Number(element.dataset.sourceOffset) <= offset).at(-1)
+    if (preview && target) preview.scrollTop += target.getBoundingClientRect().top - preview.getBoundingClientRect().top - 16
+  }, [mode, view.preview])
+
+  useEffect(() => {
+    if (!pendingPdf || mode !== 'read') return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      const article = articleRef.current
+      if (!article) return
+      void exportMarkdownPdf(article, draft.draftTitle).catch(() => {
+        useDocumentStore.getState().showToast(t('markdown.exportFailed'))
+      }).finally(() => { if (!cancelled) { setExporting(false); setPendingPdf(false) } })
+    }, 0)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [draft.draftTitle, mode, pendingPdf, t])
+
+  const copyDraft = async (version = { title: draft.draftTitle, contentMd: draft.draftContent }) => {
+    try {
+      await window.api.clipboard.writeText(markdownDocument(version.title, version.contentMd))
+      useDocumentStore.getState().showToast(t('markdown.copied'))
+    } catch {
+      useDocumentStore.getState().showToast(t('common.copyFailed'))
+    }
   }
 
   const handleReadContextMenu = (event: React.MouseEvent<HTMLElement>) => {
@@ -305,152 +206,88 @@ const WorkspaceMarkdownView = forwardRef<
     showContextMenu(items)
   }
 
-  const handleBack = async () => {
-    if (isDirty) {
-      if (await saveCurrentDraft()) onBack()
-      return
-    }
-    onBack()
-  }
+  const handleBack = async () => { if (!exporting && await draft.flush()) onBack() }
+  const handleClose = async () => { if (!exporting && await draft.flush()) onClose?.() }
+  const button = (label: string, icon: React.ReactNode, action: () => void, pressed?: boolean, disabled = false) => <IconTooltip label={label} appearance="sidebar"><button type="button" className="sidebar-header-btn" aria-label={label} aria-pressed={pressed} disabled={disabled || exporting} onClick={action}>{icon}</button></IconTooltip>
+  const modeActions = editable ? <div className="flex shrink-0 items-center gap-1" role="group" aria-label={t('workspace.markdownMode')}>
+    {button(t('workspace.markdownRead'), <BookOpen size={17} />, () => void changeMode('read'), mode === 'read')}
+    {button(t('workspace.markdownEdit'), <PencilSimple size={17} />, () => void changeMode('edit'), mode === 'edit')}
+  </div> : null
+  const renderedContent = mode === 'edit' ? draft.draftContent : draft.savedDraft.contentMd
+  const renderArticle = () => <article ref={articleRef} className="markdown-body" onContextMenu={handleReadContextMenu}>
+    <header className="markdown-document-heading">
+      <p>{typeLabel}</p><h1>{mode === 'edit' ? draft.draftTitle : draft.savedDraft.title}</h1><p>{formatDate(timestamp)}</p>
+    </header>
+    {renderedContent ? <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS} urlTransform={urlTransform}>{renderedContent}</ReactMarkdown> : <p className="italic text-muted">{t('workspace.markdownEmpty')}</p>}
+  </article>
+  const selectedVersion = draft.history.find((version) => version.id === versionId) ?? draft.history[0]
+  const externalLines = draft.latestExternalDraft?.contentMd.split('\n') ?? []
+  const localLines = draft.draftContent.split('\n')
 
-  const handleClose = async () => {
-    if (!onClose) return
-    if (await requestClose()) onClose()
-  }
-
-  const modeActions = editable ? (
-    <div
-      className="flex shrink-0 items-center gap-1"
-      role="group"
-      aria-label={t('workspace.markdownMode')}
-    >
-      <IconTooltip label={t('workspace.markdownRead')} appearance="sidebar">
-        <button
-          type="button"
-          className={[
-            'sidebar-header-btn',
-            mode === 'read' ? 'bg-active text-accent hover:bg-active' : ''
-          ].filter(Boolean).join(' ')}
-          aria-label={t('workspace.markdownRead')}
-          aria-pressed={mode === 'read'}
-          onClick={() => void changeMode('read')}
-        >
-          <BookOpen className="h-4 w-4" />
-        </button>
-      </IconTooltip>
-      <IconTooltip label={t('workspace.markdownEdit')} appearance="sidebar">
-        <button
-          type="button"
-          className={[
-            'sidebar-header-btn',
-            mode === 'edit' ? 'bg-active text-accent hover:bg-active' : ''
-          ].filter(Boolean).join(' ')}
-          aria-label={t('workspace.markdownEdit')}
-          aria-pressed={mode === 'edit'}
-          onClick={() => void changeMode('edit')}
-        >
-          <PencilSimple className="h-4 w-4" />
-        </button>
-      </IconTooltip>
-    </div>
-  ) : undefined
-
-  const headerBar = !embedded ? (
-    <PanelTabHeader
-      title={draftTitle || savedDraft.title}
-      onClose={onClose ? () => void handleClose() : undefined}
-      closeLabel={t('workspace.close')}
-      leading={<WorkspaceNavigationControls onBack={() => void handleBack()} />}
-      actions={modeActions}
-    />
-  ) : null
-
-  return (
-    <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background ${
-      fullscreen ? 'workspace-fullscreen' : ''
-    }`}>
-      {headerBar}
-      {embedded && modeActions ? (
-        <div
-          className="absolute right-5 top-5 z-20 flex items-center rounded-xl border border-border bg-background/95 p-1 shadow-lg backdrop-blur"
-          data-testid="markdown-floating-actions"
-        >
-          {modeActions}
-        </div>
-      ) : null}
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={`mx-auto flex min-h-full w-full max-w-4xl flex-col px-5 py-8 sm:px-10 ${
-          embedded && modeActions ? 'pt-16' : ''
-        }`}>
-          {saveError && (
-            <div className="mb-5 flex items-center gap-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error" role="alert">
-              <span className="min-w-0 flex-1">{saveError}</span>
-              {externalConflict ? (
-                <button
-                  type="button"
-                  className="shrink-0 rounded px-2 py-1 font-medium hover:bg-error/10"
-                  onClick={reloadExternalDraft}
-                >
-                  {t('workspace.reloadExternalUpdate')}
-                </button>
-              ) : null}
-            </div>
-          )}
-          {mode === 'edit' ? (
-            <div className="flex min-h-0 flex-1 flex-col gap-2">
-              <Input
-                variant="borderless"
-                inputSize="md"
-                className="h-11 px-0 text-xl font-semibold hover:bg-transparent focus:bg-transparent focus:ring-0 focus-visible:outline-none"
-                value={draftTitle}
-                onChange={(event) => {
-                  setDraftTitle(event.target.value)
-                  if (!externalConflictRef.current) setSaveError(null)
-                }}
-                aria-label={titleLabel}
-              />
-              <Textarea
-                variant="borderless"
-                textareaSize="md"
-                className="min-h-[420px] flex-1 resize-none px-0 py-2 font-mono leading-6 hover:bg-transparent focus:bg-transparent focus:ring-0 focus-visible:outline-none"
-                value={draftContent}
-                onChange={(event) => {
-                  setDraftContent(event.target.value)
-                  if (!externalConflictRef.current) setSaveError(null)
-                }}
-                aria-label={contentLabel}
-              />
-            </div>
-          ) : (
-            <article
-              ref={articleRef}
-              className="markdown-body select-text text-sm text-foreground [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-panel-2 [&_code]:px-1 [&_h1]:mt-0 [&_h1]:text-2xl [&_h2]:mt-8 [&_h3]:mt-6 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-panel-2 [&_pre]:p-3 [&_ul]:list-disc [&_ul]:pl-5"
-              onContextMenu={handleReadContextMenu}
-            >
-              <div className="mb-8 border-b border-border pb-5">
-                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">{typeLabel}</p>
-                <h1 className="m-0 text-3xl font-semibold tracking-tight text-foreground">{savedDraft.title}</h1>
-                <p className="mb-0 mt-3 text-xs text-muted">{formatDate(timestamp)}</p>
-              </div>
-              {savedDraft.contentMd ? (
-                <ReactMarkdown
-                  remarkPlugins={REMARK_PLUGINS}
-                  rehypePlugins={REHYPE_PLUGINS}
-                  components={MARKDOWN_COMPONENTS}
-                  urlTransform={urlTransform}
-                >
-                  {savedDraft.contentMd}
-                </ReactMarkdown>
-              ) : (
-                <p className="italic text-muted">{t('workspace.markdownEmpty')}</p>
-              )}
-            </article>
-          )}
-        </div>
+  return <div ref={surfaceRef} data-markdown-surface className={`markdown-workspace ${fullscreen ? 'workspace-fullscreen' : ''}`} onKeyDown={(event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void draft.flush() }
+  }}>
+    {!embedded && <PanelTabHeader title={draft.draftTitle || draft.savedDraft.title} onClose={onClose ? () => void handleClose() : undefined} closeLabel={t('workspace.close')} leading={<WorkspaceNavigationControls onBack={() => void handleBack()} />} actions={modeActions} />}
+    <div className="markdown-workspace-toolbar" data-testid={embedded ? 'markdown-floating-actions' : undefined}>
+      <div className="markdown-toolbar-group">
+        {embedded && modeActions}
+        {button(t('markdown.findDocument'), <MagnifyingGlass size={17} />, openFind)}
+        {(mode === 'read' || view.preview) && button(t('markdown.outline'), <List size={17} />, () => setOutlineOpen((open) => !open), outlineOpen)}
+        {mode === 'edit' && button(t('markdown.livePreview'), <Columns size={17} />, () => updateView({ preview: !view.preview }), view.preview)}
+      </div>
+      <div className="markdown-toolbar-group">
+        {editable && <span className={`markdown-save-state ${draft.status === 'error' || draft.status === 'conflict' ? 'text-error' : ''}`} role="status">{t(exporting ? 'markdown.exporting' : `markdown.saveState.${draft.status}`)}</span>}
+        {editable && button(t('markdown.versionHistory'), <ClockCounterClockwise size={17} />, () => { setVersionId(null); setDialog('history') })}
+        {button(t('markdown.copyMarkdown'), <Copy size={17} />, () => void copyDraft())}
+        {button(t('markdown.exportMarkdown'), <DownloadSimple size={17} />, () => downloadMarkdown(draft.draftTitle, draft.draftContent))}
+        {button(t('markdown.exportPdf'), <FilePdf size={17} />, () => {
+          void (async () => {
+            if (!await draft.flush()) return
+            setExporting(true)
+            updateView({ mode: 'read' })
+            setPendingPdf(true)
+          })()
+        }, undefined, exporting)}
       </div>
     </div>
-  )
+    {draft.saveError && <div className="markdown-save-alert" role="alert"><span>{draft.saveError}</span>
+      {draft.externalConflict ? <>
+        <button type="button" onClick={() => setDialog('conflict')}>{t('markdown.compareVersions')}</button>
+        <button type="button" disabled={draft.saving} onClick={draft.reloadExternalDraft}>{t('workspace.reloadExternalUpdate')}</button>
+      </> : <button type="button" onClick={() => void draft.retry()}>{t('markdown.retrySave')}</button>}
+      <button type="button" onClick={() => { draft.backupDraft(); downloadMarkdown(draft.draftTitle, draft.draftContent) }}>{t('markdown.saveDraftCopy')}</button>
+    </div>}
+    {draft.recoveredDraft && <div className="markdown-recovery-notice">{t('markdown.draftRecovered')}{mode === 'read' && <button type="button" onClick={() => void changeMode('edit')}>{t('workspace.markdownEdit')}</button>}</div>}
+    <div className="markdown-content-region">
+      <MarkdownNavigation articleRef={articleRef} content={renderedContent} findOpen={findOpen} outlineOpen={outlineOpen && (mode === 'read' || view.preview)} onCloseFind={() => setFindOpen(false)} onCloseOutline={() => setOutlineOpen(false)} onNavigate={(offset) => { editorRef.current?.revealOffset(offset); setOutlineOpen(false) }} />
+      {mode === 'edit' ? <div className={`markdown-edit-layout ${view.preview ? 'with-preview' : ''}`}>
+        <div className="markdown-editor-pane">
+          <Input variant="borderless" inputSize="md" className="h-11 px-0 text-xl font-semibold hover:bg-transparent focus:bg-transparent focus:ring-0 focus-visible:outline-none" value={draft.draftTitle} onChange={(event) => draft.setDraftTitle(event.target.value)} aria-label={titleLabel} />
+          <MarkdownEditor ref={editorRef} value={draft.draftContent} onChange={draft.setDraftContent} ariaLabel={contentLabel} initialPosition={view.position} onPositionChange={(position) => updateView({ position })} onScroll={(ratio) => {
+            const preview = previewRef.current
+            if (preview) preview.scrollTop = ratio * Math.max(0, preview.scrollHeight - preview.clientHeight)
+          }} />
+        </div>
+        {view.preview && <div ref={previewRef} className="markdown-preview-pane" aria-label={t('markdown.livePreview')}>{renderArticle()}</div>}
+      </div> : <div ref={scrollRef} className="markdown-reading-scroll" onScroll={(event) => updateView({ scrollTop: event.currentTarget.scrollTop })}>{renderArticle()}</div>}
+    </div>
+    {dialog && createPortal(<div className="markdown-dialog-backdrop" onClick={() => setDialog(null)}><div ref={dialogRef} className="markdown-history-dialog" role="dialog" aria-modal="true" aria-label={t(dialog === 'history' ? 'markdown.versionHistory' : 'markdown.compareVersions')} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+      <div className="markdown-dialog-heading"><strong>{t(dialog === 'history' ? 'markdown.versionHistory' : 'markdown.compareVersions')}</strong><button type="button" aria-label={t('common.close')} onClick={() => setDialog(null)}><X size={20} /></button></div>
+      {dialog === 'history' ? <>
+        <p>{t('markdown.historyHint')}</p>
+        <div className="markdown-history-layout"><div className="markdown-version-list">
+          {draft.history.map((version) => <button type="button" key={version.id} aria-pressed={selectedVersion?.id === version.id} onClick={() => setVersionId(version.id)}><strong>{version.title}</strong><span>{new Date(version.createdAt).toLocaleString()} · {t(`markdown.versionReason.${version.reason}`)}</span></button>)}
+          {!draft.history.length && <p>{t('markdown.noVersions')}</p>}
+        </div>{selectedVersion && <pre>{selectedVersion.contentMd}</pre>}</div>
+        <div className="markdown-dialog-footer"><button type="button" onClick={() => void copyDraft(selectedVersion)}>{t('markdown.copyMarkdown')}</button>{selectedVersion && <button type="button" className="markdown-primary-action" onClick={() => { draft.restoreVersion(selectedVersion.id); updateView({ mode: 'edit' }); setDialog(null) }}>{t('markdown.restoreVersion')}</button>}</div>
+      </> : <>
+        <p>{t('markdown.conflictHint')}</p>
+        <div className="markdown-version-comparison"><section><h3>{t('markdown.localVersion')}</h3><strong>{draft.draftTitle}</strong><pre>{localLines.map((line, index) => <span className={externalLines[index] === line ? '' : 'markdown-line-added'} key={index}>{line || ' '}<br /></span>)}</pre></section><section><h3>{t('markdown.externalVersion')}</h3><strong>{draft.latestExternalDraft?.title}</strong><pre>{externalLines.map((line, index) => <span className={localLines[index] === line ? '' : 'markdown-line-removed'} key={index}>{line || ' '}<br /></span>)}</pre></section></div>
+        <div className="markdown-dialog-footer"><button type="button" disabled={draft.saving} onClick={() => { draft.reloadExternalDraft(); setDialog(null) }}>{t('workspace.reloadExternalUpdate')}</button><button type="button" className="markdown-primary-action" disabled={draft.saving} onClick={() => { void draft.keepLocalDraft().then((saved) => { if (saved) setDialog(null) }) }}>{t('markdown.keepLocalVersion')}</button></div>
+      </>}
+    </div></div>, document.body)}
+  </div>
 })
 
 export default WorkspaceMarkdownView

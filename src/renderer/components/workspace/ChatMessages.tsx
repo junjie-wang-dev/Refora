@@ -29,11 +29,11 @@ import { useDocumentStore } from '../../store/documentStore'
 import { useSettingsModalStore } from '../../store/settingsModalStore'
 import { Button as UiButton } from '../ui'
 import { AgentTraceStepItem } from './AgentTrace'
-import { ToolResultCards } from './ToolResultCards'
 import AgentTodoList from './AgentTodoList'
 import { ChatMedia, ChatMediaCard, ChatMediaContextProvider } from './ChatMedia'
 import type { AgentTraceStep, AiProvider, ChatAttachment, ChatMediaItem, ChatMediaContext } from '../../../shared/ipc-types'
 import { openDocumentPdf } from '../../utils/openPdf'
+import { assignToolMedia } from '../../utils/toolPresentation'
 import i18n from '../../i18n'
 import { api } from '../../ipc'
 import {
@@ -344,7 +344,6 @@ function RunTimeline({
           </div>
         )}
       </div>
-      {!open && ordered.filter((step) => step.kind === 'tool' && step.status === 'done').map((step) => <ToolResultCards key={step.id} step={step} />)}
       {(finalAnswer || terminalStatus === 'cancelled' || terminalStatus === 'failed') && (
         <AnswerSegment
           content={finalAnswer}
@@ -485,6 +484,7 @@ export default function ChatMessages({
     if (!activeRunId) return []
     return runTraceGroups.get(activeRunId) ?? []
   }, [activeRunId, runTraceGroups])
+  const presentedStreamingMedia = useMemo(() => assignToolMedia(streamingMedia, streamingSteps), [streamingMedia, streamingSteps])
 
   const lastAssistantIdx = (() => {
     for (let i = displayMessages.length - 1; i >= 0; i--) {
@@ -606,6 +606,8 @@ export default function ChatMessages({
             )}
             {displayMessages.map((m, idx) => {
               const runSteps = m.runId ? (runTraceGroups.get(m.runId) ?? []) : []
+              const messageMedia = assignToolMedia(m.media ?? [], runSteps)
+              const answerMedia = messageMedia.filter((item) => !item.toolStepId)
               const showRegenerate =
                 m.role === 'assistant' && idx === lastAssistantIdx && !streaming && !activeRunId && !regenerateDisabled
 
@@ -632,7 +634,7 @@ export default function ChatMessages({
                   className="chat-response-group"
                   onContextMenu={handleMessageContextMenu}
                 >
-                  <ChatMediaContextProvider value={messageMediaContext(m.runId, m.media, m.activeDocumentId)} media={m.media}>
+                  <ChatMediaContextProvider value={messageMediaContext(m.runId, messageMedia, m.activeDocumentId)} media={messageMedia}>
                   <RunTimeline
                     steps={runSteps}
                     fallbackAnswer={m.content}
@@ -641,7 +643,7 @@ export default function ChatMessages({
                     streaming={false}
                     elapsedSeconds={0}
                   />
-                  <ChatMedia media={m.media} excludeMarkdown={m.content} />
+                  <ChatMedia media={answerMedia} excludeMarkdown={m.content} />
                   {m.attachments && m.attachments.length > 0 && <MessageAttachments attachments={m.attachments.filter((attachment) => attachment.type !== 'asset' || !m.media?.some((item) => item.source.type === 'asset' && item.source.assetId === attachment.assetId))} />}
                   </ChatMediaContextProvider>
                   <div className="chat-message-actions">
@@ -667,7 +669,7 @@ export default function ChatMessages({
                 aria-live="polite"
                 onContextMenu={handleMessageContextMenu}
               >
-                <ChatMediaContextProvider value={messageMediaContext(activeRunId, streamingMedia)} media={streamingMedia}>
+                <ChatMediaContextProvider value={messageMediaContext(activeRunId, presentedStreamingMedia)} media={presentedStreamingMedia}>
                 <RunTimeline
                   steps={streamingSteps}
                   fallbackAnswer={streamingText}
@@ -675,7 +677,7 @@ export default function ChatMessages({
                   streaming={streaming}
                   elapsedSeconds={elapsedSeconds}
                 />
-                <ChatMedia media={streamingMedia} excludeMarkdown={streamingText} />
+                <ChatMedia media={presentedStreamingMedia.filter((item) => !item.toolStepId)} excludeMarkdown={streamingText} />
                 </ChatMediaContextProvider>
               </article>
             )}

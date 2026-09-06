@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CaretDown, Check, Cloud, Terminal } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
@@ -79,8 +79,19 @@ export default function ModelSelector({
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const reasoningMenuRef = useRef<HTMLDivElement | null>(null)
+  const closeModelMenu = () => {
+    setModelMenuOpen(false)
+    menuRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')?.focus()
+  }
 
   useClickOutside(menuRef, () => setModelMenuOpen(false), modelMenuOpen)
+  useEffect(() => {
+    if (!modelMenuOpen) return
+    const selected = menuRef.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]')
+      ?? menuRef.current?.querySelector<HTMLButtonElement>('[role="option"]')
+    selected?.focus({ preventScroll: true })
+    selected?.scrollIntoView({ block: 'nearest' })
+  }, [modelMenuOpen])
   useClickOutside(
     reasoningMenuRef,
     () => setReasoningMenuOpen(false),
@@ -135,7 +146,7 @@ export default function ModelSelector({
 
   const handleApply = (baseModel: string, variant = '', providerId?: string) => {
     void onApplyModel(baseModel, variant, providerId)
-    setModelMenuOpen(false)
+    closeModelMenu()
   }
 
   return (
@@ -183,7 +194,7 @@ export default function ModelSelector({
                 previous?.focus()
               } else if (event.key === 'Escape') {
                 event.preventDefault()
-                setModelMenuOpen(false)
+                closeModelMenu()
               }
             }}
           >

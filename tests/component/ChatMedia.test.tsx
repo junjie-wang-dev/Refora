@@ -36,6 +36,15 @@ it('resolves a local image, previews it, zooms in a modal, and restores focus on
   const viewer = screen.getByRole('dialog', { name: 'Experiment result' })
   fireEvent.click(within(viewer).getByRole('button', { name: 'Zoom in' }))
   expect(within(viewer).getByRole('button', { name: 'Fit image' })).toHaveTextContent('125%')
+  fireEvent.keyDown(viewer, { key: '0' })
+  expect(within(viewer).getByRole('button', { name: 'Fit image' })).toHaveTextContent('100%')
+  const close = within(viewer).getByRole('button', { name: 'Close image viewer' })
+  const zoomOut = within(viewer).getByRole('button', { name: 'Zoom out' })
+  close.focus()
+  fireEvent.keyDown(close, { key: 'Tab' })
+  expect(zoomOut).toHaveFocus()
+  fireEvent.keyDown(zoomOut, { key: 'Tab', shiftKey: true })
+  expect(close).toHaveFocus()
   fireEvent.keyDown(viewer, { key: 'Escape' })
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(button).toHaveFocus()
@@ -133,6 +142,36 @@ function trace(result: unknown): AgentTraceStep {
 }
 
 describe('rich tool results', () => {
+  it('shows paper excerpts without calling character pagination more search results', () => {
+    render(<ToolResultCards step={{ ...trace({ docId: 'paper', title: 'Paper excerpt', text: 'Evidence from the paper.', offset: 40000, totalChars: 80000, nextOffset: 60000 }), name: 'read_paper' }} />)
+    expect(screen.getByText('Evidence from the paper.')).toBeInTheDocument()
+    expect(screen.getByText('More paper text is available in the next chunk.')).toBeInTheDocument()
+    expect(screen.queryByText('More results are available; ask the agent to continue.')).not.toBeInTheDocument()
+  })
+
+  it('honors exhausted search pages and deduplicates the same paper', () => {
+    render(<ToolResultCards step={trace({ documents: [{ docId: 'paper', title: 'Single paper', abstract: 'Evidence' }, { docId: 'paper', title: 'Single paper' }], hasMore: false, nextOffset: 20 })} />)
+    expect(screen.getAllByRole('button', { name: 'Single paper' })).toHaveLength(1)
+    expect(screen.getByText('Evidence')).toBeInTheDocument()
+    expect(screen.queryByText('More results are available; ask the agent to continue.')).not.toBeInTheDocument()
+  })
+
+  it('does not turn arbitrary status objects or non-output paths into downloadable results', () => {
+    const { rerender } = render(<ToolResultCards step={trace({ status: 'ready', message: 'Finished', count: 3 })} />)
+    expect(screen.queryByRole('region', { name: 'Data preview' })).not.toBeInTheDocument()
+    rerender(<ToolResultCards step={trace({ path: '/scripts/private.py' })} />)
+    expect(resolveMedia).not.toHaveBeenCalled()
+    expect(screen.queryByText('Loading preview…')).not.toBeInTheDocument()
+  })
+
+  it('supports expanding and collapsing long result collections', () => {
+    render(<ToolResultCards step={trace({ documents: Array.from({ length: 12 }, (_, index) => ({ docId: `doc-${index}`, title: `Paper ${index}` })) })} />)
+    expect(screen.queryByRole('button', { name: 'Paper 11' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show more results' }))
+    expect(screen.getByRole('button', { name: 'Paper 11' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show fewer results' }))
+    expect(screen.queryByRole('button', { name: 'Paper 11' })).not.toBeInTheDocument()
+  })
   it('uses complete structured search results instead of truncated trace text', () => {
     render(<ToolResultCards step={trace({ results: [{ title: 'Research source', url: 'https://example.com/paper', snippet: 'Evidence summary' }], hasMore: true })} />)
     expect(screen.getByRole('link', { name: 'Research source' })).toHaveAttribute('href', 'https://example.com/paper')

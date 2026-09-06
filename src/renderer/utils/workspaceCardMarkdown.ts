@@ -11,17 +11,28 @@ export function boardCardPreview(content: string): string {
   }
   const selected: string[] = []
   let chars = 0
+  let fence: { marker: string; length: number; start: number } | null = null
   for (const line of lines) {
     if (selected.length >= BOARD_PREVIEW_MAX_LINES) break
     const remaining = BOARD_PREVIEW_MAX_CHARS - chars
     if (remaining <= 0) break
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    const closesFence = fence && marker
+      && marker[1][0] === fence.marker
+      && marker[1].length >= fence.length
+      && !marker[2].trim()
+    if (!fence && marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) {
+      fence = { marker: marker[1][0], length: marker[1].length, start: selected.length }
+    }
     if (line.length > remaining) {
       selected.push(line.slice(0, remaining))
       break
     }
     selected.push(line)
     chars += line.length + 1
+    if (closesFence) fence = null
   }
+  if (fence) selected.splice(fence.start)
   return `${selected.join('\n').trimEnd()}\n\n…`
 }
 

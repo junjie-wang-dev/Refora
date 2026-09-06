@@ -64,6 +64,33 @@ describe('useAppShortcuts', () => {
     expect(focus).toHaveBeenCalled()
   })
 
+  it('routes find to the visible Markdown document instead of the library', () => {
+    const surface = document.createElement('div')
+    surface.dataset.markdownSurface = ''
+    const find = vi.fn()
+    surface.addEventListener('refora-markdown-find', find)
+    document.body.append(surface)
+    renderHook(() => useAppShortcuts())
+    dispatch('f', { meta: true })
+    expect(find).toHaveBeenCalledTimes(1)
+    surface.remove()
+  })
+
+  it('ignores a Markdown document hidden behind another workspace view', () => {
+    const container = document.createElement('div')
+    container.className = 'hidden'
+    const surface = document.createElement('div')
+    surface.dataset.markdownSurface = ''
+    const find = vi.fn()
+    surface.addEventListener('refora-markdown-find', find)
+    container.append(surface)
+    document.body.append(container)
+    renderHook(() => useAppShortcuts())
+    dispatch('f', { meta: true })
+    expect(find).not.toHaveBeenCalled()
+    container.remove()
+  })
+
   it('requests delete confirm for selected ids on Cmd+Backspace', () => {
     useDocumentStore.setState({ selectedIds: ['x', 'y'] })
     renderHook(() => useAppShortcuts())

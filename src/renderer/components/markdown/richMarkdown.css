@@ -167,8 +167,11 @@
 
 .markdown-diagram-image {
   display: block;
-  width: 100%;
-  max-height: 40rem;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 32rem;
+  margin: 0 auto;
   object-fit: contain;
   border-radius: 0.25rem;
   background: #fff;
@@ -186,3 +189,86 @@
   width: 1200px;
   pointer-events: none;
 }
+
+.markdown-body {
+  min-width: 0;
+  color: var(--color-foreground);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.35;
+  font-weight: 650;
+  scroll-margin-top: 1.25rem;
+}
+
+.markdown-body h1 { margin: 2rem 0 1rem; font-size: 1.75rem; font-weight: 750; }
+.markdown-body h2 { margin: 1.75rem 0 0.75rem; font-size: 1.45rem; font-weight: 700; }
+.markdown-body h3 { margin: 1.5rem 0 0.625rem; font-size: 1.2rem; }
+.markdown-body h4 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
+.markdown-body h5 { margin: 1rem 0 0.5rem; font-size: 0.95rem; }
+.markdown-body h6 { margin: 1rem 0 0.5rem; font-size: 0.9rem; color: var(--color-muted); }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0.875rem 0; }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body :is(ul, ol) { margin: 0.75rem 0; padding-left: 1.5rem; }
+.markdown-body li { margin: 0.25rem 0; }
+.markdown-body li :is(ul, ol, p) { margin-block: 0.35rem; }
+.markdown-body ul ul { list-style: circle; }
+.markdown-body ul ul ul { list-style: square; }
+.markdown-body .contains-task-list { list-style: none; padding-left: 0.25rem; }
+.markdown-body .task-list-item input { margin-right: 0.5rem; accent-color: var(--color-accent); }
+.markdown-body a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 0.15em; }
+.markdown-body blockquote { margin: 1rem 0; border-left: 3px solid var(--color-border); padding: 0.125rem 1rem; color: var(--color-muted); }
+.markdown-body hr { margin: 1.75rem 0; border: 0; border-top: 1px solid var(--color-border); }
+.markdown-body pre { overflow-x: auto; padding: 0.75rem; border-radius: 0.5rem; background: var(--color-panel-2, var(--color-background)); }
+.markdown-body :not(pre) > code { border-radius: 0.25rem; padding: 0.125em 0.3em; background: var(--color-panel-2, var(--color-background)); font-size: 0.9em; }
+.markdown-body :is(pre, code) { font-family: var(--font-mono, monospace); }
+.markdown-body .katex-display,
+.chat-markdown .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 0.25rem 0; }
+.markdown-body .footnotes { margin-top: 2rem; border-top: 1px solid var(--color-border); padding-top: 1rem; font-size: 0.875em; }
+.markdown-body [id]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+
+.markdown-diagram-preview {
+  display: block;
+  width: 100%;
+  cursor: zoom-in;
+  border-radius: 0.25rem;
+}
+
+.markdown-diagram-preview:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.markdown-diagram-preview > span {
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.markdown-diagram-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(90rem, 94vw);
+  height: 88vh;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+.markdown-diagram-dialog .markdown-format-toolbar { flex-wrap: wrap; }
+.markdown-diagram-dialog .markdown-format-button { min-width: 1.875rem; min-height: 1.875rem; justify-content: center; }
+.markdown-format-button:disabled { opacity: 0.4; cursor: default; }
+.markdown-diagram-zoom { min-width: 3rem; text-align: center; font-variant-numeric: tabular-nums; }
+.markdown-diagram-hint { margin: 0; padding: 0.5rem 0.75rem; font-size: 0.75rem; color: var(--color-muted); }
+.markdown-diagram-hint[role='alert'] { color: var(--color-danger, #c94343); }
+.markdown-diagram-viewport { flex: 1; min-height: 0; overflow: auto; cursor: grab; touch-action: none; }
+.markdown-diagram-viewport.is-dragging { cursor: grabbing; user-select: none; }
+.markdown-diagram-canvas { display: flex; justify-content: center; align-items: center; width: max-content; min-width: 100%; min-height: 100%; padding: 1.5rem; }
+.markdown-diagram-canvas img { display: block; max-width: none; flex-shrink: 0; background: #fff; border-radius: 0.25rem; }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useId } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   CaretDown,
@@ -19,7 +19,8 @@ import {
   GlobeHemisphereWest
 } from '@phosphor-icons/react'
 import type { AgentTraceStep } from '../../../shared/ipc-types'
-import { ToolResultCards } from './ToolResultCards'
+import { ToolStepDetails } from './ToolStepDetails'
+import { toolRecord, toolValue, toolTarget, toolResultValue } from '../../utils/toolPresentation'
 
 type TFunc = ReturnType<typeof useTranslation>['t']
 
@@ -216,10 +217,11 @@ function formatToolLabel(
       }
     case 'read_paper':
     case 'read_paper_fulltext': {
-      const offset = typeof objParam.offset === 'number' ? objParam.offset : 0
-      const limit = typeof objParam.limit === 'number' ? objParam.limit : 8000
-      const chunkIdx = Math.floor(offset / limit) + 1
-      if (name === 'read_paper' && objParam.source === 'ocr') {
+      const result = toolRecord(toolResultValue(step))
+      const offset = typeof result.offset === 'number' ? result.offset : typeof objParam.offset === 'number' ? objParam.offset : 0
+      const limit = typeof result.limit === 'number' ? result.limit : typeof objParam.limit === 'number' ? objParam.limit : name === 'read_paper' ? 40000 : 8000
+      const chunkIdx = typeof result.chunkIndex === 'number' ? Math.max(0, result.chunkIndex) + 1 : Math.floor(Math.max(0, offset) / Math.max(1, limit)) + 1
+      if (name === 'read_paper' && (objParam.source === 'ocr' || result.source === 'mineru_ocr')) {
         return {
           icon: 'read',
           text: running
@@ -582,10 +584,11 @@ function TraceStepRow({
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const detailsId = useId()
   useEffect(() => {
     if (forceOpen !== undefined) setOpen(forceOpen)
   }, [forceOpen])
-  const hasBody = !!(step.input || step.output)
+  const hasBody = !!(step.input || step.output || step.result != null)
   const duration = formatDuration(step)
   const toolLabel = formatToolLabel(step, t)
 
@@ -618,7 +621,11 @@ function TraceStepRow({
       : step.name
         ? humanizeIdentifier(step.name)
         : t('workspace.chat.traceTool', 'Tool')
-  const displayDetail = toolLabel?.detail
+  const inputRecord = toolRecord(toolValue(step.input))
+  const displayDetail = toolTarget(step) || (
+    toolLabel?.detail && (toolLabel.detail === inputRecord.docId || toolLabel.detail === inputRecord.documentId)
+      ? t('workspace.chat.toolDetails.selectedPaper') : toolLabel?.detail
+  )
 
   const kindLabel = step.kind === 'llm'
     ? t('workspace.chat.traceLlm', 'Model')
@@ -649,6 +656,8 @@ function TraceStepRow({
           onClick={() => hasBody && setOpen((v) => !v)}
           disabled={!hasBody}
           aria-expanded={open}
+          aria-label={[displayText, displayDetail].filter(Boolean).join(' — ')}
+          aria-controls={hasBody ? detailsId : undefined}
           title={statusTitle}
         >
           {(!compact || step.kind === 'tool') && (
@@ -699,13 +708,13 @@ function TraceStepRow({
           )}
           {hasBody && (
             <CaretDown
-              className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${compact ? (open ? 'rotate-180' : '') : (open ? '' : '-rotate-90')}`}
+              className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${open ? '' : '-rotate-90'}`}
             />
           )}
         </button>
-        {step.kind === 'tool' && step.status === 'done' && <ToolResultCards step={step} />}
         {open && hasBody && (
-          <div className="agent-trace-details">
+          <div className="agent-trace-details" id={detailsId}>
+            {step.kind === 'tool' || step.kind === 'subagent' ? <ToolStepDetails step={step} /> : <>
             {step.input && (
               <div className="agent-trace-detail-card">
                 <p className="agent-trace-detail-label">
@@ -726,6 +735,7 @@ function TraceStepRow({
                 </pre>
               </div>
             )}
+            </>}
           </div>
         )}
       </div>

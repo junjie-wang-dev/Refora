@@ -4,6 +4,7 @@ import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
 import { createServerLibraryHandlers } from '../../src/main/sidecar/ipc/library'
 import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/workspaces'
 import { createSyncHandlers } from '../../src/main/sidecar/ipc/sync'
+import { createMarkdownExportHandlers } from '../../src/main/services/markdownExport'
 import { createAppLifecycleIpcHandlers } from '../../src/main/services/appLifecycleIpc'
 import { IpcChannel } from '../../src/shared/ipc-channels'
 import type { ServerClient } from '../../src/main/sidecar/client'
@@ -39,7 +40,12 @@ describe('server IPC handler coverage', () => {
       ...createServerWorkspaceHandlers(serverClient, { consumeFiles: (paths) => [...paths] }),
       ...createServerAiHandlers({ serverClient }),
       ...createSyncHandlers(syncAccountService),
-      ...createAppLifecycleIpcHandlers({ completeRendererFlush: () => true })
+      ...createAppLifecycleIpcHandlers({ completeRendererFlush: () => true }),
+      ...createMarkdownExportHandlers({
+        showSaveDialog: async () => ({ canceled: true, filePath: '' }),
+        printToPDF: async () => new Uint8Array(),
+        writeFile: async () => undefined
+      })
     }
     const requestChannels = Object.entries(IpcChannel)
       .filter(([name]) => !name.startsWith('Event'))

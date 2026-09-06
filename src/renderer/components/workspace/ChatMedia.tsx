@@ -10,10 +10,16 @@ import { api } from '../../ipc'
 import { openDocumentPdf } from '../../utils/openPdf'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { canPreviewMediaFile, ChatFilePreview } from './ChatFilePreview'
+import { useModalDialog } from '../../hooks/useModalDialog'
 import './chatMedia.css'
 
 const MediaContext = createContext<ChatMediaContext>({})
 const MessageMediaSources = createContext<Set<string>>(new Set())
+const MessageMediaItems = createContext<ChatMediaItem[]>([])
+
+export function useMessageMediaItems(): ChatMediaItem[] {
+  return useContext(MessageMediaItems)
+}
 
 export function mediaSourceKey(source: ChatMediaSource): string {
   return JSON.stringify(Object.entries(source).sort(([left], [right]) => left.localeCompare(right)))
@@ -24,8 +30,8 @@ export function useMessageMediaSources(): Set<string> {
 }
 
 export function ChatMediaContextProvider({ value, media, children }: PropsWithChildren<{ value: ChatMediaContext; media?: ChatMediaItem[] }>) {
-  const sources = useMemo(() => new Set(media?.map((item) => mediaSourceKey(item.source)) ?? []), [media])
-  return <MediaContext.Provider value={value}><MessageMediaSources.Provider value={sources}>{children}</MessageMediaSources.Provider></MediaContext.Provider>
+  const sources = useMemo(() => new Set(media?.filter((item) => !item.toolStepId).map((item) => mediaSourceKey(item.source)) ?? []), [media])
+  return <MediaContext.Provider value={value}><MessageMediaItems.Provider value={media ?? []}><MessageMediaSources.Provider value={sources}>{children}</MessageMediaSources.Provider></MessageMediaItems.Provider></MediaContext.Provider>
 }
 
 function ImageViewer({ url, title, onClose }: { url: string; title: string; onClose: () => void }) {
@@ -33,32 +39,27 @@ function ImageViewer({ url, title, onClose }: { url: string; title: string; onCl
   const [zoom, setZoom] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null)
-  const dialog = useRef<HTMLDivElement>(null)
+  const dialog = useModalDialog<HTMLDivElement>(true, onClose)
   const updateZoom = (next: number) => {
     const value = Math.min(5, Math.max(0.25, next))
     setZoom(value)
     if (value <= 1) setPosition({ x: 0, y: 0 })
   }
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
-    dialog.current?.focus()
-    return () => previous?.focus()
-  }, [])
-  return createPortal(
-    <div ref={dialog} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="chat-image-viewer" onKeyDown={(event) => {
-      if (event.key === 'Escape') { event.stopPropagation(); onClose() }
+    const element = dialog.current
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!['+', '=', '-', '0'].includes(event.key)) return
+      event.preventDefault()
+      event.stopPropagation()
       if (event.key === '+' || event.key === '=') updateZoom(zoom + 0.25)
       if (event.key === '-') updateZoom(zoom - 0.25)
       if (event.key === '0') { updateZoom(1); setPosition({ x: 0, y: 0 }) }
-      if (event.key === 'Tab') {
-        const buttons = dialog.current?.querySelectorAll<HTMLButtonElement>('button')
-        if (!buttons?.length) return
-        const first = buttons[0]
-        const last = buttons[buttons.length - 1]
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus() }
-        if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first.focus() }
-      }
-    }}>
+    }
+    element?.addEventListener('keydown', onKeyDown)
+    return () => element?.removeEventListener('keydown', onKeyDown)
+  }, [dialog, zoom])
+  return createPortal(
+    <div ref={dialog} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="chat-image-viewer">
       <div className="chat-image-viewer-toolbar">
         <span className="min-w-0 flex-1 truncate">{title}</span>
         <button type="button" onClick={() => updateZoom(zoom - 0.25)} aria-label={t('workspace.chat.media.zoomOut')}><Minus /></button>
@@ -88,6 +89,7 @@ export const ChatMediaCard = memo(function ChatMediaCard({ item, context }: { it
   const [resource, setResource] = useState<ChatMediaResource | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [preparingExport, setPreparingExport] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [requestedSource, setRequestedSource] = useState<string | null>(null)
   const [near, setNear] = useState(typeof IntersectionObserver === 'undefined')
@@ -98,6 +100,12 @@ export const ChatMediaCard = memo(function ChatMediaCard({ item, context }: { it
   const sourceKey = JSON.stringify(item.source)
   const remote = item.source.type === 'remote'
   const title = item.title || resource?.fileName || t(`workspace.chat.media.${item.kind}`)
+  useEffect(() => {
+    const element = container.current
+    const prepare = () => { setPreparingExport(true); setNear(true) }
+    element?.addEventListener('refora-prepare-media', prepare)
+    return () => element?.removeEventListener('refora-prepare-media', prepare)
+  }, [])
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined' || !container.current) return
     const observer = new IntersectionObserver((entries) => {
@@ -130,7 +138,7 @@ export const ChatMediaCard = memo(function ChatMediaCard({ item, context }: { it
   }
   const mediaError = () => setError(t('workspace.chat.media.loadFailed'))
   return (
-    <span ref={container} className="chat-media-card" data-media-kind={resource?.kind ?? item.kind}>
+    <span ref={container} className="chat-media-card" data-media-kind={resource?.kind ?? item.kind} data-markdown-pending={item.source.type !== 'unavailable' && (!remote || requestedSource === sourceKey) && !error && (!resource || (resource.kind === 'image' && !loaded)) ? 'true' : undefined}>
       {item.source.type === 'unavailable' ? (<span className="chat-media-placeholder" role="status"><span>{t('workspace.chat.media.loadFailed')}</span><span>{item.source.reason}</span></span>) : remote && requestedSource !== sourceKey ? (
         <span className="chat-media-placeholder">
           <span>{t('workspace.chat.media.remoteHint')}</span>
@@ -148,7 +156,7 @@ export const ChatMediaCard = memo(function ChatMediaCard({ item, context }: { it
           <span className="chat-media-preview">
             {!loaded && <span role="status" className="chat-media-loading">{t('workspace.chat.media.loading')}</span>}
             <button type="button" className="chat-media-image-button" aria-label={t('workspace.chat.media.expandImage', { title })} onClick={() => setViewer(true)}>
-              <img src={resource.url} alt={title} loading="lazy" decoding="async" onLoad={() => setLoaded(true)} onError={mediaError} />
+              <img src={resource.url} alt={title} loading={preparingExport ? 'eager' : 'lazy'} decoding="async" onLoad={() => setLoaded(true)} onError={mediaError} />
               <ArrowsOut className="chat-media-expand" aria-hidden="true" />
             </button>
           </span>

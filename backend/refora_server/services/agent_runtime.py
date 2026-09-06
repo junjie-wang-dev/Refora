@@ -629,8 +629,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
         else:
             request["_media"] = []
 
-        async def observe_media(value: Any) -> None:
+        async def observe_media(value: Any, tool_step_id: str | None = None) -> None:
             incoming = _message_media(value, run_id)
+            if tool_step_id:
+                incoming = [{**item, "toolStepId": tool_step_id} for item in incoming]
             existing = normalize_media(request.get("_media"))
             seen = {item["id"] for item in existing}
             incoming = [item for item in incoming if item["id"] not in seen]
@@ -651,10 +653,10 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                 repos["agentTraces"]["updateStep"](run_trace["id"], {"result": {"media": request["_media"]}})
             await emit_event("ai.chat.media", {"runId": run_id, "threadId": thread_id, "media": request["_media"]})
 
-        async def observe_tool_media(value: Any, name: str | None) -> None:
+        async def observe_tool_media(value: Any, name: str | None, step_id: str) -> None:
             if _is_academic_tool_name(name):
                 return
-            await observe_media(value)
+            await observe_media(value, step_id)
             structured = _structured_tool_result(value, name)
             published = structured.get("published") if isinstance(structured, dict) else None
             if not isinstance(published, list):
@@ -671,7 +673,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                     "source": {"type": "asset", "assetId": artifact["assetId"]},
                     "title": artifact.get("fileName") or (asset or {}).get("fileName"),
                     "mimeType": mime,
-                }])
+                }], step_id)
 
         def is_current() -> bool:
             return active_by_thread.get(thread_id) == run_id
@@ -1106,7 +1108,6 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         tool_history.append(record)
                     name = _tool_event_name(event)
                     _, trace_output = _tool_event_values(event)
-                    await observe_tool_media(trace_output, name)
                     structured_result = _structured_tool_result(trace_output, name)
                     safe_output = (
                         ACADEMIC_PERSISTENCE_REDACTION
@@ -1144,6 +1145,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                         if structured_result is not None:
                             step = repos["agentTraces"]["updateStep"](step["id"], {"result": structured_result})
                     if step is not None:
+                        await observe_tool_media(trace_output, name, step["id"])
                         await emit_trace(request, step)
                     continue
                 if event_name == "on_tool_error":

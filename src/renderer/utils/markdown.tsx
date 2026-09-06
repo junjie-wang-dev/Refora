@@ -1,4 +1,5 @@
-import type { Components, Options } from 'react-markdown'
+import type { Components, Options, ExtraProps } from 'react-markdown'
+import type { ComponentPropsWithoutRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -18,6 +19,7 @@ interface MarkdownAstNode {
   value?: string
   properties?: Record<string, unknown>
   children?: MarkdownAstNode[]
+  position?: { start?: { offset?: number } }
 }
 
 function containsMedia(node: MarkdownAstNode | undefined): boolean {
@@ -50,7 +52,7 @@ function inlineMathNodes(value: string): MarkdownAstNode[] {
 }
 
 function replaceTableMath(node: MarkdownAstNode, insideTable = false): void {
-  if (!node.children) return
+  if (!node.children || ['code', 'pre', 'kbd', 'samp', 'script', 'style'].includes(node.tagName ?? '')) return
   const tableContent = insideTable || (node.type === 'element' && node.tagName === 'table')
   node.children = node.children.flatMap((child) => {
     if (tableContent && child.type === 'text' && typeof child.value === 'string') {
@@ -63,6 +65,56 @@ function replaceTableMath(node: MarkdownAstNode, insideTable = false): void {
 
 function rehypeTableMath() {
   return (tree: unknown) => replaceTableMath(tree as MarkdownAstNode)
+}
+
+
+export function markdownHeadingSlug(text: string): string {
+  return text.normalize('NFKC').toLowerCase().trim().replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '').replace(/\s+/g, '-') || 'section'
+}
+
+export function createMarkdownHeadingIdFactory(): (text: string) => string {
+  const used = new Set<string>()
+  return (text) => {
+    const base = `markdown-${markdownHeadingSlug(text)}`
+    let id = base
+    let suffix = 0
+    while (used.has(id)) id = `${base}-${++suffix}`
+    used.add(id)
+    return id
+  }
+}
+
+function rehypeHeadingIds() {
+  return (tree: unknown) => {
+    const nextId = createMarkdownHeadingIdFactory()
+    const text = (node: MarkdownAstNode): string => node.type === 'text' ? node.value ?? '' : (node.children ?? []).map(text).join('')
+    const visit = (node: MarkdownAstNode) => {
+      if (/^h[1-6]$/.test(node.tagName ?? '')) {
+        node.properties = { ...node.properties, id: node.properties?.id ?? nextId(text(node)) }
+      }
+      if (/^(h[1-6]|p|li|pre|blockquote|table|hr)$/.test(node.tagName ?? '') && node.position?.start?.offset !== undefined) {
+        node.properties = { ...node.properties, 'data-source-offset': node.position.start.offset }
+      }
+      node.children?.forEach(visit)
+    }
+    visit(tree as MarkdownAstNode)
+  }
+}
+
+function MarkdownLink({ href, children, node, ...props }: ComponentPropsWithoutRef<'a'> & ExtraProps) {
+  const internal = href?.startsWith('#')
+  const link = <a {...props} href={href} target={internal ? undefined : '_blank'} rel={internal ? undefined : 'noopener noreferrer'} onClick={internal ? (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const scope = event.currentTarget.closest('.markdown-body, .chat-markdown, [data-markdown-root]') ?? event.currentTarget.parentElement
+    const fragment = safeDecode((href ?? '').slice(1))
+    const target = Array.from(scope?.querySelectorAll<HTMLElement>('[id]') ?? []).find((element) => [fragment, `markdown-${fragment}`, `user-content-${fragment}`].includes(element.id))
+    if (!target) return
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1')
+    target.focus({ preventScroll: true })
+  } : undefined}>{containsMedia(node) ? <MediaSourceLabel /> : children}</a>
+  return containsMedia(node) ? <span className="markdown-linked-media">{children}{link}</span> : link
 }
 
 export const REMARK_PLUGINS = [remarkGfm, remarkMath]
@@ -87,6 +139,7 @@ export const REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
       poster: [...(defaultSchema.protocols?.src ?? []), 'refora-document', 'refora-asset', 'data']
     }
   }],
+  rehypeHeadingIds,
   rehypeTableMath,
   rehypeKatex
 ]
@@ -129,11 +182,7 @@ export function parseReforaDocLink(href: string): {
 
 const BASE_MARKDOWN_COMPONENTS: Components = {
   ...MarkdownMediaComponents,
-  a: ({ href, children, node }) => containsMedia(node) ? (
-    <span className="markdown-linked-media">{children}<a href={href} target="_blank" rel="noopener noreferrer"><MediaSourceLabel /></a></span>
-  ) : (
-    <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-  ),
+  a: MarkdownLink,
   pre: MarkdownCodeBlock,
   table: MarkdownTable
 }
@@ -151,20 +200,14 @@ export function createReforaDocMarkdownComponents(
   onOpenError?: () => void
 ): Components {
   return createMarkdownComponents({
-    a: ({ href, children, node }) => {
+    a: ({ href, children, node, ...props }) => {
       const parsed = href ? parseReforaDocLink(href) : null
       const media = containsMedia(node)
-      if (!parsed) {
-        if (media) return <span className="markdown-linked-media">{children}<a href={href} target="_blank" rel="noopener noreferrer"><MediaSourceLabel /></a></span>
-        return (
-          <a href={href} target="_blank" rel="noopener noreferrer">
-            {children}
-          </a>
-        )
-      }
+      if (!parsed) return <MarkdownLink {...props} href={href} node={node}>{children}</MarkdownLink>
       const link = (
         <button
           type="button"
+          data-markdown-searchable="true"
           className="inline-flex cursor-pointer items-center gap-0.5 text-accent underline transition-opacity duration-150 hover:opacity-80"
           onClick={async (event) => {
             event.stopPropagation()

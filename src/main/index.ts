@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createWriteStream, existsSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { initLogger, logger } from './services/logger'
@@ -43,6 +44,8 @@ import { createShutdownHandler } from './services/shutdown'
 import { createRendererFlushCoordinator } from './services/rendererFlush'
 import { activateAssemblySettings } from './services/assemblySettings'
 import { createAppLifecycleIpcHandlers } from './services/appLifecycleIpc'
+import { createMarkdownExportHandlers } from './services/markdownExport'
+import { configureGeneratedDownloadDialog } from './services/downloadDialog'
 import { runPersistenceGuard, type PersistenceFailureAction } from './services/persistenceGuard'
 import { createRendererPathCapabilities } from './services/fileCapabilities'
 import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from './services/webSecurity'
@@ -97,7 +100,19 @@ const authConfirmationGuard = createAuthConfirmationGuard({
   writePending: (pending) => writePendingAuthConfirmation(app.getPath('userData'), pending)
 })
 
-for (const [channel, handler] of Object.entries(appLifecycleIpcHandlers)) {
+const markdownExportHandlers = createMarkdownExportHandlers({
+  showSaveDialog: (options) => {
+    if (!win || win.isDestroyed()) throw new Error('Main window is unavailable')
+    return dialog.showSaveDialog(win, options)
+  },
+  printToPDF: (options) => {
+    if (!win || win.isDestroyed()) throw new Error('Main window is unavailable')
+    return win.webContents.printToPDF(options)
+  },
+  writeFile: (path, data) => writeFile(path, data)
+})
+
+for (const [channel, handler] of Object.entries({ ...appLifecycleIpcHandlers, ...markdownExportHandlers })) {
   ipcMain.handle(channel, (event, ...args) => {
     if (!isTrustedIpcSender(event, () => win)) {
       return {
@@ -950,6 +965,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   logger.info(`app:ready (dev=${isDev})`)
   if (app.isPackaged) app.setAsDefaultProtocolClient('refora')
   applyCsp()
+  session.defaultSession.on('will-download', (_event, item, contents) => {
+    if (!win || win.isDestroyed() || contents !== win.webContents) return
+    configureGeneratedDownloadDialog(item, menuLanguage === 'zh' ? '保存文件' : 'Save file')
+  })
 
   serverPythonRuntime = createServerPythonRuntime({
     userDataDir: app.getPath('userData'),

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   PaperPlaneTilt,
+  Queue,
   Square,
   Paperclip,
   Scissors,
@@ -72,6 +73,8 @@ export default function ChatInput({
     options: WorkspaceAttachmentOption[]
   } | null>(null)
   const attachMenuRef = useRef<HTMLDivElement | null>(null)
+  const isFollowup = streaming || queueing
+  const placeholder = t(isFollowup ? 'workspace.chat.followupPlaceholder' : 'workspace.chat.inputPlaceholder')
   const shouldLoadAttachments = attachMenuOpen || selectedAttachments.length > 0
   const workspaceAttachments = workspaceAttachmentState?.workspaceId === activeWorkspaceId
     ? workspaceAttachmentState.options
@@ -129,11 +132,18 @@ export default function ChatInput({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [input])
 
+  const submit = () => {
+    if (!canSend) return
+    textareaRef.current?.focus()
+    onSend()
+  }
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      onSend()
+      if (input.trim().length > MAX_INPUT_LENGTH) onSend()
+      else submit()
     }
   }
 
@@ -236,7 +246,7 @@ export default function ChatInput({
             {selectedAttachments.map((attachment) => {
               const key = attachmentKey(attachment)
               const option = workspaceAttachments.find((candidate) => candidate.key === key)
-              const attachmentTitle = option?.title ?? (
+              const attachmentTitle = option?.title ?? attachment.title ?? (
                 attachment.type === 'document' ? attachment.docId : attachment.assetId
               )
               return (
@@ -271,13 +281,10 @@ export default function ChatInput({
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={onKeyDown}
             onContextMenu={handleContextMenu}
-            placeholder={t(
-              'workspace.chat.inputPlaceholder',
-              'PaperPlaneTilt a message… (Enter to send, Shift+Enter for newline)'
-            )}
+            placeholder={placeholder}
             disabled={providers.length === 0}
-            aria-label={t('workspace.chat.inputPlaceholder', 'PaperPlaneTilt a message…')}
-            title={`${t('workspace.chat.inputPlaceholder', 'PaperPlaneTilt a message…')} (⌘L)`}
+            aria-label={placeholder}
+            title={`${placeholder} (⌘L)`}
           />
           {input.length > MAX_INPUT_LENGTH * 0.8 && (
             <span
@@ -290,6 +297,16 @@ export default function ChatInput({
             </span>
           )}
         </div>
+
+        {streaming && !!input.trim() && (
+          <div className="flex justify-end px-3 pb-1">
+            <UiButton variant="ghost" size="sm" icon={<Queue className="h-3.5 w-3.5" />} onClick={submit} disabled={!canSend}
+              aria-label={t('workspace.chat.queueMessage')}
+              title={`${t('workspace.chat.queueMessage')} (⏎)`}>
+              {t('workspace.chat.queueMessage')}
+            </UiButton>
+          </div>
+        )}
 
         <div className="flex min-w-0 items-center gap-1 px-2 pb-2 pt-1">
           <div className="relative shrink-0" ref={attachMenuRef}>
@@ -364,25 +381,25 @@ export default function ChatInput({
                 size="sm"
                 iconOnly
                 className="shrink-0"
-                onClick={onCancel}
+                onClick={() => { textareaRef.current?.focus(); onCancel() }}
                 aria-label={t('workspace.chat.stop', 'Stop')}
                 title={t('workspace.chat.stop', 'Stop')}
               >
                 <Square className="h-3.5 w-3.5" />
               </UiButton>
             )}
-            <UiButton
+            {!streaming && <UiButton
                 variant="primary"
                 size="sm"
                 iconOnly
                 className="shrink-0"
-                onClick={onSend}
+                onClick={submit}
                 disabled={!canSend}
-                aria-label={t(queueing ? 'workspace.chat.queueMessage' : 'workspace.chat.send', queueing ? 'Queue follow-up' : 'Send')}
-                title={`${t(queueing ? 'workspace.chat.queueMessage' : 'workspace.chat.send', queueing ? 'Queue follow-up' : 'Send')} (⏎)`}
+                aria-label={t(isFollowup ? 'workspace.chat.queueMessage' : 'workspace.chat.send')}
+                title={`${t(isFollowup ? 'workspace.chat.queueMessage' : 'workspace.chat.send')} (⏎)`}
               >
-                <PaperPlaneTilt className="h-3.5 w-3.5" />
-              </UiButton>
+                {isFollowup ? <Queue className="h-3.5 w-3.5" /> : <PaperPlaneTilt className="h-3.5 w-3.5" />}
+              </UiButton>}
           </div>
         </div>
       </div>

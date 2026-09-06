@@ -155,6 +155,9 @@ def test_published_artifacts_are_assistant_attachments_and_structured_trace_resu
     assert message["attachments"] == [{"type": "asset", "assetId": "asset-one", "title": "chart.png"}]
     trace = next(step for step in repos["agentTraces"]["listByRun"]("run-1") if step["name"] == "publish_workspace_artifacts")
     assert trace["result"] == published
+    assert message["media"][0]["toolStepId"] == trace["id"]
+    snapshot = next(step for step in repos["agentTraces"]["listByRun"]("run-1") if step["kind"] == "run")
+    assert snapshot["result"]["media"][0]["toolStepId"] == trace["id"]
 
 
 def test_media_survives_failed_run_even_without_text(db):

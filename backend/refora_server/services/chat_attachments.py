@@ -66,7 +66,7 @@ def normalize_media(value: Any) -> list[dict[str, Any]]:
             continue
         seen.add(identifier)
         media = {"id": identifier, "kind": item["kind"], "source": cleaned}
-        for key, limit in (("title", 500), ("mimeType", 200)):
+        for key, limit in (("title", 500), ("mimeType", 200), ("toolStepId", 200)):
             text = item.get(key)
             if isinstance(text, str) and text.strip():
                 media[key] = text.strip()[:limit]

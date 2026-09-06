@@ -63,6 +63,7 @@ function renderSelector(overrides: Partial<React.ComponentProps<typeof ModelSele
 
 describe('ModelSelector', () => {
   beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
     defaultProps.onApplyModel = vi.fn().mockResolvedValue(undefined)
     defaultProps.onReasoningEffortChange = vi.fn()
   })
@@ -240,5 +241,17 @@ describe('ModelSelector', () => {
     expect(options[0]).toHaveFocus()
     fireEvent.keyDown(listbox, { key: 'Escape' })
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  })
+
+  it('focuses the selected model when opening and returns focus to the trigger on Escape', async () => {
+    const user = userEvent.setup()
+    renderSelector({ selectedModel: 'model-beta', selectedVariant: '', requestModel: 'model-beta' })
+    const trigger = screen.getByRole('button', { name: 'Select model / provider' })
+    await user.click(trigger)
+    expect(screen.getByRole('option', { name: 'Provider One/model-beta' })).toHaveFocus()
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 })

@@ -1734,3 +1734,114 @@ def test_heavy_read_routes_keep_envelopes_while_running_repositories_off_loop():
     assert export_threads and all(
         thread != loop_thread for thread in export_threads
     )
+
+
+def _markdown_recovery_state():
+    return {
+        "draft": {"title": "草稿", "contentMd": "## 未保存\n\n最新内容"},
+        "base": {"title": "Previous", "contentMd": "Original text"},
+        "history": [{"id": "version-1", "title": "Earlier", "contentMd": "Old text", "createdAt": 1000, "reason": "backup"}],
+    }
+
+
+def _markdown_view_state():
+    return {"mode": "edit", "preview": True, "scrollTop": 100.25, "position": {"start": 3, "end": 10, "scrollTop": 20}}
+
+
+@pytest.mark.parametrize(("key", "payload"), [
+    ("markdown.document.note.2d32b00d-f79b-426f-bd6a-8a594484a376", _markdown_recovery_state()),
+    ("markdown.document.report.report-1", _markdown_recovery_state()),
+    ("markdown.view.note.note-1", _markdown_view_state()),
+    ("markdown.view.report.report-1", _markdown_view_state()),
+    ("markdown.view.summary.legacy.document:1", _markdown_view_state()),
+])
+def test_markdown_settings_roundtrip_survives_database_reopen(tmp_path, key, payload):
+    client, repos, db = _pdf_settings_client(tmp_path)
+    try:
+        response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={key: payload})
+        assert response.status_code == 200
+        assert response.json()["data"][key] == payload
+        assert client.get("/settings", headers={"X-Refora-Token": "test-token"}).json()["data"][key] == payload
+    finally:
+        client.close()
+        db.close()
+    reopened, _ = open_database(str(tmp_path / "reading-state.db"))
+    try:
+        assert create_repositories(reopened)["settings"].get(key) == payload
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("key", [
+    "markdown.document.note.", "markdown.document.summary.doc-1", "markdown.document.unknown.doc-1",
+    "markdown.document.note../bad", "markdown.document.note.doc 1", "markdown.document.note.doc%2F1",
+    "markdown.document.note." + "a" * 129, "markdown.view.note.", "markdown.view.ocr.doc-1",
+    "markdown.view.note./bad", "markdown.other.note.doc-1",
+])
+def test_markdown_settings_rejects_unapproved_keys_atomically(key):
+    client, fakes = make_client()
+    previous = copy.deepcopy(fakes.settings_values)
+    response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={"theme": "light", key: _markdown_recovery_state()})
+    assert response.status_code == 400
+    assert fakes.settings_values == previous
+    assert fakes.transaction_calls == 0
+
+
+@pytest.mark.parametrize(("path", "invalid"), [
+    (("draft", "title"), None), (("draft", "title"), "a" * 10001),
+    (("draft", "contentMd"), 123), (("base", "contentMd"), False),
+    (("history",), "bad"), (("history", 0, "createdAt"), True),
+    (("history", 0, "createdAt"), -1), (("history", 0, "reason"), "unknown"),
+    (("history", 0, "id"), "../bad"), (("history", 0, "unexpected"), "extra"),
+    (("draft", "unexpected"), "extra"), (("unknown",), "extra"),
+])
+def test_markdown_recovery_rejects_invalid_values_atomically(path, invalid):
+    client, fakes = make_client()
+    payload = _markdown_recovery_state()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = invalid
+    previous = copy.deepcopy(fakes.settings_values)
+    response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={"theme": "light", "markdown.document.note.doc-1": payload})
+    assert response.status_code == 400
+    assert fakes.settings_values == previous
+    assert fakes.transaction_calls == 0
+
+
+@pytest.mark.parametrize(("path", "invalid"), [
+    (("mode",), "preview"), (("preview",), 1), (("scrollTop",), -1),
+    (("position", "start"), 1.5), (("position", "start"), True),
+    (("position", "end"), 2), (("position", "end"), 2**53),
+    (("position", "scrollTop"), "100"), (("position", "extra"), 0),
+    (("unexpected",), True),
+])
+def test_markdown_view_rejects_invalid_values_atomically(path, invalid):
+    client, fakes = make_client()
+    payload = _markdown_view_state()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = invalid
+    previous = copy.deepcopy(fakes.settings_values)
+    response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={"theme": "light", "markdown.view.note.doc-1": payload})
+    assert response.status_code == 400
+    assert fakes.settings_values == previous
+    assert fakes.transaction_calls == 0
+
+
+@pytest.mark.parametrize("failure", ["count", "duplicate", "history_size", "body_size"])
+def test_markdown_recovery_enforces_history_and_body_bounds(failure):
+    client, fakes = make_client()
+    payload = _markdown_recovery_state()
+    if failure == "count":
+        payload["history"] *= 21
+    elif failure == "duplicate":
+        payload["history"] *= 2
+    elif failure == "history_size":
+        payload["history"][0]["contentMd"] = "a" * 2_000_001
+    else:
+        payload["draft"]["contentMd"] = "中" * (16 * 1024 * 1024 // 3 + 1)
+    response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={"markdown.document.note.doc-1": payload})
+    assert response.status_code == 400
+    assert "markdown.document.note.doc-1" not in fakes.settings_values
