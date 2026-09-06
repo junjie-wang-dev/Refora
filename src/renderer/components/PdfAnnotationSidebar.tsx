@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  CheckCircle,
   Highlighter,
   ListBullets,
   MagnifyingGlass,
@@ -28,9 +27,6 @@ export default function PdfAnnotationSidebar({
   const { t } = useTranslation()
   const selectedIds = usePdfReaderStore((state) => state.selectedAnnotationIds)
   const pendingCommentFocusId = usePdfReaderStore((state) => state.pendingCommentFocusId)
-  const saveStatus = usePdfReaderStore(
-    (state) => state.saveStatus[documentId] ?? 'idle'
-  )
   const loadStatus = usePdfReaderStore(
     (state) => state.loadStatus[documentId] ?? 'idle'
   )
@@ -103,42 +99,10 @@ export default function PdfAnnotationSidebar({
         <span className="rounded-full bg-panel-2 px-2 py-0.5 text-label text-muted">
           {annotations.length}
         </span>
-        <button
-          type="button"
-          disabled={loadStatus !== 'error' && saveStatus !== 'error'}
-          aria-live="polite"
-          className={`ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-label ${
-            loadStatus === 'error' || saveStatus === 'error' ? 'text-error' : 'text-muted'
-          } disabled:cursor-default`}
-          title={loadStatus === 'error'
-            ? t('pdfReader.annotationLoadFailed')
-            : t(`pdfReader.saveStatus.${saveStatus}`)}
-          onClick={() => {
-            const store = usePdfReaderStore.getState()
-            if (loadStatus === 'error') void store.retryLoad(documentId)
-            else store.retrySave(documentId)
-          }}
-        >
-          {loadStatus !== 'error' && saveStatus === 'saved' && (
-            <CheckCircle className="h-3.5 w-3.5" weight="fill" />
-          )}
-          {(loadStatus === 'error' || saveStatus === 'error') && (
-            <WarningCircle className="h-3.5 w-3.5" weight="fill" />
-          )}
-          <span>
-            {loadStatus === 'loading'
-              ? t('pdfReader.loadingAnnotations')
-              : loadStatus === 'error'
-                ? t('pdfReader.retryLoadAnnotations')
-                : saveStatus === 'error'
-                  ? t('pdfReader.retrySave')
-                  : t(`pdfReader.saveStatus.${saveStatus}`)}
-          </span>
-        </button>
         {overlay && (
           <button
             type="button"
-            className="rounded-md p-1 text-muted hover:bg-hover hover:text-foreground"
+            className="ml-auto rounded-md p-1 text-muted hover:bg-hover hover:text-foreground"
             aria-label={t('pdfReader.closeAnnotations')}
             onClick={onClose}
           >

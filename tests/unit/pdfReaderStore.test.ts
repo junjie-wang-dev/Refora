@@ -81,6 +81,65 @@ describe('PDF reader state', () => {
     vi.restoreAllMocks()
   })
 
+  it('uses the same editing session for creation and reentry and records one undo per session', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    store.beginHistoryGroup('paper')
+    const annotation = store.addAnnotation('paper', {
+      kind: 'text', page: 1, text: '', comment: '', color: '#f00',
+      point: { x: 0.2, y: 0.3 }, fontSize: 18
+    })!
+    store.startTextEditing('paper', annotation.id, true)
+    expect(usePdfReaderStore.getState()).toMatchObject({
+      tool: null, textEditor: { documentId: 'paper', annotationId: annotation.id },
+      selectedAnnotationIds: [annotation.id]
+    })
+    store.updateAnnotation('paper', annotation.id, { text: 'First draft' })
+    store.finishTextEditing('paper', annotation.id)
+    expect(usePdfReaderStore.getState().textEditor).toBeNull()
+    store.startTextEditing('paper', annotation.id)
+    store.updateAnnotation('paper', annotation.id, { text: 'Revised draft' })
+    store.updateAnnotation('paper', annotation.id, { fontSize: 20 })
+    store.finishTextEditing('paper', annotation.id)
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper[0]).toMatchObject({ text: 'First draft', fontSize: 18 })
+    store.undo('paper')
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+  })
+
+  it('discards an unfinished blank text mark when choosing another tool without leaving undo debris', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    store.beginHistoryGroup('paper')
+    const annotation = store.addAnnotation('paper', {
+      kind: 'text', page: 1, text: '', comment: '', color: '#f00', point: { x: 0.2, y: 0.3 }
+    })!
+    store.startTextEditing('paper', annotation.id, true)
+    store.setTool('highlight')
+    expect(usePdfReaderStore.getState()).toMatchObject({ tool: 'highlight', textEditor: null })
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    expect(usePdfReaderStore.getState().annotationHistory.paper.past).toEqual([])
+  })
+
+  it('finishes the previous editor and ignores stale cleanup from it when another text is opened', async () => {
+    const store = usePdfReaderStore.getState()
+    await store.open(document('paper'))
+    const first = store.addAnnotation('paper', {
+      kind: 'text', page: 1, text: 'First', comment: '', color: '#f00', point: { x: 0.2, y: 0.3 }
+    })!
+    const second = store.addAnnotation('paper', {
+      kind: 'text', page: 2, text: 'Second', comment: '', color: '#f00', point: { x: 0.2, y: 0.3 }
+    })!
+    store.startTextEditing('paper', first.id)
+    store.updateAnnotation('paper', first.id, { text: 'First revised' })
+    store.startTextEditing('paper', second.id)
+    store.finishTextEditing('paper', first.id)
+    expect(usePdfReaderStore.getState().textEditor?.annotationId).toBe(second.id)
+    await store.open(document('other'))
+    expect(usePdfReaderStore.getState().textEditor).toBeNull()
+    expect(usePdfReaderStore.getState().annotations.paper[0].text).toBe('First revised')
+  })
+
   it('keeps multiple documents in tabs and activates an existing tab without duplicating it', async () => {
     await usePdfReaderStore.getState().open(document('one'))
     await usePdfReaderStore.getState().open(document('two'))
@@ -390,7 +449,7 @@ describe('PDF reader state', () => {
     expect(usePdfReaderStore.getState().saveStatus.paper).toBe('error')
 
     usePdfReaderStore.getState().retrySave('paper')
-    expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saving')
+    expect(usePdfReaderStore.getState().saveStatus.paper).toBe('error')
     await vi.advanceTimersByTimeAsync(300)
     expect(usePdfReaderStore.getState().saveStatus.paper).toBe('saved')
   })

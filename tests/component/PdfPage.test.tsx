@@ -221,7 +221,7 @@ describe('PdfPage annotation interaction', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it.each(['click', 'double click', 'keyboard'])('reopens text with %s and groups each editing session for undo', async (action) => {
+  it.each(['double click', 'keyboard'])('reopens text with %s and groups each editing session for undo', async (action) => {
     usePdfReaderStore.setState({ annotations: { paper: [{
       id: 'text', kind: 'text', page: 1, text: 'Original', comment: '', color: '#f00',
       point: { x: 0.1, y: 0.2 }, size: { width: 0.3, height: 0.05 }, createdAt: 0
@@ -231,8 +231,10 @@ describe('PdfPage annotation interaction', () => {
     const editor = screen.getByRole('textbox', { name: 'pdfReader.tools.text' })
     expect(editor).toHaveAttribute('readonly')
     expect(editor).toHaveAttribute('title', 'pdfReader.editTextHint')
-    if (action === 'click') fireEvent.click(editor)
-    else if (action === 'double click') fireEvent.doubleClick(editor)
+    fireEvent.click(editor)
+    expect(editor).toHaveAttribute('readonly')
+    expect(usePdfReaderStore.getState().textEditor).toBeNull()
+    if (action === 'double click') fireEvent.doubleClick(editor)
     else fireEvent.keyDown(editor, { key: 'Enter' })
     await waitFor(() => expect(editor).toHaveFocus())
     expect(editor).not.toHaveAttribute('readonly')
@@ -242,7 +244,7 @@ describe('PdfPage annotation interaction', () => {
     fireEvent.change(editor, { target: { value: 'Updated annotation' } })
     fireEvent.blur(editor)
     expect(editor).toHaveAttribute('readonly')
-    fireEvent.click(editor)
+    fireEvent.doubleClick(editor)
     await waitFor(() => expect(editor).toHaveFocus())
     fireEvent.change(editor, { target: { value: 'Edited again' } })
     fireEvent.blur(editor)

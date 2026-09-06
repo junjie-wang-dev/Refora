@@ -38,6 +38,7 @@ import {
   type PdfRect,
   type PdfTool
 } from '../store/pdfReaderStore'
+import PdfTextAnnotation from './PdfTextAnnotation'
 import { api } from '../ipc'
 import { useChatDraftStore } from '../store/chatDraftStore'
 import { useDocumentStore } from '../store/documentStore'
@@ -152,7 +153,7 @@ function estimatedTextAnnotationSize(
   const availableWidth = Math.max(32, pageWidth * (1 - point.x) - 6)
   const widthPixels = Math.min(
     availableWidth,
-    Math.max(48, Math.min(320, Math.max(...lineWidths) + 6))
+    Math.max(96, Math.min(320, Math.max(...lineWidths) + 6))
   )
   const rows = lineWidths.reduce(
     (total, width) => total + Math.max(1, Math.ceil(width / widthPixels)),
@@ -378,7 +379,8 @@ export default function PdfPage({
   const [pageLoadAttempt, setPageLoadAttempt] = useState(0)
   const [inkPoints, setInkPoints] = useState<PdfPoint[] | null>(null)
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
-  const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null)
+  const textEditor = usePdfReaderStore((state) => state.textEditor)
+  const editingTextAnnotationId = textEditor?.documentId === documentId ? textEditor.annotationId : null
   const [editingNoteAnnotationId, setEditingNoteAnnotationId] = useState<string | null>(null)
   const editingHistoryRef = useRef(false)
   const noteEditorRef = useRef<HTMLTextAreaElement>(null)
@@ -905,7 +907,9 @@ export default function PdfPage({
       return
     }
     if (tool === 'text') {
-      beginEditingHistory()
+      const store = usePdfReaderStore.getState()
+      store.finishTextEditing()
+      store.beginHistoryGroup(documentId)
       const point = pdfPointFromRotation(normalizedPoint(event, element), effectiveRotation)
       const annotation = onAddAnnotation({
         kind: 'text',
@@ -914,11 +918,11 @@ export default function PdfPage({
         text: '',
         comment: '',
         point,
-        size: { width: 0.16, height: 0.04 },
+        size: estimatedTextAnnotationSize('', fontSize, point, baseSize.width, baseSize.height),
         fontSize
       })
-      setEditingTextAnnotationId(annotation?.id ?? null)
-      if (!annotation) endEditingHistory()
+      if (annotation) store.startTextEditing(documentId, annotation.id, true)
+      else store.endHistoryGroup(documentId)
       return
     }
     if (tool === 'ink') {
@@ -1110,32 +1114,6 @@ export default function PdfPage({
       usePdfReaderStore.getState().endHistoryGroup(documentId)
     }
   }, [documentId])
-
-  useEffect(() => {
-    if (!editingTextAnnotationId || tool !== 'text') return
-    const annotation = annotations.find((item) => item.id === editingTextAnnotationId)
-    if (!annotation || annotation.kind !== 'text' || annotation.color === color) return
-    updateAnnotation(documentId, annotation.id, { color })
-  }, [
-    annotations,
-    color,
-    documentId,
-    editingTextAnnotationId,
-    tool,
-    updateAnnotation
-  ])
-
-  useEffect(() => {
-    if (!editingTextAnnotationId) return
-    const frame = window.requestAnimationFrame(() => {
-      pageElementRef.current
-        ?.querySelector<HTMLTextAreaElement>(
-          `[data-text-annotation-id="${editingTextAnnotationId}"]`
-        )
-        ?.focus()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [editingTextAnnotationId])
 
   useEffect(() => {
     if (!editingNoteAnnotationId) return
@@ -1441,128 +1419,48 @@ export default function PdfPage({
           )
         }
       )}
-      {annotations.filter((annotation) => annotation.kind === 'text' && annotation.point).map(
-        (annotation) => {
-          const canonicalRect = textAnnotationRect(annotation)
-          const displayRect = pdfRectForRotation(canonicalRect, effectiveRotation)
-          const textWidth = canonicalRect.width * baseSize.width * scale
-          const textHeight = canonicalRect.height * baseSize.height * scale
-          const editing = tool === 'text' || editingTextAnnotationId === annotation.id
-          const textTransform = effectiveRotation === 90
-            ? `translateX(${textHeight}px) rotate(90deg)`
-            : effectiveRotation === 180
-              ? `translate(${textWidth}px, ${textHeight}px) rotate(180deg)`
-              : effectiveRotation === 270
-                ? `translateY(${textWidth}px) rotate(270deg)`
-                : undefined
-          return (
-            <textarea
-              key={annotation.id}
-              data-annotation-id={annotation.id}
-              data-text-annotation-id={annotation.id}
-              autoFocus={
-                editingTextAnnotationId === annotation.id &&
-                annotation.text.length === 0
-              }
-              value={annotation.text}
-              placeholder={t('pdfReader.textPlaceholder')}
-              className={`pdf-text-annotation absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 text-black shadow-none outline-none ${
-                editing
-                  ? 'pointer-events-auto'
-                  : tool === null || tool === 'eraser'
-                    ? `pointer-events-auto ${tool === null ? 'cursor-move' : 'cursor-text'}`
-                    : 'pointer-events-none'
-              } ${
-                selectedAnnotationIds.includes(annotation.id)
-                  ? 'outline outline-1 outline-offset-2 outline-accent'
-                  : ''
-              }`}
-              style={{
-                left: `${displayRect.x * 100}%`,
-                top: `${displayRect.y * 100}%`,
-                width: textWidth,
-                height: textHeight,
-                transform: textTransform,
-                transformOrigin: 'top left',
-                color: annotation.color,
-                fontSize: `${(annotation.fontSize ?? 14) * scale}px`,
-                lineHeight: 1.35,
-                '--pdf-text-annotation-color': annotation.color
-              } as CSSProperties}
-              aria-label={t('pdfReader.tools.text')}
-              title={!editing ? t('pdfReader.editTextHint') : undefined}
-              readOnly={!editing}
-              onPointerDown={(event) => {
-                if (tool === null && !editing) {
-                  startAnnotationDrag(event, annotation)
-                  return
-                }
-                if (tool === 'eraser') {
-                  event.preventDefault()
-                  window.getSelection()?.removeAllRanges()
-                }
-                event.stopPropagation()
-              }}
-              onClick={() => {
-                if (suppressAnnotationClickRef.current) return
-                handleAnnotationClick(annotation)
-                if (tool === null || tool === 'text') {
-                  beginEditingHistory()
-                  setEditingTextAnnotationId(annotation.id)
-                }
-              }}
-              onDoubleClick={() => {
-                if (tool !== null) return
-                selectAnnotation(annotation.id)
-                beginEditingHistory()
-                setEditingTextAnnotationId(annotation.id)
-              }}
-              onFocus={() => {
-                if (editing) beginEditingHistory()
-              }}
-              onChange={(event) => {
-                const nextText = event.target.value
-                const point = annotation.point ?? { x: 0, y: 0 }
-                updateAnnotation(documentId, annotation.id, {
-                  text: nextText,
-                  size: estimatedTextAnnotationSize(
-                    nextText,
-                    annotation.fontSize ?? 14,
-                    point,
-                    baseSize.width,
-                    baseSize.height
-                  )
-                })
-              }}
-              onBlur={() => {
-                if (editing && !annotation.text.trim()) {
-                  removeAnnotation(documentId, annotation.id)
-                  setEditingTextAnnotationId((current) =>
-                    current === annotation.id ? null : current
-                  )
-                }
-                endEditingHistory()
-                setEditingTextAnnotationId((current) =>
-                  current === annotation.id ? null : current
-                )
-              }}
-              onKeyDown={(event) => {
-                if (!editing && tool === null && (event.key === 'Enter' || event.key === 'F2')) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  selectAnnotation(annotation.id)
-                  beginEditingHistory()
-                  setEditingTextAnnotationId(annotation.id)
-                  return
-                }
-                if (event.key !== 'Escape') return
-                event.stopPropagation()
-                event.currentTarget.blur()
-              }}
-            />
-          )
-        }
-      )}
+      {annotations.filter((annotation) => annotation.kind === 'text' && annotation.point).map((annotation) => (
+        <PdfTextAnnotation
+          key={annotation.id}
+          annotation={annotation}
+          scale={scale}
+          rotation={effectiveRotation}
+          baseSize={baseSize}
+          rect={textAnnotationRect(annotation)}
+          selected={selectedAnnotationIds.includes(annotation.id)}
+          showControls={selectedAnnotationIds.length === 1 || editingTextAnnotationId === annotation.id}
+          editing={editingTextAnnotationId === annotation.id}
+          active={active}
+          scrollRootRef={scrollRootRef}
+          interactive={tool === null || tool === 'text' || tool === 'eraser'}
+          erasing={tool === 'eraser'}
+          onSelect={() => {
+            if (suppressAnnotationClickRef.current) return
+            if (tool === 'text') usePdfReaderStore.getState().startTextEditing(documentId, annotation.id)
+            else handleAnnotationClick(annotation)
+          }}
+          onStartEditing={() => {
+            if (suppressAnnotationClickRef.current) return
+            usePdfReaderStore.getState().startTextEditing(documentId, annotation.id)
+          }}
+          onFinishEditing={() => usePdfReaderStore.getState().finishTextEditing(documentId, annotation.id)}
+          onDragStart={(event) => startAnnotationDrag(event, annotation)}
+          onUpdate={(patch) => {
+            const point = annotation.point ?? { x: 0, y: 0 }
+            const store = usePdfReaderStore.getState()
+            if (patch.color !== undefined) store.setColor(patch.color)
+            if (patch.fontSize !== undefined) store.setFontSize(patch.fontSize)
+            updateAnnotation(documentId, annotation.id, {
+              ...patch,
+              ...(patch.text !== undefined || patch.fontSize !== undefined ? {
+                size: estimatedTextAnnotationSize(patch.text ?? annotation.text,
+                  patch.fontSize ?? annotation.fontSize ?? 14, point, baseSize.width, baseSize.height)
+              } : {})
+            })
+          }}
+          onDelete={() => removeAnnotation(documentId, annotation.id)}
+        />
+      ))}
       {editingNote && active && createPortal(
           <div
             ref={notePopoverRef}
@@ -1606,7 +1504,7 @@ export default function PdfPage({
           `note-editor-${editingNote.id}`
       )}
       {annotations
-        .filter((annotation) => selectedAnnotationIds.includes(annotation.id))
+        .filter((annotation) => annotation.kind !== 'text' && selectedAnnotationIds.includes(annotation.id))
         .flatMap((annotation) =>
           (annotation.kind === 'text'
             ? [textAnnotationRect(annotation)]

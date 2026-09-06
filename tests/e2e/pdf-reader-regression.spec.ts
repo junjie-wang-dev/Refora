@@ -577,7 +577,11 @@ test.describe('PDF reader regressions', () => {
     await navigation.getByRole('button', { name: 'Remove Return to methods', exact: true }).click()
     await expect(navigation.getByRole('button', { name: 'Return to methods, Page 2', exact: true })).toHaveCount(0)
     await expect.poll(async () => (await savedRecord())?.bookmarks).toEqual([])
-    await expect(page.locator('[data-pdf-persistence-status]')).toBeVisible()
+    await expect(page.locator('[data-pdf-persistence-status]')).toHaveCount(0)
+    await expect(page.locator('[data-pdf-reader-toolbar]').getByText(/^(Local|Saving…|Saved)$/))
+      .toHaveCount(0)
+    await expect(page.locator('[data-annotation-sidebar]').getByText(/^(Local|Saving…|Saved)$/))
+      .toHaveCount(0)
     await expect(page.getByRole('alert')).toHaveCount(0)
   })
 

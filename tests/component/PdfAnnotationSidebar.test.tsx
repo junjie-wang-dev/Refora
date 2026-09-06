@@ -34,6 +34,24 @@ describe('PdfAnnotationSidebar', () => {
     vi.restoreAllMocks()
   })
 
+  it.each(['idle', 'saving', 'saved', 'error'] as const)('does not render a persistence status in the sidebar for %s', (status) => {
+    usePdfReaderStore.setState({ loadStatus: { paper: 'loaded' }, saveStatus: { paper: status } })
+    const view = render(
+      <PdfAnnotationSidebar
+        annotations={[]}
+        documentId="paper"
+        overlay={false}
+        onClose={vi.fn()}
+        onNavigate={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByText(/^pdfReader\.saveStatus\./)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.retrySave' })).not.toBeInTheDocument()
+    expect(view.container.querySelector('[aria-live]')).toBeNull()
+    expect(screen.getByText('pdfReader.noAnnotationsTitle')).toBeInTheDocument()
+  })
+
   it('retries a failed annotation read without writing an empty snapshot', async () => {
     render(
       <PdfAnnotationSidebar

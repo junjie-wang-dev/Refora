@@ -12,7 +12,7 @@ import { showContextMenu } from '@lobehub/ui'
 import type { Document as LibraryDocument } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import PdfReader from '../../src/renderer/components/PdfReader'
-import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
+import { usePdfReaderStore, type PdfAnnotation } from '../../src/renderer/store/pdfReaderStore'
 import { DEFAULT_PDF_VIEW, usePdfViewStore } from '../../src/renderer/store/pdfViewStore'
 import { invalidateRendererSettingWrites } from '../../src/renderer/persistence'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
@@ -1407,55 +1407,74 @@ describe('PdfReader rendering visibility', () => {
     const save = vi.spyOn(api.settings, 'set').mockImplementationOnce(() => new Promise<void>((resolve) => {
       completeSave = resolve
     }))
+    usePdfReaderStore.setState({ sidebarOpen: true })
     const view = render(<PdfReader />)
     await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
-    const status = screen.getByRole('button', { name: 'pdfReader.persistenceStatus' })
+    const expectSilentPersistence = () => {
+      expect(view.container.querySelector('[data-pdf-persistence-status]')).toBeNull()
+      expect(view.container.querySelector('[data-pdf-persistence-error]')).toBeNull()
+      expect(screen.queryByText(/^pdfReader\.saveStatus\./)).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'common.retry' })).not.toBeInTheDocument()
+    }
+    expectSilentPersistence()
     const readingView = { ...DEFAULT_PDF_VIEW, y: 0.3 }
     act(() => usePdfViewStore.getState().updateView('paper', readingView))
+    expectSilentPersistence()
     await waitFor(() => expect(save).toHaveBeenCalledWith('pdfReader.document.paper', {
       view: readingView, bookmarks: []
     }))
     expect(usePdfViewStore.getState().saveStatus.paper).toBe('saving')
-    expect(status).toHaveTextContent('pdfReader.saveStatus.saved')
-    expect(status).not.toHaveTextContent('pdfReader.saveStatus.saving')
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expectSilentPersistence()
     await act(async () => completeSave())
     await waitFor(() => expect(usePdfViewStore.getState().saveStatus.paper).toBe('saved'))
-    expect(status).toHaveTextContent('pdfReader.saveStatus.saved')
+    expectSilentPersistence()
 
     save.mockRejectedValueOnce(new Error('Disk full'))
     act(() => usePdfViewStore.getState().updateView('paper', { ...readingView, y: 0.6 }))
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateFailed'))
-    expect(status).toHaveTextContent('pdfReader.retryReadingState')
-    fireEvent.click(status)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateSaveFailed'))
+    save.mockImplementationOnce(() => new Promise<void>((resolve) => { completeSave = resolve }))
+    act(() => usePdfViewStore.getState().updateView('paper', { ...readingView, y: 0.8 }))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateSaveFailed')
+    fireEvent.click(screen.getByRole('button', { name: 'common.retry' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateSaveFailed')
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.readingStateSaveFailed')
+    await act(async () => completeSave())
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expectSilentPersistence()
     expect(save).toHaveBeenLastCalledWith('pdfReader.document.paper', {
-      view: { ...readingView, y: 0.6 }, bookmarks: []
+      view: { ...readingView, y: 0.8 }, bookmarks: []
     })
   })
 
-  it('shows annotation save failures and retries from the toolbar while the sidebar stays closed', async () => {
+  it('keeps annotation save failures visible through edits and retries until the latest snapshot saves', async () => {
+    let completeSave!: (annotations: PdfAnnotation[]) => void
     const save = vi.spyOn(api.documents, 'setPdfAnnotations')
       .mockRejectedValueOnce(new Error('Disk full'))
-      .mockImplementation(async (_id, annotations) => annotations)
+      .mockImplementationOnce(() => new Promise<PdfAnnotation[]>((resolve) => { completeSave = resolve }))
     const view = render(<PdfReader />)
     await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
     act(() => usePdfReaderStore.getState().addAnnotation('paper', {
       kind: 'ink', page: 1, text: '', comment: '', color: '#ff0',
       points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }]
     }))
-    const status = screen.getByRole('button', { name: 'pdfReader.persistenceStatus' })
-    await waitFor(() => expect(status).toHaveTextContent('pdfReader.retrySave'))
-    expect(status).toBeEnabled()
-    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed')
+    expect(screen.queryByText(/^pdfReader\.saveStatus\./)).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed'))
     expect(view.container.querySelector('[data-annotation-sidebar]')).toBeNull()
-    fireEvent.click(status)
-    await waitFor(() => expect(status).toHaveTextContent('pdfReader.saveStatus.saved'))
-    expect(save).toHaveBeenCalledTimes(2)
+    const id = usePdfReaderStore.getState().annotations.paper[0].id
+    act(() => usePdfReaderStore.getState().updateAnnotation('paper', id, { color: '#f00' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed')
+    fireEvent.click(screen.getByRole('button', { name: 'common.retry' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed')
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('alert')).toHaveTextContent('pdfReader.annotationSaveFailed')
     expect(save).toHaveBeenLastCalledWith('paper', expect.arrayContaining([
-      expect.objectContaining({ kind: 'ink' })
+      expect.objectContaining({ kind: 'ink', color: '#f00' })
     ]))
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await act(async () => completeSave(usePdfReaderStore.getState().annotations.paper))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.queryByText(/^pdfReader\.saveStatus\./)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'common.retry' })).not.toBeInTheDocument()
   })
 
   it('routes Command-F to PDF search and leaves it alone while the reader is hidden', async () => {

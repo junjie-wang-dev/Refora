@@ -789,8 +789,13 @@
     "persistenceStatus": "Reader save status",
     "retryReadingState": "Retry reading state",
     "readingStateFailed": "Reading position or bookmarks could not be loaded or saved. Use the save status button to retry.",
-    "annotationSaveFailed": "Annotations have not been saved. Use the save status button to retry.",
-    "editTextHint": "Click to edit text; drag to move"
+    "annotationSaveFailed": "Annotations have not been saved.",
+    "editTextHint": "Double-click or press Enter to edit; drag to move",
+    "readingStateLoadFailed": "Reading position and bookmarks could not be loaded.",
+    "readingStateSaveFailed": "Reading position and bookmarks have not been saved.",
+    "textAnnotationToolbar": "Text annotation controls",
+    "editText": "Edit text",
+    "finishEditingText": "Done"
   },
   "workspace": {
     "untitled": "Untitled",

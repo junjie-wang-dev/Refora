@@ -16,7 +16,6 @@ import {
   ArrowsOutSimple,
   CaretLeft,
   CaretRight,
-  CheckCircle,
   CursorText,
   Eraser,
   Highlighter,
@@ -259,11 +258,12 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const selectedInkAnnotations = selectedAnnotations.filter(
     (annotation) => annotation.kind === 'ink'
   )
+  const singleTextSelection = selectedAnnotationIds.length === 1 && selectedTextAnnotations.length === 1
   const displayedFontSize = selectedTextAnnotations[0]?.fontSize ?? fontSize
   const displayedStrokeWidth = selectedInkAnnotations[0]?.strokeWidth ?? strokeWidth
   const displayedColor = selectedAnnotations[0]?.color ?? color
-  const showAnnotationStyleControls = selectedAnnotations.length > 0 || (
-    effectiveTool !== null && effectiveTool !== 'eraser'
+  const showAnnotationStyleControls = (selectedAnnotations.length > 0 && !singleTextSelection) || (
+    effectiveTool !== null && effectiveTool !== 'eraser' && effectiveTool !== 'text'
   )
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -1060,6 +1060,16 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return
+      if ((event.key === 'Enter' || event.key === 'F2') && annotationShortcutsEnabled &&
+        !(target instanceof HTMLElement && target.closest('button, a'))) {
+        const annotation = currentState.annotations[currentState.activeDocumentId ?? '']
+          ?.find((item) => item.id === currentState.selectedAnnotationIds[0])
+        if (currentState.selectedAnnotationIds.length === 1 && annotation?.kind === 'text') {
+          event.preventDefault()
+          currentState.startTextEditing(currentState.activeDocumentId!, annotation.id)
+          return
+        }
+      }
       if (
         (event.key === 'Backspace' || event.key === 'Delete') &&
         annotationShortcutsEnabled &&
@@ -1284,7 +1294,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           {t(effectiveTool === null ? 'pdfReader.tools.select' : `pdfReader.tools.${effectiveTool}`)}
         </span>
       )}
-      {(effectiveTool === 'text' || selectedTextAnnotations.length > 0) && (
+      {selectedTextAnnotations.length > 0 && !singleTextSelection && (
         <div className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md bg-panel px-0.5">
           <ReaderButton
             label={t('pdfReader.decreaseFontSize')}
@@ -1332,7 +1342,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           </ReaderButton>
         </div>
       )}
-      {selectedAnnotationIds.length > 0 && (
+      {selectedAnnotationIds.length > 0 && !singleTextSelection && (
         <div className="ml-1 flex shrink-0 items-center gap-1 rounded-md bg-active pl-2 pr-0.5">
           <span className="text-label font-medium text-accent">
             {t('pdfReader.selectedCount', { count: selectedAnnotationIds.length })}
@@ -1461,26 +1471,15 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     if (viewLoadStatus === 'error') setLoadAttempt((attempt) => attempt + 1)
     if (viewSaveStatus === 'error') usePdfViewStore.getState().retrySave(activeDocument.id)
   }
+  const persistenceErrors = [
+    annotationLoadStatus[activeDocument.id] === 'error' ? t('pdfReader.annotationLoadFailed') : null,
+    saveStatus === 'error' ? t('pdfReader.annotationSaveFailed') : null,
+    viewLoadStatus === 'error' ? t('pdfReader.readingStateLoadFailed') : null,
+    viewSaveStatus === 'error' ? t('pdfReader.readingStateSaveFailed') : null
+  ].filter((message) => message !== null)
 
   const utilityControls = (
     <>
-      <button type="button" data-pdf-persistence-status
-        aria-label={t('pdfReader.persistenceStatus')}
-        disabled={annotationLoadStatus[activeDocument.id] !== 'error' && saveStatus !== 'error' &&
-          viewLoadStatus !== 'error' && viewSaveStatus !== 'error'}
-        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-label text-muted disabled:cursor-default"
-        onClick={retryReaderPersistence}>
-        {annotationLoadStatus[activeDocument.id] === 'error' || saveStatus === 'error' || viewLoadStatus === 'error' || viewSaveStatus === 'error'
-          ? <WarningCircle className="h-4 w-4 text-error" />
-          : <CheckCircle className="h-4 w-4" />}
-        <span aria-live="polite">
-          {annotationLoadStatus[activeDocument.id] === 'error' ? t('pdfReader.retryLoadAnnotations')
-            : saveStatus === 'error' ? t('pdfReader.retrySave')
-              : viewLoadStatus === 'error' || viewSaveStatus === 'error' ? t('pdfReader.retryReadingState')
-                : annotationLoadStatus[activeDocument.id] === 'loading' ? t('pdfReader.loadingAnnotations')
-                  : t(`pdfReader.saveStatus.${saveStatus ?? 'idle'}`)}
-        </span>
-      </button>
       <ReaderButton
         label={t('pdfReader.openInSystem')}
         onClick={() => void openDocumentPdf(activeDocument.id, { forceSystem: true })}
@@ -1602,14 +1601,19 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
           </div>
         )}
       </div>
-      {(annotationLoadStatus[activeDocument.id] === 'error' || saveStatus === 'error' ||
-        viewLoadStatus === 'error' || viewSaveStatus === 'error' || navigationError) && (
+      {persistenceErrors.length > 0 && (
+        <div role="alert" data-pdf-persistence-error className="flex shrink-0 items-center gap-3 border-b border-error/25 bg-error/10 px-3 py-2 text-xs text-error">
+          <WarningCircle className="h-4 w-4 shrink-0" />
+          <div className="flex flex-1 flex-col gap-1">
+            {persistenceErrors.map((message) => <span key={message}>{message}</span>)}
+          </div>
+          <button type="button" className="shrink-0 rounded border border-error/40 px-2 py-1 hover:bg-error/10"
+            onClick={retryReaderPersistence}>{t('common.retry')}</button>
+        </div>
+      )}
+      {navigationError && (
         <div role="alert" className="flex shrink-0 items-center gap-3 border-b border-error/25 bg-error/10 px-3 py-2 text-xs text-error">
-          <span className="flex-1">{navigationError ?? (annotationLoadStatus[activeDocument.id] === 'error'
-            ? t('pdfReader.annotationLoadFailed') : saveStatus === 'error'
-              ? t('pdfReader.annotationSaveFailed') : t('pdfReader.readingStateFailed'))}</span>
-          {!navigationError && <button type="button" className="shrink-0 rounded border border-error/40 px-2 py-1 hover:bg-error/10"
-            onClick={retryReaderPersistence}>{t('common.retry')}</button>}
+          <span className="flex-1">{navigationError}</span>
         </div>
       )}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">

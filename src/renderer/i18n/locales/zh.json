@@ -789,8 +789,13 @@
     "persistenceStatus": "阅读器保存状态",
     "retryReadingState": "重试阅读状态",
     "readingStateFailed": "阅读位置或书签未能加载或保存，请点击保存状态按钮重试。",
-    "annotationSaveFailed": "批注尚未保存，请点击保存状态按钮重试。",
-    "editTextHint": "单击编辑文字，拖动移动"
+    "annotationSaveFailed": "批注尚未保存。",
+    "editTextHint": "双击或按 Enter 编辑，拖动移动",
+    "readingStateLoadFailed": "无法加载阅读位置和书签。",
+    "readingStateSaveFailed": "阅读位置和书签尚未保存。",
+    "textAnnotationToolbar": "文字标记工具",
+    "editText": "编辑文字",
+    "finishEditingText": "完成"
   },
   "workspace": {
     "untitled": "未命名",

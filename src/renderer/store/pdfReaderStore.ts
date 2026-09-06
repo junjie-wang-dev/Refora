@@ -65,6 +65,7 @@ interface PdfReaderState {
   sidebarOpen: boolean
   selectedAnnotationId: string | null
   selectedAnnotationIds: string[]
+  textEditor: { documentId: string; annotationId: string } | null
   pendingCommentFocusId: string | null
   lastDeletion: PdfAnnotationDeletion | null
   open: (document: Document) => Promise<void>
@@ -78,6 +79,8 @@ interface PdfReaderState {
   toggleSidebar: () => void
   selectAnnotation: (id: string | null) => void
   selectAnnotations: (ids: string[]) => void
+  startTextEditing: (documentId: string, annotationId: string, continueHistory?: boolean) => void
+  finishTextEditing: (documentId?: string, annotationId?: string) => void
   addAnnotation: (documentId: string, annotation: PdfAnnotationDraft) => PdfAnnotation | null
   updateAnnotation: (
     documentId: string,
@@ -150,6 +153,7 @@ function clearDocumentCache(documentId: string): void {
     loadStatus: withoutKey(state.loadStatus, documentId),
     saveStatus: withoutKey(state.saveStatus, documentId),
     annotationHistory: withoutKey(state.annotationHistory, documentId),
+    textEditor: state.textEditor?.documentId === documentId ? null : state.textEditor,
     lastDeletion: state.lastDeletion?.documentId === documentId ? null : state.lastDeletion
   }))
 }
@@ -191,6 +195,7 @@ function endHistoryGroup(documentId: string): void {
 }
 
 function applyHistory(documentId: string, direction: 'undo' | 'redo'): void {
+  usePdfReaderStore.getState().finishTextEditing(documentId)
   endHistoryGroup(documentId)
   const state = usePdfReaderStore.getState()
   const history = state.annotationHistory[documentId]
@@ -309,7 +314,7 @@ function persist(documentId: string, annotations: PdfAnnotation[]): void {
   queue.pending = { annotations, version: queue.version }
   queue.failed = null
   usePdfReaderStore.setState((state) => ({
-    saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
+    saveStatus: { ...state.saveStatus, [documentId]: state.saveStatus[documentId] === 'error' ? 'error' : 'saving' }
   }))
   queue.timer = setTimeout(() => {
     queue.timer = null
@@ -332,7 +337,7 @@ async function flushPersistQueue(
     }
     queue.failed = null
     usePdfReaderStore.setState((state) => ({
-      saveStatus: { ...state.saveStatus, [documentId]: 'saving' }
+      saveStatus: { ...state.saveStatus, [documentId]: state.saveStatus[documentId] === 'error' ? 'error' : 'saving' }
     }))
   }
   while (true) {
@@ -385,6 +390,7 @@ function resetForLibrarySwitch(): void {
     sidebarOpen: false,
     selectedAnnotationId: null,
     selectedAnnotationIds: [],
+    textEditor: null,
     pendingCommentFocusId: null,
     lastDeletion: null
   })
@@ -410,10 +416,12 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   sidebarOpen: false,
   selectedAnnotationId: null,
   selectedAnnotationIds: [],
+  textEditor: null,
   pendingCommentFocusId: null,
   lastDeletion: null,
 
   open: async (document) => {
+    get().finishTextEditing()
     const previousDocumentId = get().activeDocumentId
     if (previousDocumentId && previousDocumentId !== document.id) {
       endHistoryGroup(previousDocumentId)
@@ -470,6 +478,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   close: (documentId) => {
+    get().finishTextEditing(documentId)
     endHistoryGroup(documentId)
     annotationLoadVersions.delete(documentId)
     set((state) => {
@@ -498,6 +507,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   closeAll: () => {
+    get().finishTextEditing()
     const documentIds = new Set([
       ...get().tabs.map((tab) => tab.id),
       ...Object.keys(get().annotations),
@@ -525,6 +535,7 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   },
 
   activate: (documentId) => {
+    get().finishTextEditing()
     const previousDocumentId = get().activeDocumentId
     if (previousDocumentId && previousDocumentId !== documentId) {
       endHistoryGroup(previousDocumentId)
@@ -537,11 +548,14 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     })
   },
 
-  setTool: (tool) => set((state) => ({
-    tool,
-    selectedAnnotationId: tool === null ? state.selectedAnnotationId : null,
-    selectedAnnotationIds: tool === null ? state.selectedAnnotationIds : []
-  })),
+  setTool: (tool) => {
+    get().finishTextEditing()
+    set((state) => ({
+      tool,
+      selectedAnnotationId: tool === null ? state.selectedAnnotationId : null,
+      selectedAnnotationIds: tool === null ? state.selectedAnnotationIds : []
+    }))
+  },
   setColor: (color) => set({ color }),
   setFontSize: (fontSize) => set({
     fontSize: Math.max(8, Math.min(72, fontSize))
@@ -550,14 +564,36 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
     strokeWidth: Math.max(1, Math.min(12, strokeWidth))
   }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  selectAnnotation: (id) => set({
-    selectedAnnotationId: id,
-    selectedAnnotationIds: id ? [id] : []
-  }),
-  selectAnnotations: (ids) => set({
-    selectedAnnotationId: ids.at(-1) ?? null,
-    selectedAnnotationIds: ids
-  }),
+  selectAnnotation: (id) => get().selectAnnotations(id ? [id] : []),
+  selectAnnotations: (ids) => {
+    const editor = get().textEditor
+    if (editor && (ids.length !== 1 || ids[0] !== editor.annotationId)) get().finishTextEditing()
+    set({ selectedAnnotationId: ids.at(-1) ?? null, selectedAnnotationIds: ids })
+  },
+
+  startTextEditing: (documentId, annotationId, continueHistory = false) => {
+    const state = get()
+    const annotation = state.annotations[documentId]?.find((item) => item.id === annotationId)
+    if (state.activeDocumentId !== documentId || state.loadStatus[documentId] !== 'loaded' || annotation?.kind !== 'text') return
+    if (state.textEditor?.documentId === documentId && state.textEditor.annotationId === annotationId) return
+    get().finishTextEditing()
+    if (!continueHistory) get().beginHistoryGroup(documentId)
+    set({
+      textEditor: { documentId, annotationId }, tool: null,
+      selectedAnnotationId: annotationId, selectedAnnotationIds: [annotationId],
+      pendingCommentFocusId: null
+    })
+  },
+
+  finishTextEditing: (documentId, annotationId) => {
+    const editor = get().textEditor
+    if (!editor || (documentId && editor.documentId !== documentId) ||
+      (annotationId && editor.annotationId !== annotationId)) return
+    const annotation = get().annotations[editor.documentId]?.find((item) => item.id === editor.annotationId)
+    set({ textEditor: null })
+    if (annotation && !annotation.text.trim()) get().removeAnnotation(editor.documentId, editor.annotationId)
+    endHistoryGroup(editor.documentId)
+  },
 
   addAnnotation: (documentId, draft) => {
     if (!Object.hasOwn(get().annotations, documentId)) return null
@@ -610,6 +646,8 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   removeAnnotations: (documentId, annotationIds) => {
     if (!Object.hasOwn(get().annotations, documentId)) return
     const ids = new Set(annotationIds)
+    const editor = get().textEditor
+    const finishesTextEdit = editor?.documentId === documentId && ids.has(editor.annotationId)
     const currentAnnotations = get().annotations[documentId] ?? []
     const deleted = currentAnnotations.flatMap((annotation, index) =>
       ids.has(annotation.id) ? [{ annotation, index }] : []
@@ -625,12 +663,15 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
         annotations: { ...state.annotations, [documentId]: annotations },
         selectedAnnotationId: selectedAnnotationIds.at(-1) ?? null,
         selectedAnnotationIds,
+        textEditor: state.textEditor?.documentId === documentId && ids.has(state.textEditor.annotationId)
+          ? null : state.textEditor,
         pendingCommentFocusId: ids.has(state.pendingCommentFocusId ?? '')
           ? null
           : state.pendingCommentFocusId,
         lastDeletion: { documentId, annotations: deleted }
       }
     })
+    if (finishesTextEdit) endHistoryGroup(documentId)
     persist(documentId, annotations)
   },
 
