@@ -1,3 +1,4 @@
+vi.mock('../../src/main/services/contextMenuIcons', () => ({ contextMenuIcon: (icon: string) => icon ? { icon } : undefined }))
 import { describe, expect, it, vi } from 'vitest'
 import type { BrowserWindow, MenuItemConstructorOptions } from 'electron'
 import { Menu } from 'electron'
@@ -21,8 +22,8 @@ describe('native context menus', () => {
     expect(template[0]).toMatchObject({ label: '标题', type: 'checkbox', checked: true })
     expect(template[1]).toEqual({ type: 'separator' })
     const child = (template[2].submenu as MenuItemConstructorOptions[])[0]
-    expect(template[2].icon).toEqual({ symbol: 'sparkles' })
-    expect(child.icon).toEqual({ symbol: 'list.bullet' })
+    expect(template[2].icon).toEqual({ icon: 'ai' })
+    expect(child.icon).toEqual({ icon: 'summarize' })
     child.click?.(null as never, null as never, null as never)
     template[3].click?.(null as never, null as never, null as never)
     expect(select.mock.calls).toEqual([['summary']])

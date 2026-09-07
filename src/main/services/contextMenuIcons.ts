@@ -1,3 +1,4 @@
+import workspaceMenuIcons from '../assets/workspaceMenuIcons'
 import { nativeImage, type NativeImage } from 'electron'
 import { contextMenuSymbols, isContextMenuIcon } from '../../shared/contextMenuIcons'
 
@@ -7,7 +8,16 @@ export function contextMenuIcon(value: unknown): NativeImage | undefined {
   if (!isContextMenuIcon(value)) return undefined
   if (!images.has(value)) {
     try {
-      images.set(value, nativeImage.createMenuSymbol(contextMenuSymbols[value]))
+      if (Object.hasOwn(workspaceMenuIcons, value)) {
+        const icon = nativeImage.createEmpty()
+        for (const representation of workspaceMenuIcons[value as keyof typeof workspaceMenuIcons]) {
+          icon.addRepresentation(representation)
+        }
+        icon.setTemplateImage(true)
+        images.set(value, icon)
+      } else {
+        images.set(value, nativeImage.createMenuSymbol(contextMenuSymbols[value]))
+      }
     } catch {
       images.set(value, undefined)
     }

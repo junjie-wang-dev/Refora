@@ -1,3 +1,4 @@
+vi.mock('../../src/main/services/contextMenuIcons', () => ({ contextMenuIcon: (icon: string) => icon ? { icon } : undefined }))
 import { describe, expect, it, vi } from 'vitest'
 import { editContextMenuTemplate } from '../../src/main/services/editContextMenu'
 
@@ -17,8 +18,8 @@ describe('native edit context menu', () => {
     expect(items.filter((item) => item.role).map((item) => [item.role, item.label])).toEqual([
       ['undo', '撤销'], ['redo', '重做'], ['cut', '剪切'], ['copy', '复制'], ['paste', '粘贴'], ['selectAll', '全选']
     ])
-    expect(items.find((item) => item.role === 'copy')?.icon).toEqual({ symbol: 'doc.on.doc' })
-    expect(items.find((item) => item.role === 'cut')?.icon).toEqual({ symbol: 'scissors' })
+    expect(items.find((item) => item.role === 'copy')?.icon).toEqual({ icon: 'copy' })
+    expect(items.find((item) => item.role === 'cut')?.icon).toEqual({ icon: 'cut' })
     expect(items.find((item) => item.role === 'redo')?.enabled).toBe(false)
   })
 
