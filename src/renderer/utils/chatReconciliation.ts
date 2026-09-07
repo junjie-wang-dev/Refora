@@ -1,3 +1,4 @@
+import { resolveAgentToolCall } from '../../shared/agent-tools'
 import type {
   AgentInterrupt,
   AgentInterruptDecision,
@@ -76,8 +77,9 @@ export function reviewedOcrDocumentId(context: ResumeRetryContext): string | nul
   const decisions = interruptDecisions(context)
   for (const [index, action] of context.interrupt.actions.entries()) {
     const decision = decisions[index]
-    if (action.name !== 'prepare_paper_ocr' || !decision || decision.type === 'reject') continue
-    const docId = (decision.editedAction?.args ?? action.args).docId
+    if (resolveAgentToolCall(action.name, action.args).name !== 'prepare_paper_ocr' || !decision || decision.type === 'reject') continue
+    const reviewed = decision.editedAction ?? action
+    const docId = resolveAgentToolCall(reviewed.name, reviewed.args).args.docId
     if (typeof docId === 'string' && docId.trim()) return docId.trim()
   }
   return null

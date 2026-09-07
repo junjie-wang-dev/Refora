@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from refora_server.agent.application_catalog import APPLICATION_ACTIONS, resolve_application_call
 from refora_server.agent.risk import RiskClass, RiskOverrides, classify, is_consequential
 
 
@@ -65,6 +66,13 @@ class PermissionEngine:
         metadata: Any = None,
     ) -> Decision:
         arguments = arguments or {}
+        if tool_name in APPLICATION_ACTIONS:
+            try:
+                tool_name, arguments = resolve_application_call(tool_name, arguments)
+            except ValueError as error:
+                return Decision(False, str(error), rule="invalid_action")
+            if tool_name == '__application_help':
+                return Decision(True, "tool help")
         risk = classify(tool_name, metadata, self.risk_overrides)
 
         if risk is RiskClass.NETWORK_READ:
@@ -72,6 +80,9 @@ class PermissionEngine:
 
         if self.mode in READ_ONLY_MODES and is_consequential(risk):
             return Decision(False, f"{self.mode.value} mode is read-only")
+
+        if risk is RiskClass.DESTRUCTIVE:
+            return Decision(False, "Destructive operation requires approval for this exact call", needs_user=True)
 
         if risk is RiskClass.WRITE_LOCAL and "path" in arguments:
             path = arguments["path"]

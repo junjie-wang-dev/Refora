@@ -1,3 +1,4 @@
+import { resolveAgentToolCall } from '../../../shared/agent-tools'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -197,6 +198,26 @@ function actionCopy(
   documentTitles: Record<string, string>,
   activeWorkspaceId: string | null
 ): ApprovalCopy {
+  action = { ...action, ...resolveAgentToolCall(action.name, action.args) }
+  const destructive = new Set([
+    'delete_documents', 'delete_workspace', 'remove_workspace_items',
+    'delete_workspace_connections', 'delete_workspace_note', 'delete_workspace_report',
+    'delete_workspace_asset', 'delete_category'
+  ])
+  if (destructive.has(action.name)) {
+    const details = additionalArgumentDetails(action.args, new Set(['docIds']), t)
+    if (Array.isArray(action.args.docIds)) {
+      details.unshift({
+        label: t('workspace.chat.approvalPaperTarget', 'Paper'),
+        values: stringArray(action.args.docIds).map((id) => documentTitles[id] ? `${documentTitles[id]} (${id})` : id)
+      })
+    }
+    return {
+      name: t(`workspace.chat.applicationTools.${action.name}`, action.name),
+      description: t(`workspace.chat.destructiveActions.${action.name}`),
+      details
+    }
+  }
   if (action.name === 'prepare_paper_ocr') {
     const docId = stringValue(action.args.docId)
     const title = documentTitles[docId]
@@ -337,7 +358,9 @@ export default function AgentApprovalCard({
   }, [interrupt.id])
 
   useEffect(() => {
-    const docIds = [...new Set(interrupt.actions.flatMap((action) => {
+    const docIds = [...new Set(interrupt.actions.flatMap((original) => {
+      const action = resolveAgentToolCall(original.name, original.args)
+      if (action.name === 'delete_documents') return stringArray(action.args.docIds)
       if (action.name !== 'prepare_paper_ocr') return []
       const docId = stringValue(action.args.docId).trim()
       return docId ? [docId] : []

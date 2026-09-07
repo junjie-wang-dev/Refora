@@ -406,8 +406,8 @@ async def test_cli_tool_broker_auto_approves_workspace_writes(tmp_path):
     run_token = broker._runs["run-1"]["token"]
     tools = broker.list_tools("run-1", run_token)
     assert [tool["name"] for tool in tools] == ["search_documents", "generate_report"]
-    assert tools[0]["annotations"] == {"readOnlyHint": True}
-    assert tools[1]["annotations"] == {"readOnlyHint": False}
+    assert tools[0]["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
+    assert tools[1]["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
     assert await broker.call_tool("run-1", run_token, "search_documents", {"query": "AI"}) == {
         "query": "AI",
         "count": 1,
@@ -423,24 +423,13 @@ async def test_cli_tool_broker_auto_approves_workspace_writes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cli_tool_broker_requires_approval_for_ocr(tmp_path):
+async def test_cli_tool_broker_runs_local_ocr_without_approval(tmp_path):
     broker = CliToolBroker(str(tmp_path), "http://127.0.0.1:1", "server-token")
     broker.open_run("run-1", [_OcrTool()])
     run_token = broker._runs["run-1"]["token"]
-    call = asyncio.create_task(
-        broker.call_tool("run-1", run_token, "prepare_paper_ocr", {"docId": "doc-1"})
-    )
-
-    approvals = await broker.next_approvals("run-1")
-
-    assert approvals == [{
-        "name": "prepare_paper_ocr",
-        "args": {"docId": "doc-1"},
-        "description": "Prepare paper OCR",
-    }]
-    assert call.done() is False
-    broker.resolve_approvals("run-1", [{"type": "approve"}])
-    assert await call == {"docId": "doc-1", "queued": True}
+    result = await broker.call_tool("run-1", run_token, "prepare_paper_ocr", {"docId": "doc-1"})
+    assert result == {"docId": "doc-1", "queued": True}
+    assert broker._runs["run-1"]["approvals"].empty()
     broker.close_run("run-1")
 
 

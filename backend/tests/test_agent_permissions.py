@@ -14,7 +14,7 @@ def test_interactive_mode_allows_read_tools():
 
 
 def test_interactive_mode_requires_approval_for_external_tools():
-    decision = PermissionEngine().evaluate("prepare_paper_ocr", {"docId": "doc-1"})
+    decision = PermissionEngine().evaluate("unregistered_external_tool", {})
 
     assert not decision.allowed
     assert decision.needs_user
@@ -164,7 +164,7 @@ def test_classify_refora_tools():
         "update_report": RiskClass.WRITE_LOCAL,
         "add_docs_to_workspace": RiskClass.WRITE_LOCAL,
         "create_workspace_connections": RiskClass.WRITE_LOCAL,
-        "prepare_paper_ocr": RiskClass.EXTERNAL,
+        "prepare_paper_ocr": RiskClass.WRITE_LOCAL,
         "publish_workspace_artifacts": RiskClass.EXTERNAL,
         "install_runtime_packages": RiskClass.EXTERNAL,
         "propose_workspace_memory_update": RiskClass.EXTERNAL,
@@ -183,3 +183,7 @@ def test_interactive_mode_allows_sandbox_filesystem_writes(tool_name):
 
     assert decision.allowed
     assert not decision.needs_user
+
+
+def test_local_ocr_runs_without_extra_approval():
+    assert PermissionEngine().evaluate("prepare_paper_ocr", {"docId": "doc"}).allowed

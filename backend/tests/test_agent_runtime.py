@@ -1341,6 +1341,7 @@ def test_resume_replays_persisted_tool_effect_for_same_tool_call_id(repos, db):
         return create_agent_tools(
             AgentToolContext(run_id=req["runId"], workspace_id=ws["id"]),
             {"repos": repos},
+            legacy_names=("add_docs_to_workspace",),
         )
 
     async def stream(agent, req, mode):

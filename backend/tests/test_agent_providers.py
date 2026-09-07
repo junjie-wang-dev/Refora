@@ -408,7 +408,7 @@ def test_create_agent_routes_every_exposed_tool_through_permission_evaluation(
         assert "/memories/" in subagent["system_prompt"]
     assert policies["prepare_paper_ocr"]["when"](
         SimpleNamespace(tool_call={"args": {"docId": "doc-1"}})
-    ) is True
+    ) is False
     assert policies["__execute"]["when"](
         SimpleNamespace(tool_call={"args": {"command": "python script.py"}})
     ) is False
@@ -572,7 +572,7 @@ def test_real_deep_agent_uses_stateful_todos_and_restricted_subagents(tmp_path) 
             name for name in available if name in {tool.name for tool in tools}
         }
         assert refora_names
-        assert all(classify(name) in {RiskClass.READ, RiskClass.NETWORK_READ} for name in refora_names)
+        assert all(name in {"refora_library", "refora_workspace"} or classify(name) in {RiskClass.READ, RiskClass.NETWORK_READ} for name in refora_names)
         assert {
             "ls",
             "read_file",
@@ -772,3 +772,21 @@ def test_normalize_streaming_roles_safe_on_missing_method() -> None:
     result = providers._normalize_compatible_streaming_roles(target)
     assert result is target
     assert not hasattr(target, "_convert_chunk_to_generation_chunk")
+
+
+def test_real_subagent_cannot_call_write_action_through_compact_tool(tmp_path):
+    created = []
+    tools = create_agent_tools(AgentToolContext(run_id='subagent-run'), {
+        'repos': {}, 'workspace_operation': lambda *args: created.append(args),
+    })
+    model = RecordingOpenAIModel(responses=[
+        AIMessage(content='', tool_calls=[{'name': 'refora_workspace', 'args': {'action': 'create', 'parameters': {'name': 'Forbidden'}}, 'id': 'write-attempt', 'type': 'tool_call'}]),
+        AIMessage(content='No modification made'),
+    ])
+    graph = providers.create_agent(model, tools, {'sandboxRoot': str(tmp_path / 'sandbox'), 'memories': {}})
+    subagent = next(iter(_subagent_graphs(graph).values()))
+    result = subagent.invoke({'messages': [HumanMessage(content='Try to create a workspace')]})
+    messages = [message for message in result['messages'] if isinstance(message, ToolMessage)]
+    assert len(messages) == 1
+    assert json.loads(messages[0].content)['error']['code'] == 'invalid_tool_arguments'
+    assert created == []

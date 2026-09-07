@@ -310,41 +310,9 @@ def create_library_router(deps: Any) -> APIRouter:
         return await run(action)
 
     async def trash_documents(ids: list[str]):
-        items = []
-        library_folder = _json_setting(settings, "libraryFolderPath", "")
-        for document_id in ids:
-            item = await _call(documents, "get", document_id)
-            items.append(item)
-        for item in items:
-            if isinstance(item, Mapping) and item.get("fileMissing") != 1:
-                path = item.get("filePath")
-                if (
-                    isinstance(path, str)
-                    and os.path.isabs(path)
-                    and path.lower().endswith(".pdf")
-                    and not os.path.islink(path)
-                    and os.path.isfile(path)
-                    and isinstance(library_folder, str)
-                    and bool(library_folder)
-                    and isInsideLibrary(path, library_folder)
-                ):
-                    try:
-                        await _connector(connector, "trash", path)
-                    except Exception:
-                        pass
+        from refora_server.services.application_operations import trash_documents as remove
 
-        def _cleanup():
-            if callable(_value(documents, "bulkDelete")):
-                _method(documents, "bulkDelete")(ids)
-            else:
-                for document_id in ids:
-                    _method(documents, "delete")(document_id)
-
-        if callable(transaction):
-            transaction(_cleanup)
-        else:
-            _cleanup()
-        return {"ack": True}
+        return await remove(documents, settings, connector, transaction, ids)
 
     @router.delete("/documents/{document_id}")
     async def delete_document(document_id: str):

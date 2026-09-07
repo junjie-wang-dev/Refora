@@ -210,3 +210,37 @@ it('supports independent decisions and edits memory alongside a non-editable act
   expect(onCancel).toHaveBeenCalledOnce()
   cleanup()
 })
+
+it('explains destructive effects and shows the exact paper targets before approval', async () => {
+  await i18n.changeLanguage('en')
+  window.api.documents.get = vi.fn().mockResolvedValue({ id: 'doc-delete', title: 'Paper to remove', fileName: 'paper.pdf' })
+  const onResolve = vi.fn(async () => undefined)
+  render(<AgentApprovalCard
+    interrupt={interrupt([{ name: 'delete_documents', args: { docIds: ['doc-delete'] }, allowedDecisions: ['approve', 'reject'] }])}
+    activeWorkspaceId={null}
+    streaming={false}
+    onResolve={onResolve}
+  />)
+  expect(screen.getByText('Delete papers')).toBeInTheDocument()
+  expect(screen.getByText(/Existing library PDFs will be moved to system Trash/)).toBeInTheDocument()
+  expect(await screen.findByText('Paper to remove (doc-delete)')).toBeInTheDocument()
+  expect(onResolve).not.toHaveBeenCalled()
+  cleanup()
+})
+
+it('shows compact deletion targets while preserving the original approval action', async () => {
+  await i18n.changeLanguage('en')
+  window.api.documents.get = vi.fn().mockResolvedValue({ id: 'paper', title: 'Grouped deletion target', fileName: 'paper.pdf' })
+  const onResolve = vi.fn(async () => undefined)
+  const action: AgentInterruptAction = {
+    name: 'refora_library', args: { action: 'delete', parameters: { docIds: ['paper'] } }, allowedDecisions: ['approve', 'reject']
+  }
+  render(<AgentApprovalCard interrupt={interrupt([action])} activeWorkspaceId={null} streaming={false} onResolve={onResolve} />)
+  expect(await screen.findByText('Grouped deletion target (paper)')).toBeInTheDocument()
+  expect(screen.getByText('Delete papers')).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Decision for Delete papers'), { target: { value: 'reject' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue with these decisions' }))
+  await waitFor(() => expect(onResolve).toHaveBeenCalledWith([{ type: 'reject' }]))
+  expect(action.args).toEqual({ action: 'delete', parameters: { docIds: ['paper'] } })
+  cleanup()
+})

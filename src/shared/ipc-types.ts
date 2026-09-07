@@ -955,7 +955,7 @@ export interface SummaryErrorEvent {
 
 export interface WorkspaceItemsChangedEvent {
   workspaceId: string
-  reason: 'agent_add_docs' | 'user' | 'other'
+  reason: 'agent_add_docs' | 'agent_canvas' | 'user' | 'other'
   docIds?: string[]
 }
 

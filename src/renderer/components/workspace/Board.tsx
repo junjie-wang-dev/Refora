@@ -9,7 +9,6 @@ import { api } from '../../ipc'
 import { registerRendererFlushTask, trackRendererPersistence } from '../../persistence'
 import { EmptyState } from '../ui'
 import {
-  WORKSPACE_CANVAS_DEFAULT_ZOOM,
   errorMessage
 } from '../../../shared/ipc-types'
 import type {
@@ -180,7 +179,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   const applyViewportVisuals = useCallback((next: WorkspaceCanvasViewport) => {
     if (worldRef.current) {
-      worldRef.current.style.transform = `translate3d(${next.panX}px, ${next.panY}px, 0) scale(${WORKSPACE_CANVAS_DEFAULT_ZOOM})`
+      worldRef.current.style.transform = `translate3d(${next.panX}px, ${next.panY}px, 0) scale(${next.zoom})`
     }
   }, [])
 
@@ -195,7 +194,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [applyViewportVisuals])
 
   const updateViewportTransient = useCallback((next: WorkspaceCanvasViewport) => {
-    const fixedViewport = { ...next, zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM }
+    const fixedViewport = next
     viewportTouchedRef.current = true
     viewportRef.current = fixedViewport
     pendingViewportRef.current = fixedViewport
@@ -313,15 +312,31 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       })
     }
     const handleWorkspaceItemsChanged = (payload: WorkspaceItemsChangedEvent) => {
-      if (payload.workspaceId === workspaceId) loadConnections()
+      if (payload.workspaceId !== workspaceId) return
+      loadConnections()
+      if (payload.reason === 'agent_canvas') {
+        if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current)
+        viewportSaveTimerRef.current = null
+        pendingViewportRef.current = null
+        viewportTouchedRef.current = true
+        void api.workspaceCanvas.get(workspaceId).then((saved) => {
+          if (cancelled || activeWorkspaceIdRef.current !== workspaceId) return
+          viewportRef.current = saved
+          applyViewportVisuals(saved)
+        }).catch((e) => {
+          if (!cancelled) useDocumentStore.getState().showToast(errorMessage(e, t('workspace.canvasLoadFailed')))
+        })
+      }
     }
     loadConnections()
     const dispose = api.events.onWorkspaceItemsChanged(handleWorkspaceItemsChanged)
+    const disposeLibrary = api.events.onLibraryContentsChanged(loadConnections)
     return () => {
       cancelled = true
       dispose()
+      disposeLibrary()
     }
-  }, [activeWorkspaceId, t])
+  }, [activeWorkspaceId, applyViewportVisuals, t])
 
   useEffect(() => {
     if (viewportSaveTimerRef.current) {
@@ -337,7 +352,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     let cancelled = false
     void api.workspaceCanvas.get(workspaceId).then((saved) => {
       if (cancelled || viewportTouchedRef.current) return
-      const fixedViewport = { ...saved, zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM }
+      const fixedViewport = saved
       viewportRef.current = fixedViewport
       applyViewportVisuals(fixedViewport)
     }).catch((e) => {
@@ -654,7 +669,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     const next = {
       panX: current.panX - event.deltaX,
       panY: current.panY,
-      zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
+      zoom: current.zoom
     }
     updateViewportTransient(next)
     scheduleViewportSave(next)
@@ -825,7 +840,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       updateViewportTransient({
         panX: start.panX + event.clientX - start.x,
         panY: start.panY + event.clientY - start.y,
-        zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
+        zoom: viewportRef.current.zoom
       })
     }
     const cleanup = () => {
@@ -1019,6 +1034,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   const cardShell = useMemo<ComponentProps<typeof WorkspaceCards>['shell']>(() => ({
     canStartDrag: () => !spacePressedRef.current,
+    getCanvasZoom: () => viewportRef.current.zoom,
     frontZIndex: maxZIndex + 1,
     onSizeChange: handleCardSizeChange,
     onSizeCommit: handleCardSizeCommit,

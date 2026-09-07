@@ -52,9 +52,9 @@ def object_schema(properties: dict[str, Any], required: list[str] | None = None)
     return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
 
 
-def workspace(source: Any) -> str:
+def workspace(source: Any, arguments: Mapping[str, Any] | None = None) -> str:
     ctx = getattr(source, "context", source)
-    workspace_id = value(ctx, "workspace_id") or value(ctx, "workspaceId")
+    workspace_id = (arguments or {}).get("workspaceId") or value(ctx, "workspace_id") or value(ctx, "workspaceId")
     if not workspace_id:
         raise ValueError("A Workspace must be selected for this tool")
     return workspace_id

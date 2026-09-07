@@ -37,7 +37,7 @@ describe('server event bridge', () => {
     bridge.start()
     bridge.start()
 
-    expect(on).toHaveBeenCalledTimes(20)
+    expect(on).toHaveBeenCalledTimes(21)
     expect(subscribe).toHaveBeenCalledTimes(1)
     expect(subscribe).toHaveBeenCalledWith(expect.arrayContaining([
       'ai.chat.token',
@@ -47,6 +47,7 @@ describe('server event bridge', () => {
       'document.updated',
       'import.progress',
       'workspace.items.changed',
+      'library.contents.changed',
       'mineru.install-progress',
       'ocr.error',
       'connector.encrypt-api-key',
@@ -62,9 +63,11 @@ describe('server event bridge', () => {
       workspaceId: 'workspace-1'
     })
     expect(send).toHaveBeenNthCalledWith(3, IpcChannel.EventOcrCompleted, { jobId: 'job-1' })
+    listeners.get('library.contents.changed')?.({})
+    expect(send).toHaveBeenNthCalledWith(4, IpcChannel.EventLibraryContentsChanged, {})
     const media = { threadId: 'thread-1', runId: 'run-1', media: [{ id: 'image', kind: 'image', source: { type: 'cached', mediaId: 'a'.repeat(64) } }] }
     listeners.get('ai.chat.media')?.(media)
-    expect(send).toHaveBeenNthCalledWith(4, IpcChannel.EventAiChatMedia, media)
+    expect(send).toHaveBeenNthCalledWith(5, IpcChannel.EventAiChatMedia, media)
   })
 
   it('stops forwarding and unsubscribes every event topic', () => {

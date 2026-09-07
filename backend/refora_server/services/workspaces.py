@@ -480,6 +480,85 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
     def get_asset(asset_id: str) -> dict[str, Any]:
         return _require_scoped("workspaceAssets", "workspace asset", asset_id)
 
+    asset_edit_lock = threading.RLock()
+
+    def inspect_asset(workspace_id: str, asset_id: str) -> dict[str, Any]:
+        with asset_edit_lock:
+            _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
+            asset, file_path = _require_workspace_asset_file(repos, asset_id)
+            with open(file_path, "rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            return {**asset, "fileHash": digest, "fileSize": os.path.getsize(file_path)}
+
+    def update_asset(workspace_id: str, asset_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        with asset_edit_lock:
+            _require_scoped("workspaceAssets", "workspace asset", asset_id, workspace_id)
+            asset, old_path = _require_workspace_asset_file(repos, asset_id)
+            if set(patch) - {"expectedHash", "fileName", "contentText", "sourcePath"}:
+                raise RepoError("invalid_input", "Unsupported attachment fields")
+            if not set(patch) & {"fileName", "contentText", "sourcePath"}:
+                raise RepoError("invalid_input", "At least one attachment field is required")
+            if "contentText" in patch and "sourcePath" in patch:
+                raise RepoError("invalid_input", "Use contentText or sourcePath, not both")
+            library = _require_library_folder(repos)
+            directory = Path(old_path).parent
+            expected_directory = Path(library).resolve() / WORKSPACE_ASSET_DIRECTORY / asset_id
+            if directory.resolve() != expected_directory or directory.is_symlink():
+                raise RepoError("invalid_path", "Attachment directory is not a managed directory")
+            with open(old_path, "rb") as stream:
+                current_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+            if not patch.get("expectedHash") or current_hash != patch["expectedHash"]:
+                raise RepoError("conflict", "Attachment changed; read it again before editing")
+            name = patch.get("fileName", asset["fileName"])
+            if not isinstance(name, str) or not name.strip() or name in {".", ".."} or any(char in name for char in ("/", "\\", "\x00")):
+                raise RepoError("invalid_path", "fileName must be a plain file name")
+            destination = str(directory / name)
+            if destination != old_path and os.path.lexists(destination):
+                raise RepoError("duplicate", "A file with this name already exists")
+            with tempfile.TemporaryDirectory(prefix=".refora-edit-", dir=directory) as temporary:
+                staged = str(Path(temporary) / "replacement")
+                backup = str(Path(temporary) / "original")
+                if "contentText" in patch:
+                    if asset["previewKind"] != "text" or not isinstance(patch["contentText"], str):
+                        raise RepoError("invalid_input", "contentText requires a text attachment")
+                    content = patch["contentText"].encode("utf-8")
+                    if len(content) > WORKSPACE_MARKDOWN_IMPORT_LIMIT:
+                        raise RepoError("file_too_large", "Text exceeds the 16 MiB limit")
+                    _require_asset_capacity(str(directory), len(content))
+                    with open(staged, "wb") as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    size, digest = len(content), hashlib.sha256(content).hexdigest()
+                else:
+                    source, size = _validate_asset_source(patch.get("sourcePath", old_path))
+                    _require_asset_capacity(str(directory), size)
+                    size, digest = _stage_asset_file(source, staged, size)
+                metadata = {
+                    "fileName": name,
+                    "filePath": _to_library_relative(destination, library),
+                    "fileSize": size, "fileHash": digest, "fileMissing": False,
+                    **workspace_asset_media_type(name),
+                }
+                def replace():
+                    os.replace(old_path, backup)
+                    try:
+                        os.replace(staged, destination)
+                        return repos["workspaceAssets"]["update"](asset_id, metadata)
+                    except Exception:
+                        if destination != old_path and os.path.exists(destination):
+                            os.replace(destination, staged)
+                        os.replace(backup, old_path)
+                        raise
+                try:
+                    return _transaction(replace)
+                except Exception:
+                    if os.path.exists(backup):
+                        if destination != old_path and os.path.exists(destination):
+                            os.replace(destination, staged)
+                        os.replace(backup, old_path)
+                    raise
+
     def _unique_asset_paths(paths: list[str]) -> list[str]:
         seen: set[str] = set()
         unique_paths: list[str] = []
@@ -880,6 +959,8 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         "moveItem": move_item,
         "listAssets": list_assets,
         "getAsset": get_asset,
+        "updateAsset": update_asset,
+        "inspectAsset": inspect_asset,
         "importAssets": import_assets,
         "importAssetsAsync": import_assets_async,
         "importWorkspaceFiles": import_workspace_files,

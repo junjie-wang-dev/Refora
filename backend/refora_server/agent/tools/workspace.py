@@ -14,7 +14,7 @@ def _transaction(executor: Any, operation: Any) -> Any:
 
 
 def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     reports = {
         report["id"]: report
         for report in call(repo(executor.repos, "aiReports"), "list", ws)
@@ -33,6 +33,7 @@ def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
             "itemId": item["id"],
             "kind": item["kind"],
             "sortOrder": item["sortOrder"],
+            **{key: item[key] for key in ("x", "y", "width", "height", "zIndex") if key in item},
         }
         if item["kind"] == "document" and item.get("docId"):
             document = call(
@@ -120,11 +121,12 @@ def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
         "connectionCount": len(connections),
         "items": context_items,
         "connections": connections,
+        "canvas": call(repo(executor.repos, "workspaceCanvas"), "get", ws) if value(executor.repos, "workspaceCanvas") else None,
     }
 
 
 def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     item = next(
         (
             current
@@ -134,12 +136,12 @@ def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
         None,
     )
     if item is None:
-        raise ValueError("Item is not available in the current workspace")
+        raise ValueError("Item is not available in the target workspace")
     kind = item.get("kind")
     if kind == "document" and item.get("docId"):
         document = call(repo(executor.repos, "documents"), "get", item["docId"])
         if document is None:
-            raise ValueError("Document is not available in the current workspace")
+            raise ValueError("Document is not available in the target workspace")
         summaries = value(executor.repos, "aiSummaries")
         summary = (
             call(summaries, "getSummary", item["docId"])
@@ -155,15 +157,17 @@ def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
     elif kind == "report" and item.get("reportId"):
         data = call(repo(executor.repos, "aiReports"), "get", item["reportId"])
         if data is None or data.get("workspaceId") != ws:
-            raise ValueError("Report is not available in the current workspace")
+            raise ValueError("Report is not available in the target workspace")
     elif kind == "note" and item.get("noteId"):
         data = call(repo(executor.repos, "workspaceNotes"), "get", item["noteId"])
         if data is None or data.get("workspaceId") != ws:
-            raise ValueError("Note is not available in the current workspace")
+            raise ValueError("Note is not available in the target workspace")
     elif kind == "asset" and item.get("assetId"):
         asset = call(repo(executor.repos, "workspaceAssets"), "get", item["assetId"])
         if asset is None or asset.get("workspaceId") != ws:
-            raise ValueError("Asset is not available in the current workspace")
+            raise ValueError("Asset is not available in the target workspace")
+        if callable(value(executor.deps, "inspect_workspace_asset")) and not asset.get("fileMissing"):
+            asset = call(executor.deps, "inspect_workspace_asset", ws, item["assetId"])
         preview = (
             call(
                 executor.deps,
@@ -181,7 +185,7 @@ def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     requested = ids(args.get("docIds"))
     documents = repo(executor.repos, "documents")
     items = repo(executor.repos, "workspaceItems")
@@ -194,7 +198,7 @@ def add_docs_to_workspace(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     items = {item["id"] for item in call(repo(executor.repos, "workspaceItems"), "list", ws)}
     connections_repo = repo(executor.repos, "workspaceConnections")
     existing = {
@@ -207,7 +211,7 @@ def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
         source, target = connection.get("sourceItemId"), connection.get("targetItemId")
         error = None
         if not source or not target or source not in items or target not in items:
-            error = "Connection endpoint is not in the current workspace."
+            error = "Connection endpoint is not in the target workspace."
         elif source == target:
             error = "A card cannot connect to itself."
         elif (source, target) in existing or (source, target) in requested:
@@ -244,7 +248,7 @@ def create_workspace_connections(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def generate_report(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     workspace_doc_ids = {
         item["docId"]
         for item in call(repo(executor.repos, "workspaceItems"), "list", ws)
@@ -290,11 +294,11 @@ def generate_report(executor: Any, args: dict[str, Any]) -> Any:
 
 
 def update_report(executor: Any, args: dict[str, Any]) -> Any:
-    ws = workspace(executor)
+    ws = workspace(executor, args)
     reports = repo(executor.repos, "aiReports")
     current = call(reports, "get", args["reportId"])
     if current is None or current.get("workspaceId") != ws:
-        raise ValueError("Report is not available in the current workspace")
+        raise ValueError("Report is not available in the target workspace")
     patch = {
         key: args[key]
         for key in ("title", "contentMd")
@@ -348,12 +352,12 @@ class WorkspaceTools(ToolGroup):
         "update_report": update_report,
     }
     descriptions = {
-        "list_workspace_context": "List the current workspace cards and connections. Returns itemIds for documents, reports, notes, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
-        "read_workspace_item": "Read one current workspace card by itemId from list_workspace_context. Returns full report or note content, document metadata and cached summary, or asset metadata and text preview.",
-        "add_docs_to_workspace": "Add documents from the library to the current workspace board. Pass docIds as a comma-separated list or JSON array string. Returns JSON with added, alreadyInWorkspace, and missing arrays.",
-        "create_workspace_connections": "Create directed connections between cards in the current workspace. Call list_workspace_context first and use only itemIds returned by it. Invalid, duplicate, and self connections are reported without creating them.",
-        "generate_report": "Create and pin a structured report to the workspace board. Use this when the user asks for a report, survey, or comparison. sourceDocIds accepts a comma-separated list or a JSON array string of docIds.",
-        "update_report": "Update the title or Markdown content of an existing report in the current workspace. Use a reportId returned by list_workspace_context or generate_report. Read the report with read_workspace_item before changing content that must be preserved.",
+        "list_workspace_context": "List the target workspace cards and connections. Returns itemIds for documents, reports, notes, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
+        "read_workspace_item": "Read one target workspace card by itemId from list_workspace_context. Returns full report or note content, document metadata and cached summary, or asset metadata and text preview.",
+        "add_docs_to_workspace": "Add documents from the library to the target workspace board. Pass docIds as a native JSON array. Returns JSON with added, alreadyInWorkspace, and missing arrays.",
+        "create_workspace_connections": "Create directed connections between cards in the target workspace. Call list_workspace_context first and use only itemIds returned by it. Invalid, duplicate, and self connections are reported without creating them.",
+        "generate_report": "Create and pin a structured report to the workspace board. Use this when the user asks for a report, survey, or comparison. sourceDocIds accepts a native JSON array of docIds.",
+        "update_report": "Update the title or Markdown content of an existing report in the target workspace. Use a reportId returned by list_workspace_context or generate_report. Read the report with read_workspace_item before changing content that must be preserved.",
     }
     schemas = {
         "list_workspace_context": object_schema({}),
@@ -362,4 +366,16 @@ class WorkspaceTools(ToolGroup):
         "create_workspace_connections": object_schema({"connections": {"type": "array", "minItems": 1, "maxItems": 20, "items": _CONNECTION_ITEM_SCHEMA}}, ["connections"]),
         "generate_report": object_schema({"title": _TEXT, "contentMd": _TEXT, "sourceDocIds": {"type": "string", "description": "Comma-separated list or JSON array string of docIds"}}, ["title", "contentMd", "sourceDocIds"]),
         "update_report": _UPDATE_REPORT_SCHEMA,
+    }
+
+
+for _schema in WorkspaceTools.schemas.values():
+    _schema["properties"]["workspaceId"] = {
+        "type": "string", "minLength": 1,
+        "description": "Target workspace ID from list_workspaces; omit to use the target workspace.",
+    }
+for _name, _field in (("add_docs_to_workspace", "docIds"), ("generate_report", "sourceDocIds")):
+    WorkspaceTools.schemas[_name]["properties"][_field] = {
+        "anyOf": [{"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 100}, {"type": "string"}],
+        "description": "Native JSON array of document IDs. Legacy comma-separated strings are also accepted.",
     }

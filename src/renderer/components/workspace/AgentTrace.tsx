@@ -1,3 +1,4 @@
+import { applicationToolStep } from '../../utils/toolPresentation'
 import { useState, useEffect, useRef, useMemo, useId } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -150,6 +151,7 @@ function formatToolLabel(
   step: AgentTraceStep,
   t: TFunc
 ): ToolLabelResult | null {
+  step = applicationToolStep(step)
   if (step.kind !== 'tool' || !step.name) return null
   const name = step.name.startsWith('refora.')
     ? step.name.slice('refora.'.length)
@@ -549,7 +551,7 @@ function formatToolLabel(
       const url = firstString(objParam, ['url', 'uri', 'href'])
       return {
         icon: url ? 'web' : 'tool',
-        text: humanizeIdentifier(name),
+        text: t(`workspace.chat.applicationTools.${name}`, humanizeIdentifier(name)),
         detail
       }
     }

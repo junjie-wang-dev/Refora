@@ -116,7 +116,7 @@ def read_paper(executor: Any, args: dict[str, Any]) -> Any:
             "docId": args["docId"],
             "nextTool": "prepare_paper_ocr",
             "approval": "handled_by_application",
-            "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
+            "instruction": "Call prepare_paper_ocr now. Local OCR can run directly without additional approval.",
         }
     else:
         text = call(executor.deps, "read_paper_fulltext", args["docId"])

@@ -15,6 +15,7 @@ import type {
 } from '@shared/ipc-types'
 
 const DOC_MIME = 'application/x-refora-docids'
+const originalWorkspaceCanvasGet = window.api.workspaceCanvas.get
 const originalWorkspaceCanvasUpdate = window.api.workspaceCanvas.update
 const originalDocumentsOpenPdf = window.api.documents.openPdf
 
@@ -171,6 +172,7 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  window.api.workspaceCanvas.get = originalWorkspaceCanvasGet
   window.api.workspaceCanvas.update = originalWorkspaceCanvasUpdate
   window.api.documents.openPdf = originalDocumentsOpenPdf
 })
@@ -879,6 +881,29 @@ describe('Board error handling', () => {
 })
 
 describe('Board canvas controls and connections', () => {
+  it('applies an agent canvas view and reloads connections without switching workspaces', async () => {
+    mockItems = [makeItem('item-zoom', 'doc-zoom', 0)]
+    window.api.workspaceCanvas.get = vi.fn().mockResolvedValue({ workspaceId: 'ws-1', panX: 0, panY: 0, zoom: 1, updatedAt: 0 })
+    const { container } = render(<Board />)
+    await waitFor(() => expect(mockWorkspaceItemsChangedHandler).not.toBeNull())
+    await waitFor(() => expect(window.api.workspaceCanvas.get).toHaveBeenCalled())
+    window.api.workspaceCanvas.get = vi.fn().mockResolvedValue({ workspaceId: 'ws-1', panX: 240, panY: -50, zoom: 1.5, updatedAt: 1 })
+    mockConnectionsList.mockClear()
+    mockWorkspaceItemsChangedHandler?.({ workspaceId: 'ws-1', reason: 'agent_canvas' })
+    await waitFor(() => {
+      expect((container.querySelector('.workspace-canvas-world') as HTMLElement).style.transform)
+        .toBe('translate3d(240px, -50px, 0) scale(1.5)')
+    })
+    expect(mockConnectionsList).toHaveBeenCalledWith('ws-1')
+    mockWorkspaceItemsChangedHandler?.({ workspaceId: 'ws-other', reason: 'agent_canvas' })
+    expect(window.api.workspaceCanvas.get).toHaveBeenCalledTimes(1)
+    const card = container.querySelector('[data-workspace-card-id="item-zoom"]') as HTMLElement
+    fireEvent.pointerDown(card, { pointerId: 90, button: 0, clientX: 20, clientY: 20 })
+    fireEvent.pointerMove(document, { pointerId: 90, clientX: 80, clientY: 50 })
+    fireEvent.pointerUp(document, { pointerId: 90 })
+    expect(mockMoveItem).toHaveBeenCalledWith('item-zoom', 40, 20, expect.any(Number))
+  })
+
   it('keeps the canvas at 100% without vertical wheel movement, zoom controls, or a dotted grid', async () => {
     const { container } = render(<Board />)
     const board = container.firstElementChild as HTMLElement

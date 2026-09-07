@@ -162,7 +162,7 @@ def test_update_report_is_scoped_to_the_current_workspace_and_emits_refresh():
     assert updates == [("report-current", {"contentMd": "Revised"})]
     assert changed == [("workspace", "other")]
     assert outside["error"]["message"] == (
-        "Report is not available in the current workspace"
+        "Report is not available in the target workspace"
     )
 
 
@@ -327,7 +327,7 @@ def test_workspace_item_reads_full_report_only_from_current_workspace():
 
     assert current["kind"] == "report"
     assert current["data"]["contentMd"] == "# Complete report\n\nDetails"
-    assert other["error"]["message"] == "Report is not available in the current workspace"
+    assert other["error"]["message"] == "Report is not available in the target workspace"
 
 
 def test_workspace_item_asset_preview_uses_scoped_workspace_service():

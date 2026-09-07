@@ -1,6 +1,55 @@
+export const AGENT_APPLICATION_ACTIONS = {
+  "refora_library": {
+    "categories.assign": "set_document_categories",
+    "categories.create": "create_category",
+    "categories.delete": "delete_category",
+    "categories.list": "list_categories",
+    "categories.rename": "rename_category",
+    "context": "get_paper_context",
+    "delete": "delete_documents",
+    "import": "import_pdfs",
+    "list": "list_documents",
+    "ocr": "prepare_paper_ocr",
+    "open": "open_paper",
+    "read": "read_paper",
+    "refresh": "refresh_document_metadata",
+    "related": "find_related_papers",
+    "search": "search_documents",
+    "star": "set_documents_starred",
+    "update": "update_document"
+  },
+  "refora_workspace": {
+    "assets.delete": "delete_workspace_asset",
+    "assets.update": "update_workspace_asset",
+    "canvas.set": "set_workspace_canvas",
+    "cards.add": "add_workspace_items",
+    "cards.add_documents": "add_docs_to_workspace",
+    "cards.layout": "update_workspace_layout",
+    "cards.remove": "remove_workspace_items",
+    "cards.reorder": "reorder_workspace_items",
+    "connections.create": "create_workspace_connections",
+    "connections.delete": "delete_workspace_connections",
+    "connections.update": "update_workspace_connection",
+    "contents": "list_workspace_contents",
+    "create": "create_workspace",
+    "delete": "delete_workspace",
+    "files.import": "import_workspace_files",
+    "inspect": "list_workspace_context",
+    "list": "list_workspaces",
+    "notes.create": "create_workspace_note",
+    "notes.delete": "delete_workspace_note",
+    "notes.update": "update_workspace_note",
+    "read": "read_workspace_item",
+    "rename": "rename_workspace",
+    "reports.create": "generate_report",
+    "reports.delete": "delete_workspace_report",
+    "reports.update": "update_report"
+  }
+} as const
+
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "2b00481d0ebaf50c254d5562941b9a8dcfeef4ec51299d2c5f00d8976b396bd1" as const
+export const SERVER_PROTOCOL_DIGEST = "ff46386026d6910750412782075cd94039e6c1920b6f1e62a5818c549e140a6f" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -679,6 +728,7 @@ export const SERVER_EVENT_NAMES = [
   "import.progress",
   "import.toast",
   "workspace.items.changed",
+  "library.contents.changed",
   "mineru.install-progress",
   "ocr.progress",
   "ocr.completed",

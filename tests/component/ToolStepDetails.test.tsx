@@ -85,3 +85,11 @@ describe('tool detail presentation', () => {
     expect(screen.getByText('Readable final answer')).toBeInTheDocument()
   })
 })
+
+it('presents compact paper reads using the actual action and nested parameters', () => {
+  render(<AgentTraceStepItem step={step({ name: 'refora_library', input: JSON.stringify({ action: 'read', parameters: { docId: 'paper', offset: 40000 } }), result: { docId: 'paper', text: 'Second chunk', source: 'extracted', chunkIndex: 1 } })} />)
+  fireEvent.click(screen.getByRole('button', { name: /Read document \(chunk 2\)/ }))
+  expect(screen.getByText('Second chunk')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Technical details' }))
+  expect(screen.getByText(/"action": "read"/)).toBeInTheDocument()
+})

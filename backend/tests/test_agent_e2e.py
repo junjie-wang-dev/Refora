@@ -21,13 +21,13 @@ class ScriptedAgent:
     async def astream_events(self, invocation: Any, *, config: dict[str, Any], version: str):
         assert version == "v2"
         self._statuses.append(self._repos["agentRuns"]["get"]("run-e2e")["status"])
-        tool = next(item for item in self._tools if item.name == "add_docs_to_workspace")
+        tool = next(item for item in self._tools if item.name == "refora_workspace")
         result = tool.invoke(
             {
                 "type": "tool_call",
-                "name": "add_docs_to_workspace",
+                "name": "refora_workspace",
                 "id": "tool-call-e2e",
-                "args": {"docIds": "doc-e2e"},
+                "args": {"action": "cards.add_documents", "parameters": {"docIds": ["doc-e2e"]}},
             },
             {},
         )
@@ -45,8 +45,8 @@ class ScriptedAgent:
                                     "value": {
                                         "actionRequests": [
                                             {
-                                                "name": "add_docs_to_workspace",
-                                                "args": {"docIds": "doc-e2e"},
+                                                "name": "refora_workspace",
+                                                "args": {"action": "cards.add_documents", "parameters": {"docIds": ["doc-e2e"]}},
                                             }
                                         ],
                                         "reviewConfigs": [
@@ -114,7 +114,7 @@ def test_agent_run_persists_and_replays_tool_effect_after_resume(tmp_path) -> No
             },
             "systemPrompt": "Use the library.",
             "messages": [{"role": "user", "content": "Add the paper"}],
-            "enabledToolNames": ["add_docs_to_workspace"],
+            "enabledToolNames": ["refora_workspace"],
             "sandboxRoot": None,
             "memories": {},
             "includeResearchMemory": False,

@@ -1,3 +1,4 @@
+import { applicationToolStep } from '../../utils/toolPresentation'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Code, CaretDown } from '@phosphor-icons/react'
@@ -17,6 +18,8 @@ function website(value: string): string {
 }
 
 export function ToolStepDetails({ step }: { step: AgentTraceStep }) {
+  const rawInput = step.input
+  step = applicationToolStep(step)
   const { t } = useTranslation()
   const [technical, setTechnical] = useState(false)
   const inputValue = toolValue(step.input)
@@ -63,7 +66,7 @@ export function ToolStepDetails({ step }: { step: AgentTraceStep }) {
       <Code className="h-3.5 w-3.5" /><span>{t('workspace.chat.toolDetails.technical')}</span><CaretDown className={`h-3 w-3 transition-transform${technical ? ' rotate-180' : ''}`} />
     </button>
     {technical && <div className="tool-step-technical">
-      {step.input && <div className="agent-trace-detail-card"><p className="agent-trace-detail-label">{t('workspace.chat.traceInput', 'Input')}</p><pre className="agent-trace-detail-value">{diagnostic(step.input)}</pre></div>}
+      {step.input && <div className="agent-trace-detail-card"><p className="agent-trace-detail-label">{t('workspace.chat.traceInput', 'Input')}</p><pre className="agent-trace-detail-value">{diagnostic(rawInput)}</pre></div>}
       {(step.result != null || step.output) && <div className="agent-trace-detail-card"><p className="agent-trace-detail-label">{t('workspace.chat.traceOutput', 'Output')}</p><pre className="agent-trace-detail-value">{diagnostic(step.result ?? step.output)}</pre></div>}
     </div>}
   </div>

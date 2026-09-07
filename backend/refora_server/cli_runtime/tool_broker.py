@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import ToolMessage
 
 from refora_server.agent.permissions import PermissionEngine
+from refora_server.agent.application_catalog import APPLICATION_ACTIONS
 from refora_server.agent.risk import RiskClass, classify
 
 
@@ -150,13 +151,19 @@ class CliToolBroker:
             else:
                 input_schema = getattr(tool, "get_input_jsonschema", None)
                 schema = input_schema() if callable(input_schema) else {"type": "object"}
+            operations = [
+                operation for action, operation in APPLICATION_ACTIONS.get(tool.name, {}).items()
+                if action in schema.get('properties', {}).get('action', {}).get('enum', [])
+            ] or [tool.name]
+            risks = {classify(operation) for operation in operations}
             result.append(
                 {
                     "name": tool.name,
                     "description": getattr(tool, "description", "") or "",
                     "inputSchema": schema,
                     "annotations": {
-                        "readOnlyHint": classify(tool.name) is RiskClass.READ,
+                        "readOnlyHint": risks <= {RiskClass.READ, RiskClass.NETWORK_READ},
+                        "destructiveHint": RiskClass.DESTRUCTIVE in risks,
                     },
                 }
             )
@@ -245,8 +252,11 @@ class CliToolBroker:
         tool = entry["tools"].get(name)
         if tool is None:
             raise ValueError(f"CLI tool is unavailable: {name}")
-        if entry["permissions"].evaluate(name, arguments).allowed:
+        permission = entry["permissions"].evaluate(name, arguments)
+        if permission.allowed:
             return await self._invoke_tool(tool, arguments, tool_call_id)
+        if not permission.needs_user:
+            raise PermissionError(permission.reason)
         for index, replay in enumerate(entry["replay"]):
             if replay.get("name") == name and replay.get("args") == arguments:
                 decision = entry["replay"].pop(index).get("decision")

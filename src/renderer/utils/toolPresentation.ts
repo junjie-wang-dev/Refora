@@ -1,3 +1,4 @@
+import { resolveAgentToolCall } from '../../shared/agent-tools'
 import type { AgentTraceStep, ChatMediaItem } from '../../shared/ipc-types'
 import { mediaSourceFromUrl } from './mediaSources'
 
@@ -19,6 +20,12 @@ export function toolValue(value: unknown): unknown {
   return value
 }
 
+export function applicationToolStep(step: AgentTraceStep): AgentTraceStep {
+  if (!step.name) return step
+  const call = resolveAgentToolCall(step.name, toolRecord(toolValue(step.input)))
+  return call.name === step.name ? step : { ...step, name: call.name, input: JSON.stringify(call.args) }
+}
+
 export function toolResultValue(step: AgentTraceStep): unknown {
   const value = toolValue(step.result ?? step.output)
   const entry = toolRecord(value)
@@ -31,6 +38,7 @@ export function toolResultValue(step: AgentTraceStep): unknown {
 }
 
 export function toolTarget(step: AgentTraceStep): string {
+  step = applicationToolStep(step)
   const result = toolRecord(toolResultValue(step))
   const input = toolRecord(toolValue(step.input))
   return toolString(result.title) || toolString(result.fileName) || toolString(input.title)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -43,7 +44,9 @@ from refora_server.server.services.lifespan_support import (
 from refora_server.services.agent_runtime import createAgentRuntime
 from refora_server.services.agent_profiles import createAgentProfilesService
 from refora_server.services.agent_intent import assemble_recovery
-from refora_server.services.agent_tools import AgentToolContext, create_agent_tools
+from refora_server.services.agent_tools import AgentToolContext, create_agent_tools, select_agent_tools
+from refora_server.agent.application_catalog import APPLICATION_OPERATIONS
+from refora_server.services import application_operations
 from refora_server.services.chat_media import create_chat_media_service
 from refora_server.services.ai_providers import createAiProvidersService
 from refora_server.services.ai_summary import createAiSummaryService
@@ -792,6 +795,12 @@ def create_lifespan(
                         },
                     }
 
+                def workspace_operation(name: str, *args: Any) -> Any:
+                    result = services["workspaces"][name](*args)
+                    if inspect.isawaitable(result):
+                        return run_on_server_loop(result, cancel_event)
+                    return result
+
                 tool_deps = {
                     "repos": repos,
                     "ai_summary": request_summary,
@@ -819,6 +828,17 @@ def create_lifespan(
                         cancel_event,
                     ),
                     "execute_sandbox": execute_sandbox,
+                    "workspace_operation": workspace_operation,
+                    "library_changed": lambda: schedule_event(events, "library.contents.changed", {}, server_loop),
+                    "update_document": lambda identifier, patch: run_on_server_loop(
+                        application_operations.update_document(repos["documents"], metadata_service, identifier, patch), cancel_event
+                    ),
+                    "import_pdfs": lambda paths: run_on_server_loop(application_operations.import_pdfs(importer, paths), cancel_event),
+                    "delete_documents": lambda identifiers: run_on_server_loop(
+                        application_operations.trash_documents(repos["documents"], repos["settings"], connector, repos["transaction"], identifiers), cancel_event
+                    ),
+                    "refresh_document_metadata": lambda identifier: metadata_service["refresh"](identifier),
+                    "inspect_workspace_asset": lambda workspace_id, asset_id: services["workspaces"]["inspectAsset"](workspace_id, asset_id),
                     "preview_workspace_asset": lambda workspace_id, asset_id: services[
                         "workspaces"
                     ]["previewAsset"](workspace_id, asset_id),
@@ -831,6 +851,9 @@ def create_lifespan(
                     ),
                     "academic": tool_academic,
                 }
+                pending_repo = repos.get("agentInterrupts")
+                pending = pending_repo["getPendingByRun"](request["runId"]) if isinstance(pending_repo, dict) else None
+                legacy_names = tuple(action["name"] for action in (pending or {}).get("actions", []) if action.get("name") in APPLICATION_OPERATIONS)
                 tools = create_agent_tools(
                     AgentToolContext(
                         run_id=request["runId"],
@@ -838,15 +861,10 @@ def create_lifespan(
                         workspace_id=request.get("workspaceId"),
                     ),
                     tool_deps,
+                    **({"legacy_names": legacy_names} if legacy_names else {}),
                 )
                 if not request.get("workspaceId"):
                     enabled -= {
-                        "list_workspace_context",
-                        "read_workspace_item",
-                        "add_docs_to_workspace",
-                        "create_workspace_connections",
-                        "generate_report",
-                        "update_report",
                         "explore_research_frontier",
                     }
                 profile = request.get("agentProfile")
@@ -856,7 +874,7 @@ def create_lifespan(
                     enabled -= {"web_search", "web_fetch"}
                 if "install_runtime_packages" not in sandbox:
                     enabled.discard("install_runtime_packages")
-                return [tool for tool in tools if tool.name in enabled]
+                return select_agent_tools(tools, enabled | set(legacy_names))
 
             async def generate_thread_title(
                 thread_id: str,

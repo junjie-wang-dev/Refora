@@ -7,6 +7,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 
+from refora_server.agent.application_catalog import APPLICATION_ACTIONS
+
 PROTOCOL_VERSION = 1
 WEBSOCKET_PATH = "/ws"
 SERVER_EVENTS = (
@@ -26,6 +28,7 @@ SERVER_EVENTS = (
     "import.progress",
     "import.toast",
     "workspace.items.changed",
+    "library.contents.changed",
     "mineru.install-progress",
     "ocr.progress",
     "ocr.completed",
@@ -208,6 +211,7 @@ def runtime_http_routes(app: Any) -> list[dict[str, str]]:
 def _payload(http_routes: list[dict[str, str]]) -> dict[str, Any]:
     return {
         "protocolVersion": PROTOCOL_VERSION,
+        "agentApplicationActions": APPLICATION_ACTIONS,
         "httpRoutes": http_routes,
         "websocketPath": WEBSOCKET_PATH,
         "serverEvents": list(SERVER_EVENTS),

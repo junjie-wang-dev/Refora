@@ -25,6 +25,7 @@ const eventForwards: readonly EventForward[] = [
   ['import.progress', IpcChannel.EventImportProgress],
   ['import.toast', IpcChannel.EventImportToast],
   ['workspace.items.changed', IpcChannel.EventWorkspaceItemsChanged],
+  ['library.contents.changed', IpcChannel.EventLibraryContentsChanged],
   ['mineru.install-progress', IpcChannel.EventMineruInstallProgress],
   ['ocr.progress', IpcChannel.EventOcrProgress],
   ['ocr.completed', IpcChannel.EventOcrCompleted],

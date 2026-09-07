@@ -429,7 +429,7 @@ async def test_lifespan_wires_agent_runtime_factories(monkeypatch) -> None:
             "systemPrompt": "Use the library.",
         }
 
-        assert dependencies["createTools"](request) == [tool_factory.return_value[0]]
+        assert dependencies["createTools"](request) == [tool_factory.return_value[0], tool_factory.return_value[2]]
         tool_factory.assert_called_once()
         context = tool_factory.call_args.args[0]
         assert context.run_id == "run-1"

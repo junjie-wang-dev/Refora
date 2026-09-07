@@ -17,7 +17,7 @@ from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
 
 from refora_server.agent.permissions import PermissionEngine
-from refora_server.agent.risk import RiskClass, classify
+from refora_server.services.agent_tools import readonly_agent_tools
 from refora_server.agent.sandbox_backend import create_refora_filesystem_backend
 from refora_server.services.agent_memory import (
     GLOBAL_MEMORY_PATHS,
@@ -221,11 +221,7 @@ def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -
         and (not use_native_web_search or tool.name != "web_search")
     ]
     native_tools = [{"type": "web_search"}] if use_native_web_search else []
-    read_tools = [
-        tool
-        for tool in refora_tools
-        if classify(tool.name) in {RiskClass.READ, RiskClass.NETWORK_READ}
-    ]
+    read_tools = readonly_agent_tools(refora_tools)
     subagent_tools = [*read_tools, *native_tools]
     agent_tools = [*refora_tools, *native_tools]
     filesystem_permissions = [

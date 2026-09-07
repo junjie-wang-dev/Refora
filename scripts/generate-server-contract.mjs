@@ -19,6 +19,7 @@ const contract = JSON.parse(stdout)
 const render = (value) => JSON.stringify(value, null, 2)
 const snapshotOutput = `${render(contract)}\n`
 const output = [
+  `export const AGENT_APPLICATION_ACTIONS = ${render(contract.agentApplicationActions)} as const`,
   `export const SERVER_PROTOCOL_VERSION = ${contract.protocolVersion} as const`,
   `export const SERVER_PROTOCOL_DIGEST = ${JSON.stringify(contract.protocolDigest)} as const`,
   `export const SERVER_HTTP_ROUTES = ${render(contract.httpRoutes)} as const`,

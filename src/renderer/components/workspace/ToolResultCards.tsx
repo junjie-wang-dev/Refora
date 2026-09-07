@@ -1,3 +1,4 @@
+import { applicationToolStep } from '../../utils/toolPresentation'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentTraceStep, ChatMediaItem } from '../../../shared/ipc-types'
@@ -80,6 +81,7 @@ function ResultCard({ entry }: { entry: RecordValue }) {
 }
 
 export function ToolResultCards({ step }: { step: AgentTraceStep }) {
+  step = applicationToolStep(step)
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const existingSources = useMessageMediaSources()

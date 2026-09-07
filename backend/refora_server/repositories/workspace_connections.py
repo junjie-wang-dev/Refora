@@ -77,6 +77,34 @@ def createWorkspaceConnectionsRepository(db):
         cur = db.execute("SELECT * FROM workspace_connections WHERE id = ?", [conn_id])
         return _map_connection(cur.fetchone())
 
+    def update(id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        existing = get(id)
+        if existing is None:
+            raise RepoError("not_found", "workspace connection not found")
+        if not patch or set(patch) - {"sourceItemId", "targetItemId", "sourceAnchor", "targetAnchor"}:
+            raise RepoError("invalid_input", "connection patch is invalid")
+        merged = {**existing, **patch}
+        if merged["sourceAnchor"] not in _ANCHORS or merged["targetAnchor"] not in _ANCHORS:
+            raise RepoError("invalid_anchor", "workspace connection anchor is invalid")
+        if merged["sourceItemId"] == merged["targetItemId"]:
+            raise RepoError("invalid_connection", "workspace cards cannot connect to themselves")
+        rows = db.execute(
+            "SELECT workspaceId FROM workspace_items WHERE id IN (?, ?)",
+            [merged["sourceItemId"], merged["targetItemId"]],
+        ).fetchall()
+        if len(rows) != 2 or any(row["workspaceId"] != existing["workspaceId"] for row in rows):
+            raise RepoError("not_found", "workspace connection endpoint not found")
+        try:
+            db.execute(
+                "UPDATE workspace_connections SET sourceItemId = ?, targetItemId = ?, "
+                "sourceAnchor = ?, targetAnchor = ? WHERE id = ?",
+                [merged["sourceItemId"], merged["targetItemId"], merged["sourceAnchor"], merged["targetAnchor"], id],
+            )
+        except sqlite3.IntegrityError as exc:
+            raise RepoError("duplicate", "Connection already exists") from exc
+        touch_workspace(db, existing["workspaceId"])
+        return get(id)
+
     def remove(id: str) -> None:
         cur = db.execute("SELECT workspaceId FROM workspace_connections WHERE id = ?", [id])
         existing = cur.fetchone()
@@ -85,4 +113,4 @@ def createWorkspaceConnectionsRepository(db):
         db.execute("DELETE FROM workspace_connections WHERE id = ?", [id])
         touch_workspace(db, existing["workspaceId"])
 
-    return {"list": list, "get": get, "create": create, "delete": remove}
+    return {"list": list, "get": get, "create": create, "update": update, "delete": remove}

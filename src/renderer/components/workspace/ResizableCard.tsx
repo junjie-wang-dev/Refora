@@ -41,6 +41,7 @@ interface ResizableCardProps {
   className?: string
   selected?: boolean
   canStartDrag?: () => boolean
+  getCanvasZoom?: () => number
   animatePosition?: boolean
 }
 
@@ -69,6 +70,7 @@ export default function ResizableCard({
   className = '',
   selected = false,
   canStartDrag,
+  getCanvasZoom,
   animatePosition = false
 }: ResizableCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
@@ -194,6 +196,7 @@ export default function ResizableCard({
     flushPendingPositionCommit()
     flushPendingSizeCommit()
     const pointerId = e.pointerId
+    const zoom = getCanvasZoom?.() ?? 1
     const pointerTarget = dragClickTarget ?? target.closest<HTMLElement>('[data-card-kind]') ?? e.currentTarget
     moveStartRef.current = {
       x: e.clientX,
@@ -234,8 +237,8 @@ export default function ResizableCard({
       if (!activated && Math.hypot(dx, dy) >= DRAG_START_DISTANCE) activate()
       ev.preventDefault()
       const next = {
-        x: Math.round(moveStartRef.current.cardX + dx),
-        y: Math.round(moveStartRef.current.cardY + dy),
+        x: Math.round(moveStartRef.current.cardX + dx / zoom),
+        y: Math.round(moveStartRef.current.cardY + dy / zoom),
         zIndex: activated ? moveStartRef.current.zIndex : position.zIndex
       }
       previewed = true
@@ -283,7 +286,7 @@ export default function ResizableCard({
     document.addEventListener('pointermove', onMove)
     document.addEventListener('pointerup', onUp)
     document.addEventListener('pointercancel', onCancel)
-  }, [canStartDrag, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, frontZIndex, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
+  }, [canStartDrag, getCanvasZoom, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, frontZIndex, onPositionCancel, onPositionCommit, position, scheduleVisuals, sizeKey])
 
   const startResize = useCallback(
     (edge: Edge, e: React.PointerEvent) => {
@@ -294,6 +297,7 @@ export default function ResizableCard({
       flushPendingPositionCommit()
       flushPendingSizeCommit()
       const pointerId = e.pointerId
+      const zoom = getCanvasZoom?.() ?? 1
       e.currentTarget.setPointerCapture?.(pointerId)
       resizeStartRef.current = {
         x: e.clientX,
@@ -320,10 +324,10 @@ export default function ResizableCard({
         let nextW = resizeStartRef.current.w
         let nextH = resizeStartRef.current.h
         if (resizeStartRef.current.edge === 'e' || resizeStartRef.current.edge === 'se') {
-          nextW = Math.max(1, Math.round(resizeStartRef.current.w + dx))
+          nextW = Math.max(1, Math.round(resizeStartRef.current.w + dx / zoom))
         }
         if (resizeStartRef.current.edge === 's' || resizeStartRef.current.edge === 'se') {
-          nextH = Math.max(1, Math.round(resizeStartRef.current.h + dy))
+          nextH = Math.max(1, Math.round(resizeStartRef.current.h + dy / zoom))
         }
         latestSizeRef.current = { width: nextW, height: nextH }
         sizeDirtyRef.current = true
@@ -361,7 +365,7 @@ export default function ResizableCard({
         edge === 'e' ? 'ew-resize' : edge === 's' ? 'ns-resize' : 'nwse-resize'
       document.body.style.userSelect = 'none'
     },
-    [canStartDrag, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
+    [canStartDrag, getCanvasZoom, flushPendingPositionCommit, flushPendingSizeCommit, flushVisuals, onSizeCancel, onSizeCommit, scheduleVisuals, size, sizeKey]
   )
 
   const moveByKeyboard = (e: React.KeyboardEvent<HTMLDivElement>) => {

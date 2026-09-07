@@ -193,28 +193,10 @@ def test_tool_factory_covers_read_web_academic_workspace_and_memory_tools():
     names = {tool.name for tool in tools}
 
     assert names == {
-        "search_documents",
-        "get_paper_context",
-        "read_paper",
-        "open_paper",
-        "find_related_papers",
-        "list_workspace_context",
-        "read_workspace_item",
-        "add_docs_to_workspace",
-        "create_workspace_connections",
-        "generate_report",
-        "update_report",
-        "prepare_paper_ocr",
-        "propose_workspace_memory_update",
-        "publish_workspace_artifacts",
-        "install_runtime_packages",
-        "__execute",
-        "search_arxiv",
-        "get_arxiv_paper",
-        "get_related_academic_papers",
-        "explore_research_frontier",
-        "web_search",
-        "web_fetch",
+        "refora_library", "refora_workspace", "propose_workspace_memory_update",
+        "publish_workspace_artifacts", "install_runtime_packages", "__execute",
+        "search_arxiv", "get_arxiv_paper", "get_related_academic_papers",
+        "explore_research_frontier", "web_search", "web_fetch",
     }
     assert "write_todos" not in names
 
@@ -222,25 +204,26 @@ def test_tool_factory_covers_read_web_academic_workspace_and_memory_tools():
 def test_library_tools_registered_with_document_and_summary_schemas():
     tools = {tool.name: tool for tool in create_agent_tools(AgentToolContext(run_id="run"), {})}
 
-    assert set({"search_documents", "get_paper_context", "read_paper", "open_paper", "find_related_papers"}) <= set(tools)
+    def schema(name, action):
+        return json.loads(tools[name].invoke({"action": "help", "parameters": {"action": action}}))["actions"][0]["parametersSchema"]
 
-    search = tools["search_documents"].args_schema
+    search = schema("refora_library", "search")
     assert search["required"] == ["query"]
     assert search["additionalProperties"] is False
     assert search["properties"]["query"] == {"type": "string"}
     assert search["properties"]["scope"]["enum"] == ["workspace", "library"]
 
-    fulltext = tools["read_paper"].args_schema
+    fulltext = schema("refora_library", "read")
     assert fulltext["required"] == ["docId"]
     assert fulltext["properties"]["source"]["enum"] == ["auto", "ocr", "extracted"]
     assert fulltext["properties"]["offset"] == {"type": "integer", "minimum": 0, "default": 0}
     assert fulltext["properties"]["limit"] == {"type": "integer", "minimum": 500, "maximum": 40000, "default": 40000}
 
-    related = tools["find_related_papers"].args_schema
+    related = schema("refora_library", "related")
     assert related["required"] == ["docId"]
     assert related["properties"]["limit"] == {"type": "integer", "minimum": 1, "maximum": 20, "default": 8}
 
-    update_report = tools["update_report"].args_schema
+    update_report = schema("refora_workspace", "reports.update")
     assert update_report["required"] == ["reportId"]
     assert update_report["anyOf"] == [
         {"required": ["title"]},
@@ -402,7 +385,7 @@ def test_read_paper_ocr_source_returns_cache_missing_contract():
         "docId": "d1",
         "nextTool": "prepare_paper_ocr",
         "approval": "handled_by_application",
-        "instruction": "Call prepare_paper_ocr now. Do not ask for approval in assistant text; the application will show the approval UI.",
+        "instruction": "Call prepare_paper_ocr now. Local OCR can run directly without additional approval.",
     }
 
 
@@ -791,13 +774,13 @@ def test_tool_invoke_persists_tool_effect_from_tool_call_id():
         ws = make_workspaces_repo(db)["create"]("Research")
         repos = create_repositories(db)
         tools = create_agent_tools(AgentToolContext(run_id="run-1", workspace_id=ws["id"]), {"repos": repos})
-        tool = next(t for t in tools if t.name == "add_docs_to_workspace")
+        tool = next(t for t in tools if t.name == "refora_workspace")
 
         call = {
             "type": "tool_call",
-            "name": "add_docs_to_workspace",
+            "name": "refora_workspace",
             "id": "call-xyz",
-            "args": {"docIds": "doc-1"},
+            "args": {"action": "cards.add_documents", "parameters": {"docIds": ["doc-1"]}},
         }
         config: RunnableConfig = {}
         result = tool.invoke(call, config)
@@ -821,13 +804,13 @@ def test_tool_invoke_replays_persisted_effect_on_same_tool_call_id():
         repos = create_repositories(db)
         items_repo = repos["workspaceItems"]
         tools = create_agent_tools(AgentToolContext(run_id="run-1", workspace_id=ws["id"]), {"repos": repos})
-        tool = next(t for t in tools if t.name == "add_docs_to_workspace")
+        tool = next(t for t in tools if t.name == "refora_workspace")
 
         call = {
             "type": "tool_call",
-            "name": "add_docs_to_workspace",
+            "name": "refora_workspace",
             "id": "call-xyz",
-            "args": {"docIds": "doc-1"},
+            "args": {"action": "cards.add_documents", "parameters": {"docIds": ["doc-1"]}},
         }
         config: RunnableConfig = {}
         first = tool.invoke(call, config)
@@ -853,9 +836,9 @@ def test_tool_invoke_without_tool_call_id_skips_effect_recording():
         ws = make_workspaces_repo(db)["create"]("Research")
         repos = create_repositories(db)
         tools = create_agent_tools(AgentToolContext(run_id="run-1", workspace_id=ws["id"]), {"repos": repos})
-        tool = next(t for t in tools if t.name == "add_docs_to_workspace")
+        tool = next(t for t in tools if t.name == "refora_workspace")
 
-        result = tool.invoke({"docIds": "doc-1"}, {})
+        result = tool.invoke({"action": "cards.add_documents", "parameters": {"docIds": ["doc-1"]}}, {})
         content = result.content if hasattr(result, "content") else result
 
         assert json.loads(content)["added"] == ["doc-1"]
