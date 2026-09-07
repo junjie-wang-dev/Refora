@@ -578,6 +578,8 @@
     }
   },
   "common": {
+    "contextMenuFailed": "Could not complete the menu action. Please try again.",
+    "edit": "Edit",
     "delete": "Delete",
     "rename": "Rename",
     "cancel": "Cancel",
@@ -797,6 +799,9 @@
     "finishEditingText": "Done"
   },
   "workspace": {
+    "pasteFiles": "Paste files",
+    "clipboardNoFiles": "No files in the clipboard. Copy files in Finder first.",
+    "pasteFilesFailed": "Could not read clipboard files. Copy existing files in Finder; folders and shortcuts are not supported.",
     "untitled": "Untitled",
     "close": "Close",
     "switchWorkspace": "Switch workspace",
@@ -898,6 +903,8 @@
     "stickyColorSky": "Sky",
     "stickyColorLavender": "Lavender",
     "stickyColorSlate": "Slate",
+    "canvasFitContent": "Show all content",
+    "canvasDefaultZoom": "Default zoom (100%)",
     "canvasLoadFailed": "Failed to load the canvas view",
     "canvasSaveFailed": "Failed to save the canvas view",
     "connectionStart": "Drag to another card to connect",
@@ -909,6 +916,12 @@
     "addFailed": "Failed to add items to the workspace",
     "chatPlaceholder": "Ask anything about the papers in this workspace.",
     "chat": {
+      "noThreads": "No conversations yet",
+      "newConversation": "New conversation",
+      "threadHistory": "Thread history",
+      "suggestionSummarize": "Summarize the key contributions of these papers",
+      "suggestionCompare": "Compare the methodologies used in these papers",
+      "suggestionReport": "Generate a research report",
       "title": "Chat",
       "selectProvider": "Select model / provider",
       "chooseModel": "Choose model",

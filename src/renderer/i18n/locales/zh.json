@@ -578,6 +578,8 @@
     }
   },
   "common": {
+    "contextMenuFailed": "无法完成菜单操作，请重试。",
+    "edit": "编辑",
     "delete": "删除",
     "rename": "重命名",
     "cancel": "取消",
@@ -797,6 +799,9 @@
     "finishEditingText": "完成"
   },
   "workspace": {
+    "pasteFiles": "粘贴文件",
+    "clipboardNoFiles": "剪贴板中没有文件，请先在访达中复制文件。",
+    "pasteFilesFailed": "无法读取剪贴板文件。请在访达中复制现有文件，不支持文件夹和快捷方式。",
     "untitled": "未命名",
     "close": "关闭",
     "switchWorkspace": "切换工作空间",
@@ -898,6 +903,8 @@
     "stickyColorSky": "天空蓝",
     "stickyColorLavender": "薰衣草紫",
     "stickyColorSlate": "岩灰",
+    "canvasFitContent": "显示全部内容",
+    "canvasDefaultZoom": "默认缩放（100%）",
     "canvasLoadFailed": "画布视图加载失败",
     "canvasSaveFailed": "画布视图保存失败",
     "connectionStart": "拖动到另一张卡片建立连线",
@@ -909,6 +916,12 @@
     "addFailed": "内容添加到工作空间失败",
     "chatPlaceholder": "针对此工作空间中的文献提出任何问题。",
     "chat": {
+      "noThreads": "暂无对话",
+      "newConversation": "新对话",
+      "threadHistory": "对话历史",
+      "suggestionSummarize": "总结这些论文的主要贡献",
+      "suggestionCompare": "比较这些论文采用的研究方法",
+      "suggestionReport": "生成研究报告",
       "title": "对话",
       "selectProvider": "选择模型 / 服务商",
       "chooseModel": "选择模型",

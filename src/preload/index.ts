@@ -317,7 +317,11 @@ const api: ReforaApi = {
     toBibtexString: (ids: string[]) => invoke<string>(IpcChannel.ExportBibtexString, ids)
   },
 
+  contextMenu: {
+    show: (items) => invoke<string | null>(IpcChannel.ContextMenuShow, items)
+  },
   clipboard: {
+    readFiles: () => invoke<string[]>(IpcChannel.ClipboardReadFiles),
     writeText: (text: string) => invoke<void>(IpcChannel.ClipboardWriteText, text),
     copyMarkdown: (title: string, content: string) =>
       invoke<void>(IpcChannel.ClipboardCopyMarkdown, title, content),

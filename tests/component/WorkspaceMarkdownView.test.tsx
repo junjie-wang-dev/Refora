@@ -1,6 +1,7 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { showContextMenu } from '@lobehub/ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 import WorkspaceMarkdownView from '../../src/renderer/components/workspace/WorkspaceMarkdownView'
 import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import type { WorkspaceNote } from '../../src/shared/ipc-types'

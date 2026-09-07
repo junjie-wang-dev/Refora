@@ -42,6 +42,7 @@ interface ResizableCardProps {
   selected?: boolean
   canStartDrag?: () => boolean
   getCanvasZoom?: () => number
+  getPositionPreview?: (sizeKey: string) => CardPosition | undefined
   animatePosition?: boolean
 }
 
@@ -71,6 +72,7 @@ export default function ResizableCard({
   selected = false,
   canStartDrag,
   getCanvasZoom,
+  getPositionPreview,
   animatePosition = false
 }: ResizableCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
@@ -160,11 +162,14 @@ export default function ResizableCard({
   }, [flushVisuals])
 
   useLayoutEffect(() => {
-    latestPositionRef.current = position
-    if (!movingRef.current && cardRef.current) {
-      cardRef.current.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
+    if (movingRef.current) return
+    const next = getPositionPreview?.(sizeKey) ?? position
+    latestPositionRef.current = next
+    if (cardRef.current) {
+      cardRef.current.style.transform = `translate3d(${next.x}px, ${next.y}px, 0)`
+      cardRef.current.style.zIndex = String(next.zIndex)
     }
-  }, [position])
+  }, [getPositionPreview, position, sizeKey])
 
   useLayoutEffect(() => {
     latestSizeRef.current = size

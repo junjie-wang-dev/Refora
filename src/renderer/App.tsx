@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import clsx from 'clsx'
-import { ThemeProvider, ContextMenuHost } from '@lobehub/ui'
+import { ThemeProvider } from '@lobehub/ui'
 import { theme as antdTheme } from 'antd'
 import { ChatCircleText, IconContext } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
@@ -628,7 +628,6 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
           enableGlobalStyle={false}
           enableCustomFonts={false}
         >
-      <ContextMenuHost />
       <SettingsModalHost />
       <div className="app-root relative isolate flex h-screen w-screen overflow-hidden bg-background text-foreground">
         {showWizard && <FirstRunWizard onDone={() => setShowWizard(false)} />}

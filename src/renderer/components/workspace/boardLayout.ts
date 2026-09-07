@@ -12,6 +12,28 @@ export const DEFAULT_VIEWPORT: WorkspaceCanvasViewport = {
   zoom: WORKSPACE_CANVAS_DEFAULT_ZOOM
 }
 
+export function fitContentViewport(
+  bounds: Array<{ x: number; y: number; width: number; height: number }>,
+  width: number,
+  height: number
+): WorkspaceCanvasViewport {
+  if (!bounds.length || width <= 0 || height <= 0) return DEFAULT_VIEWPORT
+  const left = Math.min(...bounds.map((item) => item.x))
+  const top = Math.min(...bounds.map((item) => item.y))
+  const right = Math.max(...bounds.map((item) => item.x + item.width))
+  const bottom = Math.max(...bounds.map((item) => item.y + item.height))
+  const zoom = Math.min(
+    WORKSPACE_CANVAS_DEFAULT_ZOOM,
+    Math.max(1, width - 64) / Math.max(1, right - left),
+    Math.max(1, height - 112) / Math.max(1, bottom - top)
+  )
+  return {
+    panX: width / 2 - (left + right) / 2 * zoom,
+    panY: (height - 48) / 2 - (top + bottom) / 2 * zoom,
+    zoom
+  }
+}
+
 export interface GridPlacement {
   x: number
   y: number

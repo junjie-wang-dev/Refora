@@ -1,3 +1,4 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -5,7 +6,7 @@ import DocumentList from '@renderer/components/DocumentList'
 import ConfirmDialog from '../../src/renderer/components/ConfirmDialog'
 import { useConfirmStore } from '../../src/renderer/store/confirmStore'
 import type { Document } from '@shared/ipc-types'
-import { showContextMenu } from '../mocks/lobehub-ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 
 vi.mock('@lobehub/ui', async () => await import('../mocks/lobehub-ui'))
 

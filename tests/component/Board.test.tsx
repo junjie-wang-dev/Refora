@@ -1,7 +1,8 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { showContextMenu } from '@lobehub/ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 import Board from '@renderer/components/workspace/Board'
 import type {
   AiReport,
@@ -162,6 +163,7 @@ beforeEach(() => {
   workspaceAssets.open = vi.fn().mockResolvedValue(undefined)
   workspaceAssets.reveal = vi.fn().mockResolvedValue(undefined)
   api.clipboard = {
+    readFiles: vi.fn().mockResolvedValue([]),
     copyWorkspaceAsset: mockCopyWorkspaceAsset,
     copyMarkdown: mockCopyMarkdown,
     writeText: mockWriteClipboardText
@@ -892,7 +894,7 @@ describe('Board canvas controls and connections', () => {
     mockWorkspaceItemsChangedHandler?.({ workspaceId: 'ws-1', reason: 'agent_canvas' })
     await waitFor(() => {
       expect((container.querySelector('.workspace-canvas-world') as HTMLElement).style.transform)
-        .toBe('translate3d(240px, -50px, 0) scale(1.5)')
+        .toBe('translate3d(240px, -50px, 0) scale(1)')
     })
     expect(mockConnectionsList).toHaveBeenCalledWith('ws-1')
     mockWorkspaceItemsChangedHandler?.({ workspaceId: 'ws-other', reason: 'agent_canvas' })
@@ -901,7 +903,37 @@ describe('Board canvas controls and connections', () => {
     fireEvent.pointerDown(card, { pointerId: 90, button: 0, clientX: 20, clientY: 20 })
     fireEvent.pointerMove(document, { pointerId: 90, clientX: 80, clientY: 50 })
     fireEvent.pointerUp(document, { pointerId: 90 })
-    expect(mockMoveItem).toHaveBeenCalledWith('item-zoom', 40, 20, expect.any(Number))
+    expect(mockMoveItem).toHaveBeenCalledWith('item-zoom', 60, 30, expect.any(Number))
+  })
+
+  it('toggles between fitting all cards and the original default viewport', async () => {
+    vi.spyOn(window.api.workspaceCanvas, 'get')
+    mockItems = [
+      { ...makeItem('left', 'doc-left', 0), x: -1000, y: -500, width: 300, height: 200 },
+      { ...makeItem('right', 'doc-right', 1), x: 3000, y: 1500, width: 300, height: 200 }
+    ]
+    const { container, rerender } = render(<Board />)
+    await waitFor(() => expect(window.api.workspaceCanvas.get).toHaveBeenCalled())
+    const board = container.firstElementChild as HTMLElement
+    vi.spyOn(board, 'getBoundingClientRect').mockReturnValue({ width: 800, height: 600 } as DOMRect)
+    const world = container.querySelector('.workspace-canvas-world') as HTMLElement
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.canvasFitContent' }))
+    await waitFor(() => expect(world.style.transform).toContain(`scale(${736 / 4300})`))
+    expect(screen.getByRole('button', { name: 'workspace.canvasDefaultZoom' })).toHaveAttribute('aria-pressed', 'true')
+    mockItems = [...mockItems, { ...makeItem('far', 'doc-far', 2), x: 9000, y: 0, width: 300, height: 200 }]
+    rerender(<Board />)
+    await waitFor(() => expect(world.style.transform).toContain(`scale(${736 / 10300})`))
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.canvasDefaultZoom' }))
+    expect(world.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
+    expect(screen.getByRole('button', { name: 'workspace.canvasFitContent' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('disables fitting an empty workspace', () => {
+    render(<Board />)
+    expect(screen.getByRole('button', { name: 'workspace.canvasFitContent' })).toBeDisabled()
+    expect(screen.getByTestId('workspace-floating-actions')).toContainElement(
+      screen.getByRole('button', { name: 'workspace.canvasFitContent' })
+    )
   })
 
   it('keeps the canvas at 100% without vertical wheel movement, zoom controls, or a dotted grid', async () => {
@@ -945,6 +977,53 @@ describe('Board canvas controls and connections', () => {
     expect(card.style.transform).toBe('translate3d(60px, 35px, 0)')
     expect(mockMoveItem).toHaveBeenCalledOnce()
     expect(mockMoveItem).toHaveBeenCalledWith('item-1', 60, 35, 1)
+  })
+
+  it.each([false, true])('moves selected cards together and supports cancellation: %s', async (cancel) => {
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400), makeItem('item-3', 'doc-3', 800)]
+    const { container } = render(<Board />)
+    const cards = Array.from(container.querySelectorAll<HTMLElement>('[data-workspace-card-id]'))
+    fireEvent.focus(cards[0])
+    fireEvent.pointerDown(cards[1], { pointerId: 71, button: 0, shiftKey: true })
+    fireEvent.pointerUp(document, { pointerId: 71 })
+    fireEvent.pointerDown(cards[0], { pointerId: 72, button: 0, clientX: 20, clientY: 20 })
+    fireEvent.pointerMove(document, { pointerId: 72, clientX: 80, clientY: 55 })
+    await waitFor(() => expect(cards[1].style.transform).toBe('translate3d(460px, 35px, 0)'))
+    expect(cards[0].style.transform).toBe('translate3d(60px, 35px, 0)')
+    expect(cards[2].style.transform).toBe('translate3d(800px, 0px, 0)')
+    expect(mockMoveItem).not.toHaveBeenCalled()
+    if (cancel) {
+      fireEvent.pointerCancel(document, { pointerId: 72 })
+      expect(cards[0].style.transform).toBe('translate3d(0px, 0px, 0)')
+      expect(cards[1].style.transform).toBe('translate3d(400px, 0px, 0)')
+      expect(mockMoveItem).not.toHaveBeenCalled()
+    } else {
+      fireEvent.pointerUp(document, { pointerId: 72 })
+      expect(mockMoveItem).toHaveBeenCalledTimes(2)
+      expect(mockMoveItem).toHaveBeenCalledWith('item-1', 60, 35, expect.any(Number))
+      expect(mockMoveItem).toHaveBeenCalledWith('item-2', 460, 35, expect.any(Number))
+    }
+  })
+
+  it('moves a selected group by canvas coordinates when zoomed out', async () => {
+    mockItems = [makeItem('item-1', 'doc-1', 0), makeItem('item-2', 'doc-2', 400)]
+    const { container } = render(<Board />)
+    const board = container.firstElementChild as HTMLElement
+    vi.spyOn(board, 'getBoundingClientRect').mockReturnValue({ width: 400, height: 600 } as DOMRect)
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.canvasFitContent' }))
+    const world = container.querySelector('.workspace-canvas-world') as HTMLElement
+    const zoom = Number(world.style.transform.match(/scale\(([^)]+)\)/)?.[1])
+    expect(zoom).toBeLessThan(1)
+    const cards = Array.from(container.querySelectorAll<HTMLElement>('[data-workspace-card-id]'))
+    fireEvent.focus(cards[0])
+    fireEvent.pointerDown(cards[1], { pointerId: 73, button: 0, shiftKey: true })
+    fireEvent.pointerUp(document, { pointerId: 73 })
+    fireEvent.pointerDown(cards[1], { pointerId: 74, button: 0, clientX: 0, clientY: 0 })
+    fireEvent.pointerMove(document, { pointerId: 74, clientX: 100 * zoom, clientY: 50 * zoom })
+    fireEvent.pointerUp(document, { pointerId: 74 })
+    await waitFor(() => expect(mockMoveItem).toHaveBeenCalledTimes(2))
+    expect(mockMoveItem).toHaveBeenCalledWith('item-1', 100, 50, expect.any(Number))
+    expect(mockMoveItem).toHaveBeenCalledWith('item-2', 500, 50, expect.any(Number))
   })
 
   it('restores connection geometry when a card drag is cancelled', async () => {
@@ -1428,5 +1507,48 @@ describe('Board canvas controls and connections', () => {
     expect(world.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
     const board = container.firstElementChild as HTMLElement
     expect(board).not.toHaveClass('is-pan-ready')
+  })
+})
+
+
+describe('Board file paste menu', () => {
+  function pasteAction(container: HTMLElement) {
+    fireEvent.contextMenu(container.querySelector('[data-testid="workspace-board"]') ?? container.firstElementChild!, { clientX: 500, clientY: 400 })
+    const items = vi.mocked(showContextMenu).mock.calls.at(-1)![0] as Array<{ key: string; onClick?: () => void }>
+    return items.find((item) => item.key === 'paste-files')!
+  }
+
+  it('imports clipboard files at the context-menu position', async () => {
+    vi.mocked(window.api.clipboard.readFiles).mockResolvedValue(['/tmp/first.pdf', '/tmp/second.md'])
+    const { container } = render(<Board />)
+    await act(async () => pasteAction(container).onClick!())
+    expect(mockAddFiles).toHaveBeenCalledWith(['/tmp/first.pdf', '/tmp/second.md'], { x: 350, y: 300 })
+  })
+
+  it('explains an empty clipboard without opening a file picker', async () => {
+    const { container } = render(<Board />)
+    await act(async () => pasteAction(container).onClick!())
+    expect(mockShowToast).toHaveBeenCalledWith('workspace.clipboardNoFiles')
+    expect(mockAddFiles).not.toHaveBeenCalled()
+    expect(mockAddAssets).not.toHaveBeenCalled()
+  })
+
+  it('reports clipboard read failures', async () => {
+    vi.mocked(window.api.clipboard.readFiles).mockRejectedValue(new Error('Clipboard unavailable'))
+    const { container } = render(<Board />)
+    await act(async () => pasteAction(container).onClick!())
+    expect(mockShowToast).toHaveBeenCalledWith('workspace.pasteFilesFailed')
+    expect(mockAddFiles).not.toHaveBeenCalled()
+  })
+
+  it('does not paste into a workspace opened while the clipboard was being read', async () => {
+    let finish!: (paths: string[]) => void
+    vi.mocked(window.api.clipboard.readFiles).mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const { container, rerender } = render(<Board />)
+    act(() => pasteAction(container).onClick!())
+    mockActiveWorkspaceId = 'ws-2'
+    rerender(<Board />)
+    await act(async () => finish(['/tmp/paper.pdf']))
+    expect(mockAddFiles).not.toHaveBeenCalled()
   })
 })

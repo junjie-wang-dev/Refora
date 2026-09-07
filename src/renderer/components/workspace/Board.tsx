@@ -1,8 +1,8 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { FilePlus, NotePencil, Sticker } from '@phosphor-icons/react'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+import { ArrowsIn, ArrowsOut, FilePlus } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useDocumentStore } from '../../store/documentStore'
 import { api } from '../../ipc'
@@ -36,7 +36,7 @@ import {
 } from './connectionGeometry'
 import BoardCanvasWorld, { type BoardConnectionDraft } from './BoardCanvasWorld'
 import WorkspaceCards from './WorkspaceCards'
-import { compactGridPlacements, DEFAULT_VIEWPORT, VIEWPORT_SAVE_DELAY } from './boardLayout'
+import { compactGridPlacements, fitContentViewport, DEFAULT_VIEWPORT, VIEWPORT_SAVE_DELAY } from './boardLayout'
 import {
   hasFilePayload,
   hasWorkspaceDocumentPayload,
@@ -74,10 +74,11 @@ export type WorkspaceMarkdownCard =
 export type WorkspaceMarkdownCardMode = 'read' | 'edit'
 
 interface BoardProps {
+  toolbarActions?: ReactNode
   onOpenMarkdownCard?: (card: WorkspaceMarkdownCard, mode?: WorkspaceMarkdownCardMode) => void
 }
 
-const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdownCard }, ref) {
+const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdownCard, toolbarActions }, ref) {
   const { t } = useTranslation()
   const items = useWorkspaceStore((s) => s.items)
   const reports = useWorkspaceStore((s) => s.reports)
@@ -100,6 +101,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const documents = useDocumentStore((s) => s.documents)
   const searchResults = useDocumentStore((s) => s.searchResults)
 
+  const [fitContent, setFitContent] = useState(false)
+  const fitContentRef = useRef(false)
+  const defaultViewportRef = useRef(DEFAULT_VIEWPORT)
   const [dropError, setDropError] = useState<string | null>(null)
   const [dropActive, setDropActive] = useState(false)
   const [autoEditNoteId, setAutoEditNoteId] = useState<string | null>(null)
@@ -129,6 +133,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const connectionDraftRef = useRef<BoardConnectionDraft | null>(null)
   const connectionPreviewPathRef = useRef<SVGPathElement>(null)
   const connectionFrameRef = useRef<number | null>(null)
+  const selectedItemIdsRef = useRef(selectedItemIds)
+  selectedItemIdsRef.current = selectedItemIds
+  const groupMoveRef = useRef<{ leader: string; origins: Map<string, CardPosition> } | null>(null)
   const previewPositionsRef = useRef(new Map<string, CardPosition>())
   const previewSizesRef = useRef(new Map<string, CardSize>())
   const itemMapRef = useRef(new Map<string, WorkspaceItem>())
@@ -209,7 +216,8 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
 
   const persistViewport = useCallback((workspaceId: string, next: WorkspaceCanvasViewport) => {
     const previousTask = viewportSaveTaskRef.current
-    const request = () => api.workspaceCanvas.update(workspaceId, next).then(() => undefined)
+    const savedViewport = fitContentRef.current ? defaultViewportRef.current : next
+    const request = () => api.workspaceCanvas.update(workspaceId, savedViewport).then(() => undefined)
     const orderedRequest = previousTask
       ? previousTask.then(request, request)
       : request()
@@ -268,6 +276,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       clearTimeout(layoutAnimationTimerRef.current)
       layoutAnimationTimerRef.current = null
     }
+    groupMoveRef.current = null
     previewPositionsRef.current.clear()
     previewSizesRef.current.clear()
     setAutoEditNoteId(null)
@@ -321,8 +330,11 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         viewportTouchedRef.current = true
         void api.workspaceCanvas.get(workspaceId).then((saved) => {
           if (cancelled || activeWorkspaceIdRef.current !== workspaceId) return
-          viewportRef.current = saved
-          applyViewportVisuals(saved)
+          const next = { ...saved, zoom: DEFAULT_VIEWPORT.zoom }
+          fitContentRef.current = false
+          setFitContent(false)
+          viewportRef.current = next
+          applyViewportVisuals(next)
         }).catch((e) => {
           if (!cancelled) useDocumentStore.getState().showToast(errorMessage(e, t('workspace.canvasLoadFailed')))
         })
@@ -343,6 +355,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       clearTimeout(viewportSaveTimerRef.current)
       viewportSaveTimerRef.current = null
     }
+    fitContentRef.current = false
+    setFitContent(false)
+    defaultViewportRef.current = DEFAULT_VIEWPORT
     viewportTouchedRef.current = false
     viewportRef.current = DEFAULT_VIEWPORT
     pendingViewportRef.current = null
@@ -352,7 +367,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     let cancelled = false
     void api.workspaceCanvas.get(workspaceId).then((saved) => {
       if (cancelled || viewportTouchedRef.current) return
-      const fixedViewport = saved
+      const fixedViewport = { ...saved, zoom: DEFAULT_VIEWPORT.zoom }
       viewportRef.current = fixedViewport
       applyViewportVisuals(fixedViewport)
     }).catch((e) => {
@@ -399,6 +414,35 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     const size = previewSizesRef.current.get(item.id) ?? sizeFor(item)
     return { x: position.x, y: position.y, width: size.width, height: size.height }
   }, [positionFor, sizeFor])
+
+  useEffect(() => {
+    if (!fitContent) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const fit = () => {
+      const { width, height } = canvas.getBoundingClientRect()
+      if (width <= 0 || height <= 0) return
+      commitViewport(fitContentViewport(sortedItems.map((item) => ({
+        x: item.x, y: item.y, ...sizeFor(item)
+      })), width, height))
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [fitContent, sortedItems, sizeFor, commitViewport])
+
+  const toggleCanvasZoom = () => {
+    if (fitContent) {
+      fitContentRef.current = false
+      setFitContent(false)
+      commitViewport(defaultViewportRef.current)
+    } else {
+      defaultViewportRef.current = { ...viewportRef.current, zoom: DEFAULT_VIEWPORT.zoom }
+      fitContentRef.current = true
+      setFitContent(true)
+    }
+  }
 
   const refreshConnectionPreview = useCallback((itemId: string) => {
     const currentItems = itemMapRef.current
@@ -448,22 +492,72 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     refreshConnectionPreview(itemId)
   }, [refreshConnectionPreview])
 
+  const applyCardPositionPreview = useCallback((itemId: string, position: CardPosition) => {
+    const card = Array.from(worldRef.current?.querySelectorAll<HTMLElement>('[data-workspace-card-id]') ?? [])
+      .find((element) => element.dataset.workspaceCardId === itemId)
+    if (card) {
+      card.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
+      card.style.zIndex = String(position.zIndex)
+    }
+  }, [])
+
   const handleCardPositionChange = useCallback((itemId: string, position: CardPosition) => {
-    previewPositionsRef.current.set(itemId, position)
-    refreshConnectionPreview(itemId)
-  }, [refreshConnectionPreview])
+    if (!groupMoveRef.current && selectedItemIdsRef.current.has(itemId) && selectedItemIdsRef.current.size > 1) {
+      const origins = new Map<string, CardPosition>()
+      for (const id of selectedItemIdsRef.current) {
+        const item = itemMapRef.current.get(id)
+        if (item) origins.set(id, { x: item.x, y: item.y, zIndex: item.zIndex })
+      }
+      groupMoveRef.current = { leader: itemId, origins }
+    }
+    const group = groupMoveRef.current
+    const origin = group?.leader === itemId ? group.origins.get(itemId) : undefined
+    if (group && origin) {
+      for (const [id, start] of group.origins) {
+        const next = {
+          x: start.x + position.x - origin.x,
+          y: start.y + position.y - origin.y,
+          zIndex: start.zIndex + position.zIndex - origin.zIndex
+        }
+        previewPositionsRef.current.set(id, next)
+        applyCardPositionPreview(id, next)
+      }
+      for (const id of group.origins.keys()) refreshConnectionPreview(id)
+    } else {
+      previewPositionsRef.current.set(itemId, position)
+      refreshConnectionPreview(itemId)
+    }
+  }, [applyCardPositionPreview, refreshConnectionPreview])
 
   const handleCardPositionCommit = useCallback((itemId: string, position: CardPosition) => {
-    void moveItem(itemId, position.x, position.y, position.zIndex).finally(() => {
-      previewPositionsRef.current.delete(itemId)
-      refreshConnectionPreview(itemId)
-    })
-  }, [moveItem, refreshConnectionPreview])
+    handleCardPositionChange(itemId, position)
+    const group = groupMoveRef.current
+    const ids = group?.leader === itemId ? [...group.origins.keys()] : [itemId]
+    groupMoveRef.current = null
+    for (const id of ids) {
+      const next = previewPositionsRef.current.get(id)
+      if (!next) continue
+      void moveItem(id, next.x, next.y, next.zIndex).finally(() => {
+        if (previewPositionsRef.current.get(id) === next) previewPositionsRef.current.delete(id)
+        refreshConnectionPreview(id)
+      })
+    }
+  }, [handleCardPositionChange, moveItem, refreshConnectionPreview])
 
   const handleCardPositionCancel = useCallback((itemId: string) => {
-    previewPositionsRef.current.delete(itemId)
-    refreshConnectionPreview(itemId)
-  }, [refreshConnectionPreview])
+    const group = groupMoveRef.current
+    if (group?.leader === itemId) {
+      groupMoveRef.current = null
+      for (const [id, origin] of group.origins) {
+        previewPositionsRef.current.delete(id)
+        applyCardPositionPreview(id, origin)
+      }
+      for (const id of group.origins.keys()) refreshConnectionPreview(id)
+    } else {
+      previewPositionsRef.current.delete(itemId)
+      refreshConnectionPreview(itemId)
+    }
+  }, [applyCardPositionPreview, refreshConnectionPreview])
 
   const selectedItems = useMemo(
     () => sortedItems.filter((item) => selectedItemIds.has(item.id)),
@@ -1001,6 +1095,29 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     }
   }), [addAssets, handleCreateNote, placementAtCanvasCenter])
 
+  const handlePasteFiles = useCallback(async (placement: WorkspaceItemPlacement) => {
+    const workspaceId = activeWorkspaceId
+    let paths: string[]
+    try {
+      paths = await api.clipboard.readFiles()
+    } catch {
+      if (activeWorkspaceIdRef.current === workspaceId) {
+        useDocumentStore.getState().showToast(t('workspace.pasteFilesFailed'))
+      }
+      return
+    }
+    if (activeWorkspaceIdRef.current !== workspaceId) return
+    if (paths.length === 0) {
+      useDocumentStore.getState().showToast(t('workspace.clipboardNoFiles'))
+      return
+    }
+    try {
+      await addFiles(paths, placement)
+    } catch {
+      return
+    }
+  }, [activeWorkspaceId, addFiles, t])
+
   const handleCanvasContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
     if (target.closest('[data-workspace-card], button, input, textarea, a, [role="dialog"]')) return
@@ -1012,29 +1129,38 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       {
         key: 'add-files',
         label: t('workspace.assetAdd'),
-        icon: <FilePlus className="h-3.5 w-3.5" />,
+        icon: 'addFile',
         onClick: () => void addAssets([], placement)
+      },
+      {
+        key: 'paste-files',
+        label: t('workspace.pasteFiles'),
+        icon: 'paste',
+        onClick: () => void handlePasteFiles(placement)
       },
       { type: 'divider', key: 'file-divider' },
       {
         key: 'create-sticky-note',
         label: t('workspace.createStickyNote'),
-        icon: <Sticker className="h-3.5 w-3.5" />,
+        icon: 'sticky',
         onClick: () => void handleCreateNote('plain', placement)
       },
       {
         key: 'create-markdown-note',
         label: t('workspace.createNote'),
-        icon: <NotePencil className="h-3.5 w-3.5" />,
+        icon: 'note',
         onClick: () => void handleCreateNote('markdown', placement)
       }
     ]
     showContextMenu(items)
-  }, [addAssets, handleCreateNote, t, worldPositionAt])
+  }, [addAssets, handleCreateNote, handlePasteFiles, t, worldPositionAt])
 
   const cardShell = useMemo<ComponentProps<typeof WorkspaceCards>['shell']>(() => ({
     canStartDrag: () => !spacePressedRef.current,
     getCanvasZoom: () => viewportRef.current.zoom,
+    getPositionPreview: (itemId) => groupMoveRef.current?.origins.has(itemId)
+      ? previewPositionsRef.current.get(itemId)
+      : undefined,
     frontZIndex: maxZIndex + 1,
     onSizeChange: handleCardSizeChange,
     onSizeCommit: handleCardSizeCommit,
@@ -1115,6 +1241,27 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       onDragLeave={handleDragLeave}
       onDrop={(e) => void handleDrop(e)}
     >
+      {panelView === 'workspace' && (
+        <div
+          className="absolute bottom-5 right-5 z-[250001] flex items-center gap-1 rounded-xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur"
+          data-testid="workspace-floating-actions"
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation() }}
+        >
+          {toolbarActions}
+          <button
+            type="button"
+            className="sidebar-header-btn"
+            title={t(fitContent ? 'workspace.canvasDefaultZoom' : 'workspace.canvasFitContent')}
+            aria-label={t(fitContent ? 'workspace.canvasDefaultZoom' : 'workspace.canvasFitContent')}
+            aria-pressed={fitContent}
+            disabled={sortedItems.length === 0}
+            onClick={toggleCanvasZoom}
+          >
+            {fitContent ? <ArrowsIn className="h-4 w-4" /> : <ArrowsOut className="h-4 w-4" />}
+          </button>
+        </div>
+      )}
       <div className="pointer-events-none absolute left-3 top-3 z-[200000]">
         {dropError && (
           <div className="rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error shadow-sm">

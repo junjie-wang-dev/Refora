@@ -1,6 +1,7 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { showContextMenu } from '@lobehub/ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 import type { ChatMessage } from '../../src/shared/ipc-types'
 import ChatMessages from '../../src/renderer/components/workspace/ChatMessages'
 

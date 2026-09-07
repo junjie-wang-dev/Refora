@@ -52,6 +52,9 @@ import { contentSecurityPolicy, isTrustedIpcSender, secureWebPreferences } from 
 import { consumeDeepLinkArguments, handoffSecondInstance } from './services/instanceHandoff'
 import { createLifecycleTransitionGate } from './services/lifecycleTransitionGate'
 import { sendLibraryContentsChanged } from './services/libraryContentsChanged'
+import { createNativeContextMenuHandlers } from './services/nativeContextMenu'
+import { registerEditContextMenu } from './services/editContextMenu'
+import { createClipboardFileHandlers } from './services/clipboardFiles'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -112,7 +115,12 @@ const markdownExportHandlers = createMarkdownExportHandlers({
   writeFile: (path, data) => writeFile(path, data)
 })
 
-for (const [channel, handler] of Object.entries({ ...appLifecycleIpcHandlers, ...markdownExportHandlers })) {
+for (const [channel, handler] of Object.entries({
+  ...createNativeContextMenuHandlers(() => win),
+  ...appLifecycleIpcHandlers,
+  ...markdownExportHandlers,
+  ...createClipboardFileHandlers(rendererPathCapabilities.authorizeFile)
+})) {
   ipcMain.handle(channel, (event, ...args) => {
     if (!isTrustedIpcSender(event, () => win)) {
       return {
@@ -618,6 +626,8 @@ function createWindow(bounds?: WindowBounds | null): BrowserWindow {
     }),
     webPreferences: secureWebPreferences(join(__dirname, '../preload/index.js'))
   })
+
+  registerEditContextMenu(bw, () => menuLanguage)
 
   const sendWindowFocus = (focused: boolean) => {
     if (!bw.isDestroyed() && !bw.webContents.isDestroyed()) {

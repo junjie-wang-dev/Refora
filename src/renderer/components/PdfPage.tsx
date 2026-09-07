@@ -11,17 +11,8 @@ import {
   type RefObject
 } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  Copy,
-  CursorText,
-  Highlighter,
-  ListBullets,
-  NoteBlank,
-  Plus,
-  Sparkle,
-  X
-} from '@phosphor-icons/react'
-import { showContextMenu, type ContextMenuItem } from '@lobehub/ui'
+import { NoteBlank, X } from '@phosphor-icons/react'
+import { showContextMenu, type ContextMenuItem } from '../utils/contextMenu'
 import { useTranslation } from 'react-i18next'
 import type {
   PDFDocumentProxy,
@@ -731,7 +722,7 @@ export default function PdfPage({
       {
         key: 'copy',
         label: t('pdfReader.contextMenu.copy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: 'copy',
         onClick: () => {
           void api.clipboard.writeText(selection.text).then(() => {
             useDocumentStore.getState().showToast(t('pdfReader.contextMenu.copySuccess'))
@@ -743,7 +734,7 @@ export default function PdfPage({
       {
         key: 'highlight',
         label: t('pdfReader.contextMenu.highlight'),
-        icon: <Highlighter className="h-3.5 w-3.5" />,
+        icon: 'highlight',
         onClick: () => {
           usePdfReaderStore.getState().beginHistoryGroup(documentId)
           selection.pages.forEach((selectedPage) => {
@@ -765,12 +756,12 @@ export default function PdfPage({
         key: 'ai',
         type: 'submenu',
         label: t('pdfReader.contextMenu.ai'),
-        icon: <Sparkle className="h-3.5 w-3.5" />,
+        icon: 'ai',
         children: [
           {
             key: 'ai-summary',
             label: t('pdfReader.contextMenu.summary'),
-            icon: <ListBullets className="h-3.5 w-3.5" />,
+            icon: 'summarize',
             onClick: () => requestAiDraft(
               'prefill',
               t('pdfReader.contextMenu.summaryPrompt')
@@ -779,7 +770,7 @@ export default function PdfPage({
           {
             key: 'ai-explain',
             label: t('pdfReader.contextMenu.explain'),
-            icon: <CursorText className="h-3.5 w-3.5" />,
+            icon: 'explain',
             onClick: () => requestAiDraft(
               'prefill',
               t('pdfReader.contextMenu.explainPrompt')
@@ -788,7 +779,7 @@ export default function PdfPage({
           {
             key: 'ai-context',
             label: t('pdfReader.contextMenu.addToAiContext'),
-            icon: <Plus className="h-3.5 w-3.5" />,
+            icon: 'add',
             onClick: () => requestAiDraft(
               'append',
               t('pdfReader.contextMenu.contextPrompt', {

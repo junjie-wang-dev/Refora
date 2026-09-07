@@ -1,17 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   PaperPlaneTilt,
   Queue,
   Square,
-  Paperclip,
-  Scissors,
-  Copy,
-  Clipboard,
-  SelectionAll
+  Paperclip
 } from '@phosphor-icons/react'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { Button as UiButton } from '../ui'
 import { api } from '../../ipc'
@@ -147,97 +141,6 @@ export default function ChatInput({
     }
   }
 
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      const el = textareaRef.current
-      const start = el?.selectionStart ?? 0
-      const end = el?.selectionEnd ?? 0
-      const hasSelection = start !== end
-      const items: ContextMenuItem[] = [
-        {
-          key: 'cut',
-          label: t('workspace.chat.cut', 'Cut'),
-          icon: <Scissors className="h-3.5 w-3.5" />,
-          disabled: !hasSelection,
-          onClick: async () => {
-            const ta = textareaRef.current
-            if (!ta) return
-            const s = ta.selectionStart
-            const en = ta.selectionEnd
-            if (s === en) return
-            try {
-              await navigator.clipboard.writeText(input.slice(s, en))
-            } catch {
-              return
-            }
-            onInputChange(input.slice(0, s) + input.slice(en))
-            requestAnimationFrame(() => {
-              ta.focus()
-              ta.selectionStart = ta.selectionEnd = s
-            })
-          }
-        },
-        {
-          key: 'copy',
-          label: t('workspace.chat.copy', 'Copy'),
-          icon: <Copy className="h-3.5 w-3.5" />,
-          disabled: !hasSelection,
-          onClick: async () => {
-            const ta = textareaRef.current
-            if (!ta) return
-            const s = ta.selectionStart
-            const en = ta.selectionEnd
-            if (s === en) return
-            try {
-              await navigator.clipboard.writeText(input.slice(s, en))
-            } catch {
-              return
-            }
-          }
-        },
-        {
-          key: 'paste',
-          label: t('workspace.chat.paste', 'Paste'),
-          icon: <Clipboard className="h-3.5 w-3.5" />,
-          onClick: async () => {
-            const ta = textareaRef.current
-            if (!ta) return
-            let text = ''
-            try {
-              text = await navigator.clipboard.readText()
-            } catch {
-              return
-            }
-            if (!text) return
-            const s = ta.selectionStart
-            const en = ta.selectionEnd
-            onInputChange(input.slice(0, s) + text + input.slice(en))
-            requestAnimationFrame(() => {
-              ta.focus()
-              ta.selectionStart = ta.selectionEnd = s + text.length
-            })
-          }
-        },
-        { type: 'divider', key: 'divider' },
-        {
-          key: 'selectAll',
-          label: t('workspace.chat.selectAll', 'Select All'),
-          icon: <SelectionAll className="h-3.5 w-3.5" />,
-          disabled: !input,
-          onClick: () => {
-            const ta = textareaRef.current
-            if (!ta) return
-            ta.focus()
-            ta.select()
-          }
-        }
-      ]
-      showContextMenu(items)
-    },
-    [input, onInputChange, t, textareaRef]
-  )
-
   return (
     <div ref={inputAreaRef} className="shrink-0 py-3" style={{ paddingInline: 'clamp(12px, 7cqi, 64px)' }}>
       <div className="mx-auto flex w-full max-w-[768px] flex-col rounded-xl border border-border bg-input-area shadow-sm focus-within:border-accent focus-within:ring-1 focus-within:ring-accent">
@@ -280,7 +183,6 @@ export default function ChatInput({
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={onKeyDown}
-            onContextMenu={handleContextMenu}
             placeholder={placeholder}
             disabled={providers.length === 0}
             aria-label={placeholder}

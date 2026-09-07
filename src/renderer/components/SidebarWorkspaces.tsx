@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, PencilSimple, Trash, SquaresFour } from '@phosphor-icons/react'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
+import { Plus, SquaresFour } from '@phosphor-icons/react'
+import { showContextMenu } from '../utils/contextMenu'
+import type { ContextMenuItem } from '../utils/contextMenu'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useConfirmStore } from '../store/confirmStore'
 import type { Workspace } from '../../shared/ipc-types'
@@ -54,7 +54,7 @@ export default function SidebarWorkspaces() {
         {
           key: 'create',
           label: t('sidebar.createWorkspace'),
-          icon: <Plus className="h-3.5 w-3.5" />,
+          icon: 'workspace',
           onClick: startWsCreate,
         },
       ]
@@ -71,19 +71,19 @@ export default function SidebarWorkspaces() {
         {
           key: 'create',
           label: t('sidebar.createWorkspace'),
-          icon: <Plus className="h-3.5 w-3.5" />,
+          icon: 'workspace',
           onClick: startWsCreate,
         },
         {
           key: 'rename',
           label: t('sidebar.renameWorkspace'),
-          icon: <PencilSimple className="h-3.5 w-3.5" />,
+          icon: 'edit',
           onClick: () => startWsRename(ws),
         },
         {
           key: 'delete',
           label: t('sidebar.deleteWorkspace'),
-          icon: <Trash className="h-3.5 w-3.5" />,
+          icon: 'delete',
           onClick: () => showConfirm({
             title: t('common.delete'),
             message: t('sidebar.deleteWorkspaceConfirm', { name: ws.name }),

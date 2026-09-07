@@ -68,4 +68,24 @@ describe('i18n locale files (master plan §8 namespaces)', () => {
     expect(en.dialog.duplicateWarning).toContain('{{name}}')
     expect(zh.dialog.duplicateWarning).toContain('{{name}}')
   })
+
+  it('provides translations for editing and the empty chat controls', () => {
+    for (const locale of [en, zh]) {
+      for (const key of [
+        'common.edit',
+        'workspace.chat.noThreads',
+        'common.contextMenuFailed',
+        'workspace.chat.newConversation',
+        'workspace.chat.threadHistory',
+        'workspace.chat.suggestionSummarize',
+        'workspace.chat.suggestionCompare',
+        'workspace.chat.suggestionReport'
+      ]) {
+        expect(locale).toHaveProperty(key, expect.any(String))
+      }
+    }
+    expect(zh.common.edit).toBe('编辑')
+    expect(zh.workspace.chat.noThreads).toBe('暂无对话')
+    expect(zh.workspace.chat.threadHistory).toBe('对话历史')
+  })
 })

@@ -323,12 +323,10 @@ export default function WorkspacePanel() {
       />
       <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className={`relative ${panelView === 'workspace' ? 'h-full' : 'hidden'}`}>
-          <Board ref={boardRef} onOpenMarkdownCard={handleOpenMarkdownCard} />
-          {panelView === 'workspace' ? (
-            <div
-              className="absolute bottom-5 right-5 z-50 flex items-center gap-1 rounded-xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur"
-              data-testid="workspace-floating-actions"
-            >
+          <Board
+            ref={boardRef}
+            onOpenMarkdownCard={handleOpenMarkdownCard}
+            toolbarActions={<>
               <button
                 type="button"
                 className="sidebar-header-btn"
@@ -369,8 +367,8 @@ export default function WorkspacePanel() {
               >
                 <FolderOpen className="h-4 w-4" />
               </button>
-            </div>
-          ) : null}
+            </>}
+          />
         </div>
         {markdownView ? (
           <div className={panelView === 'markdown' ? 'h-full' : 'hidden'}>

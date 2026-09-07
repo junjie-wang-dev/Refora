@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Button, Modal, showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { Copy, Download, PencilSimple, Trash } from '@phosphor-icons/react'
+import { Button, Modal } from '@lobehub/ui'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+import { Download, PencilSimple, Trash } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import {
   REMARK_PLUGINS,
@@ -131,25 +132,25 @@ export function openMarkdownCardContextMenu({
     {
       key: 'copy',
       label: copyLabel,
-      icon: <Copy className="h-3.5 w-3.5" />,
+      icon: 'copy',
       onClick: () => onCopy?.()
     },
     {
       key: 'edit',
       label: editLabel,
-      icon: <PencilSimple className="h-3.5 w-3.5" />,
+      icon: 'edit',
       onClick: onRequestEdit
     },
     {
       key: 'export',
       label: exportLabel,
-      icon: <Download className="h-3.5 w-3.5" />,
+      icon: 'export',
       onClick: onExport
     },
     {
       key: 'delete',
       label: deleteLabel,
-      icon: <Trash className="h-3.5 w-3.5" />,
+      icon: 'delete',
       onClick: onDelete,
       danger: true
     }

@@ -5,8 +5,9 @@ import { Button } from './ui'
 import { Textarea } from './ui'
 import { PanelHeader } from './ui'
 import { EmptyState } from './ui'
-import { Select, showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
+import { Select } from '@lobehub/ui'
+import { showContextMenu } from '../utils/contextMenu'
+import type { ContextMenuItem } from '../utils/contextMenu'
 
 import { useDocumentStore } from '../store/documentStore'
 import { api } from '../ipc'
@@ -436,6 +437,7 @@ function CategoryChips({
         ? unassigned.map((c) => ({
             key: c.id,
             label: c.name,
+            icon: 'category',
             onClick: () => assign(c.id)
           }))
         : [{ key: 'empty', label: '\u2014', disabled: true }]

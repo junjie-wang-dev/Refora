@@ -9,15 +9,9 @@ import {
   type MouseEvent as ReactMouseEvent
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import {
-  Check,
-  Copy,
-  ArrowCounterClockwise,
-  ArrowDown,
-  CaretDown
-} from '@phosphor-icons/react'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+import { Check, Copy, ArrowCounterClockwise, ArrowDown, CaretDown } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import {
   REMARK_PLUGINS,
@@ -433,7 +427,7 @@ export default function ChatMessages({
       {
         key: 'copySelection',
         label: t('workspace.chat.copySelection', 'Copy selected text'),
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: 'copy',
         onClick: () => {
           void window.api.clipboard.writeText(selectedText).catch(() => {
             useDocumentStore.getState().showToast(

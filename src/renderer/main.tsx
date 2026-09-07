@@ -7,9 +7,11 @@ import { initI18n } from './i18n'
 import type { BootstrapData } from '../shared/ipc-types'
 import { normalizeBootstrapData } from '../shared/bootstrap'
 import { flushRendererPersistence } from './persistence'
+import { preserveNativeEditContextMenu } from './utils/editContextMenu'
 import './styles/index.css'
 
 window.api.events.onRendererFlushRequested(flushRendererPersistence)
+window.addEventListener('contextmenu', preserveNativeEditContextMenu, { capture: true })
 
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 if (IS_MAC) {

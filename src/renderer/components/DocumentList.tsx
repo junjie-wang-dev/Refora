@@ -1,9 +1,9 @@
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { CaretUp, CaretDown, Star, Warning, Lightning, Check, FileText, FolderOpen, Copy, ArrowClockwise, Trash, MagnifyingGlass, TreeStructure, Plus, FilePlus } from '@phosphor-icons/react'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
+import { CaretUp, CaretDown, Star, Warning, Lightning, FileText, MagnifyingGlass, FilePlus } from '@phosphor-icons/react'
+import { showContextMenu } from '../utils/contextMenu'
+import type { ContextMenuItem } from '../utils/contextMenu'
 import { useDocumentStore } from '../store/documentStore'
 import { useConfirmStore } from '../store/confirmStore'
 import { api } from '../ipc'
@@ -368,6 +368,7 @@ export default function DocumentList({
         ? categories.map((c: Category) => ({
             key: `cat-${c.id}`,
             label: `${c.name} (${c.count ?? 0})`,
+            icon: 'category',
             onClick: () => { void assignToCategory(c.id) },
           }))
         : [{
@@ -381,7 +382,7 @@ export default function DocumentList({
         {
           key: 'addToCategory',
           label: t('sidebar.addToCategory'),
-          icon: <TreeStructure className="h-3.5 w-3.5" />,
+          icon: 'category',
           type: 'submenu',
           children: [
             ...categoryItems,
@@ -389,7 +390,7 @@ export default function DocumentList({
             {
               key: 'create-category',
               label: t('sidebar.createCategory'),
-              icon: <Plus className="h-3.5 w-3.5" />,
+              icon: 'addFolder',
               onClick: () => { createAndAssign(effectiveIds) },
             },
           ],
@@ -398,37 +399,37 @@ export default function DocumentList({
         {
           key: 'openFile',
           label: t('common.openFile'),
-          icon: <FileText className="h-3.5 w-3.5" />,
+          icon: 'file',
           onClick: () => openPdf(doc.id),
         },
         {
           key: 'showInFolder',
           label: t('common.showInFolder'),
-          icon: <FolderOpen className="h-3.5 w-3.5" />,
+          icon: 'reveal',
           onClick: () => openInFinder(doc.id),
         },
         {
           key: 'copyPath',
           label: t('common.copyPath'),
-          icon: <Copy className="h-3.5 w-3.5" />,
+          icon: 'link',
           onClick: () => handleCopyPath(doc.filePath),
         },
         {
           key: 'copyBibtex',
           label: t('common.copyBibtex'),
-          icon: <Copy className="h-3.5 w-3.5" />,
+          icon: 'quote',
           onClick: () => { void handleCopyBibtex(effectiveIds) },
         },
         {
           key: 'refreshMetadata',
           label: t('detail.refreshMetadata'),
-          icon: <ArrowClockwise className="h-3.5 w-3.5" />,
+          icon: 'refresh',
           onClick: () => refreshMetadata(doc.id),
         },
         {
           key: 'delete',
           label: t('common.delete'),
-          icon: <Trash className="h-3.5 w-3.5" />,
+          icon: 'delete',
           onClick: () =>
             requestDeleteConfirm(
               effectiveIds,
@@ -501,7 +502,8 @@ export default function DocumentList({
       const colItems: ContextMenuItem[] = sortedColumns.map((col) => ({
         key: col.id,
         label: t(`list.${col.id}` as never),
-        icon: col.visible ? <Check className="h-3.5 w-3.5" /> : <span className="inline-block w-[14px]" />,
+        checked: col.visible,
+        icon: col.id,
         onClick: () => toggleColumn(col.id),
       }))
       showContextMenu(colItems)

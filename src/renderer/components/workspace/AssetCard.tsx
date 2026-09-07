@@ -1,19 +1,9 @@
+import { Image as ImageIcon } from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import {
-  ArrowSquareOut,
-  CircleNotch,
-  Copy,
-  File,
-  FolderOpen,
-  Image as ImageIcon,
-  MusicNote,
-  Trash,
-  VideoCamera,
-  WarningCircle
-} from '@phosphor-icons/react'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+import { ArrowSquareOut, CircleNotch, File, FolderOpen, MusicNote, Trash, VideoCamera, WarningCircle } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import {
   errorMessage,
@@ -91,27 +81,27 @@ export default function AssetCard({ asset, onOpen, onReveal, onDelete, onCopy }:
       {
         key: 'copy',
         label: t('workspace.cardCopy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: 'copy',
         onClick: () => onCopy?.(),
         disabled: Boolean(asset.fileMissing)
       },
       {
         key: 'open',
         label: t('workspace.assetOpen'),
-        icon: <ArrowSquareOut className="h-3.5 w-3.5" />,
+        icon: 'open',
         onClick: onOpen
       },
       {
         key: 'reveal',
         label: t('workspace.assetReveal'),
-        icon: <FolderOpen className="h-3.5 w-3.5" />,
+        icon: 'reveal',
         onClick: onReveal
       },
       { type: 'divider', key: 'divider' },
       {
         key: 'delete',
         label: t('workspace.assetDelete'),
-        icon: <Trash className="h-3.5 w-3.5" />,
+        icon: 'delete',
         onClick: onDelete,
         danger: true
       }

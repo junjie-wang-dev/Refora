@@ -1,9 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { BookOpen, Copy, PencilSimple, SelectionAll, SidebarSimple, MagnifyingGlass, Columns, DownloadSimple, ClockCounterClockwise, X, FilePdf } from '@phosphor-icons/react'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+import { BookOpen, Copy, PencilSimple, SidebarSimple, MagnifyingGlass, Columns, DownloadSimple, ClockCounterClockwise, X, FilePdf } from '@phosphor-icons/react'
 import ReactMarkdown from 'react-markdown'
 import { REMARK_PLUGINS, REHYPE_PLUGINS, createReforaDocMarkdownComponents, urlTransform } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
@@ -174,7 +174,7 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
       {
         key: 'copy',
         label: t('workspace.markdownCopy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: 'copy',
         disabled: !selectedText,
         onClick: () => {
           if (!selectedText) return
@@ -186,7 +186,7 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
       {
         key: 'selectAll',
         label: t('workspace.markdownSelectAll'),
-        icon: <SelectionAll className="h-3.5 w-3.5" />,
+        icon: 'selectAll',
         disabled: !article.textContent,
         onClick: () => {
           const nextSelection = window.getSelection()
@@ -204,7 +204,7 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
         {
           key: 'edit',
           label: t('workspace.markdownEdit'),
-          icon: <PencilSimple className="h-3.5 w-3.5" />,
+          icon: 'edit',
           onClick: () => void changeMode('edit')
         }
       )

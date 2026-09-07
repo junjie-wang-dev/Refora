@@ -1,4 +1,5 @@
 export const IpcChannel = {
+  ContextMenuShow: 'contextMenu:show',
   Bootstrap: 'app:bootstrap',
   RendererFlushComplete: 'app:renderer-flush-complete',
 
@@ -80,6 +81,7 @@ export const IpcChannel = {
   ExportBibtexString: 'export:bibtexString',
 
   ClipboardWriteText: 'clipboard:writeText',
+  ClipboardReadFiles: 'clipboard:readFiles',
   ClipboardCopyMarkdown: 'clipboard:copyMarkdown',
   ClipboardCopyWorkspaceAsset: 'clipboard:copyWorkspaceAsset',
 

@@ -1,3 +1,4 @@
+import { createNativeContextMenuHandlers } from '../../src/main/services/nativeContextMenu'
 import { describe, expect, it } from 'vitest'
 import { createServerAiHandlers } from '../../src/main/sidecar/ipc/ai'
 import { createServerAppHandlers } from '../../src/main/sidecar/ipc/app'
@@ -6,6 +7,7 @@ import { createServerWorkspaceHandlers } from '../../src/main/sidecar/ipc/worksp
 import { createSyncHandlers } from '../../src/main/sidecar/ipc/sync'
 import { createMarkdownExportHandlers } from '../../src/main/services/markdownExport'
 import { createAppLifecycleIpcHandlers } from '../../src/main/services/appLifecycleIpc'
+import { createClipboardFileHandlers } from '../../src/main/services/clipboardFiles'
 import { IpcChannel } from '../../src/shared/ipc-channels'
 import type { ServerClient } from '../../src/main/sidecar/client'
 import type { SyncAccountService } from '../../src/main/services/syncAccount'
@@ -15,6 +17,8 @@ describe('server IPC handler coverage', () => {
     const serverClient = { http: {} } as ServerClient
     const syncAccountService = {} as SyncAccountService
     const handlers = {
+      ...createNativeContextMenuHandlers(() => null),
+      ...createClipboardFileHandlers((path) => path),
       ...createServerAppHandlers(serverClient, {
         setThemeSource: () => undefined,
         openDirectory: async () => null,

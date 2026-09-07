@@ -1,3 +1,4 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import {
   act,
   cleanup,
@@ -8,7 +9,7 @@ import {
   within
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { showContextMenu } from '@lobehub/ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 import type { Document as LibraryDocument } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
 import PdfReader from '../../src/renderer/components/PdfReader'

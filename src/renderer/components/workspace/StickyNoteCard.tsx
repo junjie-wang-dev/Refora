@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
-import { Copy, Trash } from '@phosphor-icons/react'
+import { showContextMenu } from '../../utils/contextMenu'
+import type { ContextMenuItem } from '../../utils/contextMenu'
+
 import { motion, MotionConfig } from 'motion/react'
 import { cardClassName } from '../ui'
 import type { WorkspaceNote, WorkspaceNotePatch } from '../../../shared/ipc-types'
@@ -118,14 +118,14 @@ export default function StickyNoteCard({
       {
         key: 'copy',
         label: t('workspace.cardCopy'),
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: 'copy',
         onClick: () => onCopy?.(latestDraftRef.current)
       },
       { type: 'divider', key: 'divider' },
       {
         key: 'delete',
         label: t('workspace.noteDelete'),
-        icon: <Trash className="h-3.5 w-3.5" />,
+        icon: 'delete',
         onClick: onDelete,
         danger: true
       }

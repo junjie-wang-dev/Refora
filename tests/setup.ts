@@ -235,7 +235,9 @@ export const createMockReforaApi = (): ReforaApi => ({
     toBibtexString: async () => '',
   },
 
+  contextMenu: { show: vi.fn().mockResolvedValue(null) },
   clipboard: {
+    readFiles: vi.fn().mockResolvedValue([]),
     writeText: noop,
     copyMarkdown: noop,
     copyWorkspaceAsset: noop,

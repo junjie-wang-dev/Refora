@@ -1,3 +1,4 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: (...args: unknown[]) => mockShowContextMenu(...args) }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -71,7 +72,7 @@ vi.mock('../../src/renderer/components/workspace/Board', async () => {
   const React = await import('react')
   return {
     default: React.forwardRef(function MockBoard(
-      props: { onOpenMarkdownCard?: (card: { kind: 'report'; id: string }) => void },
+      props: { toolbarActions?: React.ReactNode; onOpenMarkdownCard?: (card: { kind: 'report'; id: string }) => void },
       ref
     ) {
       React.useImperativeHandle(ref, () => ({ createNote: mockBoardCreateNote, addFiles: vi.fn() }))
@@ -86,6 +87,7 @@ vi.mock('../../src/renderer/components/workspace/Board', async () => {
           },
           'Open report card'
         ),
+        React.createElement('div', { 'data-testid': 'workspace-floating-actions' }, props.toolbarActions),
         'Board'
       )
     })

@@ -1,3 +1,4 @@
+import type { ContextMenuIcon } from './contextMenuIcons'
 import type {
   MineruEngineStatus,
   MineruInstallProgress,
@@ -24,6 +25,16 @@ import type {
   SyncServiceStatus,
   SyncSignUpResult
 } from './sync-types'
+
+export interface NativeContextMenuItem {
+  icon?: ContextMenuIcon
+  id: string
+  label?: string
+  type?: 'normal' | 'separator' | 'checkbox' | 'submenu'
+  enabled?: boolean
+  checked?: boolean
+  children?: NativeContextMenuItem[]
+}
 
 export interface IpcError {
   code: string
@@ -1087,7 +1098,11 @@ export interface ReforaApi {
     toBibtex(ids: string[]): Promise<void>
     toBibtexString(ids: string[]): Promise<string>
   }
+  contextMenu: {
+    show(items: NativeContextMenuItem[]): Promise<string | null>
+  }
   clipboard: {
+    readFiles(): Promise<string[]>
     writeText(text: string): Promise<void>
     copyMarkdown(title: string, content: string): Promise<void>
     copyWorkspaceAsset(id: string): Promise<void>

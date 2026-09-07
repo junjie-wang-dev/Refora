@@ -1,7 +1,8 @@
+vi.mock('../../src/renderer/utils/contextMenu', () => ({ showContextMenu: vi.fn() }))
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { showContextMenu } from '@lobehub/ui'
+import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 
 const mocks = vi.hoisted(() => ({
   importByIdentifier: vi.fn()
@@ -144,45 +145,10 @@ describe('ImportByIdentifierDialog', () => {
     await act(async () => {})
   })
 
-  it('offers cut, copy, and paste from the input context menu', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    const readText = vi.fn().mockResolvedValue('arXiv:')
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText, readText }
-    })
+  it('leaves the input context menu to native editing', () => {
     render(<ImportByIdentifierDialog open onClose={vi.fn()} />)
-    const input = screen.getByPlaceholderText('identifierImport.placeholder') as HTMLInputElement
-
-    fireEvent.change(input, { target: { value: '2401.12345' } })
-    input.setSelectionRange(0, 4)
-    fireEvent.contextMenu(input)
-
-    const items = vi.mocked(showContextMenu).mock.calls[0][0] as Array<{
-      key: string
-      label: string
-      disabled?: boolean
-      onClick: () => Promise<void>
-    }>
-    expect(items.map((item) => [item.key, item.label])).toEqual([
-      ['cut', 'identifierImport.cut'],
-      ['copy', 'identifierImport.copy'],
-      ['paste', 'identifierImport.paste']
-    ])
-    expect(items[0].disabled).toBe(false)
-    expect(items[1].disabled).toBe(false)
-
-    await act(() => items[1].onClick())
-    expect(writeText).toHaveBeenCalledWith('2401')
-
-    await act(() => items[0].onClick())
-    expect(input).toHaveValue('.12345')
-
-    input.setSelectionRange(0, 0)
-    fireEvent.contextMenu(input)
-    const pasteItems = vi.mocked(showContextMenu).mock.calls[1][0] as typeof items
-    await act(() => pasteItems[2].onClick())
-    expect(readText).toHaveBeenCalledOnce()
-    expect(input).toHaveValue('arXiv:.12345')
+    const input = screen.getByPlaceholderText('identifierImport.placeholder')
+    expect(fireEvent.contextMenu(input)).toBe(true)
+    expect(showContextMenu).not.toHaveBeenCalled()
   })
 })

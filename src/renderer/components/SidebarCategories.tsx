@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, PencilSimple, Trash, CircleNotch } from '@phosphor-icons/react'
-import { showContextMenu } from '@lobehub/ui'
-import type { ContextMenuItem } from '@lobehub/ui'
+import { Plus, CircleNotch } from '@phosphor-icons/react'
+import { showContextMenu } from '../utils/contextMenu'
+import type { ContextMenuItem } from '../utils/contextMenu'
 import { useDocumentStore } from '../store/documentStore'
 import { useConfirmStore } from '../store/confirmStore'
 import type { Category } from '../../shared/ipc-types'
@@ -82,7 +82,7 @@ export default function SidebarCategories() {
         {
           key: 'create',
           label: t('sidebar.createCategory'),
-          icon: <Plus className="h-3.5 w-3.5" />,
+          icon: 'addFolder',
           onClick: startCreate,
         },
       ]
@@ -99,19 +99,19 @@ export default function SidebarCategories() {
         {
           key: 'create',
           label: t('sidebar.createCategory'),
-          icon: <Plus className="h-3.5 w-3.5" />,
+          icon: 'addFolder',
           onClick: startCreate,
         },
         {
           key: 'rename',
           label: t('sidebar.renameCategory'),
-          icon: <PencilSimple className="h-3.5 w-3.5" />,
+          icon: 'edit',
           onClick: () => startRename(cat),
         },
         {
           key: 'delete',
           label: t('sidebar.deleteCategory'),
-          icon: <Trash className="h-3.5 w-3.5" />,
+          icon: 'delete',
           onClick: () => handleDelete(cat),
           danger: true,
         },
