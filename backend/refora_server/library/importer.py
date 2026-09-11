@@ -17,6 +17,13 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from refora_server.library.pdf_discovery import find_pdf_files
+from refora_server.library.bibliographic_identity import find_existing
+from refora_server.library.metadata import (
+    extractArxivFromText,
+    extractDoiFromInfo,
+    extractDoiFromText,
+    extractMetadataFromPdf,
+)
 from refora_server.library.paths import isInLibraryRoot
 from refora_server.services.document_identity import (
     file_signature,
@@ -185,6 +192,21 @@ def _library_folder(repos: dict[str, Any], deps: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_import_metadata(path: str) -> dict[str, str]:
+    parsed = extractMetadataFromPdf(path, 1)
+    if parsed.get("error"):
+        return {}
+    info = {str(key).lstrip("/"): value for key, value in parsed.get("info", {}).items()}
+    text = parsed.get("text") or ""
+    values = {
+        "doi": extractDoiFromInfo(info) or extractDoiFromText(text),
+        "arxivId": extractArxivFromText(text),
+        "title": info.get("Title") or parsed.get("titleCandidate"),
+        "authors": info.get("Author"),
+    }
+    return {key: value for key, value in values.items() if isinstance(value, str) and value.strip()}
+
+
 def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) -> dict[str, Callable[..., Any]]:
     options = deps or {}
     documents = repos["documents"]
@@ -194,7 +216,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
     now_ms = options.get("nowMs", _now_ms)
     hash_pdf = options.get("hashPdf", hashPdf)
     validate_pdf = options.get("validatePdf", validatePdfContents)
-    extract_metadata = options.get("extractPdfMetadata")
+    extract_metadata = options.get("extractPdfMetadata", _extract_import_metadata)
     complete_callbacks: list[Callable[[dict[str, Any]], None]] = []
     import_lock = asyncio.Lock()
     destroyed = False
@@ -262,7 +284,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     if file_hash
                     else None
                 )
-                if duplicate is not None:
+                if duplicate is not None and duplicate.get("filePath") and (not duplicate.get("fileMissing") or duplicate.get("fileHash") != file_hash):
                     skipped.append(path)
                     continue
                 validation = await call_work(validate_pdf, path)
@@ -278,6 +300,18 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     continue
                 if _file_identity(path) != source_identity:
                     raise RuntimeError("PDF changed during import")
+                extracted = (
+                    await call_work(extract_metadata, path)
+                    if callable(extract_metadata)
+                    else None
+                )
+                metadata = extracted if isinstance(extracted, dict) else {}
+                identity_match = duplicate or find_existing(documents, metadata)
+                if identity_match is not None and identity_match.get("filePath") and (not identity_match.get("fileMissing") or identity_match.get("fileHash") != file_hash):
+                    skipped.append(path)
+                    continue
+                if _file_identity(path) != source_identity:
+                    raise RuntimeError("PDF changed during import")
                 stored_path = path
                 if not isInLibraryRoot(path, library_folder):
                     copied = await call_work(copy_to_library, path, library_folder)
@@ -289,15 +323,21 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                     copied_path = stored_path
                 initial_identity = _file_identity(stored_path)
                 now = now_ms()
-                extracted = (
-                    await call_work(extract_metadata, stored_path)
-                    if callable(extract_metadata)
-                    else None
-                )
                 if _file_identity(stored_path) != initial_identity:
                     raise RuntimeError("PDF changed during import")
                 stored_stat = os.stat(stored_path, follow_symlinks=False)
-                metadata = extracted if isinstance(extracted, dict) else {}
+                identity_match = documents["findByHash"](file_hash) or find_existing(documents, metadata) or identity_match
+                if identity_match is not None and identity_match.get("filePath") and (not identity_match.get("fileMissing") or identity_match.get("fileHash") != file_hash):
+                    if copied_path:
+                        Path(copied_path).unlink(missing_ok=True)
+                        copied_path = None
+                    skipped.append(path)
+                    continue
+                if identity_match is not None:
+                    documents["updateFileIdentity"](identity_match["id"], stored_path, Path(stored_path).name, stored_stat.st_size, file_hash)
+                    copied_path = None
+                    imported.append(identity_match["id"])
+                    continue
                 document = documents["insert"](
                     {
                         "id": make_id(),
@@ -325,7 +365,7 @@ def createImporter(repos: dict[str, Any], deps: dict[str, Any] | None = None) ->
                         "lastReadAt": None,
                         "updatedAt": now,
                         "metadataSource": metadata.get("metadataSource") if isinstance(metadata.get("metadataSource"), str) else None,
-                        "metadataStatus": "done" if metadata else "pending",
+                        "metadataStatus": "done" if metadata and "extractPdfMetadata" in options else "pending",
                         "metadataAttempts": 0,
                         "editedFields": [],
                         "remoteValues": None,

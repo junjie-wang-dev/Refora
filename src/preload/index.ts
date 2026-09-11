@@ -181,12 +181,16 @@ const api: ReforaApi = {
       ? invoke<SearchResult>(IpcChannel.DocumentsSearch, q, page)
       : invoke<SearchResult>(IpcChannel.DocumentsSearch, q),
     get: (id: string) => invoke<Document>(IpcChannel.DocumentsGet, id),
+    merge: (targetId: string, sourceIds: string[]) =>
+      invoke<Document>(IpcChannel.DocumentsMerge, targetId, sourceIds),
     update: (id: string, patch: DocumentPatch) =>
       invoke<Document>(IpcChannel.DocumentsUpdate, id, patch),
     setStarred: (id: string, value: boolean) =>
       invoke<void>(IpcChannel.DocumentsSetStarred, id, value),
     delete: (id: string) => invoke<void>(IpcChannel.DocumentsDelete, id),
     bulkDelete: (ids: string[]) => invoke<void>(IpcChannel.DocumentsBulkDelete, ids),
+    listDeleted: () => invoke(IpcChannel.DocumentsListDeleted),
+    restoreDeleted: (id: string) => invoke(IpcChannel.DocumentsRestoreDeleted, id),
     bulkCategorize: (ids: string[], catId: string) =>
       invoke<void>(IpcChannel.DocumentsBulkCategorize, ids, catId),
     bulkRefreshMetadata: (ids: string[]) =>

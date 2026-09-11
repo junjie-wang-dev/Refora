@@ -257,7 +257,7 @@ def _formatAuthors(authors: str | None) -> str | None:
 
 def _formatBibtexEntry(doc: dict[str, Any], used: set[str]) -> str | None:
     entry_type = _resolveEntryType(doc)
-    citekey = _buildCitekey(doc, used)
+    citekey = doc.get("citekey") or _buildCitekey(doc, used)
 
     fields: list[tuple[str, str]] = []
     if doc.get("title"):

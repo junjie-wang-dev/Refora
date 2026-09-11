@@ -10,6 +10,8 @@ import { showContextMenu } from '../utils/contextMenu'
 import type { ContextMenuItem } from '../utils/contextMenu'
 
 import { useDocumentStore } from '../store/documentStore'
+import { usePdfReaderStore } from '../store/pdfReaderStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import { api } from '../ipc'
 import { formatAuthorName, formatDate, formatFilePath } from '../utils/format'
 import { isPathWithinDirectory } from '../utils/filePath'
@@ -24,6 +26,7 @@ import { errorMessage } from '../../shared/ipc-types'
 import { openDocumentPdf } from '../utils/openPdf'
 import OcrSection from './OcrSection'
 import {
+  flushRendererPersistence,
   pendingDocumentNote,
   persistDocumentNote,
   stageDocumentNote,
@@ -670,7 +673,7 @@ function SingleDetail({ doc }: { doc: Document }) {
         </div>
 
         <div className="mt-6 grid grid-cols-[84px_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-border pt-5">
-          {(['keywords', 'url', 'doi', 'arxivId'] as const).map((field) => (
+          {(['keywords', 'url', 'doi', 'arxivId', 'citekey'] as const).map((field) => (
             <div key={field} className="contents">
               <span className="text-[13px] leading-5 text-muted">
                 {field === 'doi' ? 'DOI' : t(`detail.${field}` as never)}
@@ -787,6 +790,50 @@ function BulkBar({
   const bulkCategorize = useDocumentStore((s) => s.bulkCategorize)
   const allCategories = useDocumentStore((s) => s.categories)
   const [bulkCategory, setBulkCategory] = useState<string>()
+  const [mergeCandidates, setMergeCandidates] = useState<Document[]>([])
+  const [primaryId, setPrimaryId] = useState<string>()
+  const [merging, setMerging] = useState(false)
+  const [mergeError, setMergeError] = useState<string | null>(null)
+
+  async function startMerge() {
+    setMergeError(null)
+    try {
+      const candidates = await Promise.all(selectedIds.map((id) => api.documents.get(id)))
+      setMergeCandidates(candidates)
+      setPrimaryId(candidates[0]?.id)
+    } catch (error) {
+      setMergeError(errorMessage(error, t('detail.mergeFailed')))
+    }
+  }
+
+  async function confirmMerge() {
+    if (!primaryId) return
+    setMerging(true)
+    setMergeError(null)
+    try {
+      await flushRendererPersistence()
+      const sources = mergeCandidates.map((doc) => doc.id).filter((id) => id !== primaryId)
+      const merged = await api.documents.merge(primaryId, sources)
+      for (const id of [primaryId, ...sources]) usePdfReaderStore.getState().close(id)
+      const removed = new Set(sources)
+      useDocumentStore.setState((state) => ({
+        selectedIds: [],
+        focusedDocId: merged.id,
+        documents: state.documents.filter((doc) => !removed.has(doc.id)).map((doc) => doc.id === merged.id ? merged : doc),
+        searchResults: state.searchResults.filter((doc) => !removed.has(doc.id)).map((doc) => doc.id === merged.id ? merged : doc)
+      }))
+      await Promise.all([
+        useDocumentStore.getState().fetchDocuments(),
+        useDocumentStore.getState().fetchDocumentCounts(),
+        useDocumentStore.getState().fetchCategories(),
+        useWorkspaceStore.getState().fetchItems()
+      ])
+    } catch (error) {
+      setMergeError(errorMessage(error, t('detail.mergeFailed')))
+    } finally {
+      setMerging(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4 px-5 py-4">
@@ -794,6 +841,22 @@ function BulkBar({
         {t('common.multiSelected', { count })}
       </div>
       <div className="flex flex-col gap-2">
+        <Button variant="ghost" size="md" className="self-start" disabled={merging} onClick={() => void startMerge()}>
+          {t('detail.mergeDuplicates')}
+        </Button>
+        {mergeCandidates.length > 1 && (
+          <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
+            <p className="text-xs text-muted">{t('detail.mergeDescription')}</p>
+            <label className="text-xs text-muted">{t('detail.mergePrimary')}</label>
+            <Select value={primaryId} onChange={(value: string) => setPrimaryId(value)} disabled={merging}
+              options={mergeCandidates.map((doc) => ({ value: doc.id, label: `${doc.title || doc.fileName} (${doc.citekey || doc.id})` }))} />
+            <div className="flex gap-2">
+              <Button size="sm" disabled={merging || !primaryId} onClick={() => void confirmMerge()}>{t('detail.mergeConfirm')}</Button>
+              <Button variant="ghost" size="sm" disabled={merging} onClick={() => setMergeCandidates([])}>{t('common.cancel')}</Button>
+            </div>
+          </div>
+        )}
+        {mergeError && <p role="alert" className="text-xs text-error">{mergeError}</p>}
         <Button
           variant="ghost"
           size="md"

@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 from conftest import make_doc, make_workspaces_repo, open_migrated_db
 from refora_server.db.connection import _SqliteAdapter
 from refora_server.db.migrations import run_migrations
@@ -19,7 +20,7 @@ def test_ai_report_sources_migration_backfills_valid_documents_and_cascades() ->
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 42
+    assert result.to_version == LATEST_SCHEMA_VERSION
     rows = db.execute(
         "SELECT docId, ordinal FROM ai_report_sources WHERE reportId = 'report'"
     ).fetchall()

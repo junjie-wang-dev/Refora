@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react'
 import DetailPanel from '../../src/renderer/components/DetailPanel'
+import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import type { Document, Category, ReforaApi } from '../../src/shared/ipc-types'
 import type { MineruEngineStatus, OcrDocumentState } from '../../src/shared/mineru-types'
 import { flushRendererPersistence } from '../../src/renderer/persistence'
+import * as rendererPersistence from '../../src/renderer/persistence'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -83,6 +85,8 @@ const mockStoreState = vi.hoisted(() => ({
   categories: [] as Category[],
   updateDocument: vi.fn().mockResolvedValue(undefined),
   fetchCategories: vi.fn().mockResolvedValue(undefined),
+  fetchDocuments: vi.fn().mockResolvedValue(undefined),
+  fetchDocumentCounts: vi.fn().mockResolvedValue(undefined),
   bulkRefreshMetadata: vi.fn().mockResolvedValue(undefined),
   bulkCategorize: vi.fn().mockResolvedValue(undefined),
   assignDocumentsToCategory: vi.fn().mockResolvedValue(true),
@@ -105,7 +109,7 @@ vi.mock('../../src/renderer/store/documentStore', () => ({
       }
       return mockStoreState
     },
-    { getState: () => mockStoreState }
+    { getState: () => mockStoreState, setState: (update: (state: typeof mockStoreState) => Partial<typeof mockStoreState>) => Object.assign(mockStoreState, update(mockStoreState)) }
   )
 }))
 
@@ -160,6 +164,39 @@ afterEach(() => {
 })
 
 describe('DetailPanel', () => {
+  it('merges selected documents only after reviewing a primary document', async () => {
+    vi.spyOn(rendererPersistence, 'flushRendererPersistence').mockResolvedValue(undefined)
+    const other = { ...mockDoc, id: '2', title: 'Other paper', citekey: 'otherKey' }
+    mockStoreState.selectedIds = ['1', '2']
+    mockStoreState.documents = [mockDoc, other]
+    vi.spyOn(api.documents, 'get').mockImplementation(async (id) => id === '1' ? mockDoc : other)
+    const merge = vi.spyOn(api.documents, 'merge').mockResolvedValue(mockDoc)
+    vi.spyOn(useWorkspaceStore.getState(), 'fetchItems').mockResolvedValue(undefined)
+    render(<DetailPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'detail.mergeDuplicates' }))
+    await screen.findByText('detail.mergeDescription')
+    expect(merge).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'detail.mergeConfirm' }))
+    await waitFor(() => expect(merge).toHaveBeenCalledWith('1', ['2']))
+    await waitFor(() => expect(mockStoreState.documents.map((doc) => doc.id)).toEqual(['1']))
+    expect(mockStoreState.focusedDocId).toBe('1')
+  })
+
+  it('keeps selected documents and reports a rejected merge', async () => {
+    vi.spyOn(rendererPersistence, 'flushRendererPersistence').mockResolvedValue(undefined)
+    mockStoreState.selectedIds = ['1', '2']
+    mockStoreState.documents = [mockDoc, { ...mockDoc, id: '2' }]
+    vi.spyOn(api.documents, 'get').mockImplementation(async (id) => ({ ...mockDoc, id }))
+    vi.spyOn(api.documents, 'merge').mockRejectedValue(new Error('Annotated PDFs have different content'))
+    render(<DetailPanel />)
+    fireEvent.click(screen.getByRole('button', { name: 'detail.mergeDuplicates' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'detail.mergeConfirm' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Annotated PDFs have different content')
+    expect(mockStoreState.selectedIds).toEqual(['1', '2'])
+    expect(mockStoreState.documents).toHaveLength(2)
+  })
+
   it('reports a failed bulk BibTeX export', async () => {
     mockStoreState.selectedIds = ['doc-1', 'doc-2']
     vi.spyOn(api.export, 'toBibtex').mockRejectedValue(new Error('export unavailable'))

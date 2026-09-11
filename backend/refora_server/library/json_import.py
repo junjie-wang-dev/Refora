@@ -12,7 +12,7 @@ from refora_server.library.paths import isInsideLibrary
 
 EDITABLE_FIELDS = {
     "title", "authors", "year", "venue", "volume", "issue", "pages", "abstract",
-    "keywords", "url", "doi", "arxivId", "note", "affiliations",
+    "keywords", "url", "doi", "arxivId", "note", "affiliations", "citekey",
 }
 METADATA_STATUSES = {"pending", "done", "failed"}
 METADATA_SOURCES = {"pdf", "crossref", "arxiv", "dblp", "manual"}
@@ -125,6 +125,7 @@ def sanitizeImportedDoc(doc: Any, libraryFolder: str) -> dict[str, Any] | None:
         "url": _string_or_none(doc.get("url")),
         "doi": _string_or_none(doc.get("doi")),
         "arxivId": _string_or_none(doc.get("arxivId")),
+        "citekey": _string_or_none(doc.get("citekey")),
         "note": _string_or_none(doc.get("note")),
         "affiliations": _string_or_none(doc.get("affiliations")),
         "starred": _number_default(doc.get("starred"), 0),

@@ -81,8 +81,8 @@ async def test_import_identifier_uses_mocked_academic_metadata(tmp_path: Path) -
     assert document["arxivId"] == "2401.12345"
     assert Path(document["filePath"]) == library / "Mocked Paper.pdf"
     assert Path(document["filePath"]).exists()
-    with pytest.raises(ValueError, match="already"):
-        await importByIdentifier({"documents": documents}, "2401.12345", deps)
+    assert await importByIdentifier({"documents": documents}, "2401.12345", deps) == document_id
+    assert len(documents["list"]({"mode": "all"})) == 1
 
 
 @pytest.mark.asyncio

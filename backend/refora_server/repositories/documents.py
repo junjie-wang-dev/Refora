@@ -1,13 +1,21 @@
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
 from typing import Any, Callable, TypedDict
+from urllib.parse import unquote
+
+from refora_server.academic.arxiv import base_arxiv_id, normalize_arxiv_id
 
 from refora_server.library.authors import normalizeAuthors
 from refora_server.library.paths import resolveFromLibrary, toLibraryRelative
 from refora_server.repositories.errors import RepoError
+from refora_server.repositories.document_merge import merge_documents
+from refora_server.repositories.document_recycle import create_document_recycle_repository
+from refora_server.services.export import _buildCitekey
+from refora_server.library.bibliographic_identity import find_identity_match
 
 EDITABLE_FIELDS: tuple[str, ...] = (
     "title",
@@ -24,6 +32,7 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "arxivId",
     "note",
     "affiliations",
+    "citekey",
 )
 
 COLUMN_FOR: dict[str, str] = {
@@ -41,9 +50,12 @@ COLUMN_FOR: dict[str, str] = {
     "arxivId": "arxivId",
     "note": "note",
     "affiliations": "affiliations",
+    "citekey": "citekey",
 }
 
 FTS_LIKE_COLUMNS: tuple[str, ...] = (
+    "doi",
+    "arxivId",
     "title",
     "authors",
     "venue",
@@ -89,6 +101,7 @@ DOCUMENT_COLUMNS: tuple[str, ...] = (
     "fileDevice",
     "fileInode",
     "fileMtimeNs",
+    "citekey",
 )
 
 SORT_FIELDS: frozenset[str] = frozenset(
@@ -203,6 +216,7 @@ def _map_document(row: sqlite3.Row, library_folder: str) -> dict[str, Any]:
         "fileDevice": _safe_int(row["fileDevice"]),
         "fileInode": _safe_int(row["fileInode"]),
         "fileMtimeNs": _safe_int(row["fileMtimeNs"]),
+        "citekey": row["citekey"],
     }
 
 
@@ -217,6 +231,46 @@ def _order_by_clause(mode: str, sort: dict[str, str] | None) -> str:
 def createDocumentsRepository(db, deps: DocumentsRepoDeps):
     def lib() -> str:
         return deps["getLibraryFolder"]()
+
+    def search_condition(query: str) -> tuple[str, list[Any]]:
+        escaped = query.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        like = f"%{escaped}%"
+        if len(query) >= 3 and deps["getSearchMode"]() == "trigram":
+            clauses = ["rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"]
+            params: list[Any] = ['"' + query.replace('"', '""') + '"']
+            columns = ("doi", "arxivId")
+        else:
+            clauses = []
+            params = []
+            columns = FTS_LIKE_COLUMNS
+        doi = re.sub(
+            r"^(?:https?://(?:dx\.)?doi\.org/|doi\s*:\s*)",
+            "",
+            unquote(query),
+            flags=re.IGNORECASE,
+        ).strip().lower()
+        is_doi = doi.startswith("10.") and "/" in doi
+        arxiv = normalize_arxiv_id(unquote(query))
+        columns = tuple(column for column in columns if not (
+            (column == "doi" and is_doi) or (column == "arxivId" and arxiv)
+        ))
+        clauses.extend(f"{column} LIKE ? ESCAPE '\\'" for column in columns)
+        params.extend([like] * len(columns))
+        if is_doi:
+            expression = "lower(trim(doi))"
+            for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:"):
+                expression = f"replace({expression}, '{prefix}', '')"
+            clauses.append(f"trim({expression}) = ?")
+            params.append(doi)
+        if arxiv:
+            base = base_arxiv_id(arxiv).lower()
+            expression = "lower(trim(arxivId))"
+            for prefix in ("https://", "http://", "export.", "arxiv.org/abs/", "arxiv.org/pdf/", "arxiv.org/html/", "arxiv:", ".pdf"):
+                expression = f"replace({expression}, '{prefix}', '')"
+            expression = f"trim({expression})"
+            clauses.append(f"({expression} = ? OR {expression} GLOB ?)")
+            params.extend([base, f"{base}v[0-9]*"])
+        return "(" + " OR ".join(clauses) + ")", params
 
     def list_(filter: dict[str, Any]) -> list[dict[str, Any]]:
         clauses: list[str] = []
@@ -244,6 +298,11 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
                 "id IN (SELECT docId FROM workspace_items WHERE workspaceId = ? AND kind = 'document')"
             )
             params.append(workspace_id)
+        query = filter.get("q", "").strip()
+        if query:
+            condition, search_params = search_condition(query)
+            clauses.append(condition)
+            params.extend(search_params)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         order = _order_by_clause(mode, filter.get("sort"))
         pagination = ""
@@ -302,34 +361,13 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             if isinstance(offset, (int, float)) and offset == offset
             else 0
         )
-        workspace_filter = (
-            " AND d.id IN (SELECT docId FROM workspace_items WHERE workspaceId = ? AND kind = 'document')"
-            if workspace_id
-            else ""
-        )
-        workspace_params = [workspace_id] if workspace_id else []
-        if len(trimmed) >= 3 and deps["getSearchMode"]() == "trigram":
-            literal_query = '"' + trimmed.replace('"', '""') + '"'
-            cur = db.execute(
-                "SELECT d.* FROM documents d JOIN docs_fts f ON d.rowid = f.rowid "
-                f"WHERE docs_fts MATCH ?{workspace_filter} ORDER BY rank, d.id ASC LIMIT ? OFFSET ?",
-                [literal_query, *workspace_params, safe_limit, safe_offset],
-            )
-            rows = cur.fetchall()
-            lf = lib()
-            return [_map_document(r, lf) for r in rows]
-        escaped = trimmed.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-        like = f"%{escaped}%"
-        clauses = " OR ".join(f"d.{c} LIKE ? ESCAPE '\\'" for c in FTS_LIKE_COLUMNS)
-        params = [like] * len(FTS_LIKE_COLUMNS) + [*workspace_params, safe_limit, safe_offset]
-        cur = db.execute(
-            f"SELECT d.* FROM documents d WHERE ({clauses}){workspace_filter} "
-            "ORDER BY d.addedAt DESC, d.id ASC LIMIT ? OFFSET ?",
-            params,
-        )
-        rows = cur.fetchall()
-        lf = lib()
-        return [_map_document(r, lf) for r in rows]
+        return list_({
+            "mode": "all",
+            "q": trimmed,
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "workspaceId": workspace_id,
+        })
 
     def get(id: str) -> dict[str, Any] | None:
         cur = db.execute("SELECT * FROM documents WHERE id = ?", [id])
@@ -337,6 +375,33 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         if row is None:
             return None
         return _map_document(row, lib())
+
+    def reservedCitekeys(exclude_id: str | None = None) -> set[str]:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deleted_documents'").fetchone():
+            return set()
+        keys: set[str] = set()
+        for row in db.execute("SELECT payloadJson FROM deleted_documents"):
+            payload = json.loads(row[0])
+            for document in payload.get("records", {}).get("documents", []):
+                if document.get("id") != exclude_id and isinstance(document.get("citekey"), str):
+                    keys.add(document["citekey"])
+        return keys
+
+    def allocateCitekey(doc: dict[str, Any]) -> str:
+        used = {row[0] for row in db.execute("SELECT citekey FROM documents WHERE citekey IS NOT NULL")}
+        used.update(reservedCitekeys(doc.get("id")))
+        preferred = doc.get("citekey")
+        if isinstance(preferred, str) and re.fullmatch(r"[A-Za-z0-9_:.+/-]+", preferred):
+            key = preferred
+            suffix = 2
+            while key in used:
+                key = f"{preferred}-{suffix}"
+                suffix += 1
+            return key
+        return _buildCitekey(doc, used)
+
+    def findByIdentity(metadata: dict[str, Any]) -> dict[str, Any] | None:
+        return find_identity_match(list_({"mode": "all"}), metadata)
 
     def insert(doc: dict[str, Any]) -> dict[str, Any]:
         lf = lib()
@@ -390,6 +455,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             file_device,
             file_inode,
             file_mtime_ns,
+            allocateCitekey(doc),
         ]
         placeholders = ", ".join("?" for _ in DOCUMENT_COLUMNS)
         col_list = ", ".join(DOCUMENT_COLUMNS)
@@ -412,6 +478,13 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             raise RepoError("not_found", f"document not found: {id}")
         if len(keys) == 0:
             return current
+        if "citekey" in patch:
+            key = patch["citekey"].strip()
+            if not re.fullmatch(r"[A-Za-z0-9_:.+/-]+", key):
+                raise RepoError("invalid_value", "Citation key must contain only letters, numbers, _, :, ., +, / or -", "citekey")
+            if key in reservedCitekeys(id) or db.execute("SELECT 1 FROM documents WHERE citekey = ? AND id <> ?", [key, id]).fetchone():
+                raise RepoError("duplicate_citekey", "Citation key is already used by another document", "citekey")
+            patch = {**patch, "citekey": key}
         edited = list(current["editedFields"])
         for key in keys:
             value = patch[key]
@@ -460,6 +533,8 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         lf = lib()
         cur = db.execute("SELECT * FROM documents WHERE fileHash = ?", [fileHash])
         row = cur.fetchone()
+        if row is None:
+            row = db.execute("SELECT d.* FROM documents d JOIN document_file_aliases a ON a.documentId = d.id WHERE a.fileHash = ?", [fileHash]).fetchone()
         if row is None:
             return None
         return _map_document(row, lf)
@@ -626,6 +701,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
 
     return {
         "list": list_,
+        **create_document_recycle_repository(db, lib),
         "counts": counts,
         "search": search,
         "get": get,
@@ -637,6 +713,8 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
         "setStarred": setStarred,
         "findByPath": findByPath,
         "findByHash": findByHash,
+        "findByIdentity": findByIdentity,
+        "merge": lambda target_id, source_ids: merge_documents(db, get, update, target_id, source_ids),
         "updateFilePath": updateFilePath,
         "updateFileIdentity": updateFileIdentity,
         "setMetadataStatus": setMetadataStatus,

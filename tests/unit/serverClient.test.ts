@@ -289,7 +289,7 @@ describe('serverClient', () => {
       expect(captured.signal?.aborted).toBe(true)
     })
 
-    it('does not apply the default request timeout to imports', async () => {
+    it.each(['import', 'delete', 'bulkDelete', 'restore'])('does not time out PDF file operations: %s', async (operation) => {
       vi.useFakeTimers()
       const captured: { signal: AbortSignal | null } = { signal: null }
       let resolveFetch: (response: Response) => void = () => undefined
@@ -301,7 +301,10 @@ describe('serverClient', () => {
         fetchImpl: fetchFn,
         requestTimeoutMs: 20
       })
-      const request = client.http.importFiles({ paths: ['/tmp/paper.pdf'] })
+      const request = operation === 'delete' ? client.http.documentsDelete('doc-1')
+        : operation === 'bulkDelete' ? client.http.documentsBulkDelete(['doc-1'])
+          : operation === 'restore' ? client.http.documentsRestoreDeleted('entry-1')
+            : client.http.importFiles({ paths: ['/tmp/paper.pdf'] })
       await vi.advanceTimersByTimeAsync(25)
 
       expect(captured.signal?.aborted).toBe(false)
@@ -1001,6 +1004,9 @@ describe('serverClient', () => {
       ['documentsSetStarred', ['d1', true]],
       ['documentsDelete', ['d1']],
       ['documentsBulkDelete', [['d1', 'd2']]],
+      ['documentsListDeleted', []],
+      ['documentsRestoreDeleted', ['entry-1']],
+      ['documentsMerge', ['d1', ['d2']]],
       ['documentsBulkCategorize', [{ ids: ['d1'], categoryId: 'c1' }]],
       ['documentsBulkRefreshMetadata', [['d1']]],
       ['documentsRefreshMetadata', ['d1']],

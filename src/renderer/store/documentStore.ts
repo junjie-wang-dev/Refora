@@ -16,7 +16,9 @@ import { api } from '../ipc'
 import i18n from '../i18n'
 import { openDocumentPdf } from '../utils/openPdf'
 import { useConfirmStore } from './confirmStore'
+import { usePdfReaderStore } from './pdfReaderStore'
 import {
+  flushRendererPersistence,
   flushRendererSettingWrites,
   invalidateRendererSettingWrites,
   scheduleRendererSetting
@@ -51,6 +53,7 @@ interface DocumentState {
   listColumnState: ListColumnState
   selectedIds: string[]
   focusedDocId: string | null
+  selectionAnchorId: string | null
   toastMessage: string | null
   isImporting: boolean
   importProgress: { current: number; total: number } | null
@@ -71,9 +74,10 @@ interface DocumentState {
   setSort: (field: SortField) => void
   setColumns: (columns: ListColumn[]) => void
   flushPendingSettings: () => Promise<void>
-  setFocusedDoc: (docId: string | null) => void
-  toggleSelect: (docId: string) => void
-  selectAll: () => void
+  setFocusedDoc: (docId: string | null, document?: Document) => void
+  toggleSelect: (docId: string, includeFocused?: boolean) => void
+  selectRange: (docId: string, additive?: boolean) => void
+  selectAll: () => Promise<void>
   clearSelection: () => void
   toggleStar: (docId: string) => Promise<void>
   openPdf: (docId: string) => Promise<void>
@@ -100,7 +104,7 @@ interface DocumentState {
   createCategory: (name: string) => Promise<Category | null>
   renameCategory: (id: string, name: string) => Promise<void>
   deleteCategory: (id: string) => Promise<void>
-  setSearchResults: (query: string, documents: Document[]) => void
+  setSearchResults: (query: string) => void
   clearSearch: () => void
   assignDocumentsToCategory: (
     ids: string[],
@@ -256,6 +260,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   listColumnState: defaultColumnState(),
   selectedIds: [],
   focusedDocId: null,
+  selectionAnchorId: null,
   toastMessage: null,
   isImporting: false,
   importProgress: null,
@@ -273,6 +278,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const requestVersion = ++documentRequestVersion
     const f = filter ?? get().listMode
     const sort = get().listColumnState.sort
+    const query = get().isSearching ? get().searchQuery : undefined
     set({
       isLoading: true,
       isLoadingMoreDocuments: false,
@@ -281,12 +287,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       const docs = await api.documents.list({
         ...f,
+        ...(query ? { q: query } : {}),
         sort,
         limit: DOCUMENT_PAGE_SIZE,
         offset: 0
       })
       if (requestVersion === documentRequestVersion) {
-        set({ documents: docs, hasMoreDocuments: docs.length === DOCUMENT_PAGE_SIZE })
+        set({
+          ...(query ? { searchResults: docs } : { documents: docs }),
+          hasMoreDocuments: docs.length === DOCUMENT_PAGE_SIZE
+        })
       }
     } catch (error) {
       if (requestVersion === documentRequestVersion) {
@@ -305,27 +315,26 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (
       state.isLoading ||
       state.isLoadingMoreDocuments ||
-      !state.hasMoreDocuments ||
-      state.isSearching
+      !state.hasMoreDocuments
     ) return
     const requestVersion = documentRequestVersion
-    const offset = state.documents.length
+    const offset = (state.isSearching ? state.searchResults : state.documents).length
     set({ isLoadingMoreDocuments: true })
     try {
       const docs = await api.documents.list({
         ...state.listMode,
+        ...(state.isSearching ? { q: state.searchQuery } : {}),
         sort: state.listColumnState.sort,
         limit: DOCUMENT_PAGE_SIZE,
         offset
       })
       if (requestVersion !== documentRequestVersion) return
       set((current) => {
-        const knownIds = new Set(current.documents.map((document) => document.id))
+        const currentDocs = state.isSearching ? current.searchResults : current.documents
+        const knownIds = new Set(currentDocs.map((document) => document.id))
+        const nextDocs = [...currentDocs, ...docs.filter((document) => !knownIds.has(document.id))]
         return {
-          documents: [
-            ...current.documents,
-            ...docs.filter((document) => !knownIds.has(document.id))
-          ],
+          ...(state.isSearching ? { searchResults: nextDocs } : { documents: nextDocs }),
           hasMoreDocuments: docs.length === DOCUMENT_PAGE_SIZE
         }
       })
@@ -355,7 +364,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setListMode: (filter: ListFilter) => {
-    set({ listMode: filter, selectedIds: [], focusedDocId: null })
+    set({ listMode: filter, selectedIds: [], focusedDocId: null, selectionAnchorId: null })
     void get().fetchDocuments(filter).catch(() => undefined)
   },
 
@@ -386,28 +395,85 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   flushPendingSettings: flushRendererSettingWrites,
 
-  setFocusedDoc: (docId: string | null) => {
-    set({ focusedDocId: docId })
-  },
-
-  toggleSelect: (docId: string) => {
-    set((s) => {
-      const idx = s.selectedIds.indexOf(docId)
-      if (idx === -1) {
-        return { selectedIds: [...s.selectedIds, docId] }
-      }
-      return { selectedIds: s.selectedIds.filter((id) => id !== docId) }
-    })
-  },
-
-  selectAll: () => {
-    set((s) => ({
-      selectedIds: (s.isSearching ? s.searchResults : s.documents).map((d) => d.id)
+  setFocusedDoc: (docId: string | null, document?: Document) => {
+    set((state) => ({
+      focusedDocId: docId,
+      selectionAnchorId: docId,
+      selectedIds: [],
+      ...(document?.id === docId && !state.documents.some((item) => item.id === docId)
+        ? { documents: [...state.documents, document] }
+        : {})
     }))
   },
 
+  toggleSelect: (docId: string, includeFocused = false) => {
+    set((s) => {
+      const selected = s.selectedIds.length === 0 && includeFocused && s.focusedDocId
+        ? [s.focusedDocId]
+        : s.selectedIds
+      return {
+        selectedIds: selected.includes(docId)
+          ? selected.filter((id) => id !== docId)
+          : [...selected, docId],
+        focusedDocId: docId,
+        selectionAnchorId: docId
+      }
+    })
+  },
+
+  selectRange: (docId: string, additive = false) => {
+    set((s) => {
+      const docs = s.isSearching ? s.searchResults : s.documents
+      const end = docs.findIndex((doc) => doc.id === docId)
+      if (end < 0) return s
+      const anchorId = s.selectionAnchorId ?? s.focusedDocId ?? docId
+      const anchor = docs.findIndex((doc) => doc.id === anchorId)
+      const start = anchor < 0 ? end : anchor
+      const ids = docs.slice(Math.min(start, end), Math.max(start, end) + 1).map((doc) => doc.id)
+      return {
+        focusedDocId: docId,
+        selectionAnchorId: docs[start].id,
+        selectedIds: additive ? [...new Set([...s.selectedIds, ...ids])] : ids
+      }
+    })
+  },
+
+  selectAll: async () => {
+    const state = get()
+    if (state.isLoading) return
+    const loaded = state.isSearching ? state.searchResults : state.documents
+    const ids = new Set(loaded.map((doc) => doc.id))
+    const stillCurrent = () => {
+      const current = get()
+      return current.listMode === state.listMode &&
+        current.listColumnState.sort === state.listColumnState.sort &&
+        current.isSearching === state.isSearching && current.searchQuery === state.searchQuery &&
+        current.selectedIds === state.selectedIds && current.focusedDocId === state.focusedDocId
+    }
+    try {
+      if (state.hasMoreDocuments) {
+        let offset = loaded.length
+        while (stillCurrent()) {
+          const docs = await api.documents.list({
+            ...state.listMode,
+            q: state.isSearching ? state.searchQuery : undefined,
+            sort: state.listColumnState.sort,
+            limit: DOCUMENT_PAGE_SIZE,
+            offset
+          })
+          for (const doc of docs) ids.add(doc.id)
+          if (docs.length < DOCUMENT_PAGE_SIZE) break
+          offset += docs.length
+        }
+      }
+      if (stillCurrent()) set({ selectedIds: [...ids] })
+    } catch (error) {
+      if (stillCurrent()) get().showToast(errorMessage(error, i18n.t('documentErrors.loadFailed')))
+    }
+  },
+
   clearSelection: () => {
-    set({ selectedIds: [] })
+    set({ selectedIds: [], selectionAnchorId: null })
   },
 
   toggleStar: async (docId: string) => {
@@ -472,6 +538,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }))
     try {
       await api.documents.delete(docId)
+      usePdfReaderStore.getState().close(docId)
       get().showToast(i18n.t('common.movedToTrash', { count: 1 }))
       void get().fetchCategories()
       void get().fetchDocumentCounts()
@@ -515,6 +582,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }))
     try {
       await api.documents.bulkDelete(ids)
+      for (const id of ids) usePdfReaderStore.getState().close(id)
       get().showToast(i18n.t('common.movedToTrash', { count: ids.length }))
       void get().fetchCategories()
       void get().fetchDocumentCounts()
@@ -602,9 +670,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       confirmText: i18n.t('common.delete') as string,
       cancelText: i18n.t('common.cancel') as string,
       danger: true,
-      onConfirm: () => ids.length === 1
-        ? get().deleteDoc(ids[0])
-        : get().bulkDelete(ids)
+      onConfirm: async () => {
+        await flushRendererPersistence()
+        if (ids.length === 1) await get().deleteDoc(ids[0])
+        else await get().bulkDelete(ids)
+      }
     })
   },
 
@@ -769,6 +839,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         listMode: { mode: 'all' },
         selectedIds: [],
         focusedDocId: null,
+        selectionAnchorId: null,
         isImporting: false,
         importProgress: null,
         identifierImporting: 0,
@@ -866,12 +937,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  setSearchResults: (query: string, documents: Document[]) => {
+  setSearchResults: (query: string) => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      get().clearSearch()
+      return
+    }
+    if (get().isSearching && get().searchQuery === trimmed) return
     set({
       isSearching: true,
-      searchQuery: query,
-      searchResults: documents
+      searchQuery: trimmed,
+      searchResults: [],
+      selectedIds: [],
+      focusedDocId: null,
+      selectionAnchorId: null
     })
+    void get().fetchDocuments().catch(() => undefined)
   },
 
   clearSearch: () => {

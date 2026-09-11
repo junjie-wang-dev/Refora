@@ -611,3 +611,44 @@ def test_remote_values_parse_invalid_returns_null(db):
     db.execute("UPDATE documents SET remoteValues = ? WHERE id = ?", ["{bad", "a"])
     doc = repo["get"]("a")
     assert doc["remoteValues"] is None
+
+
+@pytest.mark.parametrize("search_mode", ["trigram", "like"])
+def test_search_matches_normalized_identifiers_without_metadata(db, search_mode):
+    repo = make_docs_repo(db, library_folder="/lib", search_mode=search_mode)
+    repo["insert"](make_doc(id="doi", file_path="/lib/doi.pdf", doi="10.1234/Example"))
+    repo["insert"](make_doc(id="arxiv", file_path="/lib/arxiv.pdf", arxiv_id="2401.01234v2"))
+    for query in ("10.1234/example", "https://doi.org/10.1234/EXAMPLE", "doi: 10.1234/Example", "https://dx.doi.org/10.1234%2FExample"):
+        assert [doc["id"] for doc in repo["search"](query)] == ["doi"]
+    for query in ("2401.01234", "arXiv:2401.01234", "https://arxiv.org/pdf/2401.01234v3.pdf"):
+        assert [doc["id"] for doc in repo["search"](query)] == ["arxiv"]
+    repo["update"]("doi", {"doi": "https://doi.org/10.1234/Other"})
+    assert [doc["id"] for doc in repo["search"]("doi:10.1234/other")] == ["doi"]
+
+
+@pytest.mark.parametrize("search_mode", ["trigram", "like"])
+def test_search_list_returns_all_pages_with_category_and_sort(db, search_mode):
+    repo = make_docs_repo(db, library_folder="/lib", search_mode=search_mode)
+    db.execute("INSERT INTO categories (id, name, createdAt) VALUES ('cat', 'Research', 1)")
+    for index in range(115):
+        doc_id = f"doc-{index:03}"
+        repo["insert"](make_doc(id=doc_id, file_path=f"/lib/{index}.pdf", title=f"Common {index:03}", starred=index % 2))
+        if index < 110:
+            db.execute("INSERT INTO document_categories (documentId, categoryId) VALUES (?, 'cat')", [doc_id])
+    filter_ = {"q": "Common", "mode": "category", "categoryId": "cat", "sort": {"field": "title", "dir": "desc"}, "limit": 100}
+    first = repo["list"](filter_)
+    second = repo["list"]({**filter_, "offset": 100})
+    assert [doc["id"] for doc in first + second] == [f"doc-{index:03}" for index in range(109, -1, -1)]
+    assert len(repo["search"]("Common", limit=10)) == 10
+    starred = repo["list"]({"q": "Common", "mode": "starred"})
+    assert len(starred) == 57
+    assert all(doc["starred"] for doc in starred)
+
+
+@pytest.mark.parametrize("search_mode", ["trigram", "like"])
+def test_identifier_queries_do_not_match_longer_identifiers(db, search_mode):
+    repo = make_docs_repo(db, library_folder="/lib", search_mode=search_mode)
+    repo["insert"](make_doc(id="exact", file_path="/lib/exact.pdf", doi="10.1234/abc", arxiv_id="2301.0123"))
+    repo["insert"](make_doc(id="longer", file_path="/lib/longer.pdf", doi="10.1234/abcd", arxiv_id="2301.01234"))
+    for query in ("doi:10.1234/abc", "10.1234/abc", "arxiv:2301.0123", "2301.0123"):
+        assert [doc["id"] for doc in repo["search"](query)] == ["exact"]

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from refora_server.library.bibliographic_identity import find_existing
 from refora_server.library.authors import normalizeAuthorList
 from refora_server.library.paths import isInLibraryRoot
 
@@ -391,7 +392,8 @@ def _base_document(
         "url": metadata.get("url"),
         "doi": metadata.get("doi"),
         "arxivId": None,
-        "note": citekey or None,
+        "citekey": citekey or None,
+        "note": metadata.get("note"),
         "starred": 0,
         "addedAt": now,
         "lastReadAt": None,
@@ -422,10 +424,8 @@ def _apply_metadata_to_existing(
             continue
         if field in edited_fields:
             remote_values[field] = {"value": value, "source": "manual"}
-        else:
+        elif not document.get(field):
             patch[field] = value
-    if citekey and not document.get("note") and "note" not in edited_fields:
-        patch["note"] = citekey
     if patch:
         documents["update"](document_id, patch)
     if remote_values or document.get("remoteValues") is not None:
@@ -478,6 +478,7 @@ async def importFromBibtex(
         copied_path: str | None = None
         try:
             metadata = extractMetadataFromEntry(entry)
+            identity_match = find_existing(documents, {**metadata, "citekey": entry["citekey"]})
             arxiv_id = metadata.pop("arxivId", None)
             pdf_path = _find_pdf_from_entry(entry, source, str(path.parent))
             if pdf_path:
@@ -488,11 +489,15 @@ async def importFromBibtex(
                     if not file_hash:
                         raise RuntimeError("Unable to hash attached PDF")
                     existing = documents["findByHash"](file_hash)
-                if existing is not None:
+                if existing is None:
+                    existing = identity_match
+                if existing is not None and existing.get("filePath") and (not existing.get("fileMissing") or existing.get("fileHash") != file_hash):
                     _apply_metadata_to_existing(documents, existing["id"], metadata, entry["citekey"])
                     await apply_arxiv(existing["id"], arxiv_id, key)
                     skipped.append(existing["id"])
                     continue
+                if file_hash is None:
+                    file_hash = await asyncio.to_thread(hash_pdf, pdf_path)
                 if not library_folder:
                     raise ValueError("Library folder is not configured")
                 stored_path = pdf_path
@@ -518,6 +523,22 @@ async def importFromBibtex(
                     stored_path,
                     follow_symlinks=False,
                 )
+                existing = documents["findByHash"](file_hash) or find_existing(documents, {**metadata, "arxivId": arxiv_id, "citekey": entry["citekey"]}) or existing
+                if existing is not None and existing.get("filePath") and (not existing.get("fileMissing") or existing.get("fileHash") != file_hash):
+                    if copied_path:
+                        Path(copied_path).unlink(missing_ok=True)
+                        copied_path = None
+                    _apply_metadata_to_existing(documents, existing["id"], metadata, entry["citekey"])
+                    skipped.append(existing["id"])
+                    await apply_arxiv(existing["id"], arxiv_id, key)
+                    continue
+                if existing is not None:
+                    documents["updateFileIdentity"](existing["id"], stored_path, Path(stored_path).name, stat.st_size, file_hash)
+                    copied_path = None
+                    _apply_metadata_to_existing(documents, existing["id"], metadata, entry["citekey"])
+                    added.append(existing["id"])
+                    await apply_arxiv(existing["id"], arxiv_id, key)
+                    continue
                 base = _base_document(metadata, entry["citekey"], now_ms, make_id)
                 document = documents["insert"](
                     {
@@ -532,6 +553,11 @@ async def importFromBibtex(
                 copied_path = None
                 added.append(document["id"])
                 await apply_arxiv(document["id"], arxiv_id, key)
+                continue
+            if identity_match is not None:
+                _apply_metadata_to_existing(documents, identity_match["id"], metadata, entry["citekey"])
+                skipped.append(identity_match["id"])
+                await apply_arxiv(identity_match["id"], arxiv_id, key)
                 continue
             base = _base_document(metadata, entry["citekey"], now_ms, make_id)
             document = documents["insert"](
@@ -565,19 +591,11 @@ def importBibtex(repos: dict[str, Any], content: str, deps: dict[str, Any] | Non
     imported: list[str] = []
     skipped: list[str] = []
     errors: list[dict[str, str]] = []
-    existing_documents = documents["list"]({"mode": "all"})
     for number, entry in enumerate(parseBibtex(content), start=1):
         key = entry["citekey"] or f"entry-{number}"
         try:
             metadata = extractMetadataFromEntry(entry)
-            duplicate = next(
-                (
-                    document for document in existing_documents
-                    if (metadata.get("doi") and document.get("doi", "").lower() == metadata["doi"].lower())
-                    or (metadata.get("arxivId") and document.get("arxivId") == metadata["arxivId"])
-                ),
-                None,
-            )
+            duplicate = find_existing(documents, {**metadata, "citekey": entry["citekey"]})
             if duplicate is not None:
                 patch = {
                     field: value
@@ -610,7 +628,8 @@ def importBibtex(repos: dict[str, Any], content: str, deps: dict[str, Any] | Non
                     "url": metadata.get("url"),
                     "doi": metadata.get("doi"),
                     "arxivId": metadata.get("arxivId"),
-                    "note": metadata.get("note") or key or None,
+                    "citekey": entry["citekey"] or None,
+                    "note": metadata.get("note"),
                     "affiliations": None,
                     "starred": 0,
                     "addedAt": now,
@@ -625,7 +644,6 @@ def importBibtex(repos: dict[str, Any], content: str, deps: dict[str, Any] | Non
                 }
             )
             imported.append(document["id"])
-            existing_documents.append(document)
         except Exception as error:
             errors.append({"key": key, "message": str(error)})
     return {"imported": imported, "skipped": skipped, "errors": errors}

@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 import asyncio
 import json
 import sqlite3
@@ -252,14 +253,14 @@ def test_version_41_upgrade_preserves_history_and_tracks_structured_result_chang
             migrations.run_migrations(adapter)
         insert_thread(connection)
         connection.execute("INSERT INTO chat_messages(id, threadId, role, content, createdAt) VALUES ('old', 'thread-1', 'assistant', 'Preserved answer', 1)")
-        assert migrations.run_migrations(adapter).to_version == 42
+        assert migrations.run_migrations(adapter).to_version == LATEST_SCHEMA_VERSION
         repos = create_repositories(connection)
         assert repos["chat"]["listMessages"]("thread-1")[0]["content"] == "Preserved answer"
         step = repos["agentTraces"]["addStep"]({"threadId": "thread-1", "runId": "run", "kind": "tool", "status": "done", "seq": 0, "startedAt": 1})
         updated = repos["agentTraces"]["updateStep"](step["id"], {"result": {"papers": [{"docId": "paper"}]}})
         assert updated["revision"] > step["revision"]
         assert repos["agentTraces"]["listRunChanges"]("run", step["revision"])["traces"] == [updated]
-        assert migrations.run_migrations(adapter).from_version == 42
+        assert migrations.run_migrations(adapter).from_version == LATEST_SCHEMA_VERSION
         assert repos["agentTraces"]["listByRun"]("run")[0] == updated
     finally:
         connection.close()

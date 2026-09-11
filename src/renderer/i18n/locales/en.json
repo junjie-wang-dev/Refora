@@ -118,6 +118,8 @@
   },
   "globalSearch": {
     "label": "Global search",
+    "viewAllPapers": "View all matching papers in the current library view",
+    "previewLabel": "Preview",
     "placeholder": "Search papers, workspace content, files, and chats…",
     "loading": "Searching",
     "clear": "Clear search",
@@ -197,6 +199,12 @@
     "abstract": "Abstract",
     "keywords": "Keywords",
     "url": "URL",
+    "mergeDuplicates": "Merge duplicate documents",
+    "mergeDescription": "Keep the primary document’s metadata, citation key and PDF. Combine notes, annotations for identical PDFs, categories and workspace links. Unused source PDFs move to the system Trash. Update citations that used the source citation keys to the primary key. This merge cannot be undone.",
+    "mergePrimary": "Primary document to keep",
+    "mergeConfirm": "Merge documents",
+    "mergeFailed": "Could not merge documents",
+    "citekey": "Citation key",
     "arxivId": "arXiv ID",
     "addedAt": "Added",
     "filePath": "Path",
@@ -621,8 +629,8 @@
   "dialog": {
     "duplicateWarning": "A file with identical content already exists: {{name}}. Skip this file?",
     "deleteTitle": "Delete Document",
-    "deleteConfirm": "Remove this document from the library? The PDF file will be moved to the Trash and can be restored from there.",
-    "deleteConfirmBulk": "Remove {{count}} documents from the library? Their PDF files will be moved to the Trash and can be restored from there."
+    "deleteConfirm": "Remove this document? Its PDF will move to the system Trash. Restore the document, notes, annotations and links from Recently deleted.",
+    "deleteConfirmBulk": "Remove {{count}} documents? Their PDFs will move to the system Trash. Restore documents, notes, annotations and links from Recently deleted."
   },
   "wizard": {
     "title": "Welcome to Refora",
@@ -1358,5 +1366,17 @@
       "restored": "Before restore"
     },
     "exporting": "Exporting…"
+  },
+  "recycle": {
+    "title": "Recently deleted",
+    "description": "Restore PDFs, metadata, notes, annotations, categories and links to existing workspaces. Recovery copies stay in this library.",
+    "loadFailed": "Could not load deleted documents.",
+    "restoreFailed": "Could not restore these documents.",
+    "restored": "Restored {{count}} documents.",
+    "restoredPartial": "Restored {{count}} documents. Some links are still unavailable; they are retained and retried when related documents are restored.",
+    "empty": "No deleted documents to restore.",
+    "entry": "{{count}} documents",
+    "restoring": "Restoring…",
+    "restore": "Restore"
   }
 }

@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 from conftest import open_migrated_db
 from refora_server.db.connection import _SqliteAdapter
 from refora_server.db.migrations import MIGRATIONS_DIR, run_migrations
@@ -51,7 +52,7 @@ def test_sync_library_identity_survives_device_state_removal() -> None:
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 42
+    assert result.to_version == LATEST_SCHEMA_VERSION
     state = db.execute("SELECT * FROM sync_state WHERE id = 1").fetchone()
     assert state["remoteLibraryId"] == "remote-library"
     assert state["enabled"] == 1

@@ -187,7 +187,7 @@ describe('GlobalSearch', () => {
     fireEvent.change(input, { target: { value: 'transformer' } })
 
     await waitFor(() => expect(api.search.global).toHaveBeenCalledWith('transformer'))
-    expect(await screen.findByText('globalSearch.papers · 1')).toBeInTheDocument()
+    expect(await screen.findByText('globalSearch.papers · 1 · globalSearch.previewLabel')).toBeInTheDocument()
     expect(screen.getByRole('listbox')).toHaveClass('bg-panel')
     expect(screen.getByRole('listbox')).not.toHaveClass('bg-panel/95', 'backdrop-blur-xl')
     expect(screen.getByText('globalSearch.workspaceFiles · 1')).toBeInTheDocument()
@@ -219,8 +219,8 @@ describe('GlobalSearch', () => {
 
     fireEvent.click(option)
 
-    expect(mocks.setSearchResults).toHaveBeenCalledWith('transformer', [paper])
-    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
+    expect(mocks.setSearchResults).toHaveBeenCalledWith('transformer')
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1', paper)
     expect(mocks.openPdf).not.toHaveBeenCalled()
   })
 
@@ -230,8 +230,26 @@ describe('GlobalSearch', () => {
 
     fireEvent.change(input, { target: { value: 'Junjie' } })
 
-    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie', [paper]))
+    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie'))
     expect(mocks.openPdf).not.toHaveBeenCalled()
+  })
+
+  it('loads the document list independently when global preview fails', async () => {
+    api.search.global = vi.fn().mockRejectedValue(new Error('Preview failed'))
+    render(<GlobalSearch documentListOpen />)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'paper' } })
+    await screen.findByRole('alert')
+    expect(mocks.setSearchResults).toHaveBeenCalledWith('paper')
+  })
+
+  it('opens all matches from the preview without passing its truncated documents', async () => {
+    const onOpenDocuments = vi.fn()
+    render(<GlobalSearch onOpenDocuments={onOpenDocuments} />)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'paper' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'globalSearch.viewAllPapers' }))
+    expect(mocks.setSearchResults).toHaveBeenCalledWith('paper')
+    expect(onOpenDocuments).toHaveBeenCalled()
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
   })
 
   it('does not replace the hidden document list while global results resolve', async () => {
@@ -240,7 +258,7 @@ describe('GlobalSearch', () => {
 
     fireEvent.change(input, { target: { value: 'Junjie' } })
 
-    await screen.findByText('globalSearch.papers · 1')
+    await screen.findByText('globalSearch.papers · 1 · globalSearch.previewLabel')
     expect(mocks.setSearchResults).not.toHaveBeenCalled()
   })
 
@@ -248,7 +266,7 @@ describe('GlobalSearch', () => {
     render(<GlobalSearch documentListOpen />)
     const input = screen.getByRole('combobox', { name: 'globalSearch.label' })
     fireEvent.change(input, { target: { value: 'Junjie' } })
-    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie', [paper]))
+    await waitFor(() => expect(mocks.setSearchResults).toHaveBeenCalledWith('Junjie'))
 
     act(() => {
       mocks.documentStoreSubscriber?.(
@@ -334,7 +352,7 @@ describe('GlobalSearch', () => {
     await screen.findByRole('option', { name: 'globalSearch.openPaper: Transformer Research' })
 
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1', paper)
     expect(mocks.openPdf).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'globalSearch.clear' }))
@@ -389,7 +407,7 @@ describe('GlobalSearch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'globalSearch.retry' }))
 
     await waitFor(() => expect(api.search.global).toHaveBeenCalledTimes(2))
-    expect(await screen.findByText('globalSearch.papers · 1')).toBeInTheDocument()
+    expect(await screen.findByText('globalSearch.papers · 1 · globalSearch.previewLabel')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
@@ -422,7 +440,7 @@ describe('GlobalSearch', () => {
 
     fireEvent.click(option)
 
-    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1')
+    expect(mocks.setFocusedDoc).toHaveBeenCalledWith('paper-1', { ...paper, fileMissing: 1 })
     expect(mocks.openPdf).not.toHaveBeenCalled()
     expect(mocks.showToast).not.toHaveBeenCalled()
   })

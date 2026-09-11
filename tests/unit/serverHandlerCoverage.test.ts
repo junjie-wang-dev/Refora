@@ -8,7 +8,7 @@ import { createSyncHandlers } from '../../src/main/sidecar/ipc/sync'
 import { createMarkdownExportHandlers } from '../../src/main/services/markdownExport'
 import { createAppLifecycleIpcHandlers } from '../../src/main/services/appLifecycleIpc'
 import { createClipboardFileHandlers } from '../../src/main/services/clipboardFiles'
-import { IpcChannel } from '../../src/shared/ipc-channels'
+import { IpcChannel, SERVER_IPC_CHANNELS } from '../../src/shared/ipc-channels'
 import type { ServerClient } from '../../src/main/sidecar/client'
 import type { SyncAccountService } from '../../src/main/services/syncAccount'
 
@@ -16,9 +16,7 @@ describe('server IPC handler coverage', () => {
   it('registers every request channel exposed by preload', () => {
     const serverClient = { http: {} } as ServerClient
     const syncAccountService = {} as SyncAccountService
-    const handlers = {
-      ...createNativeContextMenuHandlers(() => null),
-      ...createClipboardFileHandlers((path) => path),
+    const serverHandlers = {
       ...createServerAppHandlers(serverClient, {
         setThemeSource: () => undefined,
         openDirectory: async () => null,
@@ -42,7 +40,13 @@ describe('server IPC handler coverage', () => {
         saveBibtex: async () => undefined
       }),
       ...createServerWorkspaceHandlers(serverClient, { consumeFiles: (paths) => [...paths] }),
-      ...createServerAiHandlers({ serverClient }),
+      ...createServerAiHandlers({ serverClient })
+    }
+    expect(Object.keys(serverHandlers).sort()).toEqual([...SERVER_IPC_CHANNELS].sort())
+    const handlers = {
+      ...serverHandlers,
+      ...createNativeContextMenuHandlers(() => null),
+      ...createClipboardFileHandlers((path) => path),
       ...createSyncHandlers(syncAccountService),
       ...createAppLifecycleIpcHandlers({ completeRendererFlush: () => true }),
       ...createMarkdownExportHandlers({

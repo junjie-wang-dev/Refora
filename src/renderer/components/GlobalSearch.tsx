@@ -46,13 +46,13 @@ function searchSelectionId(selection: SearchSelection): string {
 interface GlobalSearchProps {
   documentListOpen?: boolean
   onOpenChat?: () => void
+  onOpenDocuments?: () => void
 }
 
-export default function GlobalSearch({ documentListOpen = false, onOpenChat }: GlobalSearchProps) {
+export default function GlobalSearch({ documentListOpen = false, onOpenChat, onOpenDocuments }: GlobalSearchProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GlobalSearchResult>(EMPTY_RESULTS)
-  const [resolvedQuery, setResolvedQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchRetry, setSearchRetry] = useState(0)
@@ -81,7 +81,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     requestVersionRef.current += 1
     setQuery('')
     setResults(EMPTY_RESULTS)
-    setResolvedQuery('')
     setLoading(false)
     setSearchError(null)
     setExpanded(false)
@@ -100,7 +99,6 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
     const requestVersion = ++requestVersionRef.current
     if (!trimmed) {
       setResults(EMPTY_RESULTS)
-      setResolvedQuery('')
       setLoading(false)
       setExpanded(false)
       setActiveIndex(0)
@@ -115,14 +113,12 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
         .then((nextResults) => {
           if (requestVersionRef.current !== requestVersion) return
           setResults(nextResults)
-          setResolvedQuery(trimmed)
           setSearchError(null)
           setActiveIndex(0)
         })
         .catch((cause) => {
           if (requestVersionRef.current !== requestVersion) return
           setResults(EMPTY_RESULTS)
-          setResolvedQuery('')
           setSearchError(errorMessage(cause, translationRef.current('globalSearch.searchFailed')))
           setActiveIndex(0)
         })
@@ -154,14 +150,15 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       }
       return
     }
-    if (resolvedQuery !== trimmed) return
-    setSearchResults(query, results.documents)
-  }, [documentListOpen, query, resolvedQuery, results.documents, setSearchResults])
+    const timer = window.setTimeout(() => setSearchResults(trimmed), 180)
+    return () => window.clearTimeout(timer)
+  }, [documentListOpen, query, setSearchResults])
 
   const selectResult = useCallback(async (selection: SearchSelection) => {
     if (selection.kind === 'document') {
-      setSearchResults(query, results.documents)
-      setFocusedDoc(selection.value.id)
+      setSearchResults(query)
+      setFocusedDoc(selection.value.id, selection.value)
+      onOpenDocuments?.()
     } else if (selection.kind === 'workspaceFile') {
       const store = useWorkspaceStore.getState()
       if (store.activeWorkspaceId !== selection.value.workspaceId) {
@@ -193,7 +190,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
       onOpenChat?.()
     }
     setExpanded(false)
-  }, [onOpenChat, query, results.documents, setFocusedDoc, setSearchResults, t])
+  }, [onOpenChat, onOpenDocuments, query, setFocusedDoc, setSearchResults, t])
 
   const clear = useCallback(() => {
     const shouldClearDocumentSearch = useDocumentStore.getState().isSearching
@@ -320,6 +317,17 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
             aria-label={t('globalSearch.results')}
             className="no-drag absolute left-0 right-0 top-[calc(100%+6px)] max-h-[min(66vh,560px)] overflow-y-auto rounded-lg border border-border bg-panel p-1.5 shadow-lg"
           >
+            <button
+              type="button"
+              className="mb-1 w-full rounded-md px-2.5 py-2 text-left text-xs font-medium text-accent hover:bg-hover"
+              onClick={() => {
+                setSearchResults(query)
+                onOpenDocuments?.()
+                setExpanded(false)
+              }}
+            >
+              {t('globalSearch.viewAllPapers')}
+            </button>
             {!loading && searchError && (
               <div className="flex items-center gap-3 px-4 py-6 text-xs text-error" role="alert">
                 <span className="min-w-0 flex-1">{searchError}</span>
@@ -341,7 +349,7 @@ export default function GlobalSearch({ documentListOpen = false, onOpenChat }: G
             {results.documents.length > 0 && (
               <section aria-labelledby="global-search-papers">
                 <h2 id="global-search-papers" className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  {t('globalSearch.papers')} · {results.documents.length}
+                  {t('globalSearch.papers')} · {results.documents.length} · {t('globalSearch.previewLabel')}
                 </h2>
                 {results.documents.map((document) => resultButton(
                   { kind: 'document', value: document },

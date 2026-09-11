@@ -222,6 +222,8 @@ export default function DocumentList({
   const isLoading = useDocumentStore((s) => s.isLoading)
   const listColumnState = useDocumentStore((s) => s.listColumnState)
   const selectedIds = useDocumentStore((s) => s.selectedIds)
+  const focusedDocId = useDocumentStore((s) => s.focusedDocId)
+  const selectRange = useDocumentStore((s) => s.selectRange)
   const listMode = useDocumentStore((s) => s.listMode)
   const setSort = useDocumentStore((s) => s.setSort)
   const setColumns = useDocumentStore((s) => s.setColumns)
@@ -244,6 +246,7 @@ export default function DocumentList({
   const showConfirm = useConfirmStore((s) => s.show)
 
   const parentRef = useRef<HTMLDivElement>(null)
+  const previousFocusedDocId = useRef<string | null>(null)
 
   const cols = visibleColumns(listColumnState.columns)
 
@@ -273,15 +276,32 @@ export default function DocumentList({
 
   useEffect(() => {
     if (displayDocs.length === 0 || lastVirtualIndex < displayDocs.length - 10) return
-    if (!isSearching) {
-      void loadMoreDocuments?.()
-    }
+    void loadMoreDocuments?.()
   }, [
     displayDocs.length,
     isSearching,
     lastVirtualIndex,
     loadMoreDocuments
   ])
+
+  useEffect(() => {
+    const focusChanged = previousFocusedDocId.current !== focusedDocId
+    previousFocusedDocId.current = focusedDocId
+    if (!focusChanged) return
+    const active = document.activeElement
+    if (!focusedDocId || !parentRef.current?.contains(active) ||
+      !['row', 'grid'].includes(active?.getAttribute('role') ?? '')) return
+    const index = displayDocs.findIndex((doc) => doc.id === focusedDocId)
+    if (index < 0) return
+    virtualizer.scrollToIndex(index, { align: 'auto' })
+    const frame = requestAnimationFrame(() => {
+      if (!parentRef.current?.contains(document.activeElement)) return
+      const wrapper = Array.from(parentRef.current?.querySelectorAll<HTMLElement>('[data-document-id]') ?? [])
+        .find((row) => row.dataset.documentId === focusedDocId)
+      wrapper?.querySelector<HTMLElement>('[role="row"]')?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusedDocId, displayDocs, virtualizer])
 
   const toggleColumn = useCallback(
     (id: ColumnId) => {
@@ -306,10 +326,13 @@ export default function DocumentList({
   const handleRowClick = useCallback(
     (docId: string, e: React.MouseEvent) => {
       e.preventDefault()
-      setFocusedDoc(docId)
+      if (e.currentTarget instanceof HTMLElement) e.currentTarget.focus()
+      if (e.shiftKey) selectRange(docId, e.metaKey || e.ctrlKey)
+      else if (e.metaKey || e.ctrlKey) toggleSelect(docId, true)
+      else setFocusedDoc(docId)
       onDocumentFocus?.()
     },
-    [setFocusedDoc, onDocumentFocus]
+    [setFocusedDoc, selectRange, toggleSelect, onDocumentFocus]
   )
 
   const handleCopyPath = useCallback((filePath: string) => {
@@ -558,6 +581,8 @@ export default function DocumentList({
         className="min-h-0 flex-1 overflow-auto"
         role="grid"
         aria-label={t('list.documentList')}
+        aria-multiselectable="true"
+        tabIndex={0}
       >
         {isLoading ? (
           <SkeletonRows compact={compact} />
@@ -602,6 +627,7 @@ export default function DocumentList({
             {virtualItems.map((vr) => {
               const doc = displayDocs[vr.index]
               const isSelected = selectedIds.includes(doc.id)
+              const isFocused = focusedDocId === doc.id
               const isMissing = doc.fileMissing === 1
               const isFailed = doc.metadataStatus === 'failed'
               const hasError = isMissing || isFailed
@@ -626,39 +652,41 @@ export default function DocumentList({
                 >
                   <div
                     role="row"
-                    tabIndex={0}
-                    aria-selected={isSelected}
+                    tabIndex={isFocused || (!focusedDocId && vr.index === 0) ? 0 : -1}
+                    aria-selected={isSelected || (selectedIds.length === 0 && isFocused)}
                     className={`flex ${
                       compact ? 'items-start px-2 py-2' : 'items-center px-3'
                     } text-xs cursor-pointer transition-colors duration-150 ${
-                      isSelected ? 'bg-active' : 'hover:bg-hover'
-                    }`}
+                      isSelected || isFocused ? 'bg-active' : 'hover:bg-hover'
+                    } ${isFocused ? 'ring-1 ring-inset ring-accent' : ''}`}
                     style={{ height: rowHeight }}
                     onClick={(e) => handleRowClick(doc.id, e)}
                     onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return
                       event.preventDefault()
-                      setFocusedDoc(doc.id)
+                      if (event.key === ' ') toggleSelect(doc.id)
+                      else {
+                        setFocusedDoc(doc.id)
+                        void openPdf(doc.id)
+                      }
                       onDocumentFocus?.()
                     }}
                   >
-                    {!compact && (
-                      <div role="gridcell" className="flex w-10 flex-shrink-0 items-center justify-center">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
-                          checked={isSelected}
-                          aria-label={t('list.selectDocument', {
-                            title: doc.title || doc.fileName
-                          })}
-                          onChange={(e) => {
-                            e.stopPropagation()
-                            toggleSelect(doc.id)
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                    )}
+                    <div role="gridcell" className={`flex flex-shrink-0 items-center justify-center ${compact ? 'w-6 pt-0.5' : 'w-10'}`}>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
+                        checked={isSelected}
+                        aria-label={t('list.selectDocument', {
+                          title: doc.title || doc.fileName
+                        })}
+                        onChange={(e) => {
+                          e.stopPropagation()
+                          toggleSelect(doc.id)
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
                     <div role="gridcell" className={`flex flex-shrink-0 items-center justify-center text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
                       {isMissing ? (
                         <span title={t('detail.relocate') ?? 'Relocate'}>
@@ -678,30 +706,28 @@ export default function DocumentList({
                         </button>
                       )}
                     </div>
-                    {!compact && (
-                      <div role="gridcell" className="w-8 flex-shrink-0 text-center">
-                        <button
-                          className="cursor-pointer"
-                          title={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
-                            title: doc.title || doc.fileName
-                          })}
-                          aria-label={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
-                            title: doc.title || doc.fileName
-                          })}
-                          aria-pressed={Boolean(doc.starred)}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            toggleStar(doc.id)
-                          }}
-                        >
-                          <Star
-                            className={`h-4 w-4 ${
-                              doc.starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted'
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    )}
+                    <div role="gridcell" className={`flex-shrink-0 text-center ${compact ? 'w-6 pt-0.5' : 'w-8'}`}>
+                      <button
+                        className="cursor-pointer"
+                        title={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                          title: doc.title || doc.fileName
+                        })}
+                        aria-label={t(doc.starred ? 'list.unstarDocument' : 'list.starDocument', {
+                          title: doc.title || doc.fileName
+                        })}
+                        aria-pressed={Boolean(doc.starred)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleStar(doc.id)
+                        }}
+                      >
+                        <Star
+                          className={`h-4 w-4 ${
+                            doc.starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted'
+                          }`}
+                        />
+                      </button>
+                    </div>
                     {compact ? (
                       <div role="gridcell" className="min-w-0 flex-1 pl-1">
                         <div className="flex min-w-0 items-center gap-1.5">

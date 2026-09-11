@@ -188,43 +188,38 @@ def create_library_router(deps: Any) -> APIRouter:
             raise ValueError("limit must be between 1 and 10000")
         if offset < 0:
             raise ValueError("offset must not be negative")
+        valid_modes = {"all", "recentlyRead", "recentlyAdded", "starred", "category"}
+        if mode and mode not in valid_modes:
+            raise ValueError("mode is invalid")
+        filter_: dict[str, Any] = {"mode": mode or "all"}
+        if filter_["mode"] == "category":
+            if not category_id:
+                raise ValueError("categoryId is required for category mode")
+            filter_["categoryId"] = category_id
+        elif starred.lower() in {"true", "1"}:
+            filter_ = {"mode": "starred"}
+        elif starred and starred.lower() not in {"false", "0"}:
+            raise ValueError("starred must be true or false")
+        if starred.lower() in {"false", "0"}:
+            filter_["starred"] = False
+        if sort_field or sort_dir:
+            if sort_field not in {
+                "title",
+                "authors",
+                "year",
+                "venue",
+                "addedAt",
+                "filePath",
+            } or sort_dir not in {"asc", "desc"}:
+                raise ValueError("sortField and a valid sortDir are required")
+            filter_["sort"] = {"field": sort_field, "dir": sort_dir}
+        if limit is not None:
+            filter_["limit"] = limit
+        if offset > 0:
+            filter_["offset"] = offset
         if q.strip():
-            if offset > 0:
-                return await call_off_loop(
-                    documents, "search", q.strip(), limit or 500, offset
-                )
-            return await call_off_loop(documents, "search", q.strip(), limit or 500)
-        else:
-            valid_modes = {"all", "recentlyRead", "recentlyAdded", "starred", "category"}
-            if mode and mode not in valid_modes:
-                raise ValueError("mode is invalid")
-            filter_: dict[str, Any] = {"mode": mode or "all"}
-            if filter_["mode"] == "category":
-                if not category_id:
-                    raise ValueError("categoryId is required for category mode")
-                filter_["categoryId"] = category_id
-            elif starred.lower() in {"true", "1"}:
-                filter_ = {"mode": "starred"}
-            elif starred and starred.lower() not in {"false", "0"}:
-                raise ValueError("starred must be true or false")
-            if starred.lower() in {"false", "0"}:
-                filter_["starred"] = False
-            if sort_field or sort_dir:
-                if sort_field not in {
-                    "title",
-                    "authors",
-                    "year",
-                    "venue",
-                    "addedAt",
-                    "filePath",
-                } or sort_dir not in {"asc", "desc"}:
-                    raise ValueError("sortField and a valid sortDir are required")
-                filter_["sort"] = {"field": sort_field, "dir": sort_dir}
-            if limit is not None:
-                filter_["limit"] = limit
-            if offset > 0:
-                filter_["offset"] = offset
-            return await call_off_loop(documents, "list", filter_)
+            filter_["q"] = q.strip()
+        return await call_off_loop(documents, "list", filter_)
 
     @router.get("/documents")
     async def list_documents(
@@ -270,6 +265,30 @@ def create_library_router(deps: Any) -> APIRouter:
     async def get_document(document_id: str):
         return await run(lambda: document(document_id))
 
+    @router.get("/deleted-documents")
+    async def list_deleted_documents():
+        return await run(lambda: call_off_loop(documents, "listDeleted"))
+
+    @router.post("/deleted-documents/{entry_id}/restore")
+    async def restore_deleted_documents(entry_id: str):
+        async def action():
+            restore = _method(documents, "restoreDeleted")
+            result = await _run_blocking(lambda: transaction(lambda: restore(entry_id)))
+            library_folder = _json_setting(settings, "libraryFolderPath", "")
+            if isinstance(library_folder, str) and library_folder:
+                root = Path(library_folder).resolve()
+                recovery_root = root / ".refora" / "recycle"
+                recovery_copy = recovery_root / entry_id
+                if recovery_copy.parent == recovery_root and recovery_copy.resolve() == recovery_copy and recovery_copy.is_dir():
+                    try:
+                        await _connector(connector, "trash", str(recovery_copy))
+                    except Exception:
+                        pass
+            if callable(emit):
+                await _call({"emit": emit}, "emit", "library.contents.changed", {})
+            return result
+        return await run(action)
+
     @router.patch("/documents/{document_id}")
     async def patch_document(document_id: str, body: dict[str, Any]):
         async def action():
@@ -297,6 +316,23 @@ def create_library_router(deps: Any) -> APIRouter:
                     await emitted
             return item
 
+        return await run(action)
+
+    @router.post("/documents/merge")
+    async def merge_document_records(body: dict[str, Any]):
+        async def action():
+            data = _body_dict(body)
+            target_id = _string(data, "targetId")
+            source_ids = _ids(data)
+            sources = [await document(identifier) for identifier in source_ids]
+            item = await _call(documents, "merge", target_id, source_ids)
+            from refora_server.services.merge_cleanup import trash_merged_pdfs
+            await trash_merged_pdfs(documents, settings, connector, sources, item)
+            if callable(emit):
+                result = emit("document.updated", dict(item))
+                if inspect.isawaitable(result):
+                    await result
+            return item
         return await run(action)
 
     @router.post("/documents/{document_id}/starred")

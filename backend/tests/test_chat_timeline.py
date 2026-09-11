@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 import base64
 import json
 import sqlite3
@@ -225,7 +226,7 @@ def test_version_40_upgrade_preserves_messages_and_traces_and_replay_preserves_r
             [thread_id],
         )
         result = migrations.run_migrations(_SqliteAdapter(db))
-        assert result.from_version == 40 and result.to_version == 42
+        assert result.from_version == 40 and result.to_version == LATEST_SCHEMA_VERSION
         message = db.execute("SELECT * FROM chat_messages WHERE id = 'legacy-question'").fetchone()
         assert message["content"] == "Original question"
         assert message["displayContent"] is None and json.loads(message["attachments"]) == []

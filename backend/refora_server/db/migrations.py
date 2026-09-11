@@ -319,6 +319,10 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
             "documents",
             "CASCADE",
         )
+    if version == 46:
+        return _has_objects(db, [("table", "document_file_aliases")])
+    if version == 45:
+        return _has_columns(db, "documents", ["citekey"])
     if version == 42:
         return (
             _has_columns(db, "chat_messages", ["media"])
@@ -468,7 +472,7 @@ def _repair_unsafe_document_ids(db: SqliteLike) -> None:
     columns = [
         row[1]
         for row in db.fetchall("PRAGMA table_info(documents)", [])
-        if isinstance(row[1], str) and row[1] != "id"
+        if isinstance(row[1], str) and row[1] not in {"id", "citekey"}
     ]
     quoted_columns = ", ".join(f'"{column}"' for column in columns)
     db.exec("BEGIN")
@@ -504,11 +508,16 @@ def _repair_unsafe_document_ids(db: SqliteLike) -> None:
                 [new_id, old_id],
             )
             _repair_report_sources(db, old_id, new_id)
+            if db.has_object("table", "document_file_aliases"):
+                db.execute("UPDATE document_file_aliases SET documentId = ? WHERE documentId = ?", [new_id, old_id])
             db.execute(
                 "DELETE FROM legacy_document_id_repair_candidates WHERE documentId = ?",
                 [old_id],
             )
+            citekey_rows = db.fetchall("SELECT citekey FROM documents WHERE id = ?", [old_id]) if db.has_column("documents", "citekey") else []
             db.execute("DELETE FROM documents WHERE id = ?", [old_id])
+            if citekey_rows:
+                db.execute("UPDATE documents SET citekey = ? WHERE id = ?", [citekey_rows[0][0], new_id])
         db.exec("COMMIT")
     except Exception:
         db.exec("ROLLBACK")
@@ -861,6 +870,12 @@ def run_migrations(db: SqliteLike) -> MigrationResult:
             continue
         try:
             db.exec_script("BEGIN;\n" + migration.sql)
+            if migration.version == 45:
+                from refora_server.services.export import _buildCitekey
+                used: set[str] = set()
+                for row in db.fetchall("SELECT id, authors, year, title FROM documents ORDER BY addedAt, id", []):
+                    key = _buildCitekey(dict(zip(("id", "authors", "year", "title"), row)), used)
+                    db.execute("UPDATE documents SET citekey = ? WHERE id = ?", [key, row[0]])
             if migration.version == 40:
                 _backfill_ai_report_sources(db)
             db.set_user_version(max(current_version, migration.version))

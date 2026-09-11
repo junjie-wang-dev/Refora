@@ -15,9 +15,9 @@ function makeDoc(id: string): Document {
   }
 }
 
-function dispatch(key: string, opts: { meta?: boolean; ctrl?: boolean; target?: EventTarget | null } = {}) {
+function dispatch(key: string, opts: { meta?: boolean; ctrl?: boolean; shift?: boolean; target?: EventTarget | null } = {}) {
   const evt = new KeyboardEvent('keydown', {
-    key, metaKey: !!opts.meta, ctrlKey: !!opts.ctrl, bubbles: true, cancelable: true
+    key, metaKey: !!opts.meta, ctrlKey: !!opts.ctrl, shiftKey: !!opts.shift, bubbles: true, cancelable: true
   })
   if (opts.target !== undefined) {
     Object.defineProperty(evt, 'target', { value: opts.target ?? null })
@@ -34,6 +34,7 @@ beforeEach(() => {
     searchResults: [],
     selectedIds: [],
     focusedDocId: null,
+    selectionAnchorId: null,
     isSearching: false
   })
   vi.spyOn(useDocumentStore.getState(), 'requestDeleteConfirm').mockImplementation(() => {})
@@ -152,6 +153,34 @@ describe('useAppShortcuts', () => {
     renderHook(() => useAppShortcuts())
     dispatch('ArrowDown')
     expect(useDocumentStore.getState().setFocusedDoc).toHaveBeenCalledWith('s1')
+  })
+
+  it('selects all documents with Cmd+A inside the library', () => {
+    const selectAll = vi.spyOn(useDocumentStore.getState(), 'selectAll').mockResolvedValue()
+    renderHook(() => useAppShortcuts())
+    dispatch('a', { meta: true })
+    expect(selectAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves native text selection alone in editable fields', () => {
+    const selectAll = vi.spyOn(useDocumentStore.getState(), 'selectAll').mockResolvedValue()
+    const input = document.createElement('input')
+    documentList.append(input)
+    renderHook(() => useAppShortcuts())
+    dispatch('a', { meta: true, target: input })
+    expect(selectAll).not.toHaveBeenCalled()
+  })
+
+  it('extends selection with Shift+ArrowDown and toggles the focused document with Space', () => {
+    useDocumentStore.setState({ focusedDocId: 'a', selectionAnchorId: 'a' })
+    renderHook(() => useAppShortcuts())
+    dispatch('ArrowDown', { shift: true })
+    expect(useDocumentStore.getState().selectedIds).toEqual(['a', 'b'])
+    expect(useDocumentStore.getState().focusedDocId).toBe('b')
+    dispatch(' ')
+    expect(useDocumentStore.getState().selectedIds).toEqual(['a'])
+    dispatch('Escape')
+    expect(useDocumentStore.getState().selectedIds).toEqual([])
   })
 
   it('opens focused PDF on Enter', () => {

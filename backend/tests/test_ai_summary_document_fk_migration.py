@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 import sqlite3
 
 from conftest import make_doc, open_migrated_db
@@ -37,7 +38,7 @@ def test_ai_summary_migration_removes_orphans_and_cascades_document_deletes() ->
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 42
+    assert result.to_version == LATEST_SCHEMA_VERSION
     assert db.execute(
         "SELECT 1 FROM ai_summaries WHERE docId = 'document'"
     ).fetchone() is not None

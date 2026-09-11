@@ -1,3 +1,4 @@
+from conftest import LATEST_SCHEMA_VERSION
 import json
 import sqlite3
 
@@ -74,7 +75,7 @@ def test_forward_migration_repairs_legacy_like_wildcard_path_damage(
 
     result = run_migrations(_SqliteAdapter(db))
 
-    assert result.to_version == 42
+    assert result.to_version == LATEST_SCHEMA_VERSION
     assert db.execute(
         "SELECT filePath FROM documents WHERE id = 'outside'"
     ).fetchone()["filePath"] == str(outside_path)

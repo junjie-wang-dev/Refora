@@ -49,7 +49,7 @@ export const AGENT_APPLICATION_ACTIONS = {
 
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "ff46386026d6910750412782075cd94039e6c1920b6f1e62a5818c549e140a6f" as const
+export const SERVER_PROTOCOL_DIGEST = "b96f3a7a71c59e202747f896e2af2936e26bd391d6dd9370b116440b48d326a8" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -216,6 +216,11 @@ export const SERVER_HTTP_ROUTES = [
     "method": "GET",
     "path": "/categories",
     "schemaDigest": "ecd90208edcf9cf87dc42e782011ceafdef511e28dbffaffa58a233d3be507b0"
+  },
+  {
+    "method": "GET",
+    "path": "/deleted-documents",
+    "schemaDigest": "3108b4898b9849232c45c7f41bb506096791b0f68f6380fce6f8ae5442d775e2"
   },
   {
     "method": "GET",
@@ -509,6 +514,11 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "POST",
+    "path": "/deleted-documents/{entry_id}/restore",
+    "schemaDigest": "5d4ca4fe84ec9380c1dbf9ff8ba8de7252ccfa566671d55ac8f4c646098f562e"
+  },
+  {
+    "method": "POST",
     "path": "/documents/bulk-categorize",
     "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
   },
@@ -521,6 +531,11 @@ export const SERVER_HTTP_ROUTES = [
     "method": "POST",
     "path": "/documents/bulk-refresh-metadata",
     "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
+  },
+  {
+    "method": "POST",
+    "path": "/documents/merge",
+    "schemaDigest": "99056e25ae8196f0ceac6459c644248f23a56401e5af7b66e6bd8005fc54f704"
   },
   {
     "method": "POST",

@@ -57,11 +57,13 @@ const defaultColumns = [
 
 let mockState: {
   documents: Document[]
+  focusedDocId: string | null
   isLoading: boolean
   isSearching: boolean
   searchResults: Document[]
   setSort: ReturnType<typeof vi.fn>
   setColumns: ReturnType<typeof vi.fn>
+  selectRange: ReturnType<typeof vi.fn>
   toggleSelect: ReturnType<typeof vi.fn>
   setFocusedDoc: ReturnType<typeof vi.fn>
   toggleStar: ReturnType<typeof vi.fn>
@@ -85,11 +87,12 @@ vi.mock('@renderer/store/documentStore', () => ({
         },
         listMode: { mode: 'all' },
         selectedIds: [],
-        focusedDocId: null,
+        focusedDocId: mockState.focusedDocId,
         isSearching: mockState.isSearching,
         searchResults: mockState.searchResults,
         setSort: mockState.setSort,
         setColumns: mockState.setColumns,
+        selectRange: mockState.selectRange,
         toggleSelect: mockState.toggleSelect,
         setFocusedDoc: mockState.setFocusedDoc,
         toggleStar: mockState.toggleStar,
@@ -118,6 +121,8 @@ vi.mock('react-i18next', () => ({
   })
 }))
 
+const scrollToIndex = vi.fn()
+
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: (opts: { count: number }) => {
     const size = 28
@@ -132,6 +137,7 @@ vi.mock('@tanstack/react-virtual', () => ({
     return {
       getTotalSize: () => count * size,
       getVirtualItems: () => items,
+      scrollToIndex,
       measureElement: vi.fn()
     }
   }
@@ -140,11 +146,13 @@ vi.mock('@tanstack/react-virtual', () => ({
 function setupDefaultState() {
   mockState = {
     documents: [],
+    focusedDocId: null,
     isLoading: false,
     isSearching: false,
     searchResults: [],
     setSort: vi.fn(),
     setColumns: vi.fn(),
+    selectRange: vi.fn(),
     toggleSelect: vi.fn(),
     setFocusedDoc: vi.fn(),
     toggleStar: vi.fn(),
@@ -177,6 +185,7 @@ function findMenuItem(nodes: MenuItem[], key: string): MenuItem | undefined {
 describe('DocumentList', () => {
   beforeEach(() => {
     setupDefaultState()
+    scrollToIndex.mockClear()
     vi.mocked(showContextMenu).mockClear()
     useConfirmStore.setState({ request: null })
   })
@@ -268,6 +277,39 @@ describe('DocumentList', () => {
 
     expect(mockState.setFocusedDoc).toHaveBeenCalledWith('doc-keyboard')
     expect(onDocumentFocus).toHaveBeenCalled()
+  })
+
+  it('scrolls when focus changes without jumping back when another page is appended', () => {
+    mockState.documents = [makeDoc()]
+    const { rerender } = render(<DocumentList />)
+    screen.getByRole('row').focus()
+    mockState.focusedDocId = 'doc-1'
+    rerender(<DocumentList />)
+    expect(scrollToIndex).toHaveBeenCalledTimes(1)
+    mockState.documents = [...mockState.documents, makeDoc({ id: 'doc-2' })]
+    rerender(<DocumentList />)
+    expect(scrollToIndex).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses modifier clicks to toggle and extend selection', () => {
+    mockState.documents = [makeDoc()]
+    render(<DocumentList />)
+    const row = screen.getByRole('row')
+    fireEvent.click(row, { metaKey: true })
+    expect(mockState.toggleSelect).toHaveBeenCalledWith('doc-1', true)
+    fireEvent.click(row, { shiftKey: true })
+    expect(mockState.selectRange).toHaveBeenCalledWith('doc-1', false)
+    expect(mockState.setFocusedDoc).not.toHaveBeenCalled()
+  })
+
+  it('keeps compact selection and favorite controls operable without opening the PDF', () => {
+    mockState.documents = [makeDoc()]
+    render(<DocumentList compact />)
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'list.starDocument' }))
+    expect(mockState.toggleSelect).toHaveBeenCalledWith('doc-1')
+    expect(mockState.toggleStar).toHaveBeenCalledWith('doc-1')
+    expect(mockState.openPdf).not.toHaveBeenCalled()
   })
 
   it('calls setSort when a column header is clicked', async () => {
@@ -390,9 +432,9 @@ describe('DocumentList', () => {
     expect(screen.getByText('sidebar.allFiles').closest('[data-testid="panel-tab"]')).not.toBeNull()
     expect(screen.queryByText('list.title')).not.toBeInTheDocument()
     expect(screen.getByText('Compact Paper').closest('[style*="height: 52px"]')).not.toBeNull()
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'list.selectDocument' })).toBeInTheDocument()
     const openButton = screen.getByRole('button', { name: 'detail.open' })
-    expect(screen.queryByRole('button', { name: 'list.starDocument' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'list.starDocument' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'list.expand' })).not.toBeInTheDocument()
 
     await userEvent.click(openButton)

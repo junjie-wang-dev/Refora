@@ -235,6 +235,11 @@
     },
     {
       "method": "GET",
+      "path": "/deleted-documents",
+      "schemaDigest": "3108b4898b9849232c45c7f41bb506096791b0f68f6380fce6f8ae5442d775e2"
+    },
+    {
+      "method": "GET",
       "path": "/documents",
       "schemaDigest": "90a2d58d5ca90b12d40f67a3cb108c4cf2cfcc5330dfe724f5f319bb57b66743"
     },
@@ -525,6 +530,11 @@
     },
     {
       "method": "POST",
+      "path": "/deleted-documents/{entry_id}/restore",
+      "schemaDigest": "5d4ca4fe84ec9380c1dbf9ff8ba8de7252ccfa566671d55ac8f4c646098f562e"
+    },
+    {
+      "method": "POST",
       "path": "/documents/bulk-categorize",
       "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
     },
@@ -537,6 +547,11 @@
       "method": "POST",
       "path": "/documents/bulk-refresh-metadata",
       "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/merge",
+      "schemaDigest": "99056e25ae8196f0ceac6459c644248f23a56401e5af7b66e6bd8005fc54f704"
     },
     {
       "method": "POST",
@@ -724,7 +739,7 @@
       "schemaDigest": "c45c598bbf7a0e26e28a8757e8e23e97cffed4ea7167d69f39c66529d8b2ffc1"
     }
   ],
-  "protocolDigest": "ff46386026d6910750412782075cd94039e6c1920b6f1e62a5818c549e140a6f",
+  "protocolDigest": "b96f3a7a71c59e202747f896e2af2936e26bd391d6dd9370b116440b48d326a8",
   "protocolVersion": 1,
   "serverEvents": [
     "ai.chat.token",

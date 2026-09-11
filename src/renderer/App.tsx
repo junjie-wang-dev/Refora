@@ -655,6 +655,7 @@ function AppInner({ listColumnState, sidebarCollapsed: initialSidebarCollapsed, 
               )}
               <GlobalSearch
                 documentListOpen={documentListOpen}
+                onOpenDocuments={() => setDocumentListOpen(true)}
                 onOpenChat={() => setChatOpen(true)}
               />
               <div className="no-drag absolute right-3 top-2.5 z-[60] flex items-center">

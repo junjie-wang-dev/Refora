@@ -118,6 +118,8 @@
   },
   "globalSearch": {
     "label": "全局搜索",
+    "viewAllPapers": "查看当前文献范围内的全部匹配结果",
+    "previewLabel": "预览",
     "placeholder": "搜索论文、Workspace 内容、文件和 AI 对话…",
     "loading": "正在搜索",
     "clear": "清除搜索",
@@ -197,6 +199,12 @@
     "abstract": "摘要",
     "keywords": "关键词",
     "url": "URL",
+    "mergeDuplicates": "合并重复文献",
+    "mergeDescription": "保留主文献的元数据、引用键和 PDF，合并笔记、相同 PDF 的批注、分类和工作区关联。未被引用的来源 PDF 将移入系统废纸篓。写作中使用来源引用键的引用需改为主文献引用键。合并后无法撤销。",
+    "mergePrimary": "选择保留的主文献",
+    "mergeConfirm": "确认合并",
+    "mergeFailed": "无法合并文献",
+    "citekey": "引用键",
     "arxivId": "arXiv ID",
     "addedAt": "添加时间",
     "filePath": "PDF位置",
@@ -621,8 +629,8 @@
   "dialog": {
     "duplicateWarning": "已存在相同内容的文件: {{name}}。跳过此文件？",
     "deleteTitle": "删除文献",
-    "deleteConfirm": "从库中移除此文献？PDF 文件将被移至废纸篓，可从中恢复。",
-    "deleteConfirmBulk": "从库中移除 {{count}} 篇文献？其 PDF 文件将被移至废纸篓，可从中恢复。"
+    "deleteConfirm": "从库中移除此文献？PDF 将移至系统废纸篓；文献、笔记、批注和关联关系可在“最近删除”中恢复。",
+    "deleteConfirmBulk": "从库中移除 {{count}} 篇文献？PDF 将移至系统废纸篓；文献、笔记、批注和关联关系可在“最近删除”中恢复。"
   },
   "wizard": {
     "title": "欢迎使用 Refora",
@@ -1358,5 +1366,17 @@
       "restored": "恢复前版本"
     },
     "exporting": "正在导出…"
+  },
+  "recycle": {
+    "title": "最近删除",
+    "description": "恢复 PDF、元数据、笔记、批注、分类及仍存在的工作区关联。恢复副本保存在当前文献库中。",
+    "loadFailed": "无法加载已删除文献。",
+    "restoreFailed": "无法恢复这些文献。",
+    "restored": "已恢复 {{count}} 篇文献。",
+    "restoredPartial": "已恢复 {{count}} 篇文献。部分关联暂未恢复，记录已保留，将在相关文献恢复时自动重试。",
+    "empty": "没有可恢复的已删除文献。",
+    "entry": "{{count}} 篇文献",
+    "restoring": "恢复中…",
+    "restore": "恢复"
   }
 }

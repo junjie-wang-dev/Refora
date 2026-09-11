@@ -29,6 +29,8 @@ import type {
   ChatThread,
   Document,
   DocumentCounts,
+  DeletedDocumentBatch,
+  RestoreDeletedResult,
   DocumentPatch,
   GlobalSearchResult,
   ListModelsRequest,
@@ -337,9 +339,12 @@ export interface ServerHttp {
   documentsSearch(q: string, page?: Pick<DocumentsListQuery, 'limit' | 'offset'>): Promise<Document[]>
   documentsGet(documentId: string): Promise<Document>
   documentsUpdate(documentId: string, patch: DocumentPatch): Promise<Document>
+  documentsMerge(targetId: string, sourceIds: string[]): Promise<Document>
   documentsSetStarred(documentId: string, starred: boolean): Promise<Document>
   documentsDelete(documentId: string): Promise<{ ack: boolean }>
   documentsBulkDelete(ids: string[]): Promise<{ ack: boolean }>
+  documentsListDeleted(): Promise<DeletedDocumentBatch[]>
+  documentsRestoreDeleted(id: string): Promise<RestoreDeletedResult>
   documentsBulkCategorize(payload: BulkCategorizePayload): Promise<{ ack: boolean }>
   documentsBulkRefreshMetadata(ids: string[]): Promise<{ ack: boolean }>
   documentsRefreshMetadata(documentId: string): Promise<Document>
@@ -635,10 +640,13 @@ export function createServerClient(
     documentsCount: () => get<DocumentCounts>('/documents/count'),
     documentsSearch: (q, page) => get<Document[]>('/documents/search', { q, ...page }),
     documentsGet: (id) => get<Document>(`/documents/${pathSegment(id)}`),
+    documentsMerge: (targetId, ids) => post<Document>('/documents/merge', { targetId, ids }),
     documentsUpdate: (id, p) => patch<Document>(`/documents/${pathSegment(id)}`, p),
     documentsSetStarred: (id, starred) => post<Document>(`/documents/${pathSegment(id)}/starred`, { starred }),
-    documentsDelete: (id) => del<{ ack: boolean }>(`/documents/${pathSegment(id)}`),
-    documentsBulkDelete: (ids) => post<{ ack: boolean }>('/documents/bulk-delete', { ids }),
+    documentsDelete: (id) => request<{ ack: boolean }>('DELETE', `/documents/${pathSegment(id)}`, { timeoutMs: null }),
+    documentsBulkDelete: (ids) => post<{ ack: boolean }>('/documents/bulk-delete', { ids }, null),
+    documentsListDeleted: () => get<DeletedDocumentBatch[]>('/deleted-documents'),
+    documentsRestoreDeleted: (id) => post<RestoreDeletedResult>(`/deleted-documents/${pathSegment(id)}/restore`, undefined, null),
     documentsBulkCategorize: (payload) => post<{ ack: boolean }>('/documents/bulk-categorize', payload),
     documentsBulkRefreshMetadata: (ids) => post<{ ack: boolean }>('/documents/bulk-refresh-metadata', { ids }),
     documentsRefreshMetadata: (id) => post<Document>(`/documents/${pathSegment(id)}/refresh-metadata`),

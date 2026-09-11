@@ -63,6 +63,7 @@ export type ListMode =
 export type SortField = 'title' | 'authors' | 'year' | 'venue' | 'addedAt' | 'filePath'
 
 export interface ListFilter {
+  q?: string
   mode: ListMode
   categoryId?: string
   sort?: { field: SortField; dir: 'asc' | 'desc' }
@@ -82,6 +83,18 @@ export interface DocumentCounts {
   starred: number
 }
 
+export interface DeletedDocumentBatch {
+  id: string
+  deletedAt: number
+  titles: string[]
+  count: number
+}
+
+export interface RestoreDeletedResult {
+  documentIds: string[]
+  skippedRelations: number
+}
+
 export type EditableField =
   | 'title'
   | 'authors'
@@ -97,6 +110,7 @@ export type EditableField =
   | 'arxivId'
   | 'note'
   | 'affiliations'
+  | 'citekey'
 
 export type MetadataStatus = 'pending' | 'done' | 'failed'
 export type MetadataSource = 'pdf' | 'crossref' | 'arxiv' | 'dblp' | 'manual'
@@ -136,6 +150,7 @@ export interface Document {
   url: string | null
   doi: string | null
   arxivId: string | null
+  citekey?: string
   note: string | null
   affiliations: string | null
   starred: number
@@ -1010,9 +1025,12 @@ export interface ReforaApi {
     search(q: string, page?: PageRequest): Promise<SearchResult>
     get(id: string): Promise<Document>
     update(id: string, patch: DocumentPatch): Promise<Document>
+    merge(targetId: string, sourceIds: string[]): Promise<Document>
     setStarred(id: string, value: boolean): Promise<void>
     delete(id: string): Promise<void>
     bulkDelete(ids: string[]): Promise<void>
+    listDeleted(): Promise<DeletedDocumentBatch[]>
+    restoreDeleted(id: string): Promise<RestoreDeletedResult>
     bulkCategorize(ids: string[], catId: string): Promise<void>
     bulkRefreshMetadata(ids: string[]): Promise<void>
     openPdf(id: string, external?: boolean): Promise<Document>

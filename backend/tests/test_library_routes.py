@@ -323,6 +323,53 @@ def make_client(fakes=None):
     return TestClient(app), fakes
 
 
+def test_deleted_document_routes_restore_transactionally_and_notify_views():
+    fakes = Fakes()
+    fakes.documents['listDeleted'] = lambda: [{'id': 'entry', 'titles': ['Paper'], 'count': 1, 'deletedAt': 1}]
+    fakes.documents['restoreDeleted'] = lambda identifier: {'documentIds': [identifier], 'skippedRelations': 0}
+    client, _ = make_client(fakes)
+    assert client.get('/deleted-documents', headers={'X-Refora-Token': 'test-token'}).json()['data'][0]['id'] == 'entry'
+    response = client.post('/deleted-documents/entry/restore', headers={'X-Refora-Token': 'test-token'})
+    assert response.json() == {'ok': True, 'data': {'documentIds': ['entry'], 'skippedRelations': 0}}
+    assert fakes.transaction_calls == 1
+    assert ('library.contents.changed', {}) in fakes.emitted_events
+
+
+def test_delete_does_not_move_pdf_before_archive_transaction_succeeds(tmp_path):
+    fakes = Fakes()
+    source = tmp_path / 'paper.pdf'
+    source.write_bytes(b'%PDF-1.4\nfixture')
+    fakes.settings['get'] = lambda key, default=None: str(tmp_path) if key == 'libraryFolderPath' else default
+    fakes.document_overrides['paper'] = make_doc(id='paper', file_path=str(source))
+    fakes.documents['prepareDeletion'] = lambda ids: {'id': 'entry', 'backups': {}}
+    def fail_archive(_ids, _prepared):
+        raise RuntimeError('Archive disk is full')
+    fakes.documents['archiveDeletion'] = fail_archive
+    client, _ = make_client(fakes)
+    response = client.delete('/documents/paper', headers={'X-Refora-Token': 'test-token'})
+    assert response.json()['ok'] is False
+    assert fakes.trashed == []
+    assert fakes.deleted_documents == []
+    assert source.exists()
+
+
+@pytest.mark.parametrize('succeeds', [True, False])
+def test_restore_only_releases_recovery_copies_after_successful_commit(tmp_path, succeeds):
+    fakes = Fakes()
+    recovery = tmp_path / '.refora' / 'recycle' / 'entry'
+    recovery.mkdir(parents=True)
+    fakes.settings['get'] = lambda key, default=None: str(tmp_path) if key == 'libraryFolderPath' else default
+    def restore(_identifier):
+        if not succeeds:
+            raise RuntimeError('Recovery failed')
+        return {'documentIds': ['paper'], 'skippedRelations': 0}
+    fakes.documents['restoreDeleted'] = restore
+    client, _ = make_client(fakes)
+    response = client.post('/deleted-documents/entry/restore', headers={'X-Refora-Token': 'test-token'})
+    assert response.json()['ok'] is succeeds
+    assert fakes.trashed == ([str(recovery)] if succeeds else [])
+
+
 def test_registers_every_library_domain_protocol_route():
     client, _ = make_client()
     routes = {
@@ -1727,7 +1774,7 @@ def test_heavy_read_routes_keep_envelopes_while_running_repositories_off_loop():
             "chats": [],
         },
     }
-    assert list_response.json() == {"ok": True, "data": [{"id": "doc-search"}]}
+    assert list_response.json() == {"ok": True, "data": [{"id": "doc-list"}]}
     assert export_response.json() == {"ok": True, "data": {}}
     loop_thread = loop_threads[0]
     assert repo_threads and all(thread != loop_thread for thread in repo_threads)
@@ -1845,3 +1892,33 @@ def test_markdown_recovery_enforces_history_and_body_bounds(failure):
     response = client.patch("/settings", headers={"X-Refora-Token": "test-token"}, json={"markdown.document.note.doc-1": payload})
     assert response.status_code == 400
     assert "markdown.document.note.doc-1" not in fakes.settings_values
+
+
+def test_document_list_search_combines_category_sort_and_pagination():
+    client, fakes = make_client()
+    response = client.get(
+        "/documents?q=paper&mode=category&categoryId=cat-1&sortField=title&sortDir=asc&limit=100&offset=100",
+        headers={"X-Refora-Token": "test-token"},
+    )
+    assert response.status_code == 200
+    assert fakes.document_filter == {
+        "q": "paper", "mode": "category", "categoryId": "cat-1",
+        "sort": {"field": "title", "dir": "asc"}, "limit": 100, "offset": 100,
+    }
+    invalid = client.get(
+        "/documents?q=paper&mode=category",
+        headers={"X-Refora-Token": "test-token"},
+    )
+    assert invalid.status_code == 400
+
+
+def test_merge_route_forwards_primary_and_sources_and_rejects_malformed_ids():
+    client, fakes = make_client()
+    calls = []
+    fakes.documents["merge"] = lambda target, sources: calls.append((target, sources)) or {"id": target, "citekey": "stable"}
+    response = client.post("/documents/merge", json={"targetId": "primary", "ids": ["source"]}, headers={"X-Refora-Token": "test-token"})
+    assert response.json() == {"ok": True, "data": {"id": "primary", "citekey": "stable"}}
+    assert calls == [("primary", ["source"])]
+    response = client.post("/documents/merge", json={"targetId": "primary", "ids": "source"}, headers={"X-Refora-Token": "test-token"})
+    assert response.json()["ok"] is False
+    assert len(calls) == 1

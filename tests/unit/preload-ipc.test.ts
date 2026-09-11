@@ -63,7 +63,7 @@ describe('preload IPC bridge', () => {
     const cases: InvocationCase[] = [
       { channel: IpcChannel.ExportMarkdownPdf, args: ['Research note'], invoke: (value) => value.export.markdownPdf('Research note') },
       { channel: IpcChannel.Bootstrap, args: [], invoke: (value) => value.getBootstrap() },
-      { channel: IpcChannel.DocumentsList, args: [{ mode: 'all' }], invoke: (value) => value.documents.list({ mode: 'all' }) },
+      { channel: IpcChannel.DocumentsList, args: [{ mode: 'all', q: 'paper', limit: 100, offset: 100 }], invoke: (value) => value.documents.list({ mode: 'all', q: 'paper', limit: 100, offset: 100 }) },
       { channel: IpcChannel.DocumentsCount, args: [], invoke: (value) => value.documents.counts() },
       {
         channel: IpcChannel.DocumentsSearch,
@@ -71,10 +71,13 @@ describe('preload IPC bridge', () => {
         invoke: (value) => value.documents.search('query', { limit: 100, offset: 200 })
       },
       { channel: IpcChannel.DocumentsGet, args: ['doc-1'], invoke: (value) => value.documents.get('doc-1') },
+      { channel: IpcChannel.DocumentsMerge, args: ['primary', ['source']], invoke: (value) => value.documents.merge('primary', ['source']) },
       { channel: IpcChannel.DocumentsUpdate, args: ['doc-1', { title: 'Title' }], invoke: (value) => value.documents.update('doc-1', { title: 'Title' }) },
       { channel: IpcChannel.DocumentsSetStarred, args: ['doc-1', true], invoke: (value) => value.documents.setStarred('doc-1', true) },
       { channel: IpcChannel.DocumentsDelete, args: ['doc-1'], invoke: (value) => value.documents.delete('doc-1') },
       { channel: IpcChannel.DocumentsBulkDelete, args: [['doc-1']], invoke: (value) => value.documents.bulkDelete(['doc-1']) },
+      { channel: IpcChannel.DocumentsListDeleted, args: [], invoke: (value) => value.documents.listDeleted() },
+      { channel: IpcChannel.DocumentsRestoreDeleted, args: ['entry-1'], invoke: (value) => value.documents.restoreDeleted('entry-1') },
       { channel: IpcChannel.DocumentsBulkCategorize, args: [['doc-1'], 'cat-1'], invoke: (value) => value.documents.bulkCategorize(['doc-1'], 'cat-1') },
       { channel: IpcChannel.DocumentsBulkRefreshMetadata, args: [['doc-1']], invoke: (value) => value.documents.bulkRefreshMetadata(['doc-1']) },
       { channel: IpcChannel.DocumentsOpenPdf, args: ['doc-1'], invoke: (value) => value.documents.openPdf('doc-1') },

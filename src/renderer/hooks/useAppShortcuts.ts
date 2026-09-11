@@ -14,6 +14,13 @@ function isInteractive(target: EventTarget | null): boolean {
   )
 }
 
+function isTextEditing(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    (target instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(target.type))
+}
+
 export function useAppShortcuts(): void {
   const focusSearch = useCallback(() => {
     const input = document.querySelector<HTMLInputElement>('.doc-search-input')
@@ -39,6 +46,11 @@ export function useAppShortcuts(): void {
         ? documentList.contains(e.target)
         : document.activeElement instanceof Node && documentList.contains(document.activeElement)
       if (!targetIsInList) return
+      if (mod && e.key.toLowerCase() === 'a' && !isTextEditing(e.target)) {
+        e.preventDefault()
+        void useDocumentStore.getState().selectAll()
+        return
+      }
       if (mod && e.key === 'Backspace' && !isInteractive(e.target)) {
         e.preventDefault()
         const store = useDocumentStore.getState()
@@ -65,7 +77,8 @@ export function useAppShortcuts(): void {
         const nextIdx = e.key === 'ArrowUp'
           ? Math.max(0, currentIdx <= 0 ? 0 : currentIdx - 1)
           : Math.min(docs.length - 1, currentIdx < 0 ? 0 : currentIdx + 1)
-        store.setFocusedDoc(docs[nextIdx].id)
+        if (e.shiftKey) store.selectRange(docs[nextIdx].id)
+        else store.setFocusedDoc(docs[nextIdx].id)
         return
       }
 
@@ -78,8 +91,16 @@ export function useAppShortcuts(): void {
         return
       }
 
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        useDocumentStore.getState().clearSelection()
+        return
+      }
+
       if (e.key === ' ') {
         e.preventDefault()
+        const store = useDocumentStore.getState()
+        if (store.focusedDocId) store.toggleSelect(store.focusedDocId)
         return
       }
     }

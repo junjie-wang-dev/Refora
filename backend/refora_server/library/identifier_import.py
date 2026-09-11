@@ -20,6 +20,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 from refora_server.academic.arxiv import base_arxiv_id, normalize_arxiv_id
 from refora_server.academic.types import PaperLocator
 from refora_server.library.paths import isInLibraryRoot
+from refora_server.library.bibliographic_identity import find_existing
 
 
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -437,6 +438,9 @@ async def importByIdentifier(
         pdf_url = input_value
         parsed_name = Path(urlparse(input_value).path).name
         file_name = parsed_name if parsed_name.lower().endswith(".pdf") else "download.pdf"
+    existing = find_existing(repos["documents"], metadata)
+    if existing is not None and existing.get("filePath") and not existing.get("fileMissing"):
+        return existing["id"]
     safe_url = options.get("isSafeUrl", _validate_safe_url)
     if not await _await(safe_url(pdf_url)):
         raise ValueError("The download URL is not allowed (must be a public http(s) address).")
@@ -446,12 +450,18 @@ async def importByIdentifier(
         temporary_path = await _await(downloader(pdf_url, temporary_dir, file_name))
         if not isinstance(temporary_path, str) or not Path(temporary_path).is_absolute() or not _is_pdf_file(temporary_path):
             raise ValueError("Downloaded file is not a valid PDF.")
+        existing = find_existing(repos["documents"], metadata) or existing
+        if existing is not None and existing.get("filePath") and not existing.get("fileMissing"):
+            return existing["id"]
         file_hash = options.get("hashPdf", _hash_pdf)(temporary_path)
-        if repos["documents"]["findByHash"](file_hash) is not None:
-            raise ValueError("This file is already in your library.")
+        if existing is not None and existing.get("filePath") and existing.get("fileHash") != file_hash:
+            return existing["id"]
+        duplicate = repos["documents"]["findByHash"](file_hash)
+        if duplicate is not None:
+            return duplicate["id"]
         stat = os.stat(temporary_path)
         now = options.get("nowMs", _now_ms)()
-        document = repos["documents"]["insert"](
+        document = existing or repos["documents"]["insert"](
             {
                 "id": options.get("newId", _new_id)(),
                 "filePath": temporary_path,
@@ -505,7 +515,8 @@ async def importByIdentifier(
                 copied_stat.st_mtime_ns,
             )
         except Exception:
-            repos["documents"]["delete"](document["id"])
+            if existing is None:
+                repos["documents"]["delete"](document["id"])
             if copied_path and copy_to_library is _copy_to_library:
                 Path(copied_path).unlink(missing_ok=True)
             raise ValueError("Failed to copy the downloaded PDF to the library folder.")

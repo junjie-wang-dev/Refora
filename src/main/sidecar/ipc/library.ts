@@ -53,6 +53,7 @@ export function createServerLibraryHandlers({
     [IpcChannel.DocumentsList]: (filter: ListFilter) =>
       forward(() => http.documentsList({
         mode: filter.mode,
+        ...(filter.q === undefined ? {} : { q: filter.q }),
         ...(filter.mode === 'category' && filter.categoryId
           ? { categoryId: filter.categoryId }
           : {}),
@@ -63,11 +64,15 @@ export function createServerLibraryHandlers({
         ...(filter.offset === undefined ? {} : { offset: filter.offset })
       })),
     [IpcChannel.DocumentsCount]: () => forward(() => http.documentsCount()),
+    [IpcChannel.DocumentsListDeleted]: () => forward(() => http.documentsListDeleted()),
+    [IpcChannel.DocumentsRestoreDeleted]: (id: string) => forward(() => http.documentsRestoreDeleted(id)),
     [IpcChannel.DocumentsSearch]: (query: string, page?: PageRequest) =>
       forward(() => page
         ? http.documentsSearch(query, page)
         : http.documentsSearch(query)),
     [IpcChannel.DocumentsGet]: (documentId: string) => forward(() => http.documentsGet(documentId)),
+    [IpcChannel.DocumentsMerge]: (targetId: string, sourceIds: string[]) =>
+      forward(() => http.documentsMerge(targetId, sourceIds)),
     [IpcChannel.DocumentsUpdate]: (documentId: string, patch: DocumentPatch) =>
       forward(() => http.documentsUpdate(documentId, patch)),
     [IpcChannel.DocumentsSetStarred]: (documentId: string, starred: boolean) =>

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { useConfirmStore } from '../../src/renderer/store/confirmStore'
 import { initI18n } from '../../src/renderer/i18n'
+import { registerRendererFlushTask } from '../../src/renderer/persistence'
 import type { Category, Document, ListColumnState } from '../../src/shared/ipc-types'
 
 function makeDoc(overrides: Partial<Document> = {}): Document {
@@ -98,6 +99,7 @@ function resetStoreState(): void {
     documentCounts: { all: 0, recentlyRead: 0, recentlyAdded: 0, starred: 0 },
     selectedIds: [],
     focusedDocId: null,
+    selectionAnchorId: null,
     initialized: false,
     isSearching: false,
     searchQuery: '',
@@ -338,20 +340,60 @@ describe('DocumentStore', () => {
   })
 
   describe('global search state', () => {
-    it('accepts resolved global-search documents through the store action', () => {
-      const results = [makeDoc({ title: 'Found' })]
-      useDocumentStore.getState().setSearchResults('  hello  ', results)
+    it('keeps a preview result available to details without changing filtered search results', () => {
+      const preview = makeDoc({ id: 'preview' })
+      useDocumentStore.setState({ isSearching: true, searchResults: [] })
+      useDocumentStore.getState().setFocusedDoc(preview.id, preview)
+      expect(useDocumentStore.getState().documents).toEqual([preview])
+      expect(useDocumentStore.getState().searchResults).toEqual([])
+      expect(useDocumentStore.getState().focusedDocId).toBe(preview.id)
+    })
 
-      expect(useDocumentStore.getState()).toMatchObject({
-        isSearching: true,
-        searchQuery: '  hello  ',
-        searchResults: results
+    it('loads complete search results independently of the global preview', async () => {
+      const results = Array.from({ length: 15 }, (_, index) => makeDoc({ id: `found-${index}` }))
+      mockList.mockResolvedValue(results)
+      useDocumentStore.getState().setSearchResults('  hello  ')
+      await vi.waitFor(() => expect(useDocumentStore.getState().searchResults).toEqual(results))
+      expect(mockList).toHaveBeenCalledWith({
+        mode: 'all', q: 'hello', sort: { field: 'addedAt', dir: 'desc' }, limit: 100, offset: 0
       })
+      expect(useDocumentStore.getState().searchQuery).toBe('hello')
+    })
+
+    it('paginates search results and reapplies category and sort to the query', async () => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => makeDoc({ id: `found-${index}` }))
+      mockList.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([makeDoc({ id: 'last' })])
+      useDocumentStore.getState().setSearchResults('hello')
+      await vi.waitFor(() => expect(useDocumentStore.getState().isLoading).toBe(false))
+      await useDocumentStore.getState().loadMoreDocuments()
+      expect(useDocumentStore.getState().searchResults).toHaveLength(101)
+      expect(mockList).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'hello', offset: 100 }))
+      mockList.mockResolvedValue([makeDoc({ id: 'category-match' })])
+      useDocumentStore.getState().setListMode({ mode: 'category', categoryId: 'cat-1' })
+      await vi.waitFor(() => expect(useDocumentStore.getState().isLoading).toBe(false))
+      expect(mockList).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'hello', mode: 'category', categoryId: 'cat-1', offset: 0 }))
+      useDocumentStore.getState().setSort('title')
+      await vi.waitFor(() => expect(useDocumentStore.getState().isLoading).toBe(false))
+      expect(mockList).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'hello', categoryId: 'cat-1', sort: { field: 'title', dir: 'asc' } }))
+      expect(useDocumentStore.getState().searchResults[0].id).toBe('category-match')
+    })
+
+    it('ignores an older search page after clearing the query', async () => {
+      let resolveSearch: (docs: Document[]) => void = () => undefined
+      mockList.mockReturnValueOnce(new Promise<Document[]>((resolve) => { resolveSearch = resolve }))
+      mockList.mockResolvedValueOnce([makeDoc({ id: 'regular' })])
+      useDocumentStore.getState().setSearchResults('hello')
+      useDocumentStore.getState().clearSearch()
+      await vi.waitFor(() => expect(useDocumentStore.getState().isLoading).toBe(false))
+      resolveSearch([makeDoc({ id: 'stale' })])
+      await Promise.resolve()
+      expect(useDocumentStore.getState().searchResults).toEqual([])
+      expect(useDocumentStore.getState().documents[0].id).toBe('regular')
     })
 
     it('clears global-search state and returns to the document list', () => {
       mockList.mockResolvedValue([makeDoc()])
-      useDocumentStore.getState().setSearchResults('hello', [makeDoc()])
+      useDocumentStore.getState().setSearchResults('hello')
 
       useDocumentStore.getState().clearSearch()
 
@@ -739,6 +781,49 @@ describe('DocumentStore', () => {
   })
 
   describe('list controls', () => {
+    it('replaces batch selection on ordinary focus and supports anchored ranges and command toggling', () => {
+      const docs = ['a', 'b', 'c', 'd'].map((id) => makeDoc({ id }))
+      useDocumentStore.setState({ documents: docs, selectedIds: ['c', 'd'], isSearching: false })
+      useDocumentStore.getState().setFocusedDoc('a')
+      expect(useDocumentStore.getState().selectedIds).toEqual([])
+      useDocumentStore.getState().selectRange('c')
+      expect(useDocumentStore.getState().selectedIds).toEqual(['a', 'b', 'c'])
+      useDocumentStore.getState().selectRange('b')
+      expect(useDocumentStore.getState().selectedIds).toEqual(['a', 'b'])
+      useDocumentStore.getState().setFocusedDoc('a')
+      useDocumentStore.getState().toggleSelect('d', true)
+      expect(useDocumentStore.getState().selectedIds).toEqual(['a', 'd'])
+    })
+
+    it('selects every matching document across pages in the active category and search', async () => {
+      const docs = Array.from({ length: 100 }, (_, index) => makeDoc({ id: `doc-${index}` }))
+      useDocumentStore.setState({
+        isLoading: false, isSearching: true, searchQuery: 'neural', searchResults: docs,
+        listMode: { mode: 'category', categoryId: 'cat-a' }, hasMoreDocuments: true, selectedIds: []
+      })
+      mockList.mockResolvedValueOnce([makeDoc({ id: 'last-match' })])
+      await useDocumentStore.getState().selectAll()
+      expect(useDocumentStore.getState().selectedIds).toHaveLength(101)
+      expect(useDocumentStore.getState().selectedIds).toContain('last-match')
+      expect(mockList).toHaveBeenLastCalledWith(expect.objectContaining({
+        mode: 'category', categoryId: 'cat-a', q: 'neural', offset: 100, limit: 100
+      }))
+    })
+
+    it('does not overwrite a later user selection when select all finishes loading', async () => {
+      let finish!: (docs: Document[]) => void
+      useDocumentStore.setState({
+        documents: [makeDoc()], isLoading: false, isSearching: false, hasMoreDocuments: true, selectedIds: []
+      })
+      mockList.mockReturnValueOnce(new Promise<Document[]>((resolve) => { finish = resolve }))
+      const pending = useDocumentStore.getState().selectAll()
+      useDocumentStore.getState().setFocusedDoc('other')
+      finish([makeDoc({ id: 'late' })])
+      await pending
+      expect(useDocumentStore.getState().selectedIds).toEqual([])
+      expect(useDocumentStore.getState().focusedDocId).toBe('other')
+    })
+
     it('updates filters, selection, columns, and sort state', async () => {
       vi.useFakeTimers()
       const docs = [makeDoc(), makeDoc({ id: 'doc-2' })]
@@ -754,7 +839,9 @@ describe('DocumentStore', () => {
       expect(useDocumentStore.getState().focusedDocId).toBeNull()
       expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ mode: 'starred' }))
 
-      useDocumentStore.getState().selectAll()
+      await Promise.resolve()
+      useDocumentStore.setState({ documents: docs, isLoading: false, hasMoreDocuments: false })
+      await useDocumentStore.getState().selectAll()
       expect(useDocumentStore.getState().selectedIds).toEqual(['doc-1', 'doc-2'])
       useDocumentStore.getState().clearSelection()
       expect(useDocumentStore.getState().selectedIds).toEqual([])
@@ -980,6 +1067,19 @@ describe('DocumentStore', () => {
       useDocumentStore.getState().requestDeleteConfirm(['doc-1', 'doc-2'], '')
       await useConfirmStore.getState().request?.onConfirm()
       expect(mockBulkDelete).toHaveBeenCalledWith(['doc-1', 'doc-2'])
+    })
+
+    it('keeps documents when pending annotations or notes cannot be saved before deletion', async () => {
+      useDocumentStore.setState({ documents: [makeDoc()] })
+      const unregister = registerRendererFlushTask(async () => { throw new Error('unsaved notes') })
+      try {
+        useDocumentStore.getState().requestDeleteConfirm(['doc-1'], '')
+        await expect(useConfirmStore.getState().request?.onConfirm()).rejects.toThrow('unsaved notes')
+        expect(mockDelete).not.toHaveBeenCalled()
+        expect(useDocumentStore.getState().documents).toHaveLength(1)
+      } finally {
+        unregister()
+      }
     })
 
     it('ends imports and handles Zotero and Mendeley results', async () => {

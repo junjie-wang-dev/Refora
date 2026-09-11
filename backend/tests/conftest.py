@@ -6,11 +6,15 @@ DB_RESOURCES = Path(__file__).resolve().parents[1] / "refora_server" / "db"
 SCHEMA_SQL = DB_RESOURCES / "schema.sql"
 MIGRATIONS_DIR = DB_RESOURCES / "migrations"
 
+LATEST_SCHEMA_VERSION = 46
+
 DOCUMENT_COLUMN_MIGRATIONS = [
     "0004_add_pages_issue.sql",
     "0012_add_affiliations.sql",
     "0022_add_arxiv_id.sql",
     "0037_document_file_identity.sql",
+    "0045_document_citekeys.sql",
+    "0046_document_file_aliases.sql",
 ]
 
 
