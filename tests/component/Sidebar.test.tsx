@@ -222,11 +222,15 @@ describe('Sidebar', () => {
     expect(screen.queryByText('ML')).not.toBeInTheDocument()
   })
 
-  it('shows an inline input when the create-category button is clicked', async () => {
+  it('shows a focused inline input after the existing categories when creating', async () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByLabelText('sidebar.createCategory'))
-    expect(screen.getByPlaceholderText('sidebar.categoryName')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('sidebar.categoryName')
+    expect(input).toHaveFocus()
+    for (const category of defaultCategories) {
+      expect(screen.getByText(category.name).compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
   })
 
   it('creates a category when typing and pressing Enter in the inline input', async () => {

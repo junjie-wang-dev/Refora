@@ -781,6 +781,19 @@ describe('WorkspaceStore', () => {
   })
 
   describe('workspace lifecycle actions', () => {
+    it('appends a new workspace after existing workspaces', async () => {
+      const existing = [
+        { id: 'ws-1', name: 'Research', createdAt: 1, updatedAt: 1 },
+        { id: 'ws-2', name: 'Reading', createdAt: 2, updatedAt: 2 }
+      ]
+      useWorkspaceStore.setState({ workspaces: existing })
+
+      const created = await useWorkspaceStore.getState().createWorkspace('New workspace')
+
+      expect(created).toMatchObject({ id: 'ws-new', name: 'New workspace' })
+      expect(useWorkspaceStore.getState().workspaces).toEqual([...existing, created])
+    })
+
     it('creates, renames, and deletes the active workspace', async () => {
       const created = await useWorkspaceStore.getState().createWorkspace('New workspace')
       expect(created).toMatchObject({ id: 'ws-new', name: 'New workspace' })

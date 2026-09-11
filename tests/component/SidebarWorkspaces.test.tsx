@@ -79,6 +79,10 @@ describe('SidebarWorkspaces', () => {
 
     await user.click(screen.getByRole('button', { name: 'sidebar.createWorkspace' }))
     const input = screen.getByPlaceholderText('sidebar.workspaceName')
+    expect(input).toHaveFocus()
+    for (const workspace of workspaces) {
+      expect(screen.getByRole('button', { name: workspace.name }).compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
     await user.type(input, '  New workspace  {Enter}')
     await waitFor(() => expect(mocks.createWorkspace).toHaveBeenCalledWith('New workspace'))
 

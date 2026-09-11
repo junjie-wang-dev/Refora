@@ -118,22 +118,6 @@ export default function SidebarWorkspaces() {
         </UiButton>
       }
     >
-      {wsCreating && (
-        <UiInput
-          ref={wsNewInputRef}
-          variant="outlined"
-          inputSize="sm"
-          className="no-drag mb-1"
-          placeholder={t('sidebar.workspaceName')}
-          value={wsDraftName}
-          onChange={(e) => setWsDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); void commitWsCreate() }
-            if (e.key === 'Escape') { e.preventDefault(); cancelWsCreate() }
-          }}
-          onBlur={() => void commitWsCreate()}
-        />
-      )}
       {workspaces.length === 0 && !wsCreating ? (
         <div className="px-2 py-1 text-label italic text-muted">
           {t('sidebar.emptyWorkspaces')}
@@ -169,6 +153,22 @@ export default function SidebarWorkspaces() {
             </div>
           )
         })
+      )}
+      {wsCreating && (
+        <UiInput
+          ref={wsNewInputRef}
+          variant="outlined"
+          inputSize="sm"
+          className="no-drag mt-1"
+          placeholder={t('sidebar.workspaceName')}
+          value={wsDraftName}
+          onChange={(e) => setWsDraftName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); void commitWsCreate() }
+            if (e.key === 'Escape') { e.preventDefault(); cancelWsCreate() }
+          }}
+          onBlur={() => void commitWsCreate()}
+        />
       )}
     </SidebarSection>
   )

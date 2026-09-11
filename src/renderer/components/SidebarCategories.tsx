@@ -139,22 +139,6 @@ export default function SidebarCategories() {
         </UiButton>
       }
     >
-      {creatingNew && (
-        <UiInput
-          ref={newInputRef}
-          variant="outlined"
-          inputSize="sm"
-          className="no-drag mb-1"
-          placeholder={t('sidebar.categoryName')}
-          value={draftName}
-          onChange={(e) => setDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); void commitCreate() }
-            if (e.key === 'Escape') { e.preventDefault(); cancelCreate() }
-          }}
-          onBlur={() => void commitCreate()}
-        />
-      )}
       {categories.length === 0 && !creatingNew ? (
         <div className="px-2 py-1 text-label italic text-muted">
           {t('sidebar.emptyCategories')}
@@ -197,6 +181,22 @@ export default function SidebarCategories() {
             </div>
           )
         })
+      )}
+      {creatingNew && (
+        <UiInput
+          ref={newInputRef}
+          variant="outlined"
+          inputSize="sm"
+          className="no-drag mt-1"
+          placeholder={t('sidebar.categoryName')}
+          value={draftName}
+          onChange={(e) => setDraftName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); void commitCreate() }
+            if (e.key === 'Escape') { e.preventDefault(); cancelCreate() }
+          }}
+          onBlur={() => void commitCreate()}
+        />
       )}
     </SidebarSection>
   )
