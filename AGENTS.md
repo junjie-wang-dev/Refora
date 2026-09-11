@@ -1,5 +1,16 @@
 # Refora — Agent Guide
 
+## Execution and communication
+- Complete requested work through implementation and required verification. Make routine, reversible decisions within scope without repeated approval.
+- Ask only when missing information materially affects correctness, scope, or an irreversible action. Continue independent authorized work while awaiting an answer.
+- Incorporate follow-up instructions without losing the original objective unless the user changes it.
+- Follow system and developer instructions first, then explicit user instructions over repository and skill guidance. Read applicable nested `AGENTS.md` files before editing their files.
+- If an instruction blocks progress, identify its file and exact rule, explain the conflict, and state what is needed to proceed.
+- Use subagents only when explicitly requested; give each a bounded task and review its result before integration.
+- Respond in the user's language. Keep updates concise; finish with the outcome, validation results, and remaining blockers.
+
+These defaults are informed by the [GPT-6 Astra prompting guidance](https://developers.openai.com/api/docs/guides/latest-model#prompting-best-practices), reviewed on 2026-09-11. Model selection belongs in Codex settings; this file defines repository behavior.
+
 ## Project overview
 - Refora is a local-first macOS Electron application for managing, reading, and discussing PDF literature.
 - The stack is Electron + electron-vite + React + TypeScript with a Python 3.12 FastAPI + SQLite sidecar.
@@ -29,19 +40,21 @@ macOS only.
 - Add or update focused tests for behavior changes. Prefer observable behavior over implementation-detail assertions.
 - Keep English and Chinese locale keys synchronized when user-facing copy changes.
 - Do not hand-edit generated output in `out/`, `dist/`, `coverage/`, or `node_modules/`.
+- Regenerate `src/shared/server-contract.ts` and `backend/refora_server/server/contract_snapshot.json` with `npm run generate:server-contract` after changing their backend contract source; do not edit these artifacts manually.
 - Keep `package-lock.json` in sync with dependency changes and use `npm ci` in automation.
 
 ## Verification gate
 After **any** code change, before declaring work done, run:
-```
+```sh
 npm run verify
 ```
-- Smoke a feature with `npm run dev`.
+- For feature changes, run `npm run dev` and exercise the affected flow; startup alone is not a feature smoke test.
 - Before claiming a build works: `npm run package`.
 - When dependencies, native modules, packaging, or release automation changes, run the package command even if application code is unchanged.
+- For documentation-only changes, check the diff with `git diff --check` and verify referenced paths and commands; application tests are not required unless the task explicitly requires them.
+- After required checks pass, repeat or broaden verification only for new changes, failures, or unresolved risks.
 
-A task's own Verification assertions must also pass. Do not mark a task done until both the gate and the task's assertions pass.
-
+A task's own Verification assertions must also pass. Do not mark a task done until all applicable checks and the task's assertions pass. Report checks that could not run as unverified, never as passed.
 
 ## Security baseline (never violate)
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` (preload), no `remote`.
@@ -55,12 +68,12 @@ A task's own Verification assertions must also pass. Do not mark a task done unt
 - Deleting a document moves its PDF to the system Trash (via `shell.trashItem`, best-effort) and removes the DB record. Never hard-delete a source PDF with `fs.unlink`; the file must remain recoverable from the Trash.
 - Never read a whole PDF into memory for hashing (stream it).
 - Never git commit unless explicitly asked.
-- If a test fails and you can't fix it, or a task is blocked, STOP and report — don't guess.
+- Investigate failing checks and fix issues caused by the task within scope. If a failure cannot be fixed or a blocker prevents completion, stop and report the failing command, evidence, and next required action; do not guess or hide the failure.
 
 ## Toolchain notes
-- Use the Node.js 24 line locally and in automation.
+- Use the Node.js 24 version pinned in `.nvmrc` and the npm version in `package.json` locally and in automation.
 - SQLite is owned by the Python sidecar and uses Python's standard `sqlite3` module.
-- `tsc -b` (typecheck) uses project references and **excludes test files**; tests are run by vitest only.
+- `tsc -b` (typecheck) uses project references and **excludes test files**. `npm run typecheck:tests` checks them separately and is included in `npm run verify`. Vitest runs unit, component, and server integration tests; Playwright runs E2E tests with `npm run test:e2e`.
 
 ## CI and release automation
 - `.github/workflows/ci.yml` runs the verification gate and an unsigned macOS package build for main-branch pushes and pull requests.

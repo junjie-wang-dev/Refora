@@ -1,3 +1,4 @@
+import { NativeSelect } from '../ui/NativeSelect'
 import { resolveAgentToolCall } from '../../../shared/agent-tools'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -448,7 +449,7 @@ export default function AgentApprovalCard({
                 </div>
                 <label className="flex items-center justify-between gap-3 text-xs font-medium">
                   <span>{t('workspace.chat.approvalDecision', 'Decision')}</span>
-                  <select
+                  <NativeSelect
                     aria-label={t('workspace.chat.approvalDecisionFor', { action: copy.name, defaultValue: 'Decision for {{action}}' })}
                     className="rounded-lg border border-border bg-background px-3 py-2 text-xs"
                     value={decisions[index] ?? 'approve'}
@@ -460,7 +461,7 @@ export default function AgentApprovalCard({
                         {t(decision === 'reject' ? 'workspace.chat.rejectAction' : 'workspace.chat.approveAction')}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
                 {copy.details.length > 0 && (
                   <dl className="grid gap-3 rounded-lg border border-border bg-panel p-3">
@@ -489,7 +490,7 @@ export default function AgentApprovalCard({
                   <div className="grid gap-3 rounded-lg border border-border p-3">
                     <label className="grid gap-1 text-xs font-medium">
                       <span>{t('workspace.chat.approvalMemorySection', 'Save under')}</span>
-                      <select
+                      <NativeSelect
                         className="h-9 rounded-lg border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                         value={memoryPath(draft.path)}
                         disabled={!canEdit}
@@ -500,7 +501,7 @@ export default function AgentApprovalCard({
                             {memorySectionLabel(path, t)}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </label>
                     <label className="grid gap-1 text-xs font-medium">
                       <span>{t('workspace.chat.approvalMemoryContent', 'Information to remember')}</span>

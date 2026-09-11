@@ -68,7 +68,7 @@ interface PdfReaderState {
   saveStatus: Record<string, PdfAnnotationSaveStatus>
   annotationHistory: Record<string, PdfAnnotationHistory>
   tool: PdfTool | null
-  color: string
+  toolColors: Record<PdfAnnotationKind, string>
   fontSize: number
   strokeWidth: number
   sidebarOpen: boolean
@@ -84,7 +84,7 @@ interface PdfReaderState {
   closeAll: () => void
   activate: (documentId: string) => void
   setTool: (tool: PdfTool | null) => void
-  setColor: (color: string) => void
+  setColor: (color: string, tool: PdfAnnotationKind) => void
   setFontSize: (fontSize: number) => void
   setStrokeWidth: (strokeWidth: number) => void
   toggleSidebar: () => void
@@ -422,7 +422,14 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
   saveStatus: {},
   annotationHistory: {},
   tool: null,
-  color: '#f2c94c',
+  toolColors: {
+    highlight: '#f2c94c',
+    underline: '#f2c94c',
+    strikeout: '#f2c94c',
+    note: '#f2c94c',
+    text: '#f2c94c',
+    ink: '#f2c94c'
+  },
   fontSize: 14,
   strokeWidth: 2,
   sidebarOpen: false,
@@ -577,7 +584,9 @@ export const usePdfReaderStore = create<PdfReaderState>((set, get) => ({
       selectedAnnotationIds: tool === null ? state.selectedAnnotationIds : []
     }))
   },
-  setColor: (color) => set({ color }),
+  setColor: (color, tool) => set((state) => ({
+    toolColors: { ...state.toolColors, [tool]: color }
+  })),
   setFontSize: (fontSize) => set({
     fontSize: Math.max(8, Math.min(72, fontSize))
   }),

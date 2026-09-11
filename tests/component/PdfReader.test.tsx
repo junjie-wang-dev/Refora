@@ -343,7 +343,7 @@ describe('PdfReader rendering visibility', () => {
       loadStatus: { paper: 'loaded' },
       saveStatus: { paper: 'saved' },
       tool: null,
-      color: '#f2c94c',
+      toolColors: { ...usePdfReaderStore.getInitialState().toolColors },
       fontSize: 14,
       strokeWidth: 2,
       sidebarOpen: false,
@@ -1264,7 +1264,16 @@ describe('PdfReader rendering visibility', () => {
     }
   )
 
-  it('offers copy, current-color highlight, and AI actions for selected text', async () => {
+  it.each(['highlight', 'underline', 'strikeout'] as const)(
+    'groups copy, markup, and an AI submenu and applies the %s color',
+    async (kind) => {
+    usePdfReaderStore.setState({
+      tool: 'ink',
+      toolColors: {
+        highlight: '#6fcf97', underline: '#56ccf2', strikeout: '#eb5757',
+        note: '#f2c94c', text: '#f2c94c', ink: '#bb6bd9'
+      }
+    })
     const writeText = vi.spyOn(api.clipboard, 'writeText').mockResolvedValue(undefined)
     const removeAllRanges = vi.fn()
     vi.spyOn(window, 'getSelection').mockReturnValue({
@@ -1304,9 +1313,17 @@ describe('PdfReader rendering visibility', () => {
 
     const items = vi.mocked(showContextMenu).mock.calls[0][0] as Array<{
       key: string
+      type?: string
       children?: Array<{ key: string; onClick?: () => void }>
       onClick?: () => void
     }>
+    expect(items.map((item) => item.key)).toEqual([
+      'copy', 'annotation-divider', 'highlight', 'underline', 'strikeout',
+      'ai-divider', 'ai'
+    ])
+    expect(items.filter((item) => item.type === 'divider').map((item) => item.key))
+      .toEqual(['annotation-divider', 'ai-divider'])
+    expect(items.find((item) => item.key === 'ai')).toMatchObject({ type: 'submenu' })
     items.find((item) => item.key === 'copy')?.onClick?.()
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('Selected research finding')
@@ -1318,11 +1335,11 @@ describe('PdfReader rendering visibility', () => {
     await waitFor(() => expect(useDocumentStore.getState().showToast)
       .toHaveBeenLastCalledWith('pdfReader.contextMenu.copyFailed'))
 
-    items.find((item) => item.key === 'highlight')?.onClick?.()
+    act(() => items.find((item) => item.key === kind)?.onClick?.())
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([
       expect.objectContaining({
-        kind: 'highlight',
-        color: '#f2c94c',
+        kind,
+        color: usePdfReaderStore.getState().toolColors[kind],
         text: 'Selected research finding',
         page: 1,
         rects: [{ x: 0.1, y: 40 / 300, width: 0.8, height: 20 / 300 }]
@@ -1343,7 +1360,12 @@ describe('PdfReader rendering visibility', () => {
     expect(removeAllRanges).toHaveBeenCalled()
   })
 
-  it('creates one current-color highlight per page for a cross-page selection', async () => {
+  it.each(
+    (['highlight', 'underline', 'strikeout'] as const).flatMap((kind) =>
+      (['context-menu', 'toolbar', 'keyboard'] as const).map((entry) => ({ kind, entry }))
+    )
+  )('applies $kind to an existing cross-page selection from $entry as one undo step', async ({ kind, entry }) => {
+    usePdfReaderStore.getState().setColor('#56ccf2', kind)
     pdfMocks.document.numPages = 2
     vi.spyOn(window, 'getSelection').mockReturnValue({
       isCollapsed: false,
@@ -1387,27 +1409,71 @@ describe('PdfReader rendering visibility', () => {
       toJSON: () => ({})
     })
 
-    fireEvent.contextMenu(pages[1])
-    const items = vi.mocked(showContextMenu).mock.calls[0][0] as Array<{
-      key: string
-      onClick?: () => void
-    }>
-    items.find((item) => item.key === 'highlight')?.onClick?.()
+    if (entry === 'context-menu') {
+      fireEvent.contextMenu(pages[1])
+      const items = vi.mocked(showContextMenu).mock.calls[0][0]
+      act(() => items.find((item) => item.key === kind)?.onClick?.())
+    } else if (entry === 'toolbar') {
+      const toolbar = view.container.querySelector<HTMLElement>('[data-pdf-annotation-toolbar]')!
+      const button = within(toolbar).getByRole('button', { name: `pdfReader.tools.${kind}` })
+      expect(fireEvent.pointerDown(button)).toBe(false)
+      fireEvent.click(button)
+      expect(usePdfReaderStore.getState().tool).toBe(kind)
+    } else {
+      fireEvent.keyDown(window, { key: { highlight: 'h', underline: 'u', strikeout: 's' }[kind] })
+      expect(usePdfReaderStore.getState().tool).toBe(kind)
+    }
 
     expect(usePdfReaderStore.getState().annotations.paper).toEqual([
       expect.objectContaining({
-        kind: 'highlight',
+        kind,
         page: 1,
-        color: '#f2c94c',
+        color: '#56ccf2',
         rects: [{ x: 0.1, y: 40 / 300, width: 0.8, height: 20 / 300 }]
       }),
       expect.objectContaining({
-        kind: 'highlight',
+        kind,
         page: 2,
-        color: '#f2c94c',
+        color: '#56ccf2',
         rects: [{ x: 0.15, y: 0.1, width: 0.7, height: 20 / 300 }]
       })
     ])
+    expect(window.getSelection()?.removeAllRanges).toHaveBeenCalled()
+    act(() => usePdfReaderStore.getState().undo('paper'))
+    expect(usePdfReaderStore.getState().annotations.paper).toEqual([])
+    act(() => usePdfReaderStore.getState().redo('paper'))
+    expect(usePdfReaderStore.getState().annotations.paper).toHaveLength(2)
+  })
+
+  it('remembers an independent color for every annotation tool', async () => {
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    const kinds = ['highlight', 'underline', 'strikeout', 'note', 'text', 'ink'] as const
+    const toolbar = view.container.querySelector<HTMLElement>('[data-pdf-annotation-toolbar]')!
+    for (const [index, kind] of kinds.entries()) {
+      fireEvent.click(within(toolbar).getByRole('button', { name: `pdfReader.tools.${kind}` }))
+      fireEvent.click(screen.getAllByRole('button', { name: 'pdfReader.annotationColor' })[index % 5])
+    }
+    for (const [index, kind] of kinds.entries()) {
+      fireEvent.click(within(toolbar).getByRole('button', { name: `pdfReader.tools.${kind}` }))
+      expect(screen.getAllByRole('button', { name: 'pdfReader.annotationColor' })[index % 5])
+        .toHaveClass('border-foreground')
+    }
+    act(() => {
+      const store = usePdfReaderStore.getState()
+      const annotation = store.addAnnotation('paper', {
+        kind: 'text', page: 1, text: 'Text', comment: '', color: '#f2c94c',
+        point: { x: 0.2, y: 0.3 }
+      })!
+      store.setTool(null)
+      store.selectAnnotation(annotation.id)
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'pdfReader.annotationColor' })[1])
+    expect(usePdfReaderStore.getState().toolColors).toEqual({
+      highlight: '#f2c94c', underline: '#6fcf97', strikeout: '#56ccf2',
+      note: '#bb6bd9', text: '#6fcf97', ink: '#f2c94c'
+    })
+    expect(usePdfReaderStore.getState().annotations.paper[0].color).toBe('#6fcf97')
   })
 
   it('undoes and redoes annotation creation and edits using the toolbar and keyboard', async () => {

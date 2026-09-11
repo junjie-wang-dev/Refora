@@ -59,6 +59,7 @@ import {
   type PdfTextPointer,
   type PdfTextPosition
 } from '../utils/pdfTextSelection'
+import { applyPdfTextMarkup, isPdfTextMarkupTool } from '../utils/pdfTextMarkup'
 import type { PdfSearchMatch } from '../hooks/usePdfSearch'
 
 interface PdfRuntime {
@@ -679,28 +680,12 @@ export default function PdfPage({
   }, [goToDestination, onNavigateToPage, page, pageNumber, pdf, viewport])
 
   const addTextAnnotation = useCallback(() => {
-    if (
-      tool !== 'highlight' &&
-      tool !== 'underline' &&
-      tool !== 'strikeout'
-    ) return
+    if (!isPdfTextMarkupTool(tool)) return
     const root = scrollRootRef.current
     if (!root) return
     const selection = textSelectionInReader(root)
     if (!selection) return
-    usePdfReaderStore.getState().beginHistoryGroup(documentId)
-    selection.pages.forEach((selectedPage) => {
-      onAddAnnotation({
-        kind: tool,
-        page: selectedPage.page,
-        color,
-        text: selectedPage.text,
-        comment: '',
-        rects: selectedPage.rects
-      })
-    })
-    usePdfReaderStore.getState().endHistoryGroup(documentId)
-    window.getSelection()?.removeAllRanges()
+    applyPdfTextMarkup(documentId, selection, tool, color, onAddAnnotation)
   }, [color, documentId, onAddAnnotation, scrollRootRef, tool])
 
   const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
@@ -731,26 +716,20 @@ export default function PdfPage({
           })
         }
       },
-      {
-        key: 'highlight',
-        label: t('pdfReader.contextMenu.highlight'),
-        icon: 'highlight',
-        onClick: () => {
-          usePdfReaderStore.getState().beginHistoryGroup(documentId)
-          selection.pages.forEach((selectedPage) => {
-            onAddAnnotation({
-              kind: 'highlight',
-              page: selectedPage.page,
-              color,
-              text: selectedPage.text,
-              comment: '',
-              rects: selectedPage.rects
-            })
-          })
-          usePdfReaderStore.getState().endHistoryGroup(documentId)
-          clearSelection()
-        }
-      },
+      { type: 'divider', key: 'annotation-divider' },
+      ...(['highlight', 'underline', 'strikeout'] as const).map((kind): ContextMenuItem => ({
+        key: kind,
+        label: t(`pdfReader.tools.${kind}`),
+        icon: kind,
+        disabled: usePdfReaderStore.getState().loadStatus[documentId] !== 'loaded',
+        onClick: () => applyPdfTextMarkup(
+          documentId,
+          selection,
+          kind,
+          usePdfReaderStore.getState().toolColors[kind],
+          onAddAnnotation
+        )
+      })),
       { type: 'divider', key: 'ai-divider' },
       {
         key: 'ai',
@@ -762,19 +741,13 @@ export default function PdfPage({
             key: 'ai-summary',
             label: t('pdfReader.contextMenu.summary'),
             icon: 'summarize',
-            onClick: () => requestAiDraft(
-              'prefill',
-              t('pdfReader.contextMenu.summaryPrompt')
-            )
+            onClick: () => requestAiDraft('prefill', t('pdfReader.contextMenu.summaryPrompt'))
           },
           {
             key: 'ai-explain',
             label: t('pdfReader.contextMenu.explain'),
             icon: 'explain',
-            onClick: () => requestAiDraft(
-              'prefill',
-              t('pdfReader.contextMenu.explainPrompt')
-            )
+            onClick: () => requestAiDraft('prefill', t('pdfReader.contextMenu.explainPrompt'))
           },
           {
             key: 'ai-context',
@@ -794,7 +767,7 @@ export default function PdfPage({
       }
     ]
     showContextMenu(items)
-  }, [color, documentId, documentTitle, onAddAnnotation, scrollRootRef, t])
+  }, [documentId, documentTitle, onAddAnnotation, scrollRootRef, t])
 
   const flushInkPreview = () => {
     inkFrameRef.current = null
@@ -1440,7 +1413,7 @@ export default function PdfPage({
           onUpdate={(patch) => {
             const point = annotation.point ?? { x: 0, y: 0 }
             const store = usePdfReaderStore.getState()
-            if (patch.color !== undefined) store.setColor(patch.color)
+            if (patch.color !== undefined) store.setColor(patch.color, 'text')
             if (patch.fontSize !== undefined) store.setFontSize(patch.fontSize)
             updateAnnotation(documentId, annotation.id, {
               ...patch,

@@ -56,6 +56,8 @@ import PdfNavigationSidebar from './PdfNavigationSidebar'
 import { DEFAULT_PDF_VIEW, usePdfViewStore, type PdfReadingPosition, type PdfReadingView } from '../store/pdfViewStore'
 import { capturePdfPosition, resolvePdfDestination } from '../utils/pdfNavigation'
 import { pdfPointForRotation, pdfPointFromRotation, pdfRectForRotation } from '../utils/pdfAnnotationSelection'
+import { textSelectionInReader } from '../utils/pdfTextSelection'
+import { applyPdfTextMarkup, isPdfTextMarkupTool } from '../utils/pdfTextMarkup'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 const COLORS = ['#f2c94c', '#6fcf97', '#56ccf2', '#bb6bd9', '#eb5757']
@@ -227,7 +229,8 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
   const annotationMap = usePdfReaderStore((state) => state.annotations)
   const annotationLoadStatus = usePdfReaderStore((state) => state.loadStatus)
   const tool = usePdfReaderStore((state) => state.tool)
-  const color = usePdfReaderStore((state) => state.color)
+  const toolColors = usePdfReaderStore((state) => state.toolColors)
+  const color = toolColors[tool && tool !== 'eraser' ? tool : 'highlight']
   const fontSize = usePdfReaderStore((state) => state.fontSize)
   const strokeWidth = usePdfReaderStore((state) => state.strokeWidth)
   const sidebarOpen = usePdfReaderStore((state) => state.sidebarOpen)
@@ -1032,7 +1035,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
 
   const changeColor = (nextColor: string) => {
     if (!annotationsLoaded) return
-    usePdfReaderStore.getState().setColor(nextColor)
+    const store = usePdfReaderStore.getState()
+    const colorTools = selectedAnnotations.length > 0
+      ? new Set(selectedAnnotations.map((annotation) => annotation.kind))
+      : new Set(tool && tool !== 'eraser' ? [tool] : [])
+    colorTools.forEach((kind) => store.setColor(nextColor, kind))
     if (!activeDocumentId) return
     usePdfReaderStore.getState().updateAnnotations(
       activeDocumentId,
@@ -1040,6 +1047,19 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       { color: nextColor }
     )
   }
+
+  const activateTool = useCallback((nextTool: PdfTool | null) => {
+    const store = usePdfReaderStore.getState()
+    const documentId = store.activeDocumentId
+    if (!documentId || store.loadStatus[documentId] !== 'loaded') return
+    const selection = isPdfTextMarkupTool(nextTool) && scrollRef.current
+      ? textSelectionInReader(scrollRef.current)
+      : null
+    store.setTool(selection ? nextTool : store.tool === nextTool ? null : nextTool)
+    if (selection && isPdfTextMarkupTool(nextTool)) {
+      applyPdfTextMarkup(documentId, selection, nextTool, store.toolColors[nextTool], addAnnotation)
+    }
+  }, [addAnnotation])
 
   const removeSelectedAnnotations = () => {
     if (
@@ -1123,12 +1143,11 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
       if (nextTool === undefined) return
       if (!annotationShortcutsEnabled) return
       event.preventDefault()
-      const currentTool = usePdfReaderStore.getState().tool
-      usePdfReaderStore.getState().setTool(currentTool === nextTool ? null : nextTool)
+      activateTool(nextTool)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [active])
+  }, [active, activateTool])
 
   useEffect(() => {
     if (!active) return
@@ -1274,6 +1293,9 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
     <>
       <div
         data-pdf-annotation-toolbar
+        onPointerDown={(event) => {
+          if (window.getSelection()?.toString()) event.preventDefault()
+        }}
         className="flex shrink-0 items-center gap-0.5"
         aria-label={t('pdfReader.annotationTools')}
       >
@@ -1286,9 +1308,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
               shortcut={TOOL_SHORTCUTS[item]}
               active={effectiveTool === item}
               disabled={!annotationsLoaded}
-              onClick={() => usePdfReaderStore.getState().setTool(
-                effectiveTool === item ? null : item
-              )}
+              onClick={() => activateTool(item)}
             >
               <Icon className="h-4 w-4" />
             </ReaderButton>
@@ -1718,7 +1738,7 @@ export default function PdfReader({ onBack, embedded = false, active = true }: P
                       documentTitle={activeDocument.title || activeDocument.fileName}
                       annotations={annotationsByPage.get(pageNumber) ?? []}
                       tool={effectiveTool}
-                      color={displayedColor}
+                      color={color}
                       fontSize={fontSize}
                       strokeWidth={strokeWidth}
                       searchMatches={searchMatchesByPage.get(pageNumber) ?? EMPTY_SEARCH_MATCHES}

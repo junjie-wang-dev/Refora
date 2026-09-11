@@ -2,25 +2,13 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { readFile, writeFile } from 'node:fs/promises'
-import { ArrowSquareOut, Clipboard, Copy, Download, FilePlus, FileText, FolderOpen, NotePencil, PencilSimple, Sparkle, Sticker, Trash } from '@phosphor-icons/react/ssr'
+import * as phosphorIcons from '@phosphor-icons/react/ssr'
+import { contextMenuIconSources } from '../src/shared/contextMenuIcons.ts'
 
-const icons = {
-  addFile: FilePlus,
-  paste: Clipboard,
-  sticky: Sticker,
-  note: NotePencil,
-  copy: Copy,
-  edit: PencilSimple,
-  export: Download,
-  delete: Trash,
-  remove: Trash,
-  ai: Sparkle,
-  file: FileText,
-  open: ArrowSquareOut,
-  reveal: FolderOpen
-}
 const assets = {}
-for (const [name, Icon] of Object.entries(icons)) {
+for (const [name, source] of Object.entries(contextMenuIconSources)) {
+  const Icon = phosphorIcons[source]
+  if (!Icon) throw new Error(`Missing Phosphor icon: ${source}`)
   assets[name] = []
   for (const scaleFactor of [1, 2]) {
     const size = 16 * scaleFactor

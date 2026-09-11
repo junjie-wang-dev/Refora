@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText } from '@phosphor-icons/react'
-import { Select } from '@lobehub/ui'
+import { Select } from './ui/LobeControls'
 import { useTranslation } from 'react-i18next'
 import { api } from '../ipc'
 import { useOcrReaderStore } from '../store/ocrReaderStore'

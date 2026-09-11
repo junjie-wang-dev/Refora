@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Button, Modal } from '@lobehub/ui'
+import { Button, Modal } from '../ui/LobeControls'
 import { showContextMenu } from '../../utils/contextMenu'
 import type { ContextMenuItem } from '../../utils/contextMenu'
 import { Download, PencilSimple, Trash } from '@phosphor-icons/react'

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Trash } from '@phosphor-icons/react'
-import { Modal } from '@lobehub/ui'
+import { Modal } from './ui/LobeControls'
 import { Button as UiButton, Input as UiInput } from './ui'
 import { useConfirmStore } from '../store/confirmStore'
 

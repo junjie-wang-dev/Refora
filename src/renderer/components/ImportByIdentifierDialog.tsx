@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Modal } from '@lobehub/ui'
+import { Modal } from './ui/LobeControls'
 import { Button as UiButton, Input } from './ui'
 import { useDocumentStore } from '../store/documentStore'
 

@@ -5,7 +5,7 @@ import { Button } from './ui'
 import { Textarea } from './ui'
 import { PanelHeader } from './ui'
 import { EmptyState } from './ui'
-import { Select } from '@lobehub/ui'
+import { Select } from './ui/LobeControls'
 import { showContextMenu } from '../utils/contextMenu'
 import type { ContextMenuItem } from '../utils/contextMenu'
 

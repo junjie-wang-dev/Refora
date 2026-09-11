@@ -1,3 +1,4 @@
+import { NativeSelect } from './ui/NativeSelect'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -311,7 +312,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
               />
               {t('settings.agentProfiles.nativeSearch')}
             </label>
-            <select
+            <NativeSelect
               className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground"
               value={profile.webSearchPolicy}
               onChange={(event) => void updateSearch(profile, {
@@ -325,7 +326,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                     {t(`settings.agentProfiles.search.${policy}`)}
                   </option>
                 ))}
-            </select>
+            </NativeSelect>
           </div>
         ))}
         {apiProfiles.length === 0 && (
@@ -531,7 +532,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
             </label>
             <label className="flex flex-col gap-1.5 text-xs text-foreground">
               {t('settings.agentProfiles.runtime')}
-              <select
+              <NativeSelect
                 className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground"
                 value={form.cliRuntimeId}
                 disabled={form.id !== null}
@@ -545,7 +546,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                 {availableRuntimes.map((item) => (
                   <option key={item.runtimeId} value={item.runtimeId}>{item.label}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             <label className="flex flex-col gap-1.5 text-xs text-foreground">
               {t('settings.agentProfiles.executable')}
@@ -562,7 +563,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
             </label>
             <label className="flex flex-col gap-1.5 text-xs text-foreground">
               {t('settings.agentProfiles.model')}
-              <select
+              <NativeSelect
                 className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground"
                 value={form.model}
                 onChange={(event) => {
@@ -577,7 +578,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                 {modelOptions.map((model) => (
                   <option key={model.id} value={model.id}>{model.label}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="flex flex-col gap-1.5 text-xs text-foreground">
@@ -587,7 +588,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                     {t('settings.agentProfiles.reasoningManaged')}
                   </span>
                 ) : (
-                  <select
+                  <NativeSelect
                     className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground"
                     value={reasoningEfforts.includes(form.reasoningEffort)
                       ? form.reasoningEffort
@@ -602,12 +603,12 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                         {t(`settings.aiProviders.effort.${effort}`, effort)}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 )}
               </label>
               <label className="flex flex-col gap-1.5 text-xs text-foreground">
                 {t('settings.agentProfiles.searchPolicy')}
-                <select
+                <NativeSelect
                   className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground"
                   value={form.webSearchPolicy}
                   onChange={(event) => setForm({
@@ -620,7 +621,7 @@ export function AgentProfilesSection({ mode = 'cli' }: AgentProfilesSectionProps
                     .map((policy) => (
                       <option key={policy} value={policy}>{t(`settings.agentProfiles.search.${policy}`)}</option>
                     ))}
-                </select>
+                </NativeSelect>
               </label>
             </div>
             <label className="flex items-center gap-2 text-xs text-muted">

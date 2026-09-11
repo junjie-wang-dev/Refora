@@ -4,7 +4,8 @@ import {
   PaperPlaneTilt,
   Queue,
   Square,
-  Paperclip
+  Paperclip,
+  X
 } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { Button as UiButton } from '../ui'
@@ -168,7 +169,7 @@ export default function ChatInput({
                       )
                     }
                   >
-                    ×
+                    <X aria-hidden className="h-3 w-3" />
                   </button>
                 </span>
               )

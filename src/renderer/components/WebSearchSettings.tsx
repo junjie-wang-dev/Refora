@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Select } from '@lobehub/ui'
+import { Button, Select } from './ui/LobeControls'
 import { useTranslation } from 'react-i18next'
 import { api } from '../ipc'
 import { errorMessage } from '../../shared/ipc-types'

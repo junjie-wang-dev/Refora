@@ -1,3 +1,4 @@
+import { NativeSelect } from './ui/NativeSelect'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -665,7 +666,7 @@ export function AiProvidersSection() {
                     <span className="text-xs font-medium text-foreground">
                       {t('settings.aiProviders.providerApi')}
                     </span>
-                    <select
+                    <NativeSelect
                       className="h-8 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                       value={form.apiProtocol}
                       onChange={(event) =>
@@ -677,7 +678,7 @@ export function AiProvidersSection() {
                           {t(option.labelKey)}
                         </option>
                       ))}
-                    </select>
+                    </NativeSelect>
                   </label>
                   <label className="col-span-2 flex flex-col gap-1.5">
                     <span className="text-xs font-medium text-foreground">
@@ -858,7 +859,7 @@ export function AiProvidersSection() {
                       <span className="text-label font-medium text-muted">
                         {t('settings.aiProviders.reasoningControl')}
                       </span>
-                      <select
+                      <NativeSelect
                         className="h-8 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                         value={form.reasoningControl}
                         onChange={(event) =>
@@ -873,7 +874,7 @@ export function AiProvidersSection() {
                             {t(option.labelKey)}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </label>
                   )}
 
@@ -882,7 +883,7 @@ export function AiProvidersSection() {
                       <span className="text-label font-medium text-muted">
                         {t('settings.aiProviders.reasoningEffort')}
                       </span>
-                      <select
+                      <NativeSelect
                         className="h-8 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                         value={reasoningEfforts.includes(form.reasoningEffort) ? form.reasoningEffort : reasoningEfforts[0]}
                         onChange={(event) =>
@@ -894,7 +895,7 @@ export function AiProvidersSection() {
                             {t(`settings.aiProviders.effort.${effort}`, effort)}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </label>
                   )}
 

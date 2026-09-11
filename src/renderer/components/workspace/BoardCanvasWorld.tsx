@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react'
-import { GridFour, Palette, Stack } from '@phosphor-icons/react'
+import { GridFour, Palette, Stack, X } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
 import type {
   WorkspaceConnection,
@@ -236,7 +236,7 @@ export default function BoardCanvasWorld({
             title={t('workspace.connectionDelete')}
             onClick={() => onDeleteConnection(connection.id)}
           >
-            ×
+            <X aria-hidden className="h-3.5 w-3.5" />
           </button>
         )
       ))}

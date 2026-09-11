@@ -1,10 +1,10 @@
-import { BookOpen } from '@phosphor-icons/react'
+import { BookOpen, CircleNotch } from '@phosphor-icons/react'
 
 export default function Splash() {
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-center bg-background">
       <BookOpen className="h-16 w-16 text-accent" aria-hidden="true" />
-      <div className="mt-6 h-6 w-6 animate-spin rounded-full border-2 border-border border-t-accent" />
+      <CircleNotch aria-hidden className="mt-6 h-6 w-6 animate-spin text-accent" />
     </div>
   )
 }

@@ -51,7 +51,7 @@ describe('PDF reader state', () => {
       loadStatus: {},
       saveStatus: {},
       tool: null,
-      color: '#f2c94c',
+      toolColors: { ...usePdfReaderStore.getInitialState().toolColors },
       fontSize: 14,
       strokeWidth: 2,
       sidebarOpen: false,
@@ -614,13 +614,13 @@ describe('PDF reader state', () => {
       fontSize: 14
     })
 
-    usePdfReaderStore.getState().setColor('#eb5757')
+    usePdfReaderStore.getState().setColor('#eb5757', 'text')
     usePdfReaderStore.getState().updateAnnotation('paper', annotation!.id, {
       color: '#eb5757'
     })
 
     expect(usePdfReaderStore.getState()).toMatchObject({
-      color: '#eb5757',
+      toolColors: { text: '#eb5757' },
       annotations: {
         paper: [expect.objectContaining({
           id: annotation!.id,

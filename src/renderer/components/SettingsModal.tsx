@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Modal, Button, Select } from '@lobehub/ui'
+import { Modal, Button, Select } from './ui/LobeControls'
 import { Brain, ChartDonut, FolderOpen, Globe, HardDrives, Palette, Sparkle, UserCircle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
 import { useSidebarVisibility } from '../store/sidebarVisibility'
