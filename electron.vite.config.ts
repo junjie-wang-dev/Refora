@@ -52,6 +52,9 @@ export default defineConfig(({ mode }) => {
     },
     renderer: {
       root: 'src/renderer',
+      optimizeDeps: {
+        include: ['pdfjs-dist', 'highlight.js/lib/core', 'highlight.js/lib/languages/latex']
+      },
       server: {
         fs: {
           allow: [resolve('.'), realpathSync(resolve('node_modules'))]

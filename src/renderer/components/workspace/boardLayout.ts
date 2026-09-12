@@ -39,6 +39,22 @@ export interface GridPlacement {
   y: number
 }
 
+export function availableCardPlacement(
+  bounds: Array<{ x: number; y: number; width: number; height: number }>,
+  origin: GridPlacement,
+  width = 300,
+  height = 200
+): GridPlacement {
+  const position = { ...origin }
+  for (const item of [...bounds].sort((a, b) => a.y - b.y)) {
+    if (position.x < item.x + item.width + 24 && position.x + width + 24 > item.x
+      && position.y < item.y + item.height + 24 && position.y + height + 24 > item.y) {
+      position.y = item.y + item.height + 24
+    }
+  }
+  return position
+}
+
 export function compactGridPlacements(
   items: WorkspaceItem[],
   sizeFor: (item: WorkspaceItem) => CardSize,

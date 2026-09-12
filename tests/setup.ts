@@ -46,8 +46,6 @@ export const createMockReforaApi = (): ReforaApi => ({
     setStarred: noop,
     delete: noop,
     bulkDelete: noop,
-    listDeleted: async () => [],
-    restoreDeleted: async () => ({ documentIds: [], skippedRelations: 0 }),
     merge: async () => mockResult<Awaited<ReturnType<ReforaApi['documents']['merge']>>>(),
     bulkCategorize: noop,
     bulkRefreshMetadata: noop,
@@ -246,6 +244,7 @@ export const createMockReforaApi = (): ReforaApi => ({
     copyWorkspaceAsset: noop,
   },
 
+  latex: { execute: vi.fn().mockResolvedValue({ projects: [] }) },
   workspaces: {
     list: async () => [],
     create: async (name: string) => ({ id: 'ws', name, createdAt: 0, updatedAt: 0 }),

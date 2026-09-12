@@ -1,3 +1,4 @@
+import type { LatexRequest, LatexResponse } from '../../shared/latex-types'
 import type { ServerLifecycle } from './lifecycle'
 import type { NativeRpc } from './nativeRpc'
 import type { IpcError, Result } from '../../shared/ipc-types'
@@ -29,8 +30,6 @@ import type {
   ChatThread,
   Document,
   DocumentCounts,
-  DeletedDocumentBatch,
-  RestoreDeletedResult,
   DocumentPatch,
   GlobalSearchResult,
   ListModelsRequest,
@@ -326,6 +325,7 @@ export interface ProviderConfig {
 }
 
 export interface ServerHttp {
+  workspaceLatex(workspaceId: string, request: LatexRequest): Promise<LatexResponse>
   systemReady(): Promise<{
     status: string
     protocolVersion: number
@@ -343,8 +343,6 @@ export interface ServerHttp {
   documentsSetStarred(documentId: string, starred: boolean): Promise<Document>
   documentsDelete(documentId: string): Promise<{ ack: boolean }>
   documentsBulkDelete(ids: string[]): Promise<{ ack: boolean }>
-  documentsListDeleted(): Promise<DeletedDocumentBatch[]>
-  documentsRestoreDeleted(id: string): Promise<RestoreDeletedResult>
   documentsBulkCategorize(payload: BulkCategorizePayload): Promise<{ ack: boolean }>
   documentsBulkRefreshMetadata(ids: string[]): Promise<{ ack: boolean }>
   documentsRefreshMetadata(documentId: string): Promise<Document>
@@ -645,8 +643,6 @@ export function createServerClient(
     documentsSetStarred: (id, starred) => post<Document>(`/documents/${pathSegment(id)}/starred`, { starred }),
     documentsDelete: (id) => request<{ ack: boolean }>('DELETE', `/documents/${pathSegment(id)}`, { timeoutMs: null }),
     documentsBulkDelete: (ids) => post<{ ack: boolean }>('/documents/bulk-delete', { ids }, null),
-    documentsListDeleted: () => get<DeletedDocumentBatch[]>('/deleted-documents'),
-    documentsRestoreDeleted: (id) => post<RestoreDeletedResult>(`/deleted-documents/${pathSegment(id)}/restore`, undefined, null),
     documentsBulkCategorize: (payload) => post<{ ack: boolean }>('/documents/bulk-categorize', payload),
     documentsBulkRefreshMetadata: (ids) => post<{ ack: boolean }>('/documents/bulk-refresh-metadata', { ids }),
     documentsRefreshMetadata: (id) => post<Document>(`/documents/${pathSegment(id)}/refresh-metadata`),
@@ -736,6 +732,7 @@ export function createServerClient(
     workspacesCreate: (payload) => post<Workspace>('/workspaces', payload),
     workspacesUpdate: (id, payload) => patch<Workspace>(`/workspaces/${pathSegment(id)}`, payload),
     workspacesDelete: (id) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}`),
+    workspaceLatex: (id, request) => post<LatexResponse>(`/workspaces/${pathSegment(id)}/latex`, request, request.action === 'import' || request.action === 'configure' ? null : 150_000),
     workspacesOpenSandbox: (id) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/open-sandbox`),
 
     workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items`),
@@ -748,7 +745,7 @@ export function createServerClient(
 
     workspaceAssetsList: (id) => get<WorkspaceAsset[]>(`/workspaces/${pathSegment(id)}/assets`),
     workspaceAssetGet: (id) => get<WorkspaceAsset>(`/workspace-assets/${pathSegment(id)}`),
-    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${pathSegment(id)}/assets/files`, payload),
+    workspaceAssetsAddFiles: (id, payload) => post<WorkspaceAssetImportResult>(`/workspaces/${pathSegment(id)}/assets/files`, payload, payload.paths.length ? undefined : null),
     workspaceFilesAdd: (id, payload) => post<WorkspaceFileImportResult>(`/workspaces/${pathSegment(id)}/files`, payload),
     workspaceAssetPreview: (id, assetId) => get<WorkspaceAssetTextPreview>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}/preview`),
     workspaceAssetOpen: (id, assetId) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/assets/${pathSegment(assetId)}/open`),

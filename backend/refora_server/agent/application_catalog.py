@@ -48,6 +48,7 @@ APPLICATION_ACTIONS = {
         'reports.update': 'update_report',
         'reports.delete': 'delete_workspace_report',
         'files.import': 'import_workspace_files',
+        'latex': 'edit_latex_project',
         'assets.update': 'update_workspace_asset',
         'assets.delete': 'delete_workspace_asset',
     },

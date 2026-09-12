@@ -100,6 +100,9 @@ def list_workspace_context(executor: Any, args: dict[str, Any]) -> Any:
                     "unavailable": asset is None,
                 }
             )
+        elif item["kind"] == "latex" and item.get("latexId"):
+            project = call(repo(executor.repos, "workspaceItems"), "getLatexProject", item["latexId"])
+            context_item.update({"latexId": item["latexId"], "title": project["title"] if project else item["latexId"], "rootFile": project["rootFile"] if project else None, "unavailable": project is None})
         else:
             context_item["unavailable"] = True
         context_items.append(context_item)
@@ -179,6 +182,10 @@ def read_workspace_item(executor: Any, args: dict[str, Any]) -> Any:
             else None
         )
         data = {**asset, "preview": preview}
+    elif kind == "latex" and item.get("latexId"):
+        project = call(executor.deps, "workspace_operation", "latexOperation", ws, {"action": "project", "projectId": item["latexId"]})["project"]
+        file = call(executor.deps, "workspace_operation", "latexOperation", ws, {"action": "read", "projectId": project["id"], "path": project["rootFile"]})["file"]
+        data = {**project, "file": file}
     else:
         raise ValueError("Workspace item type is unsupported")
     return {"itemId": item["id"], "kind": kind, "data": data}
@@ -352,8 +359,8 @@ class WorkspaceTools(ToolGroup):
         "update_report": update_report,
     }
     descriptions = {
-        "list_workspace_context": "List the target workspace cards and connections. Returns itemIds for documents, reports, notes, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
-        "read_workspace_item": "Read one target workspace card by itemId from list_workspace_context. Returns full report or note content, document metadata and cached summary, or asset metadata and text preview.",
+        "list_workspace_context": "List the target workspace cards and connections. Returns itemIds for documents, reports, notes, LaTeX projects, and assets plus existing directed connections. Use the returned itemIds with create_workspace_connections.",
+        "read_workspace_item": "Read one target workspace card by itemId from list_workspace_context. Returns full report or note content, document metadata and cached summary, LaTeX project files and main source, or asset metadata and text preview.",
         "add_docs_to_workspace": "Add documents from the library to the target workspace board. Pass docIds as a native JSON array. Returns JSON with added, alreadyInWorkspace, and missing arrays.",
         "create_workspace_connections": "Create directed connections between cards in the target workspace. Call list_workspace_context first and use only itemIds returned by it. Invalid, duplicate, and self connections are reported without creating them.",
         "generate_report": "Create and pin a structured report to the workspace board. Use this when the user asks for a report, survey, or comparison. sourceDocIds accepts a native JSON array of docIds.",

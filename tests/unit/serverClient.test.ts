@@ -289,7 +289,7 @@ describe('serverClient', () => {
       expect(captured.signal?.aborted).toBe(true)
     })
 
-    it.each(['import', 'delete', 'bulkDelete', 'restore'])('does not time out PDF file operations: %s', async (operation) => {
+    it.each(['import', 'delete', 'bulkDelete'])('does not time out PDF file operations: %s', async (operation) => {
       vi.useFakeTimers()
       const captured: { signal: AbortSignal | null } = { signal: null }
       let resolveFetch: (response: Response) => void = () => undefined
@@ -303,8 +303,7 @@ describe('serverClient', () => {
       })
       const request = operation === 'delete' ? client.http.documentsDelete('doc-1')
         : operation === 'bulkDelete' ? client.http.documentsBulkDelete(['doc-1'])
-          : operation === 'restore' ? client.http.documentsRestoreDeleted('entry-1')
-            : client.http.importFiles({ paths: ['/tmp/paper.pdf'] })
+          : client.http.importFiles({ paths: ['/tmp/paper.pdf'] })
       await vi.advanceTimersByTimeAsync(25)
 
       expect(captured.signal?.aborted).toBe(false)
@@ -1004,8 +1003,6 @@ describe('serverClient', () => {
       ['documentsSetStarred', ['d1', true]],
       ['documentsDelete', ['d1']],
       ['documentsBulkDelete', [['d1', 'd2']]],
-      ['documentsListDeleted', []],
-      ['documentsRestoreDeleted', ['entry-1']],
       ['documentsMerge', ['d1', ['d2']]],
       ['documentsBulkCategorize', [{ ids: ['d1'], categoryId: 'c1' }]],
       ['documentsBulkRefreshMetadata', [['d1']]],
@@ -1087,6 +1084,7 @@ describe('serverClient', () => {
       ['workspacesUpdate', ['ws1', { name: 'ws2' }]],
       ['workspacesDelete', ['ws1']],
       ['workspacesOpenSandbox', ['ws1']],
+      ['workspaceLatex', ['ws1', { action: 'list' }]],
       ['workspaceItemsList', ['ws1']],
       ['workspaceItemGet', ['i1']],
       ['workspaceItemsCreateBatch', ['ws1', { kind: 'note', ids: ['n1'] }]],
@@ -1474,5 +1472,24 @@ describe('serverClient', () => {
       client.ws.disconnect()
       expect(captured.signal?.aborted).toBe(true)
     })
+  })
+})
+
+describe('workspace picker requests', () => {
+  it.each(['import', 'configure', 'assets'] as const)('waits for the user during %s', async (operation) => {
+    vi.useFakeTimers()
+    let complete: ((response: Response) => void) | undefined
+    let signal: AbortSignal | null | undefined
+    const fetchImpl = vi.fn((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal
+      return new Promise<Response>((resolve) => { complete = resolve })
+    }) as unknown as typeof fetch
+    const client = createServerClient(makeLifecycle(), makeNativeRpc(), { fetchImpl, requestTimeoutMs: 20 })
+    const pending = operation === 'assets' ? client.http.workspaceAssetsAddFiles('ws', { paths: [] }) : client.http.workspaceLatex('ws', { action: operation })
+    await vi.advanceTimersByTimeAsync(200_000)
+    expect(signal?.aborted).toBe(false)
+    complete!(makeResponse({}))
+    await expect(pending).resolves.toEqual({})
+    vi.useRealTimers()
   })
 })

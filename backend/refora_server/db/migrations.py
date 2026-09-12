@@ -319,6 +319,12 @@ def migration_schema_present(db: SqliteLike, version: int) -> bool:
             "documents",
             "CASCADE",
         )
+    if version == 47:
+        return (
+            _has_columns(db, "workspace_items", ["latexId"])
+            and _has_objects(db, [("table", "workspace_latex_projects"), ("index", "uq_workspace_items_latex")])
+            and _has_foreign_key(db, "workspace_items", "latexId", "workspace_latex_projects", "CASCADE")
+        )
     if version == 46:
         return _has_objects(db, [("table", "document_file_aliases")])
     if version == 45:

@@ -13,7 +13,6 @@ from refora_server.library.authors import normalizeAuthors
 from refora_server.library.paths import resolveFromLibrary, toLibraryRelative
 from refora_server.repositories.errors import RepoError
 from refora_server.repositories.document_merge import merge_documents
-from refora_server.repositories.document_recycle import create_document_recycle_repository
 from refora_server.services.export import _buildCitekey
 from refora_server.library.bibliographic_identity import find_identity_match
 
@@ -376,20 +375,8 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             return None
         return _map_document(row, lib())
 
-    def reservedCitekeys(exclude_id: str | None = None) -> set[str]:
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deleted_documents'").fetchone():
-            return set()
-        keys: set[str] = set()
-        for row in db.execute("SELECT payloadJson FROM deleted_documents"):
-            payload = json.loads(row[0])
-            for document in payload.get("records", {}).get("documents", []):
-                if document.get("id") != exclude_id and isinstance(document.get("citekey"), str):
-                    keys.add(document["citekey"])
-        return keys
-
     def allocateCitekey(doc: dict[str, Any]) -> str:
         used = {row[0] for row in db.execute("SELECT citekey FROM documents WHERE citekey IS NOT NULL")}
-        used.update(reservedCitekeys(doc.get("id")))
         preferred = doc.get("citekey")
         if isinstance(preferred, str) and re.fullmatch(r"[A-Za-z0-9_:.+/-]+", preferred):
             key = preferred
@@ -482,7 +469,7 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
             key = patch["citekey"].strip()
             if not re.fullmatch(r"[A-Za-z0-9_:.+/-]+", key):
                 raise RepoError("invalid_value", "Citation key must contain only letters, numbers, _, :, ., +, / or -", "citekey")
-            if key in reservedCitekeys(id) or db.execute("SELECT 1 FROM documents WHERE citekey = ? AND id <> ?", [key, id]).fetchone():
+            if db.execute("SELECT 1 FROM documents WHERE citekey = ? AND id <> ?", [key, id]).fetchone():
                 raise RepoError("duplicate_citekey", "Citation key is already used by another document", "citekey")
             patch = {**patch, "citekey": key}
         edited = list(current["editedFields"])
@@ -701,7 +688,6 @@ def createDocumentsRepository(db, deps: DocumentsRepoDeps):
 
     return {
         "list": list_,
-        **create_document_recycle_repository(db, lib),
         "counts": counts,
         "search": search,
         "get": get,

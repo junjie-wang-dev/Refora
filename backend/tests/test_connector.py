@@ -142,3 +142,30 @@ async def test_connector_timeout_and_unknown_event_return_error_envelopes():
         "ok": False,
         "error": {"code": "connector_timeout", "message": "Connector request timed out"},
     }
+
+
+@pytest.mark.asyncio
+async def test_file_picker_waits_for_user_instead_of_the_rpc_deadline():
+    events = EventBus()
+    socket = Socket()
+    broker = ConnectorBroker(events, timeout=0.001)
+    await events.subscribe(socket, ['connector.dialog-open-file'])
+    pending = asyncio.create_task(broker.dialog_open_file('Import source', ['tex', 'zip']))
+    await asyncio.wait_for(socket.sent.wait(), 0.1)
+    await asyncio.sleep(0.01)
+    assert not pending.done()
+    request = socket.messages[0]['data']
+    broker.handle_result({'requestId': request['requestId'], 'data': {'canceled': False, 'paths': ['/tmp/paper.zip']}})
+    assert (await pending)['data']['paths'] == ['/tmp/paper.zip']
+
+
+@pytest.mark.asyncio
+async def test_waiting_dialog_is_cancelled_when_the_server_stops():
+    events = EventBus()
+    socket = Socket()
+    broker = ConnectorBroker(events, timeout=0.001)
+    await events.subscribe(socket, ['connector.dialog-open-directory'])
+    pending = asyncio.create_task(broker.dialog_open_directory())
+    await asyncio.wait_for(socket.sent.wait(), 0.1)
+    await broker.cancel_pending()
+    assert (await pending)['error']['code'] == 'connector_shutdown'

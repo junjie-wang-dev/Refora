@@ -1,3 +1,4 @@
+import type { LatexProject } from '../../../shared/latex-types'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { showContextMenu } from '../../utils/contextMenu'
@@ -47,6 +48,7 @@ import useBoardSpacePan from './useBoardSpacePan'
 import { useBoardDocuments } from '../../hooks/useBoardDocuments'
 
 const EMPTY_NOTES: WorkspaceNote[] = []
+const EMPTY_LATEX_PROJECTS: LatexProject[] = []
 
 interface MarqueeSelection {
   left: number
@@ -57,6 +59,8 @@ interface MarqueeSelection {
 
 export interface BoardHandle {
   createNote: (noteType: WorkspaceNoteType) => void
+  createLatex: () => void
+  revealItem: (item: WorkspaceItem) => void
   addFiles: () => void
 }
 
@@ -75,15 +79,18 @@ export type WorkspaceMarkdownCardMode = 'read' | 'edit'
 
 interface BoardProps {
   toolbarActions?: ReactNode
+  onOpenLatex?: (project: LatexProject) => void
+  onCreateLatex?: (placement: WorkspaceItemPlacement) => void
   onOpenMarkdownCard?: (card: WorkspaceMarkdownCard, mode?: WorkspaceMarkdownCardMode) => void
 }
 
-const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdownCard, toolbarActions }, ref) {
+const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdownCard, toolbarActions, onOpenLatex, onCreateLatex }, ref) {
   const { t } = useTranslation()
   const items = useWorkspaceStore((s) => s.items)
   const reports = useWorkspaceStore((s) => s.reports)
   const notes = useWorkspaceStore((s) => s.notes) ?? EMPTY_NOTES
   const assets = useWorkspaceStore((s) => s.assets) ?? []
+  const latexProjects = useWorkspaceStore((s) => s.latexProjects) ?? EMPTY_LATEX_PROJECTS
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const panelView = useWorkspaceStore((s) => s.panelView)
   const addDocs = useWorkspaceStore((s) => s.addDocs)
@@ -154,6 +161,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   const reportMap = useMemo(() => new Map(reports.map((report) => [report.id, report])), [reports])
   const noteMap = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes])
   const assetMap = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets])
+  const latexMap = useMemo(() => new Map(latexProjects.map((project) => [project.id, project])), [latexProjects])
   const itemMap = useMemo(() => new Map(sortedItems.map((item) => [item.id, item])), [sortedItems])
   const workspaceDocIds = useMemo(
     () => sortedItems
@@ -1087,13 +1095,27 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
   }, [createNote, onOpenMarkdownCard, placementAtCanvasCenter, t])
 
   useImperativeHandle(ref, () => ({
+    revealItem: (item) => {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const current = viewportRef.current
+      const size = sizeFor(item)
+      const left = current.panX + item.x * current.zoom
+      const top = current.panY + item.y * current.zoom
+      setSelectedItemIds(new Set([item.id]))
+      if (left >= 0 && top >= 0 && left + size.width * current.zoom <= rect.width && top + size.height * current.zoom <= rect.height - 64) return
+      fitContentRef.current = false
+      setFitContent(false)
+      commitViewport({ ...current, panX: rect.width / 2 - (item.x + size.width / 2) * current.zoom, panY: (rect.height - 64) / 2 - (item.y + size.height / 2) * current.zoom })
+    },
+    createLatex: () => onCreateLatex?.(placementAtCanvasCenter()),
     createNote: (noteType) => {
       void handleCreateNote(noteType)
     },
     addFiles: () => {
       void addAssets([], placementAtCanvasCenter())
     }
-  }), [addAssets, handleCreateNote, placementAtCanvasCenter])
+  }), [addAssets, handleCreateNote, placementAtCanvasCenter, onCreateLatex, sizeFor, commitViewport])
 
   const handlePasteFiles = useCallback(async (placement: WorkspaceItemPlacement) => {
     const workspaceId = activeWorkspaceId
@@ -1152,8 +1174,9 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         onClick: () => void handleCreateNote('markdown', placement)
       }
     ]
+    if (onCreateLatex) items.push({ key: 'create-latex', label: t('latex.createInWorkspace'), icon: 'note', onClick: () => onCreateLatex(placement) })
     showContextMenu(items)
-  }, [addAssets, handleCreateNote, handlePasteFiles, t, worldPositionAt])
+  }, [addAssets, handleCreateNote, handlePasteFiles, t, worldPositionAt, onCreateLatex])
 
   const cardShell = useMemo<ComponentProps<typeof WorkspaceCards>['shell']>(() => ({
     canStartDrag: () => !spacePressedRef.current,
@@ -1194,6 +1217,8 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
       reports={reportMap}
       notes={noteMap}
       assets={assetMap}
+      latexProjects={latexMap}
+      onOpenLatex={onOpenLatex}
       loadedSummaryDocIds={loadedSummaryDocIds}
       summarizing={summarizing}
       summaryErrors={summaryErrors}

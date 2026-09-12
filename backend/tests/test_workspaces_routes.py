@@ -130,6 +130,10 @@ def client(services: FakeServices) -> TestClient:
             extensions: list[str] | None,
             multiple: bool,
         ) -> dict[str, Any]:
+            if not multiple:
+                assert title == "Import LaTeX source"
+                assert extensions == ["tex", "zip", "gz", "tar"]
+                return {"ok": True, "data": {"canceled": False, "path": "/tmp/paper.zip"}}
             return {
                 "ok": True,
                 "data": {
@@ -435,3 +439,34 @@ def test_items_batch_rejects_missing_ids(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "validation"
+
+
+def test_latex_route_auth_scoping_and_no_arbitrary_import_path(client, services):
+    services.workspaces['latexOperation'] = services._workspace('latexOperation', {'projects': []})
+    assert client.post('/workspaces/ws/latex', json={'action': 'list'}).status_code == 401
+    response = client.post('/workspaces/ws/latex', headers={'X-Refora-Token': 'token'}, json={'action': 'list'})
+    assert response.json() == {'ok': True, 'data': {'projects': []}}
+    assert services.calls[-1] == ('latexOperation', ('ws', {'action': 'list'}))
+    response = client.post('/workspaces/ws/latex', headers={'X-Refora-Token': 'token'}, json={'action': 'import', 'importPath': '/private/file.tex'})
+    assert response.json()['ok'] is False
+
+
+def test_latex_import_uses_native_single_file_selection(client, services):
+    services.workspaces["latexOperation"] = services._workspace("latexOperation", {"project": {"id": "paper"}})
+    response = client.post("/workspaces/ws/latex", headers=HEADERS, json={"action": "import", "placement": {"x": 12, "y": 34}})
+    assert response.json() == {"ok": True, "data": {"project": {"id": "paper"}}}
+    assert services.calls[-1] == ("latexOperation", ("ws", {"action": "import", "placement": {"x": 12, "y": 34}, "importPath": "/tmp/paper.zip"}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [{"ok": False, "error": {"code": "connector_closed", "message": "Picker closed"}}, {"ok": True, "data": {"canceled": False}}])
+async def test_native_picker_errors_keep_actionable_messages(result):
+    from refora_server.server.routes.workspaces import _select_workspace_files
+
+    class Connector:
+        async def dialog_open_file(self, *args):
+            return result
+
+    with pytest.raises(RepoError) as error:
+        await _select_workspace_files(Connector(), multiple=False)
+    assert error.value.code == ("connector_closed" if not result["ok"] else "file_picker_failed")

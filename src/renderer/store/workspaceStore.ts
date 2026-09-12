@@ -1,3 +1,4 @@
+import type { LatexProject } from '../../shared/latex-types'
 import { create } from 'zustand'
 import type {
   Workspace,
@@ -26,7 +27,7 @@ interface WorkspaceState {
   openWorkspaceIds: string[]
   activeThreadId: string | null
   panelOpen: boolean
-  panelView: 'workspace' | 'markdown' | 'pdf'
+  panelView: 'workspace' | 'markdown' | 'pdf' | 'latex'
   fullscreen: boolean
   chatStreaming: boolean
   summarizingDocIds: Set<string>
@@ -35,6 +36,7 @@ interface WorkspaceState {
   reports: AiReport[]
   notes: WorkspaceNote[]
   assets: WorkspaceAsset[]
+  latexProjects: LatexProject[]
   threads: ChatThread[]
   markdownCardRequest: { kind: WorkspaceContentKind; id: string } | null
   initialized: boolean
@@ -65,6 +67,7 @@ interface WorkspaceState {
   clearMarkdownCardRequest: () => void
   fetchItems: () => Promise<void>
   fetchAssets: () => Promise<void>
+  fetchLatexProjects: () => Promise<void>
   addAssets: (paths: string[], placement?: WorkspaceItemPlacement) => Promise<void>
   addFiles: (paths: string[], placement?: WorkspaceItemPlacement) => Promise<void>
   deleteAsset: (id: string) => Promise<void>
@@ -105,11 +108,12 @@ let workspaceRequestVersion = 0
 let threadRequestVersion = 0
 let itemRequestVersion = 0
 let assetRequestVersion = 0
+let latexRequestVersion = 0
 let reportRequestVersion = 0
 let noteRequestVersion = 0
 let workspaceContentRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let workspaceContentRefreshId: string | null = null
-let workspaceContentRefreshKinds = new Set<'items' | 'reports' | 'notes' | 'assets'>()
+let workspaceContentRefreshKinds = new Set<'items' | 'reports' | 'notes' | 'assets' | 'latex'>()
 let workspaceContentRefreshWaiters: Array<() => void> = []
 
 function cancelWorkspaceContentRefresh(): void {
@@ -123,7 +127,7 @@ function cancelWorkspaceContentRefresh(): void {
 function scheduleWorkspaceContentRefresh(
   workspaceId: string,
   get: () => WorkspaceState,
-  kinds: Array<'items' | 'reports' | 'notes' | 'assets'>
+  kinds: Array<'items' | 'reports' | 'notes' | 'assets' | 'latex'>
 ): Promise<void> {
   if (workspaceContentRefreshId && workspaceContentRefreshId !== workspaceId) {
     cancelWorkspaceContentRefresh()
@@ -150,6 +154,7 @@ function scheduleWorkspaceContentRefresh(
       if (kind === 'items') return get().fetchItems()
       if (kind === 'reports') return get().fetchReports()
       if (kind === 'notes') return get().fetchNotes()
+      if (kind === 'latex') return get().fetchLatexProjects()
       return get().fetchAssets()
     })
     void Promise.all(refreshes).finally(() => {
@@ -198,6 +203,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   reports: [],
   notes: [],
   assets: [],
+      latexProjects: [],
   threads: [],
   markdownCardRequest: null,
   initialized: false,
@@ -211,7 +217,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         void scheduleWorkspaceContentRefresh(
           report.workspaceId,
           get,
-          ['items', 'reports', 'notes', 'assets']
+          ['items', 'reports', 'notes', 'assets', 'latex']
         )
       }
     }
@@ -245,7 +251,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         void scheduleWorkspaceContentRefresh(
           payload.workspaceId,
           get,
-          ['items', 'reports', 'notes', 'assets']
+          ['items', 'reports', 'notes', 'assets', 'latex']
         )
       }
     }
@@ -274,6 +280,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         reports: [],
         notes: [],
         assets: [],
+      latexProjects: [],
         threads: [],
         markdownCardRequest: null
       })
@@ -302,6 +309,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             reports: [],
             notes: [],
             assets: [],
+      latexProjects: [],
             threads: [],
             markdownCardRequest: null
           }))
@@ -311,7 +319,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           scheduleWorkspaceContentRefresh(
             activeWorkspaceId,
             get,
-            ['items', 'reports', 'notes', 'assets']
+            ['items', 'reports', 'notes', 'assets', 'latex']
           ),
           get().fetchThreads({ selectLatestIfNone: true })
         ])
@@ -408,6 +416,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                 reports: [],
                 notes: [],
                 assets: [],
+      latexProjects: [],
                 threads: [],
                 markdownCardRequest: null
               }
@@ -431,6 +440,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       reports: [],
       notes: [],
       assets: [],
+      latexProjects: [],
       threads: [],
       markdownCardRequest: null
     }))
@@ -439,6 +449,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       void get().fetchReports()
       void get().fetchNotes()
       void get().fetchAssets()
+      void get().fetchLatexProjects()
     }
     void get().fetchThreads({ selectLatestIfNone: true })
     return true
@@ -681,6 +692,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  fetchLatexProjects: async () => {
+    const generation = libraryGeneration
+    const requestVersion = ++latexRequestVersion
+    const workspaceId = get().activeWorkspaceId
+    if (!workspaceId) { set({ latexProjects: [] }); return }
+    try {
+      const result = await api.latex.execute(workspaceId, { action: 'list' })
+      if (generation !== libraryGeneration || requestVersion !== latexRequestVersion || get().activeWorkspaceId !== workspaceId) return
+      set({ latexProjects: result.projects ?? [] })
+      if (result.projects?.length) await get().fetchItems()
+    } catch (error) {
+      if (generation === libraryGeneration && get().activeWorkspaceId === workspaceId) toast(errorMessage(error, i18n.t('workspaceErrors.loadFiles')))
+    }
+  },
+
   fetchAssets: async () => {
     const generation = libraryGeneration
     const requestVersion = ++assetRequestVersion
@@ -742,7 +768,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         generation !== libraryGeneration ||
         get().activeWorkspaceId !== workspaceId
       ) return
-      await scheduleWorkspaceContentRefresh(workspaceId, get, ['items', 'notes', 'assets'])
+      await scheduleWorkspaceContentRefresh(workspaceId, get, ['items', 'notes', 'assets', 'latex'])
       if (result.errors.length > 0) toast(result.errors[0].message)
     } catch (e) {
       if (generation !== libraryGeneration) return

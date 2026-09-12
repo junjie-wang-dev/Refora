@@ -265,30 +265,6 @@ def create_library_router(deps: Any) -> APIRouter:
     async def get_document(document_id: str):
         return await run(lambda: document(document_id))
 
-    @router.get("/deleted-documents")
-    async def list_deleted_documents():
-        return await run(lambda: call_off_loop(documents, "listDeleted"))
-
-    @router.post("/deleted-documents/{entry_id}/restore")
-    async def restore_deleted_documents(entry_id: str):
-        async def action():
-            restore = _method(documents, "restoreDeleted")
-            result = await _run_blocking(lambda: transaction(lambda: restore(entry_id)))
-            library_folder = _json_setting(settings, "libraryFolderPath", "")
-            if isinstance(library_folder, str) and library_folder:
-                root = Path(library_folder).resolve()
-                recovery_root = root / ".refora" / "recycle"
-                recovery_copy = recovery_root / entry_id
-                if recovery_copy.parent == recovery_root and recovery_copy.resolve() == recovery_copy and recovery_copy.is_dir():
-                    try:
-                        await _connector(connector, "trash", str(recovery_copy))
-                    except Exception:
-                        pass
-            if callable(emit):
-                await _call({"emit": emit}, "emit", "library.contents.changed", {})
-            return result
-        return await run(action)
-
     @router.patch("/documents/{document_id}")
     async def patch_document(document_id: str, body: dict[str, Any]):
         async def action():

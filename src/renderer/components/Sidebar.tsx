@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FilePlus, FileArrowDown, ArrowLineLeft, ArrowLineRight, CircleNotch, Trash } from '@phosphor-icons/react'
+import { FilePlus, FileArrowDown, ArrowLineLeft, ArrowLineRight, CircleNotch } from '@phosphor-icons/react'
 import { useDocumentStore } from '../store/documentStore'
 import { errorMessage } from '../../shared/ipc-types'
 import { Button as UiButton, IconTooltip } from './ui'
@@ -13,7 +13,6 @@ import { useSyncAccountStore } from '../store/syncAccountStore'
 import { useSettingsModalStore } from '../store/settingsModalStore'
 
 const ImportByIdentifierDialog = lazy(() => import('./ImportByIdentifierDialog'))
-const DeletedDocumentsDialog = lazy(() => import('./DeletedDocumentsDialog'))
 
 interface SidebarProps {
   collapsed: boolean
@@ -29,11 +28,6 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const identifierImporting = useDocumentStore((s) => s.identifierImporting)
   const setAuthConfirmation = useSyncAccountStore((state) => state.setConfirmation)
   const [showIdentifierImport, setShowIdentifierImport] = useState(false)
-  const [showDeletedDocuments, setShowDeletedDocuments] = useState(false)
-  const closeDeletedDocuments = useCallback(() => setShowDeletedDocuments(false), [])
-  const deletedDocumentsDialog = showDeletedDocuments ? (
-    <Suspense fallback={null}><DeletedDocumentsDialog onClose={closeDeletedDocuments} /></Suspense>
-  ) : null
   const openSettings = useSettingsModalStore((state) => state.openSettings)
   const openAccount = useSettingsModalStore((state) => state.openAccount)
   const isMac = document.documentElement.dataset.platform === 'mac'
@@ -85,11 +79,6 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           </UiButton>
         </IconTooltip>
         <div className="toolbar-sep" aria-hidden="true" />
-        <IconTooltip label={t('recycle.title')} appearance="sidebar">
-          <UiButton variant="ghost" size="sm" iconOnly onClick={() => setShowDeletedDocuments(true)} aria-label={t('recycle.title')}>
-            <Trash className="h-4 w-4" />
-          </UiButton>
-        </IconTooltip>
         <IconTooltip label={t('tooltip.addFile')} appearance="sidebar" shortcut="⌘I">
           <UiButton
             variant="ghost"
@@ -119,7 +108,6 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     return (
       <>
         {toolbar}
-        {deletedDocumentsDialog}
         <Suspense fallback={null}>
           {showIdentifierImport ? (
             <ImportByIdentifierDialog open onClose={() => setShowIdentifierImport(false)} />
@@ -198,16 +186,12 @@ export default function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         <SidebarSmartItems />
         <SidebarWorkspaces />
         <SidebarCategories />
-        <UiButton variant="ghost" size="sm" className="mx-2" onClick={() => setShowDeletedDocuments(true)} icon={<Trash className="h-4 w-4" />}>
-          {t('recycle.title')}
-        </UiButton>
       </nav>
 
       <SidebarFooter
         onOpenAccount={openAccount}
         onOpenSettings={() => openSettings('general')}
       />
-      {deletedDocumentsDialog}
 
 
       <Suspense fallback={null}>

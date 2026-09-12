@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FilePlus, FolderOpen, NotePencil, Sticker } from '@phosphor-icons/react'
+import { Code, FilePlus, FolderOpen, NotePencil, Sticker } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import Board, {
   type BoardHandle,
@@ -14,7 +14,13 @@ import WorkspaceReaderTabs, { type WorkspaceReaderTab } from './WorkspaceReaderT
 import { aiSummaryMarkdown } from '../../utils/workspaceCardMarkdown'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
 import { useDocumentStore } from '../../store/documentStore'
+import type { WorkspaceItemPlacement } from '../../../shared/ipc-types'
+import WorkspaceLatexDialog from './WorkspaceLatexDialog'
+import type { LatexProject, LatexRequest } from '../../../shared/latex-types'
+import type { WorkspaceLatexViewHandle } from '../latex/WorkspaceLatexView'
 import { errorMessage } from '../../../shared/ipc-types'
+
+const WorkspaceLatexView = lazy(() => import('../latex/WorkspaceLatexView'))
 
 const PdfReader = lazy(() => import('../PdfReader'))
 
@@ -57,10 +63,17 @@ export default function WorkspacePanel() {
   const clearMarkdownCardRequest = useWorkspaceStore((s) => s.clearMarkdownCardRequest)
   const updateNote = useWorkspaceStore((s) => s.updateNote)
   const updateReport = useWorkspaceStore((s) => s.updateReport)
+  const fetchLatexProjects = useWorkspaceStore((s) => s.fetchLatexProjects)
   const pdfTabs = usePdfReaderStore((s) => s.tabs)
   const activePdfDocumentId = usePdfReaderStore((s) => s.activeDocumentId)
 
   const [activeMarkdownCard, setActiveMarkdownCard] = useState<ActiveMarkdownCard | null>(null)
+  const [latexTabs, setLatexTabs] = useState<Array<{ project: LatexProject; path: string | null }>>([])
+  const [activeLatexId, setActiveLatexId] = useState<string | null>(null)
+  const [latexPlacement, setLatexPlacement] = useState<WorkspaceItemPlacement | null>(null)
+  const latexViews = useRef(new Map<string, WorkspaceLatexViewHandle>())
+  const latexContextQueue = useRef<Promise<void>>(Promise.resolve())
+  const selectedLatex = latexTabs.find((tab) => tab.project.id === activeLatexId)
   const [markdownTabs, setMarkdownTabs] = useState<ActiveMarkdownCard[]>([])
   const boardRef = useRef<BoardHandle | null>(null)
   const markdownViewRef = useRef<WorkspaceMarkdownViewHandle | null>(null)
@@ -68,6 +81,9 @@ export default function WorkspacePanel() {
   useEffect(() => {
     setActiveMarkdownCard(null)
     setMarkdownTabs([])
+    setLatexTabs([])
+    setActiveLatexId(null)
+    setLatexPlacement(null)
   }, [activeWorkspaceId])
 
   const handleOpenMarkdownCard = useCallback((
@@ -109,15 +125,61 @@ export default function WorkspacePanel() {
     ? markdownTabId(activeMarkdownCard)
     : null
 
-  const saveActiveMarkdown = useCallback(async () => {
+  const saveActiveContent = useCallback(async () => {
+    if (panelView === 'latex' && activeLatexId) return latexViews.current.get(activeLatexId)?.requestClose() ?? true
     if (panelView !== 'markdown') return true
     return markdownViewRef.current?.requestClose() ?? true
-  }, [panelView])
+  }, [panelView, activeLatexId])
+
+  const openLatexProject = useCallback(async (project: LatexProject) => {
+    await fetchLatexProjects?.()
+    setLatexTabs((tabs) => tabs.some((tab) => tab.project.id === project.id) ? tabs : [...tabs, { project, path: null }])
+    setActiveLatexId(project.id)
+    setLatexPlacement(null)
+    useWorkspaceStore.setState((state) => ({ panelView: 'latex', openWorkspaceIds: activeWorkspaceId && !state.openWorkspaceIds.includes(activeWorkspaceId) ? [...state.openWorkspaceIds, activeWorkspaceId] : state.openWorkspaceIds }))
+  }, [fetchLatexProjects, activeWorkspaceId])
+
+  const returnToWorkspace = useCallback(() => {
+    showWorkspace()
+    void fetchLatexProjects?.()
+  }, [showWorkspace, fetchLatexProjects])
+
+  const updateLatexFile = useCallback((projectId: string, path: string) => {
+    setLatexTabs((tabs) => tabs.map((tab) => tab.project.id === projectId && tab.path !== path ? { ...tab, path } : tab))
+  }, [])
+
+  const closeLatexProject = useCallback(async (id: string) => {
+    if (latexViews.current.has(id) && !await latexViews.current.get(id)!.requestClose()) return
+    const remaining = latexTabs.filter((tab) => tab.project.id !== id)
+    setLatexTabs(remaining)
+    if (activeLatexId !== id) return
+    const next = remaining.at(-1)
+    setActiveLatexId(next?.project.id ?? null)
+    if (!next && panelView === 'latex') returnToWorkspace()
+  }, [activeLatexId, latexTabs, panelView, returnToWorkspace])
+
+  useEffect(() => {
+    if (!activeWorkspaceId) return
+    let cancelled = false
+    const request: LatexRequest = panelView === 'latex' && selectedLatex?.path
+      ? { action: 'activate', projectId: selectedLatex.project.id, path: selectedLatex.path }
+      : { action: 'activate' }
+    latexContextQueue.current = latexContextQueue.current.then(async () => {
+      if (!cancelled) await window.api.latex.execute(activeWorkspaceId, request)
+    }).catch((reason) => { useDocumentStore.getState().showToast(errorMessage(reason)) })
+    return () => { cancelled = true }
+  }, [activeWorkspaceId, panelView, selectedLatex?.project.id, selectedLatex?.path])
+
+  useEffect(() => () => {
+    if (activeWorkspaceId) latexContextQueue.current = latexContextQueue.current.then(async () => {
+      await window.api.latex.execute(activeWorkspaceId, { action: 'activate' })
+    }).catch(() => undefined)
+  }, [activeWorkspaceId])
 
   useEffect(() => {
     if (!markdownCardRequest) return
     let cancelled = false
-    void saveActiveMarkdown().then((saved) => {
+    void saveActiveContent().then((saved) => {
       if (cancelled) return
       clearMarkdownCardRequest()
       if (!saved) return
@@ -130,21 +192,21 @@ export default function WorkspacePanel() {
     return () => {
       cancelled = true
     }
-  }, [clearMarkdownCardRequest, markdownCardRequest, saveActiveMarkdown])
+  }, [clearMarkdownCardRequest, markdownCardRequest, saveActiveContent])
 
   const handleSelectWorkspace = useCallback(async (workspaceId: string) => {
     await requestActiveWorkspace(workspaceId)
   }, [requestActiveWorkspace])
 
   const handleSelectMarkdown = useCallback(async (card: ActiveMarkdownCard) => {
-    if (!(await saveActiveMarkdown())) return
+    if (!(await saveActiveContent())) return
     setActiveMarkdownCard(card)
     showMarkdown()
-  }, [saveActiveMarkdown, showMarkdown])
+  }, [saveActiveContent, showMarkdown])
 
   const handleCloseMarkdown = useCallback(async (card: ActiveMarkdownCard) => {
     const isActive = isSameMarkdownCard(activeMarkdownCard, card)
-    if (isActive && !(await saveActiveMarkdown())) return
+    if (isActive && !(await saveActiveContent())) return
     setMarkdownTabs((current) => current.filter(
       (item) => !isSameMarkdownCard(item, card)
     ))
@@ -152,13 +214,13 @@ export default function WorkspacePanel() {
       setActiveMarkdownCard(null)
       showWorkspace()
     }
-  }, [activeMarkdownCard, saveActiveMarkdown, showWorkspace])
+  }, [activeMarkdownCard, saveActiveContent, showWorkspace])
 
   const handleSelectPdf = useCallback(async (documentId: string) => {
-    if (!(await saveActiveMarkdown())) return
+    if (!(await saveActiveContent())) return
     usePdfReaderStore.getState().activate(documentId)
     useWorkspaceStore.getState().openPdfReader()
-  }, [saveActiveMarkdown])
+  }, [saveActiveContent])
 
   const handleClosePdf = useCallback((documentId: string) => {
     const isActive = panelView === 'pdf' && activePdfDocumentId === documentId
@@ -187,6 +249,9 @@ export default function WorkspacePanel() {
       setActiveWorkspace(nextWorkspace.id)
     } else if (activeMarkdownCard) {
       showMarkdown()
+    } else if (latexTabs.length) {
+      setActiveLatexId(latexTabs.find((tab) => tab.project.id === activeLatexId)?.project.id ?? latexTabs.at(-1)!.project.id)
+      useWorkspaceStore.setState({ panelView: 'latex' })
     } else if (pdfTabs[0]) {
       usePdfReaderStore.getState().activate(pdfTabs[0].id)
       useWorkspaceStore.getState().openPdfReader()
@@ -195,6 +260,8 @@ export default function WorkspacePanel() {
     }
   }, [
     activeMarkdownCard,
+    activeLatexId,
+    latexTabs,
     activeWorkspaceId,
     closePanel,
     closeWorkspaceTab,
@@ -300,6 +367,14 @@ export default function WorkspacePanel() {
         onClose: () => void handleCloseMarkdown(card)
       }
     }),
+    ...latexTabs.map((tab) => ({
+      id: `latex:${tab.project.id}`,
+      title: tab.project.title,
+      kind: 'latex' as const,
+      active: panelView === 'latex' && activeLatexId === tab.project.id,
+      onSelect: () => { void saveActiveContent().then((saved) => { if (saved) void openLatexProject(tab.project) }) },
+      onClose: () => { void closeLatexProject(tab.project.id) }
+    })),
     ...pdfTabs.map((document) => ({
       id: `pdf:${document.id}`,
       title: document.title || document.fileName,
@@ -326,6 +401,8 @@ export default function WorkspacePanel() {
           <Board
             ref={boardRef}
             onOpenMarkdownCard={handleOpenMarkdownCard}
+            onOpenLatex={(project) => void openLatexProject(project)}
+            onCreateLatex={setLatexPlacement}
             toolbarActions={<>
               <button
                 type="button"
@@ -357,6 +434,7 @@ export default function WorkspacePanel() {
               >
                 <Sticker className="h-4 w-4" />
               </button>
+              <button type="button" className="sidebar-header-btn" disabled={!activeWorkspaceId} title={t('latex.open')} aria-label={t('latex.open')} onClick={() => boardRef.current?.createLatex()}><Code className="h-4 w-4" /></button>
               <button
                 type="button"
                 className="sidebar-header-btn"
@@ -375,6 +453,8 @@ export default function WorkspacePanel() {
             {markdownView}
           </div>
         ) : null}
+        {latexPlacement && activeWorkspaceId && <WorkspaceLatexDialog workspaceId={activeWorkspaceId} placement={latexPlacement} onClose={() => setLatexPlacement(null)} onOpen={openLatexProject} onCreated={(project) => { const item = useWorkspaceStore.getState().items.find((item) => item.latexId === project.id); if (item) boardRef.current?.revealItem(item) }} />}
+        {activeWorkspaceId && latexTabs.map((tab) => <div key={tab.project.id} className={panelView === 'latex' && activeLatexId === tab.project.id ? 'h-full' : 'hidden'}><Suspense fallback={<div className="h-full bg-background" />}><WorkspaceLatexView ref={(handle) => { if (handle) latexViews.current.set(tab.project.id, handle); else latexViews.current.delete(tab.project.id) }} workspaceId={activeWorkspaceId} initialProject={tab.project} onBackToWorkspace={returnToWorkspace} workspaceName={workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.name ?? ''} active={panelView === 'latex' && activeLatexId === tab.project.id} manageActiveContext={false} onOpenProject={openLatexProject} onFileChange={updateLatexFile} /></Suspense></div>)}
         {activePdfDocumentId ? (
           <div className={panelView === 'pdf' ? 'h-full' : 'hidden'}>
             <Suspense fallback={<div className="h-full bg-background" />}>

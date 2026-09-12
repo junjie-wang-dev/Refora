@@ -99,6 +99,7 @@ const pathDeps = {
 
 function makeClient(): { client: ServerClient; http: Record<string, ReturnType<typeof vi.fn>> } {
   const http = {
+    workspaceLatex: vi.fn().mockResolvedValue({ projects: [] }),
     workspacesList: vi.fn().mockResolvedValue([workspace]),
     workspacesCreate: vi.fn().mockResolvedValue(workspace),
     workspacesUpdate: vi.fn().mockResolvedValue(workspace),
@@ -348,5 +349,17 @@ describe('server workspace IPC handlers', () => {
       ok: false,
       error: { code: 'server_unavailable', message: 'Server unavailable' }
     })
+  })
+})
+
+
+describe('LaTeX IPC', () => {
+  it('forwards scoped requests and envelopes errors', async () => {
+    const { client, http } = makeClient()
+    const handlers = createServerWorkspaceHandlers(client, pathDeps)
+    await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'list' })).resolves.toEqual({ ok: true, data: { projects: [] } })
+    expect(http.workspaceLatex).toHaveBeenCalledWith('ws', { action: 'list' })
+    http.workspaceLatex.mockRejectedValue(Object.assign(new Error('Changed'), { code: 'conflict' }))
+    await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'list' })).resolves.toEqual({ ok: false, error: { code: 'conflict', message: 'Changed' } })
   })
 })

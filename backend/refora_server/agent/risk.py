@@ -35,6 +35,7 @@ _BASE: dict[str, RiskClass] = {
     "update_workspace_note": RiskClass.WRITE_LOCAL,
     "import_workspace_files": RiskClass.WRITE_LOCAL,
     "update_workspace_asset": RiskClass.WRITE_LOCAL,
+    "edit_latex_project": RiskClass.WRITE_LOCAL,
     "create_category": RiskClass.WRITE_LOCAL,
     "rename_category": RiskClass.WRITE_LOCAL,
     "set_document_categories": RiskClass.WRITE_LOCAL,

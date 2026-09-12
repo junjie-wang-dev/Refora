@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceItem } from '@shared/ipc-types'
 import {
   compactGridPlacements,
+  availableCardPlacement,
   fitContentViewport,
   DEFAULT_VIEWPORT,
   isEditableTarget
@@ -22,6 +23,12 @@ function transfer(types: string[], payload = ''): DataTransfer {
 }
 
 describe('board layout helpers', () => {
+  it('keeps free card positions and finds space below resized overlapping cards', () => {
+    const bounds = [{ x: 20, y: 280, width: 400, height: 260 }, { x: 20, y: 30, width: 320, height: 200 }]
+    expect(availableCardPlacement(bounds, { x: 600, y: 30 })).toEqual({ x: 600, y: 30 })
+    expect(availableCardPlacement(bounds, { x: 20, y: 30 })).toEqual({ x: 20, y: 564 })
+    expect(bounds[0].y).toBe(280)
+  })
   it('compacts cards into balanced columns from the requested origin', () => {
     const items = [
       { id: 'one' },

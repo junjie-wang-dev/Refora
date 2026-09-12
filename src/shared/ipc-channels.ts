@@ -12,8 +12,6 @@ export const IpcChannel = {
   DocumentsSetStarred: 'documents:setStarred',
   DocumentsDelete: 'documents:delete',
   DocumentsBulkDelete: 'documents:bulkDelete',
-  DocumentsListDeleted: 'documents:listDeleted',
-  DocumentsRestoreDeleted: 'documents:restoreDeleted',
   DocumentsBulkCategorize: 'documents:bulkCategorize',
   DocumentsBulkRefreshMetadata: 'documents:bulkRefreshMetadata',
   DocumentsOpenPdf: 'documents:openPdf',
@@ -88,6 +86,7 @@ export const IpcChannel = {
   ClipboardCopyMarkdown: 'clipboard:copyMarkdown',
   ClipboardCopyWorkspaceAsset: 'clipboard:copyWorkspaceAsset',
 
+  WorkspaceLatex: 'workspace:latex',
   WorkspacesList: 'workspaces:list',
   WorkspacesCreate: 'workspaces:create',
   WorkspacesRename: 'workspaces:rename',
@@ -260,7 +259,6 @@ export const SERVER_IPC_CHANNELS = [
   IpcChannel.DocumentsDelete,
   IpcChannel.DocumentsGet,
   IpcChannel.DocumentsList,
-  IpcChannel.DocumentsListDeleted,
   IpcChannel.DocumentsOpenInFinder,
   IpcChannel.DocumentsOpenPdf,
   IpcChannel.DocumentsPdfAnnotationsGet,
@@ -269,7 +267,6 @@ export const SERVER_IPC_CHANNELS = [
   IpcChannel.DocumentsRefreshMetadata,
   IpcChannel.DocumentsRelocateFile,
   IpcChannel.DocumentsRestoreFile,
-  IpcChannel.DocumentsRestoreDeleted,
   IpcChannel.DocumentsSearch,
   IpcChannel.DocumentsSetStarred,
   IpcChannel.DocumentsUpdate,
@@ -327,5 +324,6 @@ export const SERVER_IPC_CHANNELS = [
   IpcChannel.WorkspacesDelete,
   IpcChannel.WorkspacesList,
   IpcChannel.WorkspacesOpenSandbox,
+  IpcChannel.WorkspaceLatex,
   IpcChannel.WorkspacesRename
 ] as const

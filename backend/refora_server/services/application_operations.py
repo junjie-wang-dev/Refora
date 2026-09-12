@@ -8,17 +8,12 @@ from refora_server.library.paths import isInsideLibrary
 from refora_server.library.pdf_path import resolvePdfFilePath
 from refora_server.repositories.documents import validatePatch
 from refora_server.server.services.library_route_support import call, connector_call, value
-from refora_server.server.services.run_blocking import run_blocking
 
 
 async def trash_documents(documents, settings, connector, transaction, document_ids):
     library_folder = value(settings, 'get')('libraryFolderPath', '')
-    prepare = value(documents, 'prepareDeletion')
-    prepared = await run_blocking(prepare, document_ids) if callable(prepare) else None
     items = [await call(documents, 'get', identifier) for identifier in document_ids]
     def cleanup():
-        if prepared is not None:
-            value(documents, 'archiveDeletion')(document_ids, prepared)
         bulk_delete = value(documents, 'bulkDelete')
         if callable(bulk_delete):
             bulk_delete(document_ids)

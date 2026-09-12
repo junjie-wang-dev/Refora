@@ -1,10 +1,11 @@
+import { useEffect, useRef } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, X } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
 
 export interface WorkspaceReaderTab {
   id: string
   title: string
-  kind: 'workspace' | 'markdown' | 'pdf'
+  kind: 'workspace' | 'markdown' | 'pdf' | 'latex'
   active: boolean
   onSelect: () => void
   onClose: () => void
@@ -22,6 +23,17 @@ export default function WorkspaceReaderTabs({
   onToggleFullscreen
 }: WorkspaceReaderTabsProps) {
   const { t } = useTranslation()
+  const tabsElement = useRef<HTMLDivElement>(null)
+  const activeId = tabs.find((tab) => tab.active)?.id
+  useEffect(() => {
+    const element = tabsElement.current
+    if (!element) return
+    const revealActive = () => element.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    revealActive()
+    const observer = new ResizeObserver(revealActive)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [activeId, tabs.length])
 
   return (
     <div
@@ -29,6 +41,7 @@ export default function WorkspaceReaderTabs({
       data-testid="workspace-reader-tab-header"
     >
       <div
+        ref={tabsElement}
         className="workspace-reader-tabs-scroll no-drag flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
         role="tablist"
         aria-label={t('workspace.readerTabs')}

@@ -9,12 +9,13 @@ from typing import Any
 from refora_server.repositories.errors import RepoError
 from refora_server.repositories.workspace_support import require_workspace, touch_workspace
 
-_KINDS = ("document", "report", "note", "asset")
+_KINDS = ("document", "report", "note", "asset", "latex")
 _KIND_TABLE = {
     "document": "documents",
     "report": "ai_reports",
     "note": "workspace_notes",
     "asset": "workspace_assets",
+    "latex": "workspace_latex_projects",
 }
 
 
@@ -27,6 +28,7 @@ def _map_workspace_item(row: sqlite3.Row) -> dict[str, Any]:
         "reportId": row["reportId"] if row["reportId"] is not None else None,
         "noteId": row["noteId"] if row["noteId"] is not None else None,
         "assetId": row["assetId"] if row["assetId"] is not None else None,
+        **({"latexId": row["latexId"]} if row["latexId"] else {}),
         "sortOrder": row["sortOrder"],
         "width": row["width"],
         "height": row["height"],
@@ -96,11 +98,12 @@ def createWorkspaceItemsRepository(db):
             report_id = id_ if kind == "report" else None
             note_id = id_ if kind == "note" else None
             asset_id = id_ if kind == "asset" else None
+            latex_id = id_ if kind == "latex" else None
             cur = db.execute(
                 "SELECT id FROM workspace_items WHERE workspaceId = ? AND kind = ? AND "
                 "((? = 'document' AND docId = ?) OR (? = 'report' AND reportId = ?) OR "
-                "(? = 'note' AND noteId = ?) OR (? = 'asset' AND assetId = ?))",
-                [workspaceId, kind, kind, id_, kind, id_, kind, id_, kind, id_],
+                "(? = 'note' AND noteId = ?) OR (? = 'asset' AND assetId = ?) OR (? = 'latex' AND latexId = ?))",
+                [workspaceId, kind, kind, id_, kind, id_, kind, id_, kind, id_, kind, id_],
             )
             existing = cur.fetchone()
             if existing is not None:
@@ -116,9 +119,9 @@ def createWorkspaceItemsRepository(db):
             try:
                 db.execute(
                     "INSERT INTO workspace_items "
-                    "(id, workspaceId, kind, docId, reportId, noteId, assetId, sortOrder, x, y, zIndex, addedAt) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [item_id, workspaceId, kind, doc_id, report_id, note_id, asset_id, next_sort, x, y, next_z, now],
+                    "(id, workspaceId, kind, docId, reportId, noteId, assetId, latexId, sortOrder, x, y, zIndex, addedAt) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [item_id, workspaceId, kind, doc_id, report_id, note_id, asset_id, latex_id, next_sort, x, y, next_z, now],
                 )
             except sqlite3.IntegrityError as exc:
                 raise RepoError("duplicate", f"workspace item already exists for {kind}: {id_}") from exc
@@ -224,7 +227,26 @@ def createWorkspaceItemsRepository(db):
             return None
         return _map_workspace_item(row)
 
+    def registerLatexProject(workspaceId: str, project: dict[str, Any]) -> bool:
+        require_workspace(db, workspaceId)
+        existing = db.execute("SELECT workspaceId FROM workspace_latex_projects WHERE id = ?", [project['id']]).fetchone()
+        if existing is not None and existing['workspaceId'] != workspaceId:
+            raise RepoError('invalid_workspace', 'Project belongs to another workspace')
+        db.execute(
+            "INSERT INTO workspace_latex_projects(id, workspaceId, title, rootFile) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET title=excluded.title, rootFile=excluded.rootFile "
+            "WHERE title != excluded.title OR rootFile != excluded.rootFile",
+            [project['id'], workspaceId, project['title'], project['rootFile']],
+        )
+        return existing is None
+
+    def getLatexProject(projectId: str) -> dict[str, Any] | None:
+        row = db.execute("SELECT * FROM workspace_latex_projects WHERE id = ?", [projectId]).fetchone()
+        return dict(row) if row is not None else None
+
     return {
+        "registerLatexProject": registerLatexProject,
+        "getLatexProject": getLatexProject,
         "list": list,
         "add": add,
         "remove": remove,

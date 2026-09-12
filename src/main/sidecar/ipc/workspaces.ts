@@ -1,3 +1,4 @@
+import type { LatexRequest } from '../../../shared/latex-types'
 import { IpcChannel } from '../../../shared/ipc-channels'
 import type {
   WorkspaceCanvasViewport,
@@ -51,6 +52,7 @@ export function createServerWorkspaceHandlers(
   }
 
   const handlers = {
+    [IpcChannel.WorkspaceLatex]: (workspaceId: string, request: LatexRequest) => wrap(() => http.workspaceLatex(workspaceId, request)),
     [IpcChannel.WorkspacesList]: () => wrap(() => http.workspacesList()),
     [IpcChannel.WorkspacesCreate]: (name: string) => wrap(() => http.workspacesCreate({ name })),
     [IpcChannel.WorkspacesRename]: (id: string, name: string) =>

@@ -7,6 +7,8 @@ import type { MineruEngineStatus, OcrDocumentState } from '../../src/shared/mine
 import { flushRendererPersistence } from '../../src/renderer/persistence'
 import * as rendererPersistence from '../../src/renderer/persistence'
 
+vi.mock('@lobehub/ui', async () => import('../mocks/lobehub-ui'))
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -123,6 +125,8 @@ function resetStore(): void {
   mockStoreState.toastMessage = null
   mockStoreState.updateDocument.mockReset().mockResolvedValue(undefined)
   mockStoreState.fetchCategories.mockReset().mockResolvedValue(undefined)
+  mockStoreState.fetchDocuments.mockReset().mockResolvedValue(undefined)
+  mockStoreState.fetchDocumentCounts.mockReset().mockResolvedValue(undefined)
   mockStoreState.bulkRefreshMetadata.mockReset().mockResolvedValue(undefined)
   mockStoreState.bulkCategorize.mockReset().mockResolvedValue(undefined)
   mockStoreState.assignDocumentsToCategory.mockReset().mockResolvedValue(true)
@@ -165,22 +169,32 @@ afterEach(() => {
 
 describe('DetailPanel', () => {
   it('merges selected documents only after reviewing a primary document', async () => {
-    vi.spyOn(rendererPersistence, 'flushRendererPersistence').mockResolvedValue(undefined)
+    const flush = vi.spyOn(rendererPersistence, 'flushRendererPersistence').mockResolvedValue(undefined)
     const other = { ...mockDoc, id: '2', title: 'Other paper', citekey: 'otherKey' }
     mockStoreState.selectedIds = ['1', '2']
     mockStoreState.documents = [mockDoc, other]
     vi.spyOn(api.documents, 'get').mockImplementation(async (id) => id === '1' ? mockDoc : other)
-    const merge = vi.spyOn(api.documents, 'merge').mockResolvedValue(mockDoc)
-    vi.spyOn(useWorkspaceStore.getState(), 'fetchItems').mockResolvedValue(undefined)
+    const merge = vi.spyOn(api.documents, 'merge').mockResolvedValue(other)
+    const fetchItems = vi.spyOn(useWorkspaceStore.getState(), 'fetchItems').mockResolvedValue(undefined)
     render(<DetailPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: 'detail.mergeDuplicates' }))
     await screen.findByText('detail.mergeDescription')
     expect(merge).not.toHaveBeenCalled()
+    const primarySelect = screen.getAllByRole('combobox').find((element) =>
+      element.querySelector('option[value="2"]')
+    )!
+    fireEvent.change(primarySelect, { target: { value: '2' } })
     fireEvent.click(screen.getByRole('button', { name: 'detail.mergeConfirm' }))
-    await waitFor(() => expect(merge).toHaveBeenCalledWith('1', ['2']))
-    await waitFor(() => expect(mockStoreState.documents.map((doc) => doc.id)).toEqual(['1']))
-    expect(mockStoreState.focusedDocId).toBe('1')
+    await waitFor(() => expect(fetchItems).toHaveBeenCalledOnce())
+    expect(flush).toHaveBeenCalledOnce()
+    expect(merge).toHaveBeenCalledWith('2', ['1'])
+    expect(mockStoreState.documents.map((doc) => doc.id)).toEqual(['2'])
+    expect(mockStoreState.focusedDocId).toBe('2')
+    expect(mockStoreState.selectedIds).toEqual([])
+    expect(mockStoreState.fetchDocuments).toHaveBeenCalledOnce()
+    expect(mockStoreState.fetchDocumentCounts).toHaveBeenCalledOnce()
+    expect(mockStoreState.fetchCategories).toHaveBeenCalledOnce()
   })
 
   it('keeps selected documents and reports a rejected merge', async () => {

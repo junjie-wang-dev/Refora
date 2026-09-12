@@ -33,6 +33,8 @@ class ConnectorBroker:
         payload = {"requestId": request_id, **(dict(data) if data else {})}
         try:
             await self._events.broadcast(event, payload)
+            if event.startswith("connector.dialog-"):
+                return await asyncio.shield(future)
             return await asyncio.wait_for(asyncio.shield(future), self._timeout)
         except TimeoutError:
             return self._error("connector_timeout", "Connector request timed out")

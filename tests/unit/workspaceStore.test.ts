@@ -85,6 +85,7 @@ function makeNote(overrides: Partial<WorkspaceNote> = {}): WorkspaceNote {
   }
 }
 
+const mockLatexExecute = vi.fn()
 const mockReportsList = vi.fn()
 const mockReportsDelete = vi.fn()
 const mockReportsUpdate = vi.fn()
@@ -140,6 +141,7 @@ function resetStoreState(): void {
     reports: [],
     notes: [],
     assets: [],
+    latexProjects: [],
     threads: [],
     markdownCardRequest: null,
     initialized: false
@@ -147,6 +149,8 @@ function resetStoreState(): void {
 }
 
 beforeEach(() => {
+  mockLatexExecute.mockReset().mockResolvedValue({ projects: [] })
+  window.api.latex.execute = mockLatexExecute
   mockReportsList.mockReset()
   mockReportsDelete.mockReset()
   mockReportsUpdate.mockReset()
@@ -1634,5 +1638,20 @@ describe('workspace board migration', () => {
     expect(rejectsSql(`
       UPDATE workspace_notes SET color = 'neon' WHERE id = 'sticky-note';
     `)).toBe(true)
+  })
+})
+
+
+describe('LaTeX workspace cards', () => {
+  it('loads project metadata and then refreshes newly registered cards', async () => {
+    const project = { id: 'project', title: 'Manuscript', rootFile: 'main.tex', files: ['main.tex'] }
+    const card = makeItem({ id: 'latex-card', kind: 'latex', docId: null, latexId: project.id })
+    useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' })
+    mockLatexExecute.mockResolvedValue({ projects: [project] })
+    mockWorkspaceItemsList.mockResolvedValue([card])
+    await useWorkspaceStore.getState().fetchLatexProjects()
+    expect(mockLatexExecute).toHaveBeenCalledWith('ws-1', { action: 'list' })
+    expect(useWorkspaceStore.getState().latexProjects).toEqual([project])
+    expect(useWorkspaceStore.getState().items).toEqual([card])
   })
 })

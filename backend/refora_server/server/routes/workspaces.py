@@ -12,6 +12,7 @@ from refora_server.server.services.result import (
     failure as _failure,
     success as _result,
 )
+from refora_server.repositories.errors import RepoError
 from refora_server.services.workspace_note_input import parse_workspace_note_patch
 
 
@@ -20,6 +21,7 @@ class RequestError(Exception):
 
 
 class WorkspacesService(TypedDict):
+    latexOperation: NotRequired[Callable[..., Any]]
     listWorkspaces: Callable[..., Any]
     createWorkspace: Callable[..., Any]
     createWorkspaceWithSandbox: Callable[..., Any]
@@ -157,27 +159,28 @@ def _detach(coroutine: Awaitable[Any]) -> None:
     task.add_done_callback(consume_result)
 
 
-async def _select_workspace_files(connector: Any) -> list[str]:
+async def _select_workspace_files(connector: Any, title: str = "Add Files to Workspace", extensions: list[str] | None = None, multiple: bool = True) -> list[str]:
     if connector is None:
         raise RuntimeError("Native file picker is unavailable")
     chooser = getattr(connector, "dialog_open_file", None)
     if not callable(chooser):
         raise RuntimeError("Native file picker is unavailable")
-    selection = chooser("Add Files to Workspace", None, True)
+    selection = chooser(title, extensions, multiple)
     if inspect.isawaitable(selection):
         selection = await selection
     if not isinstance(selection, dict) or selection.get("ok") is not True:
         error = selection.get("error") if isinstance(selection, dict) else None
         message = error.get("message") if isinstance(error, dict) else None
-        raise RuntimeError(message or "Native file picker failed")
+        code = error.get("code") if isinstance(error, dict) else "file_picker_failed"
+        raise RepoError(code if isinstance(code, str) else "file_picker_failed", message or "Native file picker failed")
     data = selection.get("data")
     if not isinstance(data, dict):
-        raise RuntimeError("Native file picker returned an invalid result")
+        raise RepoError("file_picker_failed", "Native file picker returned an invalid result")
     if data.get("canceled") is True:
         return []
-    paths = data.get("paths")
+    paths = data.get("paths") if multiple else [data.get("path")]
     if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
-        raise RuntimeError("Native file picker returned invalid paths")
+        raise RepoError("file_picker_failed", "Native file picker returned invalid paths")
     return paths
 
 
@@ -188,6 +191,33 @@ def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
     connector = deps.get("connector")
     require_token = deps["require_token"]
     router = APIRouter(dependencies=[Depends(require_token)])
+
+    @router.post("/workspaces/{workspace_id}/latex")
+    async def latex_operation(workspace_id: str, body: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        async def operation() -> Any:
+            payload = dict(_body(body))
+            if "importPath" in payload or "runtimePath" in payload:
+                raise RequestError("Use the native source picker to import a project")
+            if payload.get("action") == "configure":
+                if connector is None:
+                    raise RequestError("Native directory picker is unavailable")
+                selection = await connector.dialog_open_directory("Choose TeX bin directory (contains latexmk)")
+                if not isinstance(selection, dict) or selection.get("ok") is not True:
+                    raise RequestError("Compiler directory selection failed")
+                data = selection.get("data", {})
+                if data.get("canceled"):
+                    return {}
+                payload["runtimePath"] = data.get("path")
+            if payload.get("action") == "import" and not payload.get("assetId"):
+                paths = await _select_workspace_files(connector, "Import LaTeX source", ["tex", "zip", "gz", "tar"], False)
+                if not paths:
+                    return {}
+                if len(paths) != 1:
+                    raise RequestError("Choose one LaTeX project archive or .tex file")
+                payload["importPath"] = paths[0]
+            return await asyncio.to_thread(workspaces["latexOperation"], workspace_id, payload)
+
+        return await _invoke(operation)
 
     @router.get("/workspaces")
     async def list_workspaces() -> JSONResponse:

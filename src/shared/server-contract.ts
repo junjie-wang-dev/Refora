@@ -35,6 +35,7 @@ export const AGENT_APPLICATION_ACTIONS = {
     "delete": "delete_workspace",
     "files.import": "import_workspace_files",
     "inspect": "list_workspace_context",
+    "latex": "edit_latex_project",
     "list": "list_workspaces",
     "notes.create": "create_workspace_note",
     "notes.delete": "delete_workspace_note",
@@ -49,7 +50,7 @@ export const AGENT_APPLICATION_ACTIONS = {
 
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "b96f3a7a71c59e202747f896e2af2936e26bd391d6dd9370b116440b48d326a8" as const
+export const SERVER_PROTOCOL_DIGEST = "2ac2b2be29709599b4b55463a17ff87df27024540769adda82b607c80cc8bdf0" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -216,11 +217,6 @@ export const SERVER_HTTP_ROUTES = [
     "method": "GET",
     "path": "/categories",
     "schemaDigest": "ecd90208edcf9cf87dc42e782011ceafdef511e28dbffaffa58a233d3be507b0"
-  },
-  {
-    "method": "GET",
-    "path": "/deleted-documents",
-    "schemaDigest": "3108b4898b9849232c45c7f41bb506096791b0f68f6380fce6f8ae5442d775e2"
   },
   {
     "method": "GET",
@@ -514,11 +510,6 @@ export const SERVER_HTTP_ROUTES = [
   },
   {
     "method": "POST",
-    "path": "/deleted-documents/{entry_id}/restore",
-    "schemaDigest": "5d4ca4fe84ec9380c1dbf9ff8ba8de7252ccfa566671d55ac8f4c646098f562e"
-  },
-  {
-    "method": "POST",
     "path": "/documents/bulk-categorize",
     "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
   },
@@ -696,6 +687,11 @@ export const SERVER_HTTP_ROUTES = [
     "method": "POST",
     "path": "/workspaces/{workspace_id}/items/reorder",
     "schemaDigest": "e1242a9c479f0d10585ad077407f6ad3b7f4d4f343a913afa1276471746644df"
+  },
+  {
+    "method": "POST",
+    "path": "/workspaces/{workspace_id}/latex",
+    "schemaDigest": "0060f16736e90c4e179a9c256a176ef85e8bfc62ef09b0ce53991c707d6a317f"
   },
   {
     "method": "POST",

@@ -45,7 +45,7 @@ for index in range(1, 107):
 db.close()
 `
 
-test('search, scoped sorting, multiple selection, compact controls and recently deleted work together', async () => {
+test('search, scoped sorting, multiple selection, compact controls and document deletion work together', async () => {
   test.setTimeout(120_000)
   const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'refora-e2e-management-')))
   const userDataFolder = path.join(temporaryRoot, 'user')
@@ -115,18 +115,11 @@ test('search, scoped sorting, multiple selection, compact controls and recently 
     await expect(confirmation).toBeVisible()
     await confirmation.getByRole('button', { name: 'Delete', exact: true }).click()
     await expect(row('review-001')).toHaveCount(0)
-    await expect.poll(async () => page.evaluate(() => window.api.documents.listDeleted().then((entries) => entries.length))).toBe(1)
-    await page.getByRole('button', { name: 'Recently deleted', exact: true }).click()
-    const recycle = page.getByRole('dialog')
-    await expect(recycle.getByText('LibraryReview 001', { exact: true })).toBeVisible()
-    await recycle.getByRole('button', { name: 'Restore', exact: true }).click()
-    await expect.poll(async () => page.evaluate(() => window.api.documents.listDeleted().then((entries) => entries.length))).toBe(0)
-    const restored = await page.evaluate(() => window.api.documents.get('review-001'))
-    expect(restored.note).toBe('Preserved note 1')
-    const restoredCategory = await page.evaluate(() => window.api.documents.list({ mode: 'category', categoryId: 'review-category' }))
-    expect(restoredCategory.map((document) => document.id)).toContain('review-001')
-    await page.keyboard.press('Escape')
-    await expect(row('review-001')).toBeVisible()
+    await expect.poll(async () => page.evaluate(() => window.api.documents.list({ mode: 'all' }).then((documents) =>
+      documents.some((document) => document.id === 'review-001')
+    ))).toBe(false)
+    await expect(page.getByRole('button', { name: 'Recently deleted', exact: true })).toHaveCount(0)
+    expect(fs.existsSync(path.join(libraryFolder, '.refora', 'recycle'))).toBe(false)
 
     await page.evaluate(() => window.api.workspaces.create('Review workspace'))
     await page.reload({ waitUntil: 'domcontentloaded' })

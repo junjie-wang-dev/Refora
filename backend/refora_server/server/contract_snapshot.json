@@ -36,6 +36,7 @@
       "delete": "delete_workspace",
       "files.import": "import_workspace_files",
       "inspect": "list_workspace_context",
+      "latex": "edit_latex_project",
       "list": "list_workspaces",
       "notes.create": "create_workspace_note",
       "notes.delete": "delete_workspace_note",
@@ -232,11 +233,6 @@
       "method": "GET",
       "path": "/categories",
       "schemaDigest": "ecd90208edcf9cf87dc42e782011ceafdef511e28dbffaffa58a233d3be507b0"
-    },
-    {
-      "method": "GET",
-      "path": "/deleted-documents",
-      "schemaDigest": "3108b4898b9849232c45c7f41bb506096791b0f68f6380fce6f8ae5442d775e2"
     },
     {
       "method": "GET",
@@ -530,11 +526,6 @@
     },
     {
       "method": "POST",
-      "path": "/deleted-documents/{entry_id}/restore",
-      "schemaDigest": "5d4ca4fe84ec9380c1dbf9ff8ba8de7252ccfa566671d55ac8f4c646098f562e"
-    },
-    {
-      "method": "POST",
       "path": "/documents/bulk-categorize",
       "schemaDigest": "b67f67d60658b30673fc97cdba2b87c4f3b1128b75a7ea4fc1e11cf96a3e15f0"
     },
@@ -715,6 +706,11 @@
     },
     {
       "method": "POST",
+      "path": "/workspaces/{workspace_id}/latex",
+      "schemaDigest": "0060f16736e90c4e179a9c256a176ef85e8bfc62ef09b0ce53991c707d6a317f"
+    },
+    {
+      "method": "POST",
       "path": "/workspaces/{workspace_id}/notes",
       "schemaDigest": "7e8cac7459ab553e5e6fa2fccfac146d6b0351f3458eee794dc052fbae24aef6"
     },
@@ -739,7 +735,7 @@
       "schemaDigest": "c45c598bbf7a0e26e28a8757e8e23e97cffed4ea7167d69f39c66529d8b2ffc1"
     }
   ],
-  "protocolDigest": "b96f3a7a71c59e202747f896e2af2936e26bd391d6dd9370b116440b48d326a8",
+  "protocolDigest": "2ac2b2be29709599b4b55463a17ff87df27024540769adda82b607c80cc8bdf0",
   "protocolVersion": 1,
   "serverEvents": [
     "ai.chat.token",

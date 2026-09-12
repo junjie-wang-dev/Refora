@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 import refora_server.server.routes.library as library_routes
 from conftest import make_doc
 from refora_server.db.connection import open_database
-from refora_server.repositories import create_repositories
+from refora_server.repositories import RepositoryDeps, create_repositories
 from refora_server.server.routes.library import create_library_router
 from refora_server.services.agent_profiles import createAgentProfilesService
 
@@ -323,51 +323,66 @@ def make_client(fakes=None):
     return TestClient(app), fakes
 
 
-def test_deleted_document_routes_restore_transactionally_and_notify_views():
-    fakes = Fakes()
-    fakes.documents['listDeleted'] = lambda: [{'id': 'entry', 'titles': ['Paper'], 'count': 1, 'deletedAt': 1}]
-    fakes.documents['restoreDeleted'] = lambda identifier: {'documentIds': [identifier], 'skippedRelations': 0}
-    client, _ = make_client(fakes)
-    assert client.get('/deleted-documents', headers={'X-Refora-Token': 'test-token'}).json()['data'][0]['id'] == 'entry'
-    response = client.post('/deleted-documents/entry/restore', headers={'X-Refora-Token': 'test-token'})
-    assert response.json() == {'ok': True, 'data': {'documentIds': ['entry'], 'skippedRelations': 0}}
-    assert fakes.transaction_calls == 1
-    assert ('library.contents.changed', {}) in fakes.emitted_events
+def test_removed_recovery_routes_are_unavailable():
+    client, _ = make_client()
+    headers = {"X-Refora-Token": "test-token"}
+    assert client.get("/deleted-documents", headers=headers).status_code == 404
+    assert client.post("/deleted-documents/entry/restore", headers=headers).status_code == 404
 
 
-def test_delete_does_not_move_pdf_before_archive_transaction_succeeds(tmp_path):
+def test_delete_does_not_move_pdf_before_database_transaction_succeeds(tmp_path):
     fakes = Fakes()
-    source = tmp_path / 'paper.pdf'
-    source.write_bytes(b'%PDF-1.4\nfixture')
-    fakes.settings['get'] = lambda key, default=None: str(tmp_path) if key == 'libraryFolderPath' else default
-    fakes.document_overrides['paper'] = make_doc(id='paper', file_path=str(source))
-    fakes.documents['prepareDeletion'] = lambda ids: {'id': 'entry', 'backups': {}}
-    def fail_archive(_ids, _prepared):
-        raise RuntimeError('Archive disk is full')
-    fakes.documents['archiveDeletion'] = fail_archive
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\nfixture")
+    fakes.settings["set"]("libraryFolderPath", str(tmp_path))
+    fakes.document_overrides["paper"] = make_doc(id="paper", file_path=str(source))
+    def fail_delete(_identifier):
+        raise RuntimeError("Database disk is full")
+    fakes.documents["delete"] = fail_delete
     client, _ = make_client(fakes)
-    response = client.delete('/documents/paper', headers={'X-Refora-Token': 'test-token'})
-    assert response.json()['ok'] is False
+    response = client.delete("/documents/paper", headers={"X-Refora-Token": "test-token"})
+    assert response.json()["ok"] is False
     assert fakes.trashed == []
     assert fakes.deleted_documents == []
     assert source.exists()
 
 
-@pytest.mark.parametrize('succeeds', [True, False])
-def test_restore_only_releases_recovery_copies_after_successful_commit(tmp_path, succeeds):
-    fakes = Fakes()
-    recovery = tmp_path / '.refora' / 'recycle' / 'entry'
-    recovery.mkdir(parents=True)
-    fakes.settings['get'] = lambda key, default=None: str(tmp_path) if key == 'libraryFolderPath' else default
-    def restore(_identifier):
-        if not succeeds:
-            raise RuntimeError('Recovery failed')
-        return {'documentIds': ['paper'], 'skippedRelations': 0}
-    fakes.documents['restoreDeleted'] = restore
-    client, _ = make_client(fakes)
-    response = client.post('/deleted-documents/entry/restore', headers={'X-Refora-Token': 'test-token'})
-    assert response.json()['ok'] is succeeds
-    assert fakes.trashed == ([str(recovery)] if succeeds else [])
+@pytest.mark.parametrize('bulk', [False, True])
+def test_deletion_uses_system_trash_without_creating_recovery_data(tmp_path, bulk):
+    library = tmp_path / 'library'
+    trash = tmp_path / 'system-trash'
+    library.mkdir()
+    trash.mkdir()
+    db, _ = open_database(str(tmp_path / 'library.db'))
+    try:
+        repos = create_repositories(db, RepositoryDeps(getLibraryFolder=lambda: str(library)))
+        repos['settings'].set('libraryFolderPath', str(library))
+        db.execute("INSERT INTO deleted_documents VALUES ('legacy',1,'{}')")
+        for identifier in ['first', 'second']:
+            path = library / f'{identifier}.pdf'
+            path.write_bytes(b'%PDF-1.4\nfixture')
+            repos['documents']['insert'](make_doc(id=identifier, file_path=str(path), file_hash=identifier))
+        fakes = Fakes()
+        fakes.documents = repos['documents']
+        fakes.settings = repos['settings']
+        fakes.repos = repos
+        fakes.connector['trashItem'] = lambda path: library_routes.Path(path).rename(trash / library_routes.Path(path).name)
+        client, _ = make_client(fakes)
+        headers = {'X-Refora-Token': 'test-token'}
+        response = client.post('/documents/bulk-delete', headers=headers, json={'ids': ['first', 'second']}) if bulk else client.delete('/documents/first', headers=headers)
+        assert response.json() == {'ok': True, 'data': {'ack': True}}
+        assert repos['documents']['get']('first') is None
+        assert (trash / 'first.pdf').exists()
+        assert not (library / 'first.pdf').exists()
+        assert not (library / '.refora' / 'recycle').exists()
+        assert db.execute('SELECT count(*) FROM deleted_documents').fetchone()[0] == 1
+        if bulk:
+            assert repos['documents']['get']('second') is None
+            assert (trash / 'second.pdf').exists()
+        else:
+            assert repos['documents']['get']('second') is not None
+    finally:
+        db.close()
 
 
 def test_registers_every_library_domain_protocol_route():

@@ -416,3 +416,19 @@ def test_capability_audit_is_available_to_the_agent_without_writes(app):
     assert statuses['reader_state'] == 'unsupported'
     assert statuses['ai_self_management'] == 'excluded'
     assert repos['workspaces']['list']() == []
+
+
+def test_agent_reads_and_edits_the_open_latex_file(app):
+    from refora_server.services.latex import LatexService
+    _, repos, services, execute, _, tmp_path, _ = app
+    ws, _ = create_board(app)
+    latex = LatexService(lambda _: str(tmp_path / 'sandbox'), lambda identifier: repos['workspaces']['get'](identifier), services['resolveAssetFile'])
+    services['latexOperation'] = latex.operate
+    project = latex.operate(ws, {'action': 'create', 'title': 'Paper'})['project']
+    latex.operate(ws, {'action': 'activate', 'projectId': project['id'], 'path': 'main.tex'})
+    active = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'active'})
+    assert active['file']['path'] == 'main.tex'
+    result = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'write', 'projectId': project['id'], 'path': 'main.tex', 'content': 'AI revision', 'expectedHash': active['file']['hash']})
+    assert result['file']['content'] == 'AI revision'
+    stale = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'write', 'projectId': project['id'], 'path': 'main.tex', 'content': 'Stale', 'expectedHash': active['file']['hash']})
+    assert 'error' in stale

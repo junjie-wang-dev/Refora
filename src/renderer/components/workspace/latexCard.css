@@ -1,0 +1,24 @@
+.workspace-latex-card { display:flex; flex-direction:column; gap:9px; width:100%; height:100%; overflow:hidden; padding:12px; cursor:pointer; }
+.workspace-latex-card-heading { display:flex; align-items:center; justify-content:space-between; height:16px; flex-shrink:0; }
+.workspace-latex-remove { display:grid; place-items:center; width:23px; height:23px; border-radius:5px; color:var(--color-muted); opacity:0; }
+.workspace-latex-card:hover .workspace-latex-remove,.workspace-latex-card:focus-within .workspace-latex-remove { opacity:1; }
+.workspace-latex-remove:hover { color:var(--color-foreground); background:var(--color-hover); }
+.workspace-latex-card h3 { font-size:15px; font-weight:600; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-latex-card h3 button { max-width:100%; overflow:hidden; text-overflow:ellipsis; text-align:left; }
+.workspace-latex-document { display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--color-border); border-radius:7px; background:color-mix(in srgb,var(--color-accent) 4%,var(--color-background)); }
+.workspace-latex-document > svg { color:var(--color-accent); flex-shrink:0; }
+.workspace-latex-document > div { min-width:0; }
+.workspace-latex-document strong { display:block; font:11px ui-monospace,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.workspace-latex-document span { display:block; margin-top:4px; font-size:10px; color:var(--color-muted); }
+.workspace-latex-files { display:flex; gap:7px; min-height:14px; overflow:hidden; }
+.workspace-latex-files span { display:flex; gap:4px; align-items:center; min-width:0; max-width:50%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:9px; color:var(--color-muted); }
+.workspace-latex-card footer { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:auto; font-size:10px; color:var(--color-muted); }
+.workspace-latex-card footer > span:last-child { display:flex; align-items:center; gap:5px; color:var(--color-accent); }
+.workspace-connection-accent--latex { --workspace-connection-accent:var(--color-accent); }
+.latex-workspace-existing { margin-top:24px; border-top:1px solid var(--color-border); padding-top:16px; }
+.latex-workspace-existing h3 { margin-bottom:10px; font-size:11px; color:var(--color-muted); font-weight:500; }
+.latex-workspace-existing > div { display:flex; align-items:center; gap:9px; padding:8px 0; }
+.latex-workspace-existing > div > span { flex:1; min-width:0; }
+.latex-workspace-existing strong,.latex-workspace-existing small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.latex-workspace-existing strong { font-size:12px; font-weight:500; }
+.latex-workspace-existing small { margin-top:3px; font-size:10px; color:var(--color-muted); }

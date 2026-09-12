@@ -1,3 +1,5 @@
+import type { LatexProject } from '../../../shared/latex-types'
+import LatexCard from './LatexCard'
 import { memo } from 'react'
 import type { ComponentProps } from 'react'
 import type {
@@ -291,6 +293,8 @@ interface WorkspaceCardsProps {
   reports: Map<string, AiReport>
   notes: Map<string, WorkspaceNote>
   assets: Map<string, WorkspaceAsset>
+  latexProjects?: Map<string, LatexProject>
+  onOpenLatex?: (project: LatexProject) => void
   loadedSummaryDocIds: Set<string>
   summarizing: Set<string>
   summaryErrors: Map<string, string>
@@ -323,6 +327,8 @@ export default function WorkspaceCards({
   reports,
   notes,
   assets,
+  latexProjects,
+  onOpenLatex,
   loadedSummaryDocIds,
   summarizing,
   summaryErrors,
@@ -424,6 +430,11 @@ export default function WorkspaceCards({
           onOpenMarkdownCard={onOpenMarkdownCard}
         />
       )
+    }
+    if (item.kind === 'latex' && item.latexId) {
+      const project = latexProjects?.get(item.latexId)
+      if (!project) return null
+      return <ResizableCard {...shell} key={item.id} sizeKey={item.id} size={clampCardSize({ width: item.width, height: item.height })} position={{ x: item.x, y: item.y, zIndex: item.zIndex }} selected={selectedItemIds.has(item.id)} animatePosition={animatingItemIds.has(item.id)} className="workspace-connection-accent--latex"><LatexCard project={project} onOpen={() => onOpenLatex?.(project)} onRemove={() => onRemoveItem(item.id)} /></ResizableCard>
     }
     if (item.kind === 'asset' && item.assetId) {
       const asset = assets.get(item.assetId)

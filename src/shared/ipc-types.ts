@@ -83,18 +83,6 @@ export interface DocumentCounts {
   starred: number
 }
 
-export interface DeletedDocumentBatch {
-  id: string
-  deletedAt: number
-  titles: string[]
-  count: number
-}
-
-export interface RestoreDeletedResult {
-  documentIds: string[]
-  skippedRelations: number
-}
-
 export type EditableField =
   | 'title'
   | 'authors'
@@ -338,7 +326,7 @@ export const WORKSPACE_CANVAS_MIN_ZOOM = 0.25
 export const WORKSPACE_CANVAS_MAX_ZOOM = 2.5
 export const WORKSPACE_CANVAS_DEFAULT_ZOOM = 1
 
-export type WorkspaceItemKind = 'document' | 'report' | 'note' | 'asset'
+export type WorkspaceItemKind = 'document' | 'report' | 'note' | 'asset' | 'latex'
 
 export type WorkspaceAssetPreviewKind = 'image' | 'text' | 'audio' | 'video' | 'none'
 
@@ -389,6 +377,7 @@ export interface WorkspaceAssetImportResult {
 }
 
 export interface WorkspaceFileImportResult {
+  latexProjects?: import('./latex-types').LatexProject[]
   documentIds: string[]
   notes: WorkspaceNote[]
   assets: WorkspaceAsset[]
@@ -408,6 +397,7 @@ export interface Workspace {
 }
 
 export interface WorkspaceItem {
+  latexId?: string | null
   id: string
   workspaceId: string
   kind: WorkspaceItemKind
@@ -1029,8 +1019,6 @@ export interface ReforaApi {
     setStarred(id: string, value: boolean): Promise<void>
     delete(id: string): Promise<void>
     bulkDelete(ids: string[]): Promise<void>
-    listDeleted(): Promise<DeletedDocumentBatch[]>
-    restoreDeleted(id: string): Promise<RestoreDeletedResult>
     bulkCategorize(ids: string[], catId: string): Promise<void>
     bulkRefreshMetadata(ids: string[]): Promise<void>
     openPdf(id: string, external?: boolean): Promise<Document>
@@ -1124,6 +1112,9 @@ export interface ReforaApi {
     writeText(text: string): Promise<void>
     copyMarkdown(title: string, content: string): Promise<void>
     copyWorkspaceAsset(id: string): Promise<void>
+  }
+  latex: {
+    execute(workspaceId: string, request: import('./latex-types').LatexRequest): Promise<import('./latex-types').LatexResponse>
   }
   workspaces: {
     list(): Promise<Workspace[]>

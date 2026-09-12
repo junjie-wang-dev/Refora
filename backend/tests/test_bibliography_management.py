@@ -141,14 +141,16 @@ def test_merge_rolls_back_all_sources_when_annotations_use_different_pdf():
     assert documents["get"]("target")["note"] == "target"
 
 
-def test_deleted_document_citation_key_is_reserved_for_restore():
+def test_legacy_deleted_documents_do_not_reserve_citation_keys():
     db = open_migrated_db()
     documents = make_docs_repo(db)
     db.execute("INSERT INTO deleted_documents VALUES ('deleted',1,?)", [json.dumps({"records": {"documents": [{"id": "old", "citekey": "reserved"}]}})])
     document = documents["insert"]({**make_doc(id="new"), "citekey": "reserved"})
-    assert document["citekey"] == "reserved-2"
-    with pytest.raises(RepoError, match="already used"):
-        documents["update"]("new", {"citekey": "reserved"})
+    assert document["citekey"] == "reserved"
+    documents["update"]("new", {"citekey": "renamed"})
+    assert documents["update"]("new", {"citekey": "reserved"})["citekey"] == "reserved"
+    assert db.execute("SELECT count(*) FROM deleted_documents").fetchone()[0] == 1
+    db.close()
 
 
 @pytest.mark.asyncio

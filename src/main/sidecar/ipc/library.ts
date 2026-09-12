@@ -64,8 +64,6 @@ export function createServerLibraryHandlers({
         ...(filter.offset === undefined ? {} : { offset: filter.offset })
       })),
     [IpcChannel.DocumentsCount]: () => forward(() => http.documentsCount()),
-    [IpcChannel.DocumentsListDeleted]: () => forward(() => http.documentsListDeleted()),
-    [IpcChannel.DocumentsRestoreDeleted]: (id: string) => forward(() => http.documentsRestoreDeleted(id)),
     [IpcChannel.DocumentsSearch]: (query: string, page?: PageRequest) =>
       forward(() => page
         ? http.documentsSearch(query, page)

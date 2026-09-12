@@ -135,8 +135,6 @@ describe('createServerLibraryHandlers', () => {
       { channel: IpcChannel.DocumentsSetStarred, args: ['doc-1', true], method: 'documentsSetStarred', forwarded: ['doc-1', true] },
       { channel: IpcChannel.DocumentsDelete, args: ['doc-1'], method: 'documentsDelete', forwarded: ['doc-1'] },
       { channel: IpcChannel.DocumentsBulkDelete, args: [['doc-1']], method: 'documentsBulkDelete', forwarded: [['doc-1']] },
-      { channel: IpcChannel.DocumentsListDeleted, args: [], method: 'documentsListDeleted', forwarded: [] },
-      { channel: IpcChannel.DocumentsRestoreDeleted, args: ['entry-1'], method: 'documentsRestoreDeleted', forwarded: ['entry-1'] },
       { channel: IpcChannel.DocumentsBulkCategorize, args: [['doc-1'], 'cat-1'], method: 'documentsBulkCategorize', forwarded: [{ ids: ['doc-1'], categoryId: 'cat-1' }] },
       { channel: IpcChannel.DocumentsBulkRefreshMetadata, args: [['doc-1']], method: 'documentsBulkRefreshMetadata', forwarded: [['doc-1']] },
       { channel: IpcChannel.DocumentsOpenPdf, args: ['doc-1'], method: 'documentsOpenPdf', forwarded: ['doc-1'] },

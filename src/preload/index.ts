@@ -189,8 +189,6 @@ const api: ReforaApi = {
       invoke<void>(IpcChannel.DocumentsSetStarred, id, value),
     delete: (id: string) => invoke<void>(IpcChannel.DocumentsDelete, id),
     bulkDelete: (ids: string[]) => invoke<void>(IpcChannel.DocumentsBulkDelete, ids),
-    listDeleted: () => invoke(IpcChannel.DocumentsListDeleted),
-    restoreDeleted: (id: string) => invoke(IpcChannel.DocumentsRestoreDeleted, id),
     bulkCategorize: (ids: string[], catId: string) =>
       invoke<void>(IpcChannel.DocumentsBulkCategorize, ids, catId),
     bulkRefreshMetadata: (ids: string[]) =>
@@ -333,6 +331,9 @@ const api: ReforaApi = {
       invoke<void>(IpcChannel.ClipboardCopyWorkspaceAsset, id)
   },
 
+  latex: {
+    execute: (workspaceId, request) => invoke(IpcChannel.WorkspaceLatex, workspaceId, request)
+  },
   workspaces: {
     list: () => invoke<Workspace[]>(IpcChannel.WorkspacesList),
     create: (name: string) => invoke<Workspace>(IpcChannel.WorkspacesCreate, name),

@@ -163,7 +163,7 @@ def remove_workspace_items(executor, args):
     return {'removedItemIds': args['itemIds']}
 
 
-@tool('add_workspace_items', 'Pin existing library PDFs or workspace notes, reports and attachments to a workspace. Pass kind and native JSON ids array. Returns complete cards, including itemIds and geometry. Optional placement sets the starting canvas position.', scoped=True, kind=(Literal['document', 'note', 'report', 'asset'], ...), ids=(Ids, ...), placement=(Placement | None, None))
+@tool('add_workspace_items', 'Pin existing library PDFs or workspace notes, reports and attachments to a workspace. Pass kind and native JSON ids array. Returns complete cards, including itemIds and geometry. Optional placement sets the starting canvas position.', scoped=True, kind=(Literal['document', 'note', 'report', 'asset', 'latex'], ...), ids=(Ids, ...), placement=(Placement | None, None))
 def add_workspace_items(executor, args):
     result = service(executor, 'addItems', args['workspaceId'], args['kind'], args['ids'], args.get('placement'))
     changed(executor, args['workspaceId'])
@@ -346,3 +346,14 @@ def list_documents(executor, args):
     documents = call(repo(executor.repos, 'documents'), 'list', filters)
     rows = [{**item, 'docId': item['id'], 'categories': call(repo(executor.repos, 'categories'), 'listForDocument', item['id'])} for item in documents[:limit]]
     return {'documents': rows, 'offset': offset, 'limit': limit, 'hasMore': len(documents) > limit, 'nextOffset': offset + limit if len(documents) > limit else None}
+
+
+@tool('edit_latex_project', 'Read and edit local LaTeX projects. Use operation=active to read the currently open editor file, including its content and hash. Use list for projects, project for files, read with projectId/path, write with content and expectedHash (empty hash creates a new file), root to select the main .tex file, asset with assetId to copy workspace images and obtain an includegraphics path, and compile for local PDF compilation and diagnostics. Read before writing; stale hashes are rejected. Changes appear in the editor automatically. Files remain local.', scoped=True, operation=(Literal['active', 'list', 'project', 'read', 'write', 'root', 'asset', 'compile'], ...), projectId=(Text, None), path=(Text, None), content=(str, None), expectedHash=(str, None), assetId=(Text, None), engine=(Literal['pdflatex', 'xelatex', 'lualatex'], None))
+def edit_latex_project(executor, args):
+    request = {key: val for key, val in args.items() if key not in {'workspaceId', 'operation'}}
+    result = service(executor, 'latexOperation', args['workspaceId'], {**request, 'action': args['operation']})
+    if args['operation'] in {'write', 'root', 'asset'}:
+        changed(executor, args['workspaceId'])
+    if 'compilation' in result:
+        result = {'compilation': {key: val for key, val in result['compilation'].items() if key != 'pdfBase64'}}
+    return result

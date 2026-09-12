@@ -719,9 +719,11 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         markdown_paths = [
             path for path in unique_paths if Path(path).suffix.lower() in {".md", ".markdown"}
         ]
+        latex_paths = [path for path in unique_paths if Path(path).suffix.lower() == ".tex"]
+        latex_projects = []
         asset_paths = [
             path for path in unique_paths
-            if Path(path).suffix.lower() not in {".pdf", ".md", ".markdown"}
+            if Path(path).suffix.lower() not in {".pdf", ".md", ".markdown", ".tex"}
         ]
         document_ids: list[str] = []
         notes: list[dict[str, Any]] = []
@@ -787,12 +789,21 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
             except Exception as exc:
                 errors.append({"path": raw_path, "message": str(exc)})
 
+        for raw_path in latex_paths:
+            try:
+                result = await asyncio.to_thread(latex.operate, workspace_id, {"action": "import", "importPath": raw_path, "placement": placed(offset)})
+                latex_projects.append(result["project"])
+                offset += 1
+            except Exception as exc:
+                errors.append({"path": raw_path, "message": str(exc)})
+
         if asset_paths:
             result = await import_assets_async(workspace_id, asset_paths, placed(offset))
             assets.extend(result["imported"])
             errors.extend(result["errors"])
 
         return {
+            **({"latexProjects": latex_projects} if latex_projects else {}),
             "documentIds": document_ids,
             "notes": notes,
             "assets": assets,
@@ -942,7 +953,18 @@ def createWorkspacesService(repos: dict[str, Any], deps: dict[str, Any] | None =
         repos_["workspaceItems"]["removeByNoteId"](note_id)
         repos_["workspaceNotes"]["delete"](note_id)
 
+    from refora_server.services.latex import LatexService
+
+    def register_latex_project(workspace_id, project, placement):
+        def operation():
+            if repos["workspaceItems"]["registerLatexProject"](workspace_id, project):
+                repos["workspaceItems"]["add"](workspace_id, "latex", [project["id"]], placement)
+        _transaction(operation)
+
+    latex = LatexService(_sandbox_root, _require_workspace, resolve_asset_file, repos["settings"], register_latex_project)
+
     return {
+        "latexOperation": latex.operate,
         "listWorkspaces": list_workspaces,
         "createWorkspace": create_workspace,
         "createWorkspaceWithSandbox": create_workspace_with_sandbox,
