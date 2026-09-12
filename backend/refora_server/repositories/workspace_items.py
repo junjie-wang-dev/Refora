@@ -119,9 +119,9 @@ def createWorkspaceItemsRepository(db):
             try:
                 db.execute(
                     "INSERT INTO workspace_items "
-                    "(id, workspaceId, kind, docId, reportId, noteId, assetId, latexId, sortOrder, x, y, zIndex, addedAt) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [item_id, workspaceId, kind, doc_id, report_id, note_id, asset_id, latex_id, next_sort, x, y, next_z, now],
+                    "(id, workspaceId, kind, docId, reportId, noteId, assetId, latexId, sortOrder, x, y, zIndex, addedAt, height) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [item_id, workspaceId, kind, doc_id, report_id, note_id, asset_id, latex_id, next_sort, x, y, next_z, now, 112 if kind == "latex" else 200],
                 )
             except sqlite3.IntegrityError as exc:
                 raise RepoError("duplicate", f"workspace item already exists for {kind}: {id_}") from exc

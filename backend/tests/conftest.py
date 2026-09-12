@@ -6,7 +6,7 @@ DB_RESOURCES = Path(__file__).resolve().parents[1] / "refora_server" / "db"
 SCHEMA_SQL = DB_RESOURCES / "schema.sql"
 MIGRATIONS_DIR = DB_RESOURCES / "migrations"
 
-LATEST_SCHEMA_VERSION = 47
+LATEST_SCHEMA_VERSION = 48
 
 DOCUMENT_COLUMN_MIGRATIONS = [
     "0004_add_pages_issue.sql",

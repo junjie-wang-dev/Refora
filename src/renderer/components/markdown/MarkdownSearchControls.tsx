@@ -15,9 +15,10 @@ interface Props {
   onNavigate: (direction: number) => void
   onClose: () => void
   closable?: boolean
+  inputPlaceholder?: string
 }
 
-export default function MarkdownSearchControls({ inputRef, query, total, index, label, previousLabel, nextLabel, closeLabel, onQueryChange, onNavigate, onClose, closable = true }: Props) {
+export default function MarkdownSearchControls({ inputRef, query, total, index, label, previousLabel, nextLabel, closeLabel, onQueryChange, onNavigate, onClose, closable = true, inputPlaceholder }: Props) {
   const { t } = useTranslation()
   return <form className="markdown-search-controls" role="search" aria-label={label} onSubmit={(event) => { event.preventDefault(); onNavigate(1) }} onKeyDown={(event) => {
     if (event.nativeEvent.isComposing) return
@@ -26,7 +27,7 @@ export default function MarkdownSearchControls({ inputRef, query, total, index, 
   }}>
     <div className="markdown-search-input">
       <MagnifyingGlass size={16} aria-hidden="true" />
-      <input ref={inputRef} value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label={label} placeholder={t('markdown.findDocument')} />
+      <input ref={inputRef} value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label={label} placeholder={inputPlaceholder ?? t('markdown.findDocument')} />
       {query && <button type="button" aria-label={t('common.clearSearch')} title={t('common.clearSearch')} onPointerDown={(event) => event.preventDefault()} onClick={() => { onQueryChange(''); inputRef.current?.focus() }}><X size={14} /></button>}
     </div>
     <span role="status" aria-live="polite">{query ? total ? `${index + 1}/${total}` : t('pdfReader.noResults') : ''}</span>

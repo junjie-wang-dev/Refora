@@ -38,6 +38,7 @@ def test_create_project_pins_one_persistent_card_and_removal_keeps_sources(board
     assert len(items) == 1
     assert (items[0]['kind'], items[0]['latexId'], items[0]['x'], items[0]['y']) == ('latex', project['id'], 85, -30)
     card = items[0]
+    assert (card['width'], card['height']) == (300, 112)
     services['moveItem'](ws, card['id'], 400, 600, 3)
     services['resizeItem'](ws, card['id'], 420, 250)
     services['latexOperation'](ws, {'action': 'list'})
@@ -49,6 +50,7 @@ def test_create_project_pins_one_persistent_card_and_removal_keeps_sources(board
     assert (directory / ws / 'work/latex' / project['id'] / 'files/main.tex').is_file()
     services['addItems'](ws, 'latex', [project['id']], {'x': 10, 'y': 20})
     assert len(repos['workspaceItems']['list'](ws)) == 1
+    assert repos['workspaceItems']['list'](ws)[0]['height'] == 112
 
 
 def test_existing_project_is_backfilled_once(board):
@@ -62,6 +64,26 @@ def test_existing_project_is_backfilled_once(board):
     services['latexOperation'](ws, {'action': 'list'})
     assert len(repos['workspaceItems']['list'](ws)) == 1
     assert repos['workspaceItems']['getLatexProject'](identifier)['title'] == 'Existing paper'
+
+
+def test_compact_card_migration_preserves_custom_sizes_positions_and_connections(board):
+    db, repos, services, ws, _ = board
+    for title in ['Default', 'Custom']:
+        services['latexOperation'](ws, {'action': 'create', 'title': title})
+    original, custom = repos['workspaceItems']['list'](ws)
+    services['resizeItem'](ws, original['id'], 300, 200)
+    services['moveItem'](ws, original['id'], 90, 240, 3)
+    services['resizeItem'](ws, custom['id'], 360, 250)
+    note = services['createNote'](ws, 'Note', 'Keep size', 'markdown')
+    edge = repos['workspaceConnections']['create'](ws, original['id'], custom['id'], 'right', 'left')
+    db.execute('PRAGMA user_version = 47')
+    migrations.run_migrations(_SqliteAdapter(db))
+    updated = repos['workspaceItems']['get'](original['id'])
+    assert (updated['width'], updated['height'], updated['x'], updated['y'], updated['zIndex']) == (300, 112, 90, 240, 3)
+    unchanged = repos['workspaceItems']['get'](custom['id'])
+    assert (unchanged['width'], unchanged['height']) == (360, 250)
+    assert next(item for item in repos['workspaceItems']['list'](ws) if item['noteId'] == note['id'])['height'] == 200
+    assert repos['workspaceConnections']['list'](ws) == [edge]
 
 
 def test_tex_import_creates_a_card_and_agent_can_read_it(board):

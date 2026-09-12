@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown'
 import { REMARK_PLUGINS, REHYPE_PLUGINS, createReforaDocMarkdownComponents, urlTransform } from '../../utils/markdown'
 import { useDocumentStore } from '../../store/documentStore'
 import { formatDate } from '../../utils/format'
-import { IconTooltip, Input, PanelTabHeader } from '../ui'
+import { ReaderToolbarButton, Input, PanelTabHeader } from '../ui'
 import WorkspaceNavigationControls from './WorkspaceNavigationControls'
 import { openDocumentPdf } from '../../utils/openPdf'
 import i18n from '../../i18n'
@@ -214,7 +214,7 @@ const WorkspaceMarkdownView = forwardRef<WorkspaceMarkdownViewHandle, WorkspaceM
 
   const handleBack = async () => { if (!exporting && await draft.flush()) onBack() }
   const handleClose = async () => { if (!exporting && await draft.flush()) onClose?.() }
-  const button = (label: string, icon: React.ReactNode, action: () => void, pressed?: boolean, disabled = false) => <IconTooltip label={label} appearance="sidebar"><button type="button" className="markdown-reader-button" aria-label={label} aria-pressed={pressed} disabled={disabled || exporting} onClick={action}>{icon}</button></IconTooltip>
+  const button = (label: string, icon: React.ReactNode, action: () => void, pressed?: boolean, disabled = false) => <ReaderToolbarButton label={label} active={pressed} disabled={disabled || exporting} onClick={action}>{icon}</ReaderToolbarButton>
   const modeActions = editable ? <div className="flex shrink-0 items-center gap-1" role="group" aria-label={t('workspace.markdownMode')}>
     {button(t('workspace.markdownRead'), <BookOpen size={17} />, () => void changeMode('read'), mode === 'read')}
     {button(t('workspace.markdownEdit'), <PencilSimple size={17} />, () => void changeMode('edit'), mode === 'edit')}

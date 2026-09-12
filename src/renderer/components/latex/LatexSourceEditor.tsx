@@ -1,8 +1,12 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import hljs from 'highlight.js/lib/core'
 import latex from 'highlight.js/lib/languages/latex'
-import { ArrowDown, ArrowUp, CaretDown, CaretRight, MagnifyingGlass, X } from '@phosphor-icons/react'
+import { CaretDown, CaretRight } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
+
+import MarkdownSearchControls from '../markdown/MarkdownSearchControls'
+import '../markdown/markdownWorkspace.css'
 
 hljs.registerLanguage('latex', latex)
 
@@ -11,15 +15,18 @@ export interface LatexSourceHandle {
   revealLine: (line: number) => void
   insert: (text: string) => void
   openFind: () => void
+  closeFind: () => void
 }
 interface Props {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  searchContainer?: HTMLDivElement | null
+  onSearchFocus?: () => void
   onPositionChange?: (line: number, column: number) => void
 }
 
-const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, onPositionChange }, ref) {
+const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, searchContainer, onSearchFocus, onPositionChange }, ref) {
   const { t } = useTranslation()
   const input = useRef<HTMLTextAreaElement>(null)
   const highlights = useRef<HTMLPreElement>(null)
@@ -30,7 +37,7 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
   const [find, setFind] = useState(false)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [line, setLine] = useState(1)
-  const [matchIndex, setMatchIndex] = useState(0)
+  const [matchIndex, setMatchIndex] = useState(-1)
   const html = useMemo(() => hljs.highlight(value, { language: 'latex' }).value, [value])
   const lines = useMemo(() => value.split('\n'), [value])
   const matches = useMemo(() => {
@@ -64,12 +71,17 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
     syncScroll()
     notifyPosition()
   }
-  const openFind = () => { setFind(true); requestAnimationFrame(() => search.current?.focus()) }
+  const closeFind = () => { setFind(false); setQuery(''); setMatchIndex(-1); setReplaceOpen(false); input.current?.focus() }
+  const openFind = () => { setFind(true); onSearchFocus?.(); requestAnimationFrame(() => search.current?.focus()) }
   useImperativeHandle(ref, () => ({
     focus: () => input.current?.focus(),
     revealLine: (target) => reveal(lines.slice(0, Math.max(0, target - 1)).reduce((sum, text) => sum + text.length + 1, 0)),
     insert: (text) => {
       let { start, end } = selection.current
+      if (start !== end) {
+        const nextLine = value.indexOf('\n', end)
+        start = end = nextLine < 0 ? value.length : nextLine + 1
+      }
       const closing = value.lastIndexOf('\\end{document}')
       const opening = value.indexOf('\\begin{document}')
       if (start === end && (start === 0 || (closing >= 0 && (start >= closing || start < opening)))) {
@@ -78,24 +90,26 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
       onChange(value.slice(0, start) + text + value.slice(end))
       requestAnimationFrame(() => reveal(start + text.length))
     },
-    openFind
+    openFind,
+    closeFind
   }))
   const selectMatch = (direction: number) => {
     if (!matches.length) return
-    const caret = input.current?.selectionStart ?? 0
-    let index = direction > 0 ? matches.findIndex((offset) => offset > caret) : matches.findLastIndex((offset) => offset < caret)
-    if (index < 0) index = direction > 0 ? 0 : matches.length - 1
+    const keepSearchFocus = document.activeElement === search.current
+    const index = matchIndex < 0 ? direction > 0 ? 0 : matches.length - 1 : (matchIndex + direction + matches.length) % matches.length
     setMatchIndex(index)
     reveal(matches[index], matches[index] + query.length)
+    if (keepSearchFocus) search.current?.focus()
   }
+  const searchControls = <div className="latex-find" data-query={Boolean(query) || undefined} onFocusCapture={onSearchFocus}>
+      <div className="latex-find-row"><button type="button" className="latex-icon-button" aria-label={t('latex.toggleReplace')} aria-expanded={replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)}>{replaceOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}</button><MarkdownSearchControls inputRef={search} inputPlaceholder={t('latex.find')} query={query} total={matches.length} index={Math.min(matchIndex, Math.max(0, matches.length - 1))} label={t('latex.find')} previousLabel={t('latex.previousMatch')} nextLabel={t('latex.next')} closeLabel={t('common.close')} onQueryChange={(next) => { setQuery(next); setMatchIndex(-1) }} onNavigate={selectMatch} onClose={closeFind} closable={!searchContainer} /></div>
+      {replaceOpen && <div className="latex-replace-row"><input aria-label={t('latex.replacement')} placeholder={t('latex.replacement')} value={replacement} onChange={(event) => setReplacement(event.target.value)} /><button type="button" className="latex-text-button" disabled={!query || disabled} onClick={() => onChange(value.split(query).join(replacement))}>{t('latex.replaceAll')}</button></div>}
+    </div>
   return <div className="latex-source" onKeyDown={(event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
-    if (event.key === 'Escape') { setFind(false); input.current?.focus() }
+    if (event.key === 'Escape' && find) { event.preventDefault(); event.stopPropagation(); closeFind() }
   }}>
-    {find && <div className="latex-find">
-      <div className="latex-find-row"><button type="button" className="latex-icon-button" aria-label={t('latex.toggleReplace')} aria-expanded={replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)}>{replaceOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}</button><label><MagnifyingGlass size={14} /><input ref={search} aria-label={t('latex.find')} placeholder={t('latex.find')} value={query} onChange={(event) => { setQuery(event.target.value); setMatchIndex(0) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); selectMatch(event.shiftKey ? -1 : 1) } }} /></label><span className="latex-match-count" role="status">{matches.length ? `${Math.min(matchIndex + 1, matches.length)}/${matches.length}` : '0/0'}</span><button type="button" className="latex-icon-button" aria-label={t('latex.previousMatch')} disabled={!matches.length} onClick={() => selectMatch(-1)}><ArrowUp size={14} /></button><button type="button" className="latex-icon-button" aria-label={t('latex.next')} disabled={!matches.length} onClick={() => selectMatch(1)}><ArrowDown size={14} /></button><button type="button" className="latex-icon-button" onClick={() => { setFind(false); input.current?.focus() }} aria-label={t('common.close')}><X size={15} /></button></div>
-      {replaceOpen && <div className="latex-replace-row"><input aria-label={t('latex.replacement')} placeholder={t('latex.replacement')} value={replacement} onChange={(event) => setReplacement(event.target.value)} /><button type="button" className="latex-text-button" disabled={!query || disabled} onClick={() => onChange(value.split(query).join(replacement))}>{t('latex.replaceAll')}</button></div>}
-    </div>}
+    {searchContainer ? createPortal(searchControls, searchContainer) : find && searchControls}
     <div className="latex-source-body"><div ref={gutter} className="latex-line-numbers" aria-hidden="true">{lines.map((_, index) => <span key={index} data-active={line === index + 1}>{index + 1}</span>)}</div><div className="latex-source-stack">
       <pre aria-hidden="true" ref={highlights} className="latex-highlight"><code dangerouslySetInnerHTML={{ __html: html + '\n' }} /></pre>
       <textarea ref={input} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label={t('latex.source')} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onSelect={notifyPosition} onKeyUp={notifyPosition} onClick={notifyPosition} onScroll={syncScroll} onKeyDown={(event) => {

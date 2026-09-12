@@ -155,6 +155,27 @@ it('combines file navigation and all primary actions in one toolbar', async () =
   expect(screen.getByRole('button', { name: 'latex.buildSettings' })).toBeInTheDocument()
 })
 
+it('keeps search in the toolbar and focuses source search from preview', async () => {
+  render(<WorkspaceLatexView workspaceId="ws" initialProject={project} active />)
+  await screen.findByLabelText('latex.source')
+  const sidebar = screen.getByRole('button', { name: 'latex.toggleSidebar' })
+  expect(sidebar).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(sidebar)
+  expect(sidebar).toHaveAttribute('aria-pressed', 'false')
+  const search = screen.getByRole('textbox', { name: 'latex.find' })
+  expect(document.querySelector('.latex-topbar')).toContainElement(search)
+  expect(screen.queryByRole('button', { name: 'latex.backToWorkspace' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'latex.find' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'latex.preview' }))
+  fireEvent.focus(search)
+  expect(screen.getByRole('button', { name: 'latex.edit' })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.change(search, { target: { value: 'Text' } })
+  fireEvent.keyDown(search, { key: 'Escape' })
+  expect(search).toBeInTheDocument()
+  expect(search).toHaveValue('')
+  expect(screen.getByLabelText('latex.source')).toHaveFocus()
+})
+
 it('focuses the editor after creating a source file', async () => {
   const implementation = execute.getMockImplementation()!
   const newFile = { path: 'sections/focus.tex', content: '', hash: 'new-file' }

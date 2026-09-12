@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeft, ArrowsClockwise, CaretDown, Check, CheckCircle, Code, Columns, Copy, DotsThree, DownloadSimple, FileCode, FilePdf, FolderOpen, GearSix, MagnifyingGlass, Play, Plus, SidebarSimple, WarningCircle, X } from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, Check, CheckCircle, Code, Columns, Copy, DotsThree, DownloadSimple, FileCode, FilePdf, FolderOpen, GearSix, Play, Plus, SidebarSimple, WarningCircle, X } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
 import type { LatexEngine, LatexFile, LatexProject, LatexRequest, LatexResponse } from '../../../shared/latex-types'
 import { errorMessage } from '../../../shared/ipc-types'
@@ -11,6 +11,7 @@ import LatexExplorer, { type LatexExplorerTab } from './LatexExplorer'
 import { latexDiagnostics } from './latexNavigation'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import LatexPdfPreview from './LatexPdfPreview'
+import { ReaderToolbarButton } from '../ui'
 import './latex.css'
 
 function download(name: string, content: BlobPart, type: string) {
@@ -30,11 +31,9 @@ interface WorkspaceLatexViewProps {
   onOpenProject?: (project: LatexProject) => Promise<void>
   onFileChange?: (projectId: string, path: string) => void
   manageActiveContext?: boolean
-  onBackToWorkspace?: () => void
-  workspaceName?: string
 }
 
-const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexViewProps>(function WorkspaceLatexView({ workspaceId, active, initialProject, onOpenProject, onFileChange, manageActiveContext = true, onBackToWorkspace, workspaceName }, ref) {
+const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexViewProps>(function WorkspaceLatexView({ workspaceId, active, initialProject, onOpenProject, onFileChange, manageActiveContext = true }, ref) {
   const { t } = useTranslation()
   const assets = useWorkspaceStore((state) => state.assets)
   const [projects, setProjects] = useState<LatexProject[]>([])
@@ -64,6 +63,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const editor = useRef<LatexSourceHandle>(null)
   const menuElement = useRef<HTMLDivElement>(null)
   const menuTrigger = useRef<HTMLButtonElement | null>(null)
+  const [searchContainer, setSearchContainer] = useState<HTMLDivElement | null>(null)
   const navigatorTrigger = useRef<HTMLButtonElement>(null)
   const dialogElement = useModalDialog<HTMLDivElement>(Boolean(dialog), () => setDialog(null))
   const surface = useRef<HTMLDivElement>(null)
@@ -309,18 +309,32 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
     if (result.project && result.file) { await loadFile(result.project, result.file.path); setNewPath(''); setDialog(null); setStale(true) }
   })
 
+  const openFind = () => {
+    changeView('source')
+    if (compact) setSidebarOpen(false)
+    requestAnimationFrame(() => editor.current?.openFind())
+  }
+
   return <div ref={surface} className="latex-workspace" data-compact={compact || undefined} onKeyDown={(event) => {
     if (event.key === 'Escape' && compact && sidebarOpen && !menu && !dialog) { event.preventDefault(); event.stopPropagation(); setSidebarOpen(false); navigatorTrigger.current?.focus() }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); if (!busy) void compile() }
   }}>
     <header className="latex-topbar" data-editor={Boolean(project) || undefined}>
       {project ? <>
-        {onBackToWorkspace ? <button type="button" className="latex-icon-button" aria-label={t('latex.backToWorkspace', { name: workspaceName })} title={t('latex.backToWorkspace', { name: workspaceName })} onClick={() => { void save().then((saved) => { if (saved) onBackToWorkspace() }) }}><ArrowLeft size={18} /></button> : <button ref={navigatorTrigger} type="button" className="latex-icon-button" aria-label={t('latex.toggleSidebar')} aria-expanded={sidebarOpen} title={t('latex.toggleSidebar')} onClick={() => setSidebarOpen(!sidebarOpen)}><SidebarSimple size={18} /></button>}
-        <button ref={onBackToWorkspace ? navigatorTrigger : undefined} type="button" className="latex-current-file" title={file?.path} aria-label={t('latex.currentFile', { path: file?.path ?? '' })} aria-expanded={sidebarOpen && explorerTab === 'files'} onClick={() => { setExplorerTab('files'); setSidebarOpen(!(sidebarOpen && explorerTab === 'files')) }}><FileCode size={13} />{file?.path.includes('/') && <span className="latex-file-directory">{file.path.slice(0, file.path.lastIndexOf('/') + 1)}</span>}<span className="latex-file-basename">{file?.path.split('/').at(-1)}</span><CaretDown size={11} /></button>
-        <div className="latex-view-switch" role="group" aria-label={t('latex.layout')}><button type="button" aria-label={t('latex.edit')} title={t('latex.edit')} aria-pressed={effectiveView === 'source'} onClick={() => changeView('source')}><Code size={15} /></button><button type="button" className="latex-split-control" aria-label={t('latex.split')} title={t('latex.split')} aria-pressed={effectiveView === 'split'} disabled={compact} onClick={() => changeView('split')}><Columns size={15} /></button><button type="button" aria-label={t('latex.preview')} title={t('latex.preview')} aria-pressed={effectiveView === 'preview'} onClick={() => changeView('preview')}><FilePdf size={15} /></button></div><button type="button" className="latex-icon-button latex-find-action" aria-label={t('latex.find')} title={t('latex.find')} onClick={() => { changeView('source'); requestAnimationFrame(() => editor.current?.openFind()) }}><MagnifyingGlass size={15} /></button>
+        <ReaderToolbarButton ref={navigatorTrigger} label={t('latex.toggleSidebar')} active={sidebarOpen} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><SidebarSimple size={16} /></ReaderToolbarButton>
+        <span className="latex-toolbar-divider" />
+        <button type="button" className="latex-current-file" title={file?.path} aria-label={t('latex.currentFile', { path: file?.path ?? '' })} aria-expanded={sidebarOpen && explorerTab === 'files'} onClick={() => { setExplorerTab('files'); setSidebarOpen(!(sidebarOpen && explorerTab === 'files')) }}><FileCode size={13} />{file?.path.includes('/') && <span className="latex-file-directory">{file.path.slice(0, file.path.lastIndexOf('/') + 1)}</span>}<span className="latex-file-basename">{file?.path.split('/').at(-1)}</span><CaretDown size={11} /></button>
+        <div className="latex-view-switch" role="group" aria-label={t('latex.layout')}>
+          <ReaderToolbarButton label={t('latex.edit')} active={effectiveView === 'source'} onClick={() => changeView('source')}><Code size={17} /></ReaderToolbarButton>
+          <ReaderToolbarButton label={t('latex.preview')} active={effectiveView === 'preview'} onClick={() => changeView('preview')}><FilePdf size={17} /></ReaderToolbarButton>
+          {!compact && <ReaderToolbarButton label={t('latex.split')} active={effectiveView === 'split'} onClick={() => changeView('split')}><Columns size={17} /></ReaderToolbarButton>}
+        </div>
+        <div ref={setSearchContainer} className="latex-search-slot" />
+
       </> : <button type="button" className="latex-project-trigger latex-menu-trigger" aria-label={t('latex.project')} aria-expanded={menu === 'projects'} onClick={(event) => { menuTrigger.current = event.currentTarget; setMenu(menu === 'projects' ? null : 'projects') }}><span className="latex-document-mark"><FileCode size={18} /></span><span>{t('latex.chooseProject')}</span><CaretDown size={12} /></button>}
-      <div className="latex-topbar-actions">{project && <button type="button" className="latex-compile-button" aria-label={t('latex.compile')} title={t('latex.compileShortcut')} disabled={busy || conflict || !file} onClick={() => void compile()}>{compiling ? <ArrowsClockwise size={15} className="latex-spin" /> : <Play size={14} weight="fill" />}<span>{t(compiling ? 'latex.compiling' : 'latex.compileLabel')}</span></button>}<button type="button" className="latex-icon-button latex-menu-trigger" aria-label={t('latex.moreActions')} aria-expanded={menu === 'more'} title={t('latex.moreActions')} onClick={(event) => { menuTrigger.current = event.currentTarget; setMenu(menu === 'more' ? null : 'more') }}><DotsThree size={22} weight="bold" /></button></div>
+      <div className="latex-topbar-actions">{project && <ReaderToolbarButton className="latex-compile-button" label={t('latex.compile')} shortcut="⌘Enter" disabled={busy || conflict || !file} onClick={() => void compile()}>{compiling ? <ArrowsClockwise size={16} className="latex-spin" /> : <Play size={16} />}<span>{t(compiling ? 'latex.compiling' : 'latex.compileLabel')}</span></ReaderToolbarButton>}<ReaderToolbarButton className="latex-menu-trigger" label={t('latex.moreActions')} aria-expanded={menu === 'more'} title={t('latex.moreActions')} onClick={(event) => { menuTrigger.current = event.currentTarget; setMenu(menu === 'more' ? null : 'more') }}><DotsThree size={20} /></ReaderToolbarButton></div>
     </header>
     {menu && <div ref={menuElement} className={`latex-popover is-${menu} ${project ? 'is-editor' : ''}`} role="dialog" aria-label={t(menu === 'projects' ? 'latex.projects' : 'latex.moreActions')}>
       {menu === 'projects' ? <><div className="latex-popover-heading">{t('latex.projects')}</div><div className="latex-project-list">{projects.map((entry) => <button type="button" key={entry.id} disabled={busy} onClick={() => void openProject(entry)}><FileCode size={17} /><span><strong>{entry.title}</strong><small>{entry.rootFile}</small></span>{project?.id === entry.id && <Check size={15} />}</button>)}{!projects.length && <p>{t('latex.noProjects')}</p>}</div><div className="latex-menu-divider" /><button type="button" disabled={busy} onClick={() => { setMenu(null); setDialog('create') }}><Plus size={16} />{t('latex.create')}</button><button type="button" disabled={busy} onClick={() => void importProject()}><FolderOpen size={16} />{t('latex.import')}</button></> : <>
@@ -334,7 +348,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
     {!project ? <div className="latex-start-screen"><div className="latex-welcome-icon"><FileCode size={32} weight="duotone" /></div><span className="latex-eyebrow">LATEX STUDIO</span><h1>{t('latex.welcomeTitle')}</h1><p>{t('latex.welcomeDescription')}</p><div className="latex-start-actions"><button type="button" className="latex-primary-action" disabled={busy} onClick={() => setDialog('create')}><Plus size={17} />{t('latex.create')}</button><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void importProject()}><FolderOpen size={17} />{t('latex.import')}</button></div>{projects.length > 0 && <section className="latex-recent-projects"><h2>{t('latex.recentProjects')}</h2>{projects.slice(0, 6).map((entry) => <button type="button" key={entry.id} disabled={busy} onClick={() => void openProject(entry)}><FileCode size={19} /><span><strong>{entry.title}</strong><small>{entry.rootFile} · {t('latex.fileCount', { count: entry.files.length })}</small></span><span className="latex-recent-arrow">↗</span></button>)}</section>}<div className="latex-welcome-note"><span className="latex-local-dot" />{t('latex.localOnly')}</div></div> : <>
       <div className="latex-workbench" data-view={effectiveView} data-sidebar={sidebarOpen || undefined}>
         {sidebarOpen && <>{compact && <button type="button" className="latex-explorer-scrim" aria-label={t('latex.closeSidebar')} onClick={() => setSidebarOpen(false)} />}<LatexExplorer tab={explorerTab} onTabChange={setExplorerTab} files={editable} currentFile={file?.path ?? ''} rootFile={project.rootFile} source={draft} assets={assets} busy={busy} onClose={() => setSidebarOpen(false)} onCreate={() => setDialog('file')} onOpen={(path) => void run(() => loadFile(project, path))} onInsert={(id) => void insertAsset(id)} onNavigate={jumpToLine} /></>}
-        <div className="latex-editing-surfaces"><section className="latex-editor-region" aria-label={t('latex.edit')}>{file && <LatexSourceEditor ref={editor} key={`${project.id}:${file.path}`} value={draft} onChange={changeDraft} disabled={busy} onPositionChange={(line, column) => setPosition({ line, column })} />}</section>
+        <div className="latex-editing-surfaces"><section className="latex-editor-region" aria-label={t('latex.edit')}>{file && <LatexSourceEditor ref={editor} key={`${project.id}:${file.path}`} value={draft} onChange={changeDraft} disabled={busy} searchContainer={searchContainer} onSearchFocus={() => { if (effectiveView === 'preview') changeView('source'); if (compact) setSidebarOpen(false) }} onPositionChange={(line, column) => setPosition({ line, column })} />}</section>
           <section className="latex-preview-region" aria-label={t('latex.previewPane')}>{pdf ? <LatexPdfPreview data={pdf} stale={stale} onDownload={downloadPdf} /> : <div className="latex-preview-empty"><div className="latex-preview-sheet"><FilePdf size={30} weight="thin" /><span /><span /><span /></div><h3>{t('latex.previewReady')}</h3><p>{t('latex.previewDescription')}</p><button type="button" className="latex-text-button" disabled={busy || conflict} onClick={() => void compile()}><Play size={13} />{t('latex.compileLabel')}</button><kbd>⌘ ↵</kbd></div>}</section>
         </div>
       </div>

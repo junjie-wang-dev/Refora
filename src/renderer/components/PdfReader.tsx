@@ -1,11 +1,11 @@
+import { ReaderToolbarButton as ReaderButton } from './ui'
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
-  type ReactNode
+  useState
 } from 'react'
 import {
   ArrowCounterClockwise,
@@ -180,39 +180,6 @@ const TOOL_SHORTCUTS: Record<PdfTool, string> = {
   text: 'T',
   ink: 'P',
   eraser: 'E'
-}
-
-function ReaderButton({
-  label,
-  shortcut,
-  active = false,
-  disabled = false,
-  onClick,
-  children
-}: {
-  label: string
-  shortcut?: string
-  active?: boolean
-  disabled?: boolean
-  onClick: () => void
-  children: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      title={shortcut ? `${label} (${shortcut})` : label}
-      aria-label={label}
-      data-shortcut={shortcut}
-      aria-pressed={active || undefined}
-      disabled={disabled}
-      className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-muted transition-colors hover:bg-hover hover:text-foreground disabled:opacity-35 ${
-        active ? 'bg-active text-accent' : ''
-      }`}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  )
 }
 
 interface PdfReaderProps {

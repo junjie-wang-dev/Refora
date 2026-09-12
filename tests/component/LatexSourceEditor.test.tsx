@@ -18,6 +18,31 @@ function setup(initial: string) {
 }
 
 describe('LaTeX source navigation and insertion', () => {
+  it('preserves text selected by search when inserting a workspace figure', async () => {
+    const { input, handle } = setup('\\begin{document}\nLocal source.\n\\end{document}\n')
+    fireEvent.keyDown(input, { key: 'f', metaKey: true })
+    const search = screen.getByRole('textbox', { name: 'latex.find' })
+    fireEvent.change(search, { target: { value: 'Local' } })
+    fireEvent.keyDown(search, { key: 'Enter' })
+    fireEvent.keyDown(search, { key: 'Escape' })
+    act(() => handle.current!.insert('FIGURE\n'))
+    await waitFor(() => expect(input).toHaveValue('\\begin{document}\nLocal source.\nFIGURE\n\\end{document}\n'))
+  })
+  it('starts with the first match and keeps Enter navigation in the search field', async () => {
+    const { input } = setup('alpha beta alpha')
+    fireEvent.keyDown(input, { key: 'f', metaKey: true })
+    const search = screen.getByRole('textbox', { name: 'latex.find' })
+    await waitFor(() => expect(search).toHaveFocus())
+    fireEvent.change(search, { target: { value: 'alpha' } })
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(input.selectionStart).toBe(0)
+    expect(search).toHaveFocus()
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(input.selectionStart).toBe(11)
+    expect(search).toHaveFocus()
+    fireEvent.keyDown(search, { key: 'Enter', shiftKey: true })
+    expect(input.selectionStart).toBe(0)
+  })
   it('inserts a figure inside the document when the cursor is past its end', async () => {
     const source = '\\begin{document}\nText\n\\end{document}\n'
     const { handle, input, position } = setup(source)
@@ -37,13 +62,13 @@ describe('LaTeX source navigation and insertion', () => {
   it('finds and replaces text without leaving the editor', async () => {
     const { input } = setup('alpha beta alpha')
     fireEvent.keyDown(input, { key: 'f', metaKey: true })
-    fireEvent.change(screen.getByLabelText('latex.find'), { target: { value: 'alpha' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'latex.find' }), { target: { value: 'alpha' } })
     fireEvent.click(screen.getByRole('button', { name: 'latex.toggleReplace' }))
     fireEvent.change(screen.getByLabelText('latex.replacement'), { target: { value: 'gamma' } })
     fireEvent.click(screen.getByRole('button', { name: 'latex.replaceAll' }))
     expect(input).toHaveValue('gamma beta gamma')
-    fireEvent.keyDown(screen.getByLabelText('latex.find'), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'latex.find' }), { key: 'Escape' })
     await waitFor(() => expect(input).toHaveFocus())
-    expect(screen.queryByLabelText('latex.find')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'latex.find' })).not.toBeInTheDocument()
   })
 })

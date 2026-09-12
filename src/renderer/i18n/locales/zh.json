@@ -1425,7 +1425,7 @@
     "localProject": "保存在这台 Mac",
     "toggleReplace": "展开替换",
     "previousMatch": "上一个匹配",
-    "toggleSidebar": "显示文件导航",
+    "toggleSidebar": "文档导航",
     "compileShortcut": "编译 · ⌘Enter",
     "compileLabel": "编译",
     "compiling": "编译中…",

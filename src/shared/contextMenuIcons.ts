@@ -22,6 +22,7 @@ export const contextMenuIconSources = {
   remove: 'Trash',
   category: 'Tag',
   note: 'NotePencil',
+  code: 'Code',
   sticky: 'Sticker',
   ai: 'Sparkle',
   highlight: 'Highlighter',

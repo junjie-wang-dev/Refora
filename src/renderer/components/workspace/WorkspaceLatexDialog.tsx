@@ -21,7 +21,7 @@ export default function WorkspaceLatexDialog({ workspaceId, placement, onClose, 
   const [error, setError] = useState('')
   const dialog = useModalDialog<HTMLDivElement>(true, () => { if (!busy) onClose() })
   useEffect(() => { void refresh() }, [refresh])
-  const freePlacement = () => availableCardPlacement(useWorkspaceStore.getState().items.map((item) => ({ x: item.x, y: item.y, ...clampCardSize(item) })), placement)
+  const freePlacement = () => availableCardPlacement(useWorkspaceStore.getState().items.map((item) => ({ x: item.x, y: item.y, ...clampCardSize(item) })), placement, 300, 112)
   const create = async (action: 'create' | 'import') => {
     setBusy(true); setError('')
     try {

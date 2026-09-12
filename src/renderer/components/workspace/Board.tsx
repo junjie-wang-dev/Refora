@@ -1174,7 +1174,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
         onClick: () => void handleCreateNote('markdown', placement)
       }
     ]
-    if (onCreateLatex) items.push({ key: 'create-latex', label: t('latex.createInWorkspace'), icon: 'note', onClick: () => onCreateLatex(placement) })
+    if (onCreateLatex) items.push({ key: 'create-latex', label: t('latex.createInWorkspace'), icon: 'code', onClick: () => onCreateLatex(placement) })
     showContextMenu(items)
   }, [addAssets, handleCreateNote, handlePasteFiles, t, worldPositionAt, onCreateLatex])
 
