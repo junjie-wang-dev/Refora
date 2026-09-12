@@ -181,7 +181,7 @@ function SkeletonRows({ compact }: { compact: boolean }) {
         >
           <div className={compact ? 'w-7' : 'w-10'} />
           {!compact && <div className="w-8" />}
-          {!compact && <div className="w-8" />}
+          <div className={compact ? 'w-6' : 'w-8'} />
           <div className={compact ? 'min-w-0 flex-1 space-y-2' : 'contents'}>
             <div className="skeleton-shimmer mx-1 h-3 flex-1 rounded" />
             {compact ? (
@@ -672,21 +672,23 @@ export default function DocumentList({
                       onDocumentFocus?.()
                     }}
                   >
-                    <div role="gridcell" className={`flex flex-shrink-0 items-center justify-center ${compact ? 'w-6 pt-0.5' : 'w-10'}`}>
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-border bg-background accent-accent cursor-pointer"
-                        checked={isSelected}
-                        aria-label={t('list.selectDocument', {
-                          title: doc.title || doc.fileName
-                        })}
-                        onChange={(e) => {
-                          e.stopPropagation()
-                          toggleSelect(doc.id)
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </div>
+                    {!compact && (
+                      <div role="gridcell" className="flex w-10 flex-shrink-0 items-center justify-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-accent"
+                          checked={isSelected}
+                          aria-label={t('list.selectDocument', {
+                            title: doc.title || doc.fileName
+                          })}
+                          onChange={(e) => {
+                            e.stopPropagation()
+                            toggleSelect(doc.id)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                    )}
                     <div role="gridcell" className={`flex flex-shrink-0 items-center justify-center text-center ${compact ? 'w-7 pt-0.5' : 'w-8'}`}>
                       {isMissing ? (
                         <span title={t('detail.relocate') ?? 'Relocate'}>

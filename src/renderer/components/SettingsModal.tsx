@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Modal, Button, Select } from './ui/LobeControls'
-import { Brain, ChartDonut, FolderOpen, Globe, HardDrives, Palette, Sparkle, UserCircle } from '@phosphor-icons/react'
+import { Brain, ChartDonut, Code, FolderOpen, Globe, HardDrives, Palette, Sparkle, UserCircle } from '@phosphor-icons/react'
 import { useTheme } from '../hooks/useTheme'
 import { useSidebarVisibility } from '../store/sidebarVisibility'
 import { api } from '../ipc'
 import { changeLanguage, type AppLanguage } from '../i18n'
 import { errorMessage, type WorkspaceAgentMemory } from '../../shared/ipc-types'
 import { Input as UiInput } from './ui'
+import { NativeSelect } from './ui/NativeSelect'
 import { ModelSettingsSection } from './ModelSettingsSection'
 import type { MineruEngineStatus, MineruInstallProgress } from '../../shared/mineru-types'
 import { formatElapsedClock } from '../utils/format'
@@ -17,6 +18,7 @@ import { WebSearchSettings } from './WebSearchSettings'
 import { UsageStatsSection } from './UsageStatsSection'
 import type { PdfOpenMode } from '../utils/openPdf'
 import { AccountSettings } from './AccountSettings'
+import type { LatexCompiler } from '../../shared/latex-types'
 
 interface SettingsModalProps {
   open: boolean
@@ -45,6 +47,7 @@ export type SettingsPage =
   | 'appearance'
   | 'account'
   | 'mineru'
+  | 'latex'
   | 'aiProviders'
   | 'usage'
   | 'webSearch'
@@ -94,6 +97,143 @@ function formatBytes(bytes: number | null): string {
     unit += 1
   }
   return `${value.toFixed(unit < 2 ? 0 : 1)} ${units[unit]}`
+}
+
+function LatexCompilerSettingsSection({ onError }: { onError: (message: string | null) => void }) {
+  const { t } = useTranslation()
+  const [compiler, setCompiler] = useState<LatexCompiler>('latexmk')
+  const [paths, setPaths] = useState<Record<LatexCompiler, string>>({ latexmk: '', tectonic: '' })
+  const [busy, setBusy] = useState(false)
+  const savedPathsRef = useRef<Record<LatexCompiler, string>>({ latexmk: '', tectonic: '' })
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([
+      api.settings.get<LatexCompiler>('latexCompiler', 'latexmk'),
+      api.settings.get<string>('latexBinPath', ''),
+      api.settings.get<string>('tectonicBinPath', '')
+    ]).then(([savedCompiler, latexmkPath, tectonicPath]) => {
+      if (cancelled) return
+      setCompiler(savedCompiler === 'tectonic' ? 'tectonic' : 'latexmk')
+      setPaths({ latexmk: latexmkPath, tectonic: tectonicPath })
+      savedPathsRef.current = { latexmk: latexmkPath, tectonic: tectonicPath }
+    }).catch((error) => {
+      if (!cancelled) onError(errorMessage(error, t('settings.latexCompiler.loadFailed')))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [onError, t])
+
+  const changeCompiler = async (value: string) => {
+    const next = value === 'tectonic' ? 'tectonic' : 'latexmk'
+    const previous = compiler
+    setCompiler(next)
+    onError(null)
+    try {
+      await api.settings.set('latexCompiler', next)
+    } catch (error) {
+      setCompiler(previous)
+      onError(errorMessage(error, t('settings.latexCompiler.saveFailed')))
+    }
+  }
+
+  const setCompilerPath = async (path: string) => {
+    const key = compiler === 'tectonic' ? 'tectonicBinPath' : 'latexBinPath'
+    const previous = savedPathsRef.current[compiler]
+    if (path === previous) return
+    setPaths((current) => ({ ...current, [compiler]: path }))
+    onError(null)
+    try {
+      await api.settings.set(key, path)
+      savedPathsRef.current = { ...savedPathsRef.current, [compiler]: path }
+    } catch (error) {
+      setPaths((current) => ({ ...current, [compiler]: previous }))
+      onError(errorMessage(error, t('settings.latexCompiler.saveFailed')))
+    }
+  }
+
+  const chooseExecutable = async () => {
+    setBusy(true)
+    onError(null)
+    try {
+      const path = await api.dialog.openExecutable(compiler)
+      if (path) await setCompilerPath(path)
+    } catch (error) {
+      onError(errorMessage(error, t('settings.latexCompiler.saveFailed')))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selectedPath = paths[compiler]
+
+  return (
+    <SettingsSection
+      title={t('settings.latexCompiler.title')}
+      description={t('settings.latexCompiler.desc')}
+    >
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex min-w-0 flex-col gap-1">
+          <label className="text-xs text-foreground">{t('settings.latexCompiler.compiler')}</label>
+          <span className="text-label text-muted">
+            {t(`settings.latexCompiler.${compiler}Hint`)}
+          </span>
+        </div>
+        <NativeSelect
+          aria-label={t('settings.latexCompiler.compiler')}
+          value={compiler}
+          onChange={(event) => void changeCompiler(event.target.value)}
+          className="h-8 w-[180px] rounded-lg border border-border bg-panel px-3 text-xs text-foreground outline-none focus:border-accent"
+        >
+          <option value="latexmk">latexmk</option>
+          <option value="tectonic">Tectonic</option>
+        </NativeSelect>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs text-muted">
+          {t('settings.latexCompiler.executablePath', {
+            executable: compiler === 'tectonic' ? 'tectonic' : 'latexmk'
+          })}
+        </label>
+        <div className="flex gap-2">
+          <UiInput
+            className="min-w-0 flex-1"
+            variant="outlined"
+            value={selectedPath}
+            onChange={(event) => setPaths((current) => ({
+              ...current,
+              [compiler]: event.target.value
+            }))}
+            onBlur={() => void setCompilerPath(selectedPath.trim())}
+            onPressEnter={() => void setCompilerPath(selectedPath.trim())}
+            placeholder={t('settings.latexCompiler.autoDetect')}
+            inputSize="sm"
+          />
+          {selectedPath && (
+            <Button size="small" disabled={busy} onClick={() => void setCompilerPath('')}>
+              {t('settings.latexCompiler.useAutoDetect')}
+            </Button>
+          )}
+          <Button size="small" loading={busy} onClick={() => void chooseExecutable()}>
+            {t('settings.latexCompiler.chooseExecutable')}
+          </Button>
+        </div>
+        <span className="text-label text-muted">
+          {t('settings.latexCompiler.pathHint', {
+            executable: compiler === 'tectonic' ? 'tectonic' : 'latexmk'
+          })}
+        </span>
+      </div>
+
+      {compiler === 'tectonic' && (
+        <div className="rounded-lg border border-border bg-panel p-3 text-xs text-muted">
+          {t('settings.latexCompiler.tectonicCacheHint')}
+        </div>
+      )}
+    </SettingsSection>
+  )
 }
 
 function AgentMemorySettingsSection({ onError }: { onError: (message: string | null) => void }) {
@@ -573,6 +713,12 @@ export default function SettingsModal({
       icon: HardDrives
     },
     {
+      id: 'latex' as const,
+      label: t('settings.latexCompiler.title'),
+      description: t('settings.latexCompiler.desc'),
+      icon: Code
+    },
+    {
       id: 'aiProviders' as const,
       label: t('settings.aiProviders.title'),
       description: t('settings.aiProviders.desc'),
@@ -767,6 +913,8 @@ export default function SettingsModal({
           )}
 
           {activePage === 'mineru' && <MineruSettingsSection onError={setError} />}
+
+          {activePage === 'latex' && <LatexCompilerSettingsSection onError={setError} />}
 
           {activePage === 'aiProviders' && (
             <ModelSettingsSection />

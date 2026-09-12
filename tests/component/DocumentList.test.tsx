@@ -302,12 +302,10 @@ describe('DocumentList', () => {
     expect(mockState.setFocusedDoc).not.toHaveBeenCalled()
   })
 
-  it('keeps compact selection and favorite controls operable without opening the PDF', () => {
+  it('keeps compact favorite controls operable without opening the PDF', () => {
     mockState.documents = [makeDoc()]
     render(<DocumentList compact />)
-    fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: 'list.starDocument' }))
-    expect(mockState.toggleSelect).toHaveBeenCalledWith('doc-1')
     expect(mockState.toggleStar).toHaveBeenCalledWith('doc-1')
     expect(mockState.openPdf).not.toHaveBeenCalled()
   })
@@ -432,7 +430,7 @@ describe('DocumentList', () => {
     expect(screen.getByText('sidebar.allFiles').closest('[data-testid="panel-tab"]')).not.toBeNull()
     expect(screen.queryByText('list.title')).not.toBeInTheDocument()
     expect(screen.getByText('Compact Paper').closest('[style*="height: 52px"]')).not.toBeNull()
-    expect(screen.getByRole('checkbox', { name: 'list.selectDocument' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     const openButton = screen.getByRole('button', { name: 'detail.open' })
     expect(screen.getByRole('button', { name: 'list.starDocument' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'list.expand' })).not.toBeInTheDocument()

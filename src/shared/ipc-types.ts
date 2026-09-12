@@ -1094,6 +1094,7 @@ export interface ReforaApi {
   }
   dialog: {
     openDirectory(): Promise<string | null>
+    openExecutable(executable: 'latexmk' | 'tectonic'): Promise<string | null>
   }
   library: {
     switch(path: string): Promise<LibrarySwitchResult>

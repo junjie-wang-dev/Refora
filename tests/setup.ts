@@ -215,6 +215,7 @@ export const createMockReforaApi = (): ReforaApi => ({
 
   dialog: {
     openDirectory: async () => null,
+    openExecutable: async () => null,
   },
 
   library: {

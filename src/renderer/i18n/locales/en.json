@@ -379,6 +379,21 @@
         "invalid": "Installation needs repair"
       }
     },
+    "latexCompiler": {
+      "title": "LaTeX Compiler",
+      "desc": "Choose the local compiler used by all LaTeX projects",
+      "compiler": "Compiler",
+      "latexmkHint": "Use latexmk with pdfLaTeX, XeLaTeX, or LuaLaTeX from MacTeX or TinyTeX.",
+      "tectonicHint": "Use the self-contained Tectonic compiler with automatic package management.",
+      "executablePath": "{{executable}} executable or containing folder",
+      "autoDetect": "Detect automatically",
+      "chooseExecutable": "Choose File",
+      "useAutoDetect": "Reset",
+      "pathHint": "Leave blank for automatic detection, paste the full executable path, or choose the folder containing {{executable}}.",
+      "tectonicCacheHint": "Tectonic downloads required support files on demand and keeps them in a local cache inside the library. Compilation runs in untrusted mode with shell escape disabled.",
+      "loadFailed": "Failed to load the LaTeX compiler settings",
+      "saveFailed": "Failed to save the LaTeX compiler settings"
+    },
     "webSearch": {
       "title": "Web Search",
       "desc": "Configure web search and page access for the Refora Agent",
@@ -1439,6 +1454,7 @@
     "fileCount": "{{count}} files",
     "localOnly": "Your sources and figures stay on this Mac",
     "layout": "Editor layout",
+    "layoutSaveFailed": "Could not save the editor split size",
     "split": "Source and PDF",
     "previewPane": "Document preview",
     "previewReady": "Your paper, beautifully typeset",

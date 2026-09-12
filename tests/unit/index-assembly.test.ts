@@ -102,6 +102,7 @@ function createTestAssembly(
     },
     removeDocumentPreviewCache: async () => undefined,
     openDirectory: async () => null,
+    openExecutable: async () => null,
     saveBibtex: async () => undefined,
     ...deps
   })

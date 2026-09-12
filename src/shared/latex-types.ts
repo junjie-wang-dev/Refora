@@ -14,6 +14,7 @@ export interface LatexFile {
 }
 
 export type LatexEngine = 'pdflatex' | 'xelatex' | 'lualatex'
+export type LatexCompiler = 'latexmk' | 'tectonic'
 
 export type LatexRequest =
   | { action: 'list' | 'active' | 'configure' }

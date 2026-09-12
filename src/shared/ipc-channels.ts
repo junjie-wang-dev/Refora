@@ -43,6 +43,7 @@ export const IpcChannel = {
   WatchToggle: 'watch:toggle',
 
   DialogOpenDirectory: 'dialog:openDirectory',
+  DialogOpenExecutable: 'dialog:openExecutable',
   FileAuthorizeDropped: 'file:authorizeDropped',
 
   LibrarySwitch: 'library:switch',
@@ -252,6 +253,7 @@ export const SERVER_IPC_CHANNELS = [
   IpcChannel.ClipboardCopyWorkspaceAsset,
   IpcChannel.ClipboardWriteText,
   IpcChannel.DialogOpenDirectory,
+  IpcChannel.DialogOpenExecutable,
   IpcChannel.DocumentsBulkCategorize,
   IpcChannel.DocumentsBulkDelete,
   IpcChannel.DocumentsBulkRefreshMetadata,

@@ -72,6 +72,21 @@ describe('LaTeX workspace editor', () => {
     expect(stored.content).toBe('Save before leaving')
   })
 
+  it('resizes and remembers the source and preview split', async () => {
+    await open()
+    const surfaces = document.querySelector('.latex-editing-surfaces') as HTMLDivElement
+    const source = document.querySelector('.latex-editor-region') as HTMLElement
+    Object.defineProperty(surfaces, 'clientWidth', { configurable: true, value: 1000 })
+
+    expect(source).toHaveStyle({ flex: '0 0 50%' })
+    const divider = screen.getByRole('separator')
+    fireEvent.mouseDown(divider, { clientX: 500 })
+    fireEvent.mouseMove(document, { clientX: 650 })
+    expect(source).toHaveStyle({ flex: '0 0 65%' })
+    fireEvent.mouseUp(document)
+    expect(localStorage.getItem('refora.latex.splitPercent')).toBe('65')
+  })
+
   it('recovers a local draft and detects that AI changed the stored file', async () => {
     localStorage.setItem('refora.latex.draft.ws.p.main.tex', JSON.stringify({ content: 'Recovered', hash: 'old' }))
     const source = await open()

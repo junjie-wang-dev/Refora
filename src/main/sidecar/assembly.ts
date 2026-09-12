@@ -26,6 +26,7 @@ export interface ServerAssemblyDeps {
   rendererPathCapabilities: RendererPathCapabilities
   removeDocumentPreviewCache: (documentId: string) => Promise<void>
   openDirectory: () => Promise<string | null>
+  openExecutable: (executable: 'latexmk' | 'tectonic') => Promise<string | null>
   saveBibtex: (bibtex: string) => Promise<void>
 }
 
@@ -109,6 +110,7 @@ export function createServerAssembly(deps: ServerAssemblyDeps): ServerAssembly {
             nativeTheme.themeSource = theme
           },
           openDirectory: deps.openDirectory,
+          openExecutable: deps.openExecutable,
           authorizeFile: deps.rendererPathCapabilities.authorizeFile,
           authorizeDirectory: deps.rendererPathCapabilities.authorizeDirectory
         }),

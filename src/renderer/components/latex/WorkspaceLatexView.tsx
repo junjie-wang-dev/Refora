@@ -2,7 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { createPortal } from 'react-dom'
 import { ArrowsClockwise, CaretDown, Check, CheckCircle, Code, Columns, Copy, DotsThree, DownloadSimple, FileCode, FilePdf, FolderOpen, GearSix, Play, Plus, SidebarSimple, WarningCircle, X } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
-import type { LatexEngine, LatexFile, LatexProject, LatexRequest, LatexResponse } from '../../../shared/latex-types'
+import type { LatexCompiler, LatexEngine, LatexFile, LatexProject, LatexRequest, LatexResponse } from '../../../shared/latex-types'
 import { errorMessage } from '../../../shared/ipc-types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { registerRendererFlushTask } from '../../persistence'
@@ -12,7 +12,20 @@ import { latexDiagnostics } from './latexNavigation'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import LatexPdfPreview from './LatexPdfPreview'
 import { ReaderToolbarButton } from '../ui'
+import ResizeDivider from '../ResizeDivider'
 import './latex.css'
+
+const LATEX_SPLIT_PERCENT_KEY = 'refora.latex.splitPercent'
+
+function initialSplitPercent(): number {
+  try {
+    const saved = Number(localStorage.getItem(LATEX_SPLIT_PERCENT_KEY))
+    if (Number.isFinite(saved) && saved >= 20 && saved <= 80) return saved
+  } catch {
+    return 50
+  }
+  return 50
+}
 
 function download(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }))
@@ -43,6 +56,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const [draft, setDraft] = useState('')
   const [title, setTitle] = useState('')
   const [newPath, setNewPath] = useState('')
+  const [compiler, setCompiler] = useState<LatexCompiler>('latexmk')
   const [engine, setEngine] = useState<LatexEngine>('pdflatex')
   const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -50,6 +64,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const [conflict, setConflict] = useState(false)
   const [pdf, setPdf] = useState('')
   const [view, setView] = useState<'source' | 'split' | 'preview'>('split')
+  const [splitPercent, setSplitPercent] = useState(initialSplitPercent)
   const [compact, setCompact] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerTab, setExplorerTab] = useState<LatexExplorerTab>('files')
@@ -67,6 +82,8 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const navigatorTrigger = useRef<HTMLButtonElement>(null)
   const dialogElement = useModalDialog<HTMLDivElement>(Boolean(dialog), () => setDialog(null))
   const surface = useRef<HTMLDivElement>(null)
+  const editingSurfaces = useRef<HTMLDivElement>(null)
+  const splitPercentRef = useRef(splitPercent)
   const [log, setLog] = useState('')
   const [showLog, setShowLog] = useState(false)
   const session = useRef({ project, file, draft, conflict })
@@ -75,6 +92,28 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const alive = useRef(true)
   const effectiveView = compact && view === 'split' ? 'source' : view
   const diagnostics = useMemo(() => latexDiagnostics(log), [log])
+  const resizeSplit = useCallback((delta: number) => {
+    const width = editingSurfaces.current?.clientWidth ?? 0
+    if (width <= 0) return
+    setSplitPercent((current) => {
+      const next = Math.max(20, Math.min(80, current + delta / width * 100))
+      splitPercentRef.current = next
+      return next
+    })
+  }, [])
+  const persistSplit = useCallback(() => {
+    try {
+      localStorage.setItem(LATEX_SPLIT_PERCENT_KEY, String(splitPercentRef.current))
+    } catch {
+      setError(t('latex.layoutSaveFailed'))
+    }
+  }, [t])
+  const refreshCompiler = useCallback(async () => {
+    const saved = await window.api.settings.get<LatexCompiler>('latexCompiler', 'latexmk')
+    const next = saved === 'tectonic' ? 'tectonic' : 'latexmk'
+    if (alive.current) setCompiler(next)
+    return next
+  }, [])
 
   useEffect(() => {
     const element = surface.current
@@ -106,6 +145,11 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   const recoveryKey = useCallback((id: string, path: string) => `refora.latex.draft.${workspaceId}.${id}.${path}`, [workspaceId])
 
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  useEffect(() => {
+    void refreshCompiler().catch((reason) => {
+      if (alive.current) setError(errorMessage(reason))
+    })
+  }, [refreshCompiler])
   const refresh = useCallback(async () => {
     const result = await execute({ action: 'list' })
     if (alive.current) setProjects(result.projects ?? [])
@@ -244,6 +288,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
   }
   const compile = () => run(async () => {
     if (!project || !await save()) return
+    await refreshCompiler()
     setError('')
     setCompiling(true)
     try {
@@ -314,6 +359,11 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
     if (compact) setSidebarOpen(false)
     requestAnimationFrame(() => editor.current?.openFind())
   }
+  const openBuildSettings = () => {
+    setMenu(null)
+    setDialog('settings')
+    void refreshCompiler().catch((reason) => setError(errorMessage(reason)))
+  }
 
   return <div ref={surface} className="latex-workspace" data-compact={compact || undefined} onKeyDown={(event) => {
     if (event.key === 'Escape' && compact && sidebarOpen && !menu && !dialog) { event.preventDefault(); event.stopPropagation(); setSidebarOpen(false); navigatorTrigger.current?.focus() }
@@ -341,22 +391,23 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
         <button type="button" disabled={busy} onClick={() => setMenu('projects')}><FolderOpen size={16} />{t('latex.openProject')}</button>
         <button type="button" disabled={busy} onClick={() => { setMenu(null); setDialog('create') }}><Plus size={16} />{t('latex.create')}</button><button type="button" disabled={busy} onClick={() => void importProject()}><FolderOpen size={16} />{t('latex.import')}</button><div className="latex-menu-divider" />
         <button type="button" disabled={!file} onClick={() => { download(file?.path.split('/').at(-1) ?? 'draft.tex', draft, 'text/plain;charset=utf-8'); setMenu(null) }}><DownloadSimple size={16} />{t('latex.downloadDraft')}</button><button type="button" disabled={!pdf} onClick={() => { downloadPdf(); setMenu(null) }}><FilePdf size={16} />{t('latex.exportPdf')}</button><div className="latex-menu-divider" />
-        <button type="button" onClick={() => { setMenu(null); setDialog('settings') }}><GearSix size={16} />{t('latex.buildSettings')}</button>
+        <button type="button" onClick={openBuildSettings}><GearSix size={16} />{t('latex.buildSettings')}</button>
       </>}
     </div>}
     {error && <div className="latex-alert" role="alert"><WarningCircle size={17} /><span>{error}</span>{conflict && project && file && <button type="button" disabled={busy || saving} onClick={() => void run(() => loadFile(project, file.path, true))}>{t('latex.reload')}</button>}{file && <button type="button" onClick={() => download(file.path.split('/').at(-1) ?? 'draft.tex', draft, 'text/plain;charset=utf-8')}>{t('latex.downloadDraft')}</button>}</div>}
     {!project ? <div className="latex-start-screen"><div className="latex-welcome-icon"><FileCode size={32} weight="duotone" /></div><span className="latex-eyebrow">LATEX STUDIO</span><h1>{t('latex.welcomeTitle')}</h1><p>{t('latex.welcomeDescription')}</p><div className="latex-start-actions"><button type="button" className="latex-primary-action" disabled={busy} onClick={() => setDialog('create')}><Plus size={17} />{t('latex.create')}</button><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void importProject()}><FolderOpen size={17} />{t('latex.import')}</button></div>{projects.length > 0 && <section className="latex-recent-projects"><h2>{t('latex.recentProjects')}</h2>{projects.slice(0, 6).map((entry) => <button type="button" key={entry.id} disabled={busy} onClick={() => void openProject(entry)}><FileCode size={19} /><span><strong>{entry.title}</strong><small>{entry.rootFile} · {t('latex.fileCount', { count: entry.files.length })}</small></span><span className="latex-recent-arrow">↗</span></button>)}</section>}<div className="latex-welcome-note"><span className="latex-local-dot" />{t('latex.localOnly')}</div></div> : <>
       <div className="latex-workbench" data-view={effectiveView} data-sidebar={sidebarOpen || undefined}>
         {sidebarOpen && <>{compact && <button type="button" className="latex-explorer-scrim" aria-label={t('latex.closeSidebar')} onClick={() => setSidebarOpen(false)} />}<LatexExplorer tab={explorerTab} onTabChange={setExplorerTab} files={editable} currentFile={file?.path ?? ''} rootFile={project.rootFile} source={draft} assets={assets} busy={busy} onClose={() => setSidebarOpen(false)} onCreate={() => setDialog('file')} onOpen={(path) => void run(() => loadFile(project, path))} onInsert={(id) => void insertAsset(id)} onNavigate={jumpToLine} /></>}
-        <div className="latex-editing-surfaces"><section className="latex-editor-region" aria-label={t('latex.edit')}>{file && <LatexSourceEditor ref={editor} key={`${project.id}:${file.path}`} value={draft} onChange={changeDraft} disabled={busy} searchContainer={searchContainer} onSearchFocus={() => { if (effectiveView === 'preview') changeView('source'); if (compact) setSidebarOpen(false) }} onPositionChange={(line, column) => setPosition({ line, column })} />}</section>
+        <div ref={editingSurfaces} className="latex-editing-surfaces"><section className="latex-editor-region" aria-label={t('latex.edit')} style={effectiveView === 'split' ? { flex: `0 0 ${splitPercent}%` } : undefined}>{file && <LatexSourceEditor ref={editor} key={`${project.id}:${file.path}`} value={draft} onChange={changeDraft} disabled={busy} searchContainer={searchContainer} onSearchFocus={() => { if (effectiveView === 'preview') changeView('source'); if (compact) setSidebarOpen(false) }} onPositionChange={(line, column) => setPosition({ line, column })} />}</section>
+          {effectiveView === 'split' && <ResizeDivider variant="soft" onResize={resizeSplit} onResizeEnd={persistSplit} />}
           <section className="latex-preview-region" aria-label={t('latex.previewPane')}>{pdf ? <LatexPdfPreview data={pdf} stale={stale} onDownload={downloadPdf} /> : <div className="latex-preview-empty"><div className="latex-preview-sheet"><FilePdf size={30} weight="thin" /><span /><span /><span /></div><h3>{t('latex.previewReady')}</h3><p>{t('latex.previewDescription')}</p><button type="button" className="latex-text-button" disabled={busy || conflict} onClick={() => void compile()}><Play size={13} />{t('latex.compileLabel')}</button><kbd>⌘ ↵</kbd></div>}</section>
         </div>
       </div>
       {showLog && <section className="latex-build-panel" aria-label={t('latex.log')}><div className="latex-build-heading"><span>{error ? <WarningCircle size={15} /> : <CheckCircle size={15} />}{t('latex.log')}{diagnostics.length > 0 && <small>{diagnostics.length}</small>}</span><div><button type="button" className="latex-text-button" aria-pressed={rawLog} onClick={() => setRawLog(!rawLog)}>{t('latex.rawLog')}</button><button type="button" className="latex-icon-button" aria-label={t('latex.copyLog')} onClick={() => void window.api.clipboard.writeText(log).catch((reason) => setError(errorMessage(reason)))}><Copy size={14} /></button><button type="button" className="latex-icon-button" aria-label={t('latex.closeLog')} onClick={() => setShowLog(false)}><X size={15} /></button></div></div>{rawLog || !diagnostics.length ? <pre className="latex-log">{log || t('latex.noLog')}</pre> : <div className="latex-diagnostics">{diagnostics.map((item, index) => <button type="button" key={index} onClick={() => void goToDiagnostic(item.file, item.line)}><WarningCircle size={14} /><span>{item.message}</span><small>{item.file}:{item.line}</small></button>)}</div>}</section>}
-      <footer className="latex-statusbar"><button type="button" aria-label={t('latex.save')} title={t('latex.save')} className="latex-save-indicator" data-dirty={draft !== file?.content || undefined} disabled={saving || conflict || busy} onClick={() => void save()}>{saving ? <ArrowsClockwise size={12} className="latex-spin" /> : error ? <WarningCircle size={12} /> : <Check size={12} />}<span role="status">{t(saving ? 'latex.saving' : draft !== file?.content ? 'latex.unsaved' : 'latex.saved')}</span></button><button type="button" className="latex-build-status" data-error={Boolean(error) || undefined} onClick={() => setShowLog(!showLog)} aria-label={t('latex.log')} aria-expanded={showLog}>{compiling ? t('latex.compiling') : stale && pdf ? t('latex.previewStale') : builtAt ? t('latex.builtAt', { time: builtAt }) : t('latex.ready')}</button><span className="latex-cursor-position">{t('latex.position', position)}</span><button type="button" className="latex-engine-label" title={t('latex.buildSettings')} onClick={() => setDialog('settings')}>{engine === 'pdflatex' ? 'pdfLaTeX' : engine === 'xelatex' ? 'XeLaTeX' : 'LuaLaTeX'}</button></footer>
+      <footer className="latex-statusbar"><button type="button" aria-label={t('latex.save')} title={t('latex.save')} className="latex-save-indicator" data-dirty={draft !== file?.content || undefined} disabled={saving || conflict || busy} onClick={() => void save()}>{saving ? <ArrowsClockwise size={12} className="latex-spin" /> : error ? <WarningCircle size={12} /> : <Check size={12} />}<span role="status">{t(saving ? 'latex.saving' : draft !== file?.content ? 'latex.unsaved' : 'latex.saved')}</span></button><button type="button" className="latex-build-status" data-error={Boolean(error) || undefined} onClick={() => setShowLog(!showLog)} aria-label={t('latex.log')} aria-expanded={showLog}>{compiling ? t('latex.compiling') : stale && pdf ? t('latex.previewStale') : builtAt ? t('latex.builtAt', { time: builtAt }) : t('latex.ready')}</button><span className="latex-cursor-position">{t('latex.position', position)}</span><button type="button" className="latex-engine-label" title={t('latex.buildSettings')} onClick={openBuildSettings}>{compiler === 'tectonic' ? 'Tectonic' : engine === 'pdflatex' ? 'pdfLaTeX' : engine === 'xelatex' ? 'XeLaTeX' : 'LuaLaTeX'}</button></footer>
     </>}
     {dialog && createPortal(<div className="latex-modal-backdrop" onClick={() => { if (!busy) setDialog(null) }}><div ref={dialogElement} className="latex-dialog" role="dialog" aria-modal="true" aria-label={t(dialog === 'create' ? 'latex.create' : dialog === 'file' ? 'latex.newFile' : 'latex.buildSettings')} tabIndex={-1} onClick={(event) => event.stopPropagation()}><div className="latex-dialog-heading"><span className="latex-dialog-icon">{dialog === 'settings' ? <GearSix size={21} /> : <FileCode size={21} />}</span><div><h2>{t(dialog === 'create' ? 'latex.create' : dialog === 'file' ? 'latex.newFile' : 'latex.buildSettings')}</h2><p>{t(dialog === 'create' ? 'latex.createHint' : dialog === 'file' ? 'latex.newFileHint' : 'latex.settingsHint')}</p></div><button type="button" className="latex-icon-button" aria-label={t('common.close')} disabled={busy} onClick={() => setDialog(null)}><X size={18} /></button></div>
-      {dialog === 'settings' ? <div className="latex-settings-fields">{project && <label>{t('latex.root')}<select aria-label={t('latex.root')} disabled={busy} value={project.rootFile} onChange={(event) => { const path = event.target.value; void run(async () => { if (!await save()) return; const result = await execute({ action: 'root', projectId: project.id, path }); if (result.project) { setProject(result.project); setStale(true) } }) }}>{project.files.filter((path) => path.endsWith('.tex')).map((path) => <option key={path}>{path}</option>)}</select></label>}<label>{t('latex.engine')}<select aria-label={t('latex.engine')} value={engine} disabled={busy} onChange={(event) => { setEngine(event.target.value as LatexEngine); setStale(true) }}><option value="pdflatex">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select></label><div className="latex-runtime-setting"><span><strong>{t('latex.localCompiler')}</strong><p>{t('latex.runtimeHint')}</p></span><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void run(async () => { await execute({ action: 'configure' }); setError('') })}>{t('latex.configure')}</button></div><div className="latex-dialog-footer"><button type="button" className="latex-primary-action" onClick={() => setDialog(null)}>{t('latex.done')}</button></div></div> : <form onSubmit={(event) => { event.preventDefault(); void (dialog === 'create' ? createProject() : createFile()) }}><label className="latex-dialog-label">{t(dialog === 'create' ? 'latex.projectTitle' : 'latex.fileName')}<input data-autofocus aria-label={t(dialog === 'create' ? 'latex.projectTitle' : 'latex.newFile')} placeholder={dialog === 'create' ? t('latex.titlePlaceholder') : 'sections/introduction.tex'} value={dialog === 'create' ? title : newPath} onChange={(event) => dialog === 'create' ? setTitle(event.target.value) : setNewPath(event.target.value)} disabled={busy} /></label>{error && <p className="latex-dialog-error" role="alert">{error}</p>}<div className="latex-dialog-footer"><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => setDialog(null)}>{t('common.cancel')}</button><button type="submit" className="latex-primary-action" disabled={busy || !(dialog === 'create' ? title : newPath).trim()}>{busy && <ArrowsClockwise size={14} className="latex-spin" />}{t(dialog === 'create' ? 'latex.create' : 'latex.newFile')}</button></div></form>}
+      {dialog === 'settings' ? <div className="latex-settings-fields">{project && <label>{t('latex.root')}<select aria-label={t('latex.root')} disabled={busy} value={project.rootFile} onChange={(event) => { const path = event.target.value; void run(async () => { if (!await save()) return; const result = await execute({ action: 'root', projectId: project.id, path }); if (result.project) { setProject(result.project); setStale(true) } }) }}>{project.files.filter((path) => path.endsWith('.tex')).map((path) => <option key={path}>{path}</option>)}</select></label>}{compiler === 'latexmk' ? <label>{t('latex.engine')}<select aria-label={t('latex.engine')} value={engine} disabled={busy} onChange={(event) => { setEngine(event.target.value as LatexEngine); setStale(true) }}><option value="pdflatex">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select></label> : <div className="latex-runtime-setting"><span><strong>Tectonic</strong><p>{t('settings.latexCompiler.tectonicHint')}</p></span></div>}<div className="latex-dialog-footer"><button type="button" className="latex-primary-action" onClick={() => setDialog(null)}>{t('latex.done')}</button></div></div> : <form onSubmit={(event) => { event.preventDefault(); void (dialog === 'create' ? createProject() : createFile()) }}><label className="latex-dialog-label">{t(dialog === 'create' ? 'latex.projectTitle' : 'latex.fileName')}<input data-autofocus aria-label={t(dialog === 'create' ? 'latex.projectTitle' : 'latex.newFile')} placeholder={dialog === 'create' ? t('latex.titlePlaceholder') : 'sections/introduction.tex'} value={dialog === 'create' ? title : newPath} onChange={(event) => dialog === 'create' ? setTitle(event.target.value) : setNewPath(event.target.value)} disabled={busy} /></label>{error && <p className="latex-dialog-error" role="alert">{error}</p>}<div className="latex-dialog-footer"><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => setDialog(null)}>{t('common.cancel')}</button><button type="submit" className="latex-primary-action" disabled={busy || !(dialog === 'create' ? title : newPath).trim()}>{busy && <ArrowsClockwise size={14} className="latex-spin" />}{t(dialog === 'create' ? 'latex.create' : 'latex.newFile')}</button></div></form>}
     </div></div>, document.body)}
   </div>
 })

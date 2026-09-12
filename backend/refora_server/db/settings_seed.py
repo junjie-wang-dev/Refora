@@ -34,6 +34,9 @@ SETTING_KEYS: tuple[str, ...] = (
     "workspaceWidth",
     "documentListCompactWidth",
     "pdfOpenMode",
+    "latexCompiler",
+    "latexBinPath",
+    "tectonicBinPath",
 )
 
 
@@ -65,6 +68,9 @@ def default_settings(language: Language) -> list[tuple[str, Any]]:
         ("workspaceWidth", 480),
         ("documentListCompactWidth", 320),
         ("pdfOpenMode", "system"),
+        ("latexCompiler", "latexmk"),
+        ("latexBinPath", ""),
+        ("tectonicBinPath", ""),
     ]
 
 

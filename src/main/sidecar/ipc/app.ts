@@ -6,13 +6,14 @@ import { resultify } from './result'
 export interface ServerAppHandlerDeps {
   setThemeSource: (theme: ThemeMode) => void
   openDirectory: () => Promise<string | null>
+  openExecutable: (executable: 'latexmk' | 'tectonic') => Promise<string | null>
   authorizeFile: (path: string) => string
   authorizeDirectory: (path: string) => string
 }
 
 export function createServerAppHandlers(
   serverClient: ServerClient,
-  { setThemeSource, openDirectory, authorizeFile, authorizeDirectory }: ServerAppHandlerDeps
+  { setThemeSource, openDirectory, openExecutable, authorizeFile, authorizeDirectory }: ServerAppHandlerDeps
 ) {
   const { http } = serverClient
 
@@ -23,6 +24,13 @@ export function createServerAppHandlers(
       resultify(async () => {
         const path = await openDirectory()
         return path ? authorizeDirectory(path) : null
+      }),
+    [IpcChannel.DialogOpenExecutable]: (executable: 'latexmk' | 'tectonic') =>
+      resultify(async () => {
+        if (executable !== 'latexmk' && executable !== 'tectonic') {
+          throw Object.assign(new Error('Unsupported LaTeX executable'), { code: 'invalid_argument' })
+        }
+        return openExecutable(executable)
       }),
     [IpcChannel.FileAuthorizeDropped]: (path: string) =>
       resultify(async () => authorizeFile(path)),

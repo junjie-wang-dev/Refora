@@ -1054,6 +1054,8 @@ def test_settings_roundtrip_uses_json_values():
             "listColumnState": {"columns": []},
             "activeAgentProfileId": "profile-cli",
             "chatSelectedAgentProfileId": "profile-cli",
+            "latexCompiler": "tectonic",
+            "tectonicBinPath": "/opt/homebrew/bin",
         },
     )
     fetched = client.get("/settings", headers=headers)
@@ -1062,6 +1064,8 @@ def test_settings_roundtrip_uses_json_values():
     assert updated.json()["data"]["listColumnState"] == {"columns": []}
     assert updated.json()["data"]["activeAgentProfileId"] == "profile-cli"
     assert updated.json()["data"]["chatSelectedAgentProfileId"] == "profile-cli"
+    assert updated.json()["data"]["latexCompiler"] == "tectonic"
+    assert updated.json()["data"]["tectonicBinPath"] == "/opt/homebrew/bin"
     assert fetched.json()["data"]["theme"] == "dark"
     assert fetched.json()["data"]["sidebarCollapsed"] is True
 
@@ -1347,6 +1351,21 @@ def test_settings_rejects_unknown_keys_and_library_folder_path(tmp_path):
     assert unknown.json()["error"]["code"] == "forbidden_field"
     assert library_switch.status_code == 400
     assert library_switch.json()["error"]["code"] == "use_library_switch"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("latexCompiler", "custom"),
+    ("latexBinPath", "relative/bin"),
+    ("tectonicBinPath", 42),
+])
+def test_settings_rejects_invalid_latex_compiler_configuration(key, value):
+    client, _ = make_client()
+    response = client.patch(
+        "/settings",
+        headers={"X-Refora-Token": "test-token"},
+        json={key: value},
+    )
+    assert response.status_code == 400
 
 
 def test_settings_proxy_url_applies_proxy_rules_via_connector(tmp_path):

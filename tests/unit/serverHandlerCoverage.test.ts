@@ -20,6 +20,7 @@ describe('server IPC handler coverage', () => {
       ...createServerAppHandlers(serverClient, {
         setThemeSource: () => undefined,
         openDirectory: async () => null,
+        openExecutable: async () => null,
         authorizeFile: (path) => path,
         authorizeDirectory: (path) => path
       }),

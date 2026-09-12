@@ -133,15 +133,28 @@ def import_sources(source: Path, target: Path) -> None:
         raise RepoError('invalid_archive', 'Choose a .tex, .zip or .tar.gz source file')
 
 
-def tex_binary(configured: str = "") -> Path:
-    candidates = [configured, os.environ.get('REFORA_TEX_BIN', ''), '/Library/TeX/texbin', str(Path.home() / 'Library/TinyTeX/bin/universal-darwin'), str(Path.home() / '.TinyTeX/bin/universal-darwin')]
-    found = shutil.which('latexmk')
+def compiler_binary(executable: str, configured: str = "") -> Path:
+    environment_key = 'REFORA_TECTONIC_BIN' if executable == 'tectonic' else 'REFORA_TEX_BIN'
+    configured_path = Path(configured).expanduser() if configured else None
+    if configured_path and configured_path.is_file() and configured_path.name == executable:
+        return configured_path.resolve().parent
+    candidates = [configured if configured_path and configured_path.is_dir() else '', os.environ.get(environment_key, '')]
+    if executable == 'latexmk':
+        candidates.extend(['/Library/TeX/texbin', str(Path.home() / 'Library/TinyTeX/bin/universal-darwin'), str(Path.home() / '.TinyTeX/bin/universal-darwin')])
+    candidates.extend(['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin'])
+    found = shutil.which(executable)
     if found:
         candidates.append(str(Path(found).parent))
     for candidate in candidates:
-        if candidate and (Path(candidate) / 'latexmk').is_file():
+        if candidate and (Path(candidate) / executable).is_file():
             return Path(candidate).resolve()
-    raise RepoError('latex_unavailable', 'Install MacTeX or TinyTeX with latexmk, then restart Refora')
+    if executable == 'tectonic':
+        raise RepoError('latex_unavailable', 'Install Tectonic, or choose its bin directory in Settings')
+    raise RepoError('latex_unavailable', 'Install MacTeX or TinyTeX with latexmk, or choose its bin directory in Settings')
+
+
+def tex_binary(configured: str = "") -> Path:
+    return compiler_binary('latexmk', configured)
 
 
 def tail_log(path: Path) -> str:
@@ -151,13 +164,15 @@ def tail_log(path: Path) -> str:
         return stream.read(100000).decode('utf-8', errors='replace')
 
 
-def compile_project(source: Path, root_file: str, engine: str, configured: str = "") -> dict[str, Any]:
+def compile_project(source: Path, root_file: str, engine: str, compiler: str = 'latexmk', configured: str = "") -> dict[str, Any]:
     if engine not in {'pdflatex', 'xelatex', 'lualatex'}:
         raise RepoError('validation', 'Unknown LaTeX engine')
+    if compiler not in {'latexmk', 'tectonic'}:
+        raise RepoError('validation', 'Unknown LaTeX compiler')
     root = safe_path(source, root_file)
     if root.suffix.lower() != '.tex' or not root.is_file():
         raise RepoError('invalid_path', 'Select a .tex root document')
-    binary = tex_binary(configured)
+    binary = tex_binary(configured) if compiler == 'latexmk' else compiler_binary('tectonic', configured)
     if not Path('/usr/bin/sandbox-exec').is_file():
         raise RepoError('sandbox_unavailable', 'Local LaTeX compilation requires the macOS sandbox')
     with tempfile.TemporaryDirectory(prefix='refora-latex-') as temporary:
@@ -182,18 +197,43 @@ def compile_project(source: Path, root_file: str, engine: str, configured: str =
             shutil.copyfile(file, destination)
         quoted = lambda path: json.dumps(str(path))
         ghostscript = shutil.which('gs') or next((name for name in ('/usr/local/bin/gs', '/opt/homebrew/bin/gs') if Path(name).is_file()), None)
-        readable = ['/System', '/usr', '/bin', '/sbin', '/Library/Fonts', '/Library/Apple', '/private/etc', '/dev', str(binary.parent.parent), str(build)]
+        readable = ['/System', '/usr', '/bin', '/sbin', '/Library/Fonts', '/Library/Apple', '/private/etc', '/dev', str(build)]
+        readable_literals = []
+        if compiler == 'tectonic':
+            compiler_root = next((Path(prefix) for prefix in ('/opt/homebrew', '/usr/local', '/opt/local') if binary.is_relative_to(prefix)), None)
+            if compiler_root:
+                readable.append(str(compiler_root))
+            else:
+                readable_literals.append(str((binary / 'tectonic').resolve()))
+        else:
+            readable.append(str(binary.parent.parent))
+        writable = [str(build)]
+        tectonic_cache = None
+        if compiler == 'tectonic':
+            tectonic_cache = (source.parent.parent / '.tectonic-cache').resolve()
+            tectonic_cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tectonic_config = Path.home() / 'Library/Application Support/Tectonic'
+            tectonic_config.mkdir(mode=0o700, parents=True, exist_ok=True)
+            readable.extend([str(tectonic_cache), str(tectonic_config)])
+            writable.extend([str(tectonic_cache), str(tectonic_config)])
         if ghostscript:
             readable.append(str(Path(ghostscript).resolve().parent.parent))
         profile = '\n'.join([
             '(version 1)', '(deny default)', '(allow process*)', '(allow sysctl-read)', '(allow mach-lookup)',
             '(allow file-read-metadata)', '(allow file-read* (literal "/"))',
             *[f'(allow file-read* (subpath {quoted(path)}))' for path in readable],
-            f'(allow file-write* (subpath {quoted(build)}))', '(allow file-write* (literal "/dev/null"))',
+            *[f'(allow file-read* (literal {quoted(path)}))' for path in readable_literals],
+            *[f'(allow file-write* (subpath {quoted(path)}))' for path in writable],
+            *(['(allow network*)'] if compiler == 'tectonic' else []),
+            '(allow file-write* (literal "/dev/null"))',
         ])
         env = {'PATH': f'{binary}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin', 'HOME': str(build), 'TMPDIR': str(build), 'TEXMFHOME': str(build / 'texmf'), 'TEXMFVAR': str(build / 'texmf-var'), 'TEXMFCONFIG': str(build / 'texmf-config'), 'openin_any': 'p', 'openout_any': 'p', 'shell_escape': 'f', 'LANG': 'en_US.UTF-8', 'USER': 'refora', 'LOGNAME': 'refora'}
-        mode = {'pdflatex': '-pdf', 'xelatex': '-xelatex', 'lualatex': '-lualatex'}[engine]
-        command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'latexmk'), '-norc', mode, '-no-shell-escape', '-interaction=nonstopmode', '-file-line-error', '-halt-on-error', './' + root.name]
+        if compiler == 'tectonic':
+            env.update({'TECTONIC_CACHE_DIR': str(tectonic_cache), 'TECTONIC_UNTRUSTED_MODE': '1'})
+            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--print', './' + root.name]
+        else:
+            mode = {'pdflatex': '-pdf', 'xelatex': '-xelatex', 'lualatex': '-lualatex'}[engine]
+            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'latexmk'), '-norc', mode, '-no-shell-escape', '-interaction=nonstopmode', '-file-line-error', '-halt-on-error', './' + root.name]
         cwd = build / root.relative_to(source).parent
         log_path = build / 'refora-build.log'
         deadline = time.monotonic() + 120
@@ -384,5 +424,8 @@ class LatexService:
             relative = os.path.relpath(destination, (source / project['rootFile']).parent)
             return {'assetPath': relative, 'project': self.project(directory, project['id'])[0]}
         if action == 'compile':
-            return {'compilation': compile_project(source, project['rootFile'], request.get('engine', 'pdflatex'), self.settings.get('latexBinPath', '') if self.settings is not None else '')}
+            compiler = self.settings.get('latexCompiler', 'latexmk') if self.settings is not None else 'latexmk'
+            path_key = 'tectonicBinPath' if compiler == 'tectonic' else 'latexBinPath'
+            configured = self.settings.get(path_key, '') if self.settings is not None else ''
+            return {'compilation': compile_project(source, project['rootFile'], request.get('engine', 'pdflatex'), compiler, configured)}
         raise RepoError('validation', 'Unknown LaTeX operation')

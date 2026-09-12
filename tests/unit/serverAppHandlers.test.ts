@@ -11,6 +11,7 @@ function appDeps(overrides: Partial<Parameters<typeof createServerAppHandlers>[1
   return {
     setThemeSource: vi.fn(),
     openDirectory: vi.fn().mockResolvedValue(null),
+    openExecutable: vi.fn().mockResolvedValue(null),
     authorizeFile: (path: string) => path,
     authorizeDirectory: (path: string) => path,
     ...overrides
@@ -88,6 +89,25 @@ describe('createServerAppHandlers', () => {
     await expect(handlers[IpcChannel.DialogOpenDirectory]()).resolves.toEqual({
       ok: false,
       error: { code: 'native_unavailable', message: 'Native unavailable' }
+    })
+  })
+
+  it('selects only supported LaTeX executables', async () => {
+    const http = {
+      appBootstrap: vi.fn(),
+      globalSearch: vi.fn()
+    }
+    const openExecutable = vi.fn().mockResolvedValue('/Users/reader/tectonic')
+    const handlers = createServerAppHandlers(clientWith(http), appDeps({ openExecutable }))
+
+    await expect(handlers[IpcChannel.DialogOpenExecutable]('tectonic')).resolves.toEqual({
+      ok: true,
+      data: '/Users/reader/tectonic'
+    })
+    expect(openExecutable).toHaveBeenCalledWith('tectonic')
+    await expect(handlers[IpcChannel.DialogOpenExecutable]('custom' as never)).resolves.toEqual({
+      ok: false,
+      error: { code: 'invalid_argument', message: 'Unsupported LaTeX executable' }
     })
   })
 

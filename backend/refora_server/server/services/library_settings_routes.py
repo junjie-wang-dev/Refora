@@ -285,6 +285,12 @@ def register_library_settings_routes(
                     error = RuntimeError("Use library.switch to change the library folder")
                     error.code = "use_library_switch"
                     raise error
+                if key == "latexCompiler" and candidate not in {"latexmk", "tectonic"}:
+                    raise ValueError("LaTeX compiler must be latexmk or tectonic")
+                if key in {"latexBinPath", "tectonicBinPath"} and (
+                    not isinstance(candidate, str) or (candidate and not os.path.isabs(candidate))
+                ):
+                    raise ValueError("LaTeX compiler directory must be an absolute path or empty")
                 try:
                     json.dumps(candidate, allow_nan=False)
                 except (TypeError, ValueError) as exc:

@@ -189,5 +189,8 @@ def test_default_settings_matches_ts_defaults() -> None:
     assert entries["workspaceWidth"] == 480
     assert entries["documentListCompactWidth"] == 320
     assert entries["pdfOpenMode"] == "system"
+    assert entries["latexCompiler"] == "latexmk"
+    assert entries["latexBinPath"] == ""
+    assert entries["tectonicBinPath"] == ""
     assert DEFAULT_LIBRARY_FOLDER == ""
     assert len(entries) == len(SETTING_KEYS)

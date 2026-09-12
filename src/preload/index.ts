@@ -300,7 +300,8 @@ const api: ReforaApi = {
   },
 
   dialog: {
-    openDirectory: () => invoke<string | null>(IpcChannel.DialogOpenDirectory)
+    openDirectory: () => invoke<string | null>(IpcChannel.DialogOpenDirectory),
+    openExecutable: (executable) => invoke<string | null>(IpcChannel.DialogOpenExecutable, executable)
   },
 
   library: {

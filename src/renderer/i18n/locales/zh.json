@@ -379,6 +379,21 @@
         "invalid": "安装需要修复"
       }
     },
+    "latexCompiler": {
+      "title": "LaTeX 编译器",
+      "desc": "选择所有 LaTeX 项目使用的本地编译器",
+      "compiler": "编译器",
+      "latexmkHint": "使用 MacTeX 或 TinyTeX 中的 latexmk，并支持 pdfLaTeX、XeLaTeX 与 LuaLaTeX。",
+      "tectonicHint": "使用自带依赖管理能力的独立 Tectonic 编译器。",
+      "executablePath": "{{executable}} 可执行文件或所在文件夹",
+      "autoDetect": "自动检测",
+      "chooseExecutable": "选择文件",
+      "useAutoDetect": "重置",
+      "pathHint": "留空可自动检测；也可以粘贴可执行文件的完整路径，或选择包含 {{executable}} 的文件夹。",
+      "tectonicCacheHint": "Tectonic 会按需下载所需的支持文件，并将它们缓存在文献库内。编译以不受信任模式运行，并禁用 shell escape。",
+      "loadFailed": "无法读取 LaTeX 编译器设置",
+      "saveFailed": "无法保存 LaTeX 编译器设置"
+    },
     "webSearch": {
       "title": "联网搜索",
       "desc": "配置 Refora Agent 使用的联网搜索与网页读取服务",
@@ -1439,6 +1454,7 @@
     "fileCount": "{{count}} 个文件",
     "localOnly": "源码与图片保存在本机",
     "layout": "编辑器布局",
+    "layoutSaveFailed": "无法保存编辑器分栏大小",
     "split": "源码与 PDF 并排",
     "previewPane": "文档预览",
     "previewReady": "让论文呈现完整模样",

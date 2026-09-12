@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, shell, session, dialog, ipcMain, nativeImage, nativeTheme, net, protocol } from 'electron'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { createWriteStream, existsSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
@@ -835,6 +835,28 @@ async function createPythonServerAssembly(
         ? await dialog.showOpenDialog(target, options)
         : await dialog.showOpenDialog(options)
       return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    openExecutable: async (executable) => {
+      const target = win
+      const options = {
+        title: `Choose ${executable} executable`,
+        buttonLabel: 'Choose',
+        properties: ['openFile'] as Array<'openFile'>
+      }
+      const result = target && !target.isDestroyed()
+        ? await dialog.showOpenDialog(target, options)
+        : await dialog.showOpenDialog(options)
+      if (result.canceled) return null
+      const selected = result.filePaths[0]
+      if (!selected || !isAbsolute(selected) || basename(selected) !== executable) {
+        throw Object.assign(new Error(`Choose the ${executable} executable`), { code: 'invalid_path' })
+      }
+      const resolved = realpathSync(selected)
+      const stats = statSync(resolved)
+      if (!stats.isFile() || (stats.mode & 0o111) === 0) {
+        throw Object.assign(new Error(`${executable} must be an executable file`), { code: 'invalid_path' })
+      }
+      return resolved
     },
     saveBibtex: async (bibtex) => {
       const target = win

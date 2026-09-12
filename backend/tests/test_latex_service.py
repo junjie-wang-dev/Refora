@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from refora_server.services.latex import LatexService, import_sources, safe_path, STARTER
+from refora_server.services.latex import LatexService, compiler_binary, import_sources, safe_path, STARTER
 from refora_server.repositories.errors import RepoError
 
 
@@ -153,6 +153,13 @@ def test_configured_tex_directory_requires_a_real_compiler(service, tmp_path):
     assert settings['latexBinPath'] == str(tmp_path)
 
 
+def test_compiler_binary_accepts_the_executable_path(tmp_path):
+    executable = tmp_path / 'tectonic'
+    executable.write_text('compiler')
+    executable.chmod(0o755)
+    assert compiler_binary('tectonic', str(executable)) == tmp_path.resolve()
+
+
 def test_compilation_never_returns_an_imported_stale_pdf(tmp_path, monkeypatch):
     from refora_server.services import latex
     source = tmp_path / 'source'
@@ -180,6 +187,57 @@ def test_compilation_never_returns_an_imported_stale_pdf(tmp_path, monkeypatch):
     assert '(allow network' not in profile
     assert kwargs['env']['openin_any'] == 'p'
     assert (source / 'main.pdf').read_bytes() == b'%PDF-old source artifact'
+
+
+def test_tectonic_compilation_uses_untrusted_mode_and_persistent_cache(tmp_path, monkeypatch):
+    from refora_server.services import latex
+    source = tmp_path / 'work' / 'latex' / 'project' / 'files'
+    source.mkdir(parents=True)
+    (source / 'main.tex').write_text(STARTER)
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    monkeypatch.setattr(latex, 'compiler_binary', lambda executable, configured='': binary)
+    calls = []
+    class Process:
+        returncode = 0
+        def __init__(self, command, **kwargs):
+            calls.append((command, kwargs))
+            (kwargs['cwd'] / 'main.pdf').write_bytes(b'%PDF-tectonic')
+        def wait(self, **kwargs):
+            return 0
+    monkeypatch.setattr(latex.subprocess, 'Popen', Process)
+    result = latex.compile_project(source, 'main.tex', 'pdflatex', 'tectonic')
+    assert result['success'] is True
+    command, kwargs = calls[0]
+    assert command[command.index(str(binary / 'tectonic')):] == [
+        str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--print', './main.tex'
+    ]
+    assert kwargs['env']['TECTONIC_UNTRUSTED_MODE'] == '1'
+    assert kwargs['env']['TECTONIC_CACHE_DIR'] == str(tmp_path / 'work' / 'latex' / '.tectonic-cache')
+    profile = command[command.index('-p') + 1]
+    assert '(allow network*)' in profile
+    assert str(tmp_path / 'work' / 'latex' / '.tectonic-cache') in profile
+
+
+def test_compile_uses_the_configured_global_compiler(service, tmp_path, monkeypatch):
+    from refora_server.services import latex
+    class Settings(dict):
+        def set(self, key, value):
+            self[key] = value
+    service.settings = Settings(latexCompiler='tectonic', tectonicBinPath=str(tmp_path / 'tectonic-bin'))
+    project = create(service)
+    called = {}
+    def compile_stub(source, root_file, engine, compiler, configured):
+        called.update(root_file=root_file, engine=engine, compiler=compiler, configured=configured)
+        return {'success': True, 'log': ''}
+    monkeypatch.setattr(latex, 'compile_project', compile_stub)
+    service.operate('ws', {'action': 'compile', 'projectId': project['id'], 'engine': 'xelatex'})
+    assert called == {
+        'root_file': 'main.tex',
+        'engine': 'xelatex',
+        'compiler': 'tectonic',
+        'configured': str(tmp_path / 'tectonic-bin')
+    }
 
 
 def test_compiler_output_symlinks_cannot_read_outside_build(tmp_path, monkeypatch):

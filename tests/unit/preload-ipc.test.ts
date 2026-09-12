@@ -114,6 +114,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.WebSearchConfigUpdate, args: [{ provider: 'ddgs' }], invoke: (value) => value.webSearch.updateConfig({ provider: 'ddgs' }) },
       { channel: IpcChannel.WebSearchTest, args: [], invoke: (value) => value.webSearch.test() },
       { channel: IpcChannel.DialogOpenDirectory, args: [], invoke: (value) => value.dialog.openDirectory() },
+      { channel: IpcChannel.DialogOpenExecutable, args: ['tectonic'], invoke: (value) => value.dialog.openExecutable('tectonic') },
       { channel: IpcChannel.LibrarySwitch, args: ['/library'], invoke: (value) => value.library.switch('/library') },
       { channel: IpcChannel.ExportToBibtex, args: [['doc-1']], invoke: (value) => value.export.toBibtex(['doc-1']) },
       { channel: IpcChannel.ExportBibtexString, args: [['doc-1']], invoke: (value) => value.export.toBibtexString(['doc-1']) },
