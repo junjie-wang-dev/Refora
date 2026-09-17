@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
@@ -30,6 +31,7 @@ def _map_run(row: sqlite3.Row) -> dict[str, Any]:
         "runtimeSessionId": row["runtimeSessionId"],
         "modelId": row["modelId"],
         "activeDocumentId": row["activeDocumentId"],
+        **({"latexContext": json.loads(row["latexContext"])} if row["latexContext"] else {}),
         "status": row["status"],
         "checkpointBefore": row["checkpointBefore"],
         "checkpointAfter": row["checkpointAfter"],
@@ -51,9 +53,9 @@ def createAgentRunsRepository(db):
         id = input.get("id") or _new_id()
         db.execute(
             "INSERT INTO agent_runs "
-            "(id, threadId, providerId, agentProfileId, runtimeSessionId, modelId, activeDocumentId, status, checkpointBefore, checkpointAfter, "
+            "(id, threadId, providerId, agentProfileId, runtimeSessionId, modelId, activeDocumentId, latexContext, status, checkpointBefore, checkpointAfter, "
             "replacesRunId, userMessageId, assistantMessageId, startedAt, endedAt, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL)",
             [
                 id,
                 input["threadId"],
@@ -62,6 +64,7 @@ def createAgentRunsRepository(db):
                 input.get("runtimeSessionId"),
                 input["modelId"],
                 input.get("activeDocumentId"),
+                json.dumps(input["latexContext"]) if input.get("latexContext") else None,
                 input.get("status") or RUN_STATUS_QUEUED,
                 input.get("checkpointBefore"),
                 input.get("replacesRunId"),

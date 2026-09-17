@@ -790,3 +790,14 @@ def test_real_subagent_cannot_call_write_action_through_compact_tool(tmp_path):
     assert len(messages) == 1
     assert json.loads(messages[0].content)['error']['code'] == 'invalid_tool_arguments'
     assert created == []
+
+
+@pytest.mark.asyncio
+async def test_latex_agent_exposes_only_project_tools_without_research_or_filesystem_context():
+    model = RecordingOpenAIModel(responses=[AIMessage(content='LaTeX answer')])
+    context = AgentToolContext(run_id='latex-run', workspace_id='workspace', latex_context={'projectId': 'paper', 'path': 'main.tex'})
+    tools = create_agent_tools(context, {})
+    agent = providers.create_agent(model, tools, {'latexContext': context.latex_context, 'systemPrompt': 'LaTeX only', 'sandboxRoot': '/tmp'})
+    result = await agent.ainvoke({'messages': [HumanMessage(content='Explain this source')]})
+    assert result['messages'][-1].content == 'LaTeX answer'
+    assert model.bound_tool_names[-1] == ['edit_latex_project']

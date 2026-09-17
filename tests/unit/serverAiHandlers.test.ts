@@ -120,6 +120,7 @@ describe('server AI IPC handlers', () => {
       threadId: 'thread-1',
       runId: 'client-run',
       text: 'Hello',
+      latexContext: { projectId: 'paper', path: 'main.tex', selection: { startLine: 2, endLine: 4 } },
       providerId: 'provider-1'
     }
 

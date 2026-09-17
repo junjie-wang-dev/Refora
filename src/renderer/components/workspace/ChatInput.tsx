@@ -41,6 +41,7 @@ export interface ChatInputProps {
   onCancel: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   inputAreaRef: React.RefObject<HTMLDivElement | null>
+  attachmentsEnabled?: boolean
   toolbar?: React.ReactNode
 }
 
@@ -60,7 +61,8 @@ export default function ChatInput({
   onCancel,
   textareaRef,
   inputAreaRef,
-  toolbar
+  toolbar,
+  attachmentsEnabled = true
 }: ChatInputProps) {
   const { t } = useTranslation()
   const [workspaceAttachmentState, setWorkspaceAttachmentState] = useState<{
@@ -212,7 +214,7 @@ export default function ChatInput({
         )}
 
         <div className="flex min-w-0 items-center gap-1 px-2 pb-2 pt-1">
-          <div className="relative shrink-0" ref={attachMenuRef}>
+          {attachmentsEnabled && <div className="relative shrink-0" ref={attachMenuRef}>
             <UiButton
               variant="ghost"
               size="sm"
@@ -272,7 +274,7 @@ export default function ChatInput({
                 )}
               </div>
             )}
-          </div>
+          </div>}
           <div
             className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1"
             data-testid="chat-input-controls"

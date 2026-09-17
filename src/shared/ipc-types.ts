@@ -1,3 +1,4 @@
+import type { LatexChatContext } from './latex-types'
 import type { ContextMenuIcon } from './contextMenuIcons'
 import type {
   MineruEngineStatus,
@@ -753,6 +754,7 @@ export interface ChatMessage {
   runStatus?: AgentRunStatus
   attachments?: ChatAttachment[]
   media?: ChatMediaItem[]
+  latexContext?: LatexChatContext | null
   activeDocumentId?: string | null
 }
 
@@ -776,6 +778,7 @@ export interface ChatRunSnapshot {
 
 export interface AgentTurnIntent {
   workspaceId: string | null
+  latexContext?: LatexChatContext | null
   activeDocumentId?: string
   threadId?: string
   runId?: string
@@ -845,6 +848,7 @@ export interface AgentRun {
   agentProfileId: string | null
   runtimeSessionId: string | null
   modelId: string
+  latexContext?: LatexChatContext | null
   activeDocumentId: string | null
   status: AgentRunStatus
   checkpointBefore: string | null

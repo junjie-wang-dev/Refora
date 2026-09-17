@@ -742,6 +742,7 @@ def createAgentRuntime(repos: dict[str, Any], deps: dict[str, Any] | None = None
                             or thread.get("agentProfileId"),
                             "runtimeSessionId": request.get("runtimeSessionId"),
                             "modelId": model,
+                            "latexContext": request.get("latexContext"),
                             "activeDocumentId": request.get("activeDocumentId"),
                             "status": RUN_STATUS_QUEUED,
                             "checkpointBefore": request.get("checkpointBefore"),

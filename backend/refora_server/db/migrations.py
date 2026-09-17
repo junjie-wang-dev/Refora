@@ -181,6 +181,8 @@ def _sync_library_identity_schema_present(db: SqliteLike) -> bool:
 
 def migration_schema_present(db: SqliteLike, version: int) -> bool:
     current = db.get_user_version()
+    if version == 49:
+        return _has_columns(db, "agent_runs", ["latexContext"])
     if version == 12:
         return _has_columns(db, "documents", ["affiliations"])
     if version == 13:

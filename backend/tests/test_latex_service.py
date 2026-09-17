@@ -210,7 +210,7 @@ def test_tectonic_compilation_uses_untrusted_mode_and_persistent_cache(tmp_path,
     assert result['success'] is True
     command, kwargs = calls[0]
     assert command[command.index(str(binary / 'tectonic')):] == [
-        str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--print', './main.tex'
+        str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--synctex', '--print', './main.tex'
     ]
     assert kwargs['env']['TECTONIC_UNTRUSTED_MODE'] == '1'
     assert kwargs['env']['TECTONIC_CACHE_DIR'] == str(tmp_path / 'work' / 'latex' / '.tectonic-cache')
@@ -260,3 +260,208 @@ def test_compiler_output_symlinks_cannot_read_outside_build(tmp_path, monkeypatc
     with pytest.raises(RepoError):
         latex.compile_project(source, 'main.tex', 'pdflatex')
     assert sentinel.read_text() == 'private sentinel'
+
+
+def test_import_folder_copies_complete_project_and_keeps_source_independent(service, tmp_path):
+    folder = tmp_path / 'Conference Paper'
+    (folder / 'sections').mkdir(parents=True)
+    (folder / '.git').mkdir()
+    (folder / '.git/config').write_text('private config')
+    (folder / 'main.tex').write_text(r'\documentclass[conference]{IEEEtran}\input{sections/intro}')
+    (folder / 'sections/intro.tex').write_text('Introduction')
+    (folder / 'references.bib').write_text('@article{paper,title={Paper}}')
+    (folder / 'IEEEtran.cls').write_text(r'\ProvidesClass{IEEEtran}')
+    (folder / 'figure.png').write_bytes(b'figure')
+    (folder / 'compile.sh').write_text('unused')
+    project = service.operate('ws', {'action': 'import', 'importPath': str(folder)})['project']
+    assert project['title'] == 'Conference Paper'
+    assert project['rootFile'] == 'main.tex'
+    assert project['template'] == 'IEEE Conference'
+    assert project['files'] == ['IEEEtran.cls', 'figure.png', 'main.tex', 'references.bib', 'sections/intro.tex']
+    (folder / 'sections/intro.tex').write_text('Original changed')
+    assert service.operate('ws', {'action': 'read', 'projectId': project['id'], 'path': 'sections/intro.tex'})['file']['content'] == 'Introduction'
+    assert service.operate('ws', {'action': 'list'})['projects'] == [project]
+
+
+@pytest.mark.parametrize('kind', ['file', 'directory', 'limit', 'empty'])
+def test_invalid_folder_import_rolls_back(service, tmp_path, monkeypatch, kind):
+    from refora_server.services import latex
+    folder = tmp_path / 'invalid'
+    folder.mkdir()
+    if kind != 'empty':
+        (folder / 'main.tex').write_text(STARTER)
+    if kind == 'file':
+        (folder / 'linked.tex').symlink_to(folder / 'main.tex')
+    elif kind == 'directory':
+        (folder / 'linked').symlink_to(tmp_path, target_is_directory=True)
+    elif kind == 'limit':
+        monkeypatch.setattr(latex, 'MAX_PROJECT', 5)
+    with pytest.raises(RepoError):
+        service.operate('ws', {'action': 'import', 'importPath': str(folder)})
+    assert service.operate('ws', {'action': 'list'}) == {'projects': []}
+
+
+@pytest.mark.parametrize(('declaration', 'template'), [
+    (r'\documentclass{elsarticle}', 'Elsevier'),
+    (r'\documentclass{acmart}', 'ACM'),
+    (r'\documentclass[aps]{revtex4-2}', 'APS / REVTeX'),
+    (r'\documentclass{article}\usepackage{neurips_2025}', 'NeurIPS 2025'),
+    (r'\documentclass{article}\usepackage{iclr2026_conference}', 'ICLR 2026'),
+    (r'\documentclass{article}\usepackage[review]{cvpr}', 'CVPR'),
+    (r'\documentclass{article}', None),
+    ('% \\usepackage{cvpr}\n\\documentclass{article}', None),
+])
+def test_template_detected_from_active_source(service, declaration, template):
+    project = create(service)
+    source = service.operate('ws', {'action': 'read', 'projectId': project['id'], 'path': 'main.tex'})['file']
+    saved = service.operate('ws', {'action': 'write', 'projectId': project['id'], 'path': 'main.tex', 'content': declaration, 'expectedHash': source['hash']})['project']
+    assert saved['template'] == template
+
+
+def test_template_follows_included_preamble_and_root_changes(service):
+    project = create(service)
+    identifier = project['id']
+    for name, content in [('preamble.tex', r'\usepackage{neurips_2026}\input{preamble}'), ('conference.tex', r'\documentclass{article}\input{preamble}'), ('unused.sty', r'\usepackage{cvpr}')]:
+        service.operate('ws', {'action': 'write', 'projectId': identifier, 'path': name, 'content': content, 'expectedHash': ''})
+    assert service.operate('ws', {'action': 'project', 'projectId': identifier})['project']['template'] is None
+    updated = service.operate('ws', {'action': 'root', 'projectId': identifier, 'path': 'conference.tex'})['project']
+    assert updated['template'] == 'NeurIPS 2026'
+
+
+def test_ai_review_stages_and_resolves_individual_hunks(service):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'main.tex'}
+    original = service.operate('ws', {'action': 'read', **args})['file']
+    before = 'Alpha is wrong.\nUnchanged separator.\nBeta is wrong.\n'
+    file = service.operate('ws', {'action': 'write', **args, 'content': before, 'expectedHash': original['hash']})['file']
+    proposed = service.operate('ws', {'action': 'propose', **args, 'content': 'Alpha is right.\nUnchanged separator.\nBeta is right.\n', 'expectedHash': file['hash']})['file']
+    assert proposed['content'] == before
+    review = proposed['review']
+    assert len(review['edits']) == 2
+    assert service.operate('ws', {'action': 'project', 'projectId': project['id']})['project']['reviewFiles'] == ['main.tex']
+    restarted = LatexService(service.root_for_workspace, service.require_workspace, service.resolve_asset)
+    assert restarted.operate('ws', {'action': 'read', **args})['file']['review'] == review
+    with pytest.raises(RepoError, match='pending AI changes'):
+        service.operate('ws', {'action': 'write', **args, 'content': 'overwrite', 'expectedHash': file['hash']})
+    resolved = service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': 'accept', 'editId': review['edits'][1]['id']})['file']
+    assert resolved['content'] == 'Alpha is wrong.\nUnchanged separator.\nBeta is right.\n'
+    with pytest.raises(RepoError, match='already been reviewed'):
+        service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': 'reject', 'editId': review['edits'][1]['id']})
+    result = service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': 'reject'})
+    assert result['file']['content'] == resolved['content']
+    assert 'review' not in result['file']
+    assert result['project']['reviewFiles'] == []
+
+
+@pytest.mark.parametrize('decision', ['accept', 'reject'])
+def test_ai_review_all_handles_unicode_insertions_deletions_and_eof(service, decision):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'main.tex'}
+    original = service.operate('ws', {'action': 'read', **args})['file']
+    before, after = '旧文字\nStable\nDelete me\nLast', '新文字\nStable\nLast\nAdded\n'
+    file = service.operate('ws', {'action': 'write', **args, 'content': before, 'expectedHash': original['hash']})['file']
+    review = service.operate('ws', {'action': 'propose', **args, 'content': after, 'expectedHash': file['hash']})['file']['review']
+    result = service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': decision})['file']
+    assert result['content'] == (after if decision == 'accept' else before)
+    assert 'review' not in result
+
+
+def test_ai_review_never_overwrites_external_edits(service):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'main.tex'}
+    file = service.operate('ws', {'action': 'read', **args})['file']
+    review = service.operate('ws', {'action': 'propose', **args, 'content': 'Suggestion', 'expectedHash': file['hash']})['file']['review']
+    _, source = service.project(service.directory('ws'), project['id'])
+    (source / 'main.tex').write_text('External edit')
+    with pytest.raises(RepoError, match='changed externally'):
+        service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': 'accept'})
+    result = service.operate('ws', {'action': 'review', **args, 'reviewId': review['id'], 'decision': 'reject'})['file']
+    assert result['content'] == 'External edit'
+    assert 'review' not in result
+
+
+@pytest.mark.parametrize('decision', ['accept', 'reject'])
+def test_ai_new_files_are_staged_before_creation(service, decision):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'parts/new.tex'}
+    proposed = service.operate('ws', {'action': 'propose', **args, 'content': 'New section\n', 'expectedHash': ''})
+    assert 'parts/new.tex' in proposed['project']['files']
+    _, source = service.project(service.directory('ws'), project['id'])
+    assert not (source / 'parts/new.tex').exists()
+    pending = service.operate('ws', {'action': 'read', **args})['file']
+    assert pending['content'] == ''
+    result = service.operate('ws', {'action': 'review', **args, 'reviewId': pending['review']['id'], 'decision': decision})
+    assert (source / 'parts/new.tex').exists() == (decision == 'accept')
+    assert ('parts/new.tex' in result['project']['files']) == (decision == 'accept')
+
+
+def test_preview_cache_survives_restarts_and_failed_compiles(service, monkeypatch):
+    from refora_server.services import latex
+    import base64
+    project = create(service)
+    request = {'projectId': project['id']}
+    assert service.operate('ws', {'action': 'preview', **request}) == {}
+    file = service.operate('ws', {'action': 'read', **request, 'path': 'main.tex'})['file']
+    pdf = base64.b64encode(b'%PDF-1.7\nSuccessful preview').decode()
+    mapping = {'boxes': [], 'sourceHashes': {'main.tex': file['hash']}}
+    monkeypatch.setattr(latex, 'compile_project', lambda *args: {'success': True, 'log': 'Success', 'pdfBase64': pdf, 'synctex': mapping})
+    built = service.operate('ws', {'action': 'compile', **request, 'engine': 'xelatex'})['compilation']
+    assert built['stale'] is False
+    revision = service.operate('ws', {'action': 'project', **request})['project']['previewRevision']
+    assert revision
+    restarted = LatexService(service.root_for_workspace, service.require_workspace, service.resolve_asset)
+    preview = restarted.operate('ws', {'action': 'preview', **request})['compilation']
+    assert preview['pdfBase64'] == pdf
+    assert preview['builtAt'] == built['builtAt']
+    assert preview['synctex'] == mapping
+    assert preview['engine'] == 'xelatex'
+    assert preview['stale'] is False
+    service.operate('ws', {'action': 'write', **request, 'path': 'main.tex', 'content': 'Invalid source', 'expectedHash': file['hash']})
+    monkeypatch.setattr(latex, 'compile_project', lambda *args: {'success': False, 'log': 'Syntax error'})
+    assert not restarted.operate('ws', {'action': 'compile', **request})['compilation']['success']
+    preview = restarted.operate('ws', {'action': 'preview', **request})['compilation']
+    assert preview['pdfBase64'] == pdf
+    assert preview['stale'] is True
+    assert restarted.operate('ws', {'action': 'project', **request})['project']['previewRevision'] == revision
+    other = create(service)
+    assert service.operate('ws', {'action': 'preview', 'projectId': other['id']}) == {}
+
+
+def test_preview_cache_detects_figures_dependencies_settings_and_corruption(service, monkeypatch):
+    from refora_server.services import latex
+    import base64
+    project = create(service)
+    request = {'projectId': project['id']}
+    _, source = service.project(service.directory('ws'), project['id'])
+    (source / 'figure.png').write_bytes(b'original image')
+    pdf = base64.b64encode(b'%PDF-1.7\nPreview').decode()
+    monkeypatch.setattr(latex, 'compile_project', lambda *args: {'success': True, 'log': '', 'pdfBase64': pdf})
+    service.operate('ws', {'action': 'compile', **request})
+    (source / 'figure.png').write_bytes(b'changed image')
+    assert service.operate('ws', {'action': 'preview', **request})['compilation']['stale']
+    (source / 'figure.png').write_bytes(b'original image')
+    assert not service.operate('ws', {'action': 'preview', **request})['compilation']['stale']
+    (source / 'refs.bib').write_text('@article{new}')
+    assert service.operate('ws', {'action': 'preview', **request})['compilation']['stale']
+    (source / 'refs.bib').unlink()
+    service.settings = {'latexCompiler': 'tectonic'}
+    assert service.operate('ws', {'action': 'preview', **request})['compilation']['stale']
+    (source.parent / 'preview-cache.json').write_text('not json')
+    assert service.operate('ws', {'action': 'preview', **request}) == {}
+    assert service.operate('ws', {'action': 'read', **request, 'path': 'main.tex'})['file']['content'] == STARTER
+
+
+def test_preview_keeps_snapshot_fingerprint_when_source_changes_during_compile(service, monkeypatch):
+    from refora_server.services import latex
+    from refora_server.services.latex_preview_cache import project_fingerprint
+    import base64
+    project = create(service)
+    def compile_changed(source, root, *_):
+        inputs = project_fingerprint(source, root)
+        (source / root).write_text('Changed during compilation')
+        return {'success': True, 'log': '', 'pdfBase64': base64.b64encode(b'%PDF-1.7\nOld snapshot').decode(), '_inputs': inputs}
+    monkeypatch.setattr(latex, 'compile_project', compile_changed)
+    built = service.operate('ws', {'action': 'compile', 'projectId': project['id']})['compilation']
+    assert built['stale'] is True
+    assert '_inputs' not in built
+    assert service.operate('ws', {'action': 'preview', 'projectId': project['id']})['compilation']['stale'] is True

@@ -859,6 +859,7 @@ def create_lifespan(
                         run_id=request["runId"],
                         thread_id=request.get("threadId"),
                         workspace_id=request.get("workspaceId"),
+                        latex_context=request.get("latexContext"),
                     ),
                     tool_deps,
                     **({"legacy_names": legacy_names} if legacy_names else {}),

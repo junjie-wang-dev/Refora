@@ -45,6 +45,7 @@ import { useWorkspaceStore } from '../../src/renderer/store/workspaceStore'
 import { useDocumentStore } from '../../src/renderer/store/documentStore'
 import { usePdfReaderStore } from '../../src/renderer/store/pdfReaderStore'
 import { useChatQueueStore } from '../../src/renderer/store/chatQueueStore'
+import { useLatexContextStore } from '../../src/renderer/store/latexContextStore'
 import { useChatDraftStore } from '../../src/renderer/store/chatDraftStore'
 import { useSettingsModalStore } from '../../src/renderer/store/settingsModalStore'
 import { useAgentCatalogStore } from '../../src/renderer/store/agentCatalogStore'
@@ -286,6 +287,7 @@ function setupStore(): void {
 }
 
 beforeEach(() => {
+  useLatexContextStore.setState({ active: null })
   Element.prototype.scrollIntoView = vi.fn()
   mockChatHistory.mockReset()
   mockChatHistoryPage.mockReset()
@@ -426,6 +428,44 @@ describe('ChatPanel tab header', () => {
       activeDocumentId: 'doc-reader',
       text: 'Explain this paper'
     })
+  })
+
+  it('automatically sends a LaTeX selection request once without replacing the chat draft', async () => {
+    setupApi([])
+    render(<StrictMode><ChatPanel /></StrictMode>)
+    const input = await screen.findByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
+    await waitFor(() => expect(input).not.toBeDisabled())
+    fireEvent.change(input, { target: { value: 'My unfinished question' } })
+    act(() => useChatDraftStore.getState().request({ mode: 'send', workspaceId: 'ws-1', text: 'Proofread selected LaTeX', latexContext: { projectId: 'paper', path: 'main.tex', intent: 'proofread', selection: { startLine: 3, endLine: 5 } } }))
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(1))
+    expect(mockChatSend.mock.calls[0][0]).toMatchObject({ workspaceId: 'ws-1', text: 'Proofread selected LaTeX', latexContext: { projectId: 'paper', path: 'main.tex', intent: 'proofread', selection: { startLine: 3, endLine: 5 } } })
+    expect(input).toHaveValue('My unfinished question')
+    expect(useChatDraftStore.getState().pending).toBeNull()
+  })
+
+  it('scopes ordinary chat to the open LaTeX file and hides workspace attachments and suggestions', async () => {
+    setupApi([])
+    useLatexContextStore.setState({ active: { workspaceId: 'ws-1', projectId: 'paper', path: 'chapters/intro.tex' } })
+    render(<ChatPanel />)
+    const input = await screen.findByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
+    await waitFor(() => expect(input).not.toBeDisabled())
+    expect(screen.queryByRole('button', { name: 'workspace.chat.attachPapers' })).not.toBeInTheDocument()
+    expect(screen.queryByText('workspace.chat.suggestionReport')).not.toBeInTheDocument()
+    expect(screen.getByText('latex.chatPlaceholder')).toBeVisible()
+    fireEvent.change(input, { target: { value: 'Explain this file' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(mockChatSend).toHaveBeenCalledTimes(1))
+    expect(mockChatSend.mock.calls[0][0]).toMatchObject({ text: 'Explain this file', attachments: undefined, latexContext: { projectId: 'paper', path: 'chapters/intro.tex' } })
+    expect(mockChatSend.mock.calls[0][0].latexContext).not.toHaveProperty('workspaceId')
+  })
+
+  it('does not send a LaTeX request into another workspace', async () => {
+    setupApi([])
+    useChatDraftStore.getState().request({ mode: 'send', workspaceId: 'other', text: 'Private selection' })
+    render(<ChatPanel />)
+    const input = await screen.findByRole('textbox', { name: 'workspace.chat.inputPlaceholder' })
+    await waitFor(() => expect(input).not.toBeDisabled())
+    expect(mockChatSend).not.toHaveBeenCalled()
   })
 
   it('prefills AI selection requests and appends selected context without sending', async () => {

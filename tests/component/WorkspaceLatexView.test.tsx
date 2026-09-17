@@ -2,26 +2,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import WorkspaceLatexView from '../../src/renderer/components/latex/WorkspaceLatexView'
 import { flushRendererPersistence } from '../../src/renderer/persistence'
-import type { LatexRequest, LatexResponse } from '../../src/shared/latex-types'
+import type { LatexFile, LatexRequest, LatexResponse, LatexSyncBox } from '../../src/shared/latex-types'
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
-vi.mock('../../src/renderer/components/latex/LatexPdfPreview', () => ({ default: () => <div>PDF preview</div> }))
+vi.mock('../../src/renderer/components/latex/LatexPdfPreview', () => ({ default: ({ data, target, syncEnabled, onLocateSource }: { data?: string; target?: { box: LatexSyncBox }; syncEnabled?: boolean; onLocateSource?: (page: number, x: number, y: number) => void }) => <div data-preview={data}><span>PDF preview</span>{target && <span>{target.box.path}:{target.box.line}</span>}<button disabled={!syncEnabled} onClick={() => onLocateSource?.(2, 30, 35)}>Locate included source</button></div> }))
 const project = { id: 'p', title: 'Paper', rootFile: 'main.tex', files: ['main.tex', 'refs.bib'] }
-let stored = { path: 'main.tex', content: 'Original source', hash: 'first' }
+let cached: LatexResponse['compilation']
+let previewResponse: Promise<LatexResponse> | null = null
+let compileResult: LatexResponse['compilation']
+let stored: LatexFile = { path: 'main.tex', content: 'Original source', hash: 'first' }
 const execute = vi.fn(async (_workspace: string, request: LatexRequest): Promise<LatexResponse> => {
   if (request.action === 'list') return { projects: [project] }
   if (request.action === 'project' || request.action === 'create') return { project }
+  if (request.action === 'preview') return previewResponse ?? { compilation: cached }
   if (request.action === 'read') return { file: { ...stored } }
   if (request.action === 'write') {
     if (request.expectedHash !== stored.hash) throw { code: 'conflict', message: 'External update conflict' }
     stored = { path: request.path, content: request.content, hash: 'saved' }
     return { file: { ...stored } }
   }
-  if (request.action === 'compile') return { compilation: { success: true, log: 'Done', pdfBase64: 'cGRm' } }
+  if (request.action === 'compile') return { compilation: compileResult }
   return {}
 })
 
 beforeEach(() => {
+  cached = undefined
+  previewResponse = null
+  compileResult = { success: true, log: 'Done', pdfBase64: 'cGRm' }
   stored = { path: 'main.tex', content: 'Original source', hash: 'first' }
   execute.mockClear()
   window.api.latex.execute = execute
@@ -208,4 +215,133 @@ it('focuses the editor after creating a source file', async () => {
     await waitFor(() => expect(screen.getByLabelText('latex.source')).toHaveFocus())
     expect(screen.getByRole('button', { name: 'latex.currentFile' })).toHaveTextContent('focus.tex')
   } finally { execute.mockImplementation(implementation) }
+})
+
+it('navigates both ways across files and disables stale source maps', async () => {
+  const implementation = execute.getMockImplementation()!
+  execute.mockImplementation(async (workspaceId, request) => {
+    if (request.action === 'read' && request.path === 'sections/second.tex') return { file: { path: request.path, content: 'First\nMapped section\nLast', hash: 'included' } }
+    if (request.action === 'compile') return { compilation: { success: true, log: '', pdfBase64: 'cGRm', synctex: { sourceHashes: { 'main.tex': stored.hash, 'sections/second.tex': 'included' }, boxes: [
+      { path: 'main.tex', line: 1, page: 1, x: 20, y: 30, width: 100, height: 12 },
+      { path: 'sections/second.tex', line: 2, page: 2, x: 20, y: 30, width: 100, height: 12 }
+    ] } } }
+    return implementation(workspaceId, request)
+  })
+  try {
+    await open()
+    const forward = screen.getByRole('button', { name: 'latex.goToPdf' })
+    expect(forward).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+    await waitFor(() => expect(forward).toBeEnabled())
+    fireEvent.click(forward)
+    await screen.findByText('main.tex:1')
+    fireEvent.click(screen.getByRole('button', { name: 'Locate included source' }))
+    await waitFor(() => expect(screen.getByLabelText('latex.source')).toHaveValue('First\nMapped section\nLast'))
+    const source = screen.getByLabelText<HTMLTextAreaElement>('latex.source')
+    await waitFor(() => expect(source.selectionStart).toBe(6))
+    expect(source.selectionEnd).toBe(20)
+    expect(source).toHaveFocus()
+    fireEvent.change(source, { target: { value: 'Changed source' } })
+    expect(forward).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Locate included source' })).toBeDisabled()
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('rejects navigation when the source changed outside the editor after compilation', async () => {
+  const implementation = execute.getMockImplementation()!
+  execute.mockImplementation(async (workspaceId, request) => {
+    if (request.action === 'compile') return { compilation: { success: true, log: '', pdfBase64: 'cGRm', synctex: { sourceHashes: { 'main.tex': 'first' }, boxes: [{ path: 'main.tex', line: 1, page: 1, x: 20, y: 30, width: 100, height: 12 }] } } }
+    return implementation(workspaceId, request)
+  })
+  try {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+    const forward = screen.getByRole('button', { name: 'latex.goToPdf' })
+    await waitFor(() => expect(forward).toBeEnabled())
+    stored = { ...stored, hash: 'external-change' }
+    fireEvent.click(forward)
+    await screen.findByText('latex.syncRecompile')
+    expect(forward).toBeDisabled()
+    expect(screen.queryByText('main.tex:1')).not.toBeInTheDocument()
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('places direction arrows on the source/PDF divider without starting a resize or stealing the caret', async () => {
+  const source = await open()
+  const group = screen.getByRole('group', { name: 'latex.syncNavigation' })
+  const forward = screen.getByRole('button', { name: 'latex.goToPdf' })
+  const reverse = screen.getByRole('button', { name: 'latex.goToCode' })
+  expect(group).toContainElement(forward)
+  expect(group).toContainElement(reverse)
+  expect(group.closest('.latex-sync-divider')).toContainElement(screen.getByRole('separator'))
+  expect(document.querySelector('.latex-statusbar')).not.toContainElement(forward)
+  source.focus()
+  fireEvent.mouseDown(forward)
+  fireEvent.mouseMove(document, { clientX: 900 })
+  fireEvent.mouseUp(document)
+  expect(source).toHaveFocus()
+  expect(document.querySelector('.latex-editor-region')).toHaveStyle({ flex: '0 0 50%' })
+})
+
+it('only shows floating sync controls in the split layout', async () => {
+  await open()
+  expect(screen.getByRole('group', { name: 'latex.syncNavigation' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'latex.edit' }))
+  expect(screen.queryByRole('group', { name: 'latex.syncNavigation' })).not.toBeInTheDocument()
+  expect(document.querySelector('.latex-sync-divider')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'latex.preview' }))
+  expect(screen.queryByRole('button', { name: 'latex.goToCode' })).not.toBeInTheDocument()
+  expect(document.querySelector('.latex-sync-divider')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'latex.split' }))
+  expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeInTheDocument()
+  expect(screen.getByRole('separator')).toBeInTheDocument()
+})
+
+
+it('detects staged AI changes without a hash change and saves individual review decisions', async () => {
+  await open()
+  stored = { ...stored, review: { id: 'r1', path: 'main.tex', baseContent: stored.content, expectedHash: stored.hash, edits: [{ id: 'e1', startLine: 0, endLine: 1, before: stored.content, after: 'Proposed source', status: 'pending' }] } }
+  await screen.findByRole('region', { name: 'latex.aiReview' }, { timeout: 3000 })
+  expect(screen.queryByLabelText('latex.source')).not.toBeInTheDocument()
+  execute.mockImplementationOnce(async (_workspace, request) => {
+    expect(request).toMatchObject({ action: 'review', reviewId: 'r1', decision: 'accept', editId: 'e1' })
+    stored = { path: 'main.tex', content: 'Proposed source', hash: 'accepted' }
+    return { file: stored, project }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'latex.acceptChange' }))
+  await waitFor(() => expect(screen.getByLabelText('latex.source')).toHaveValue('Proposed source'))
+})
+
+
+it('restores the last PDF and SyncTeX without compiling and keeps it when a later compile fails', async () => {
+  cached = { success: true, log: 'Cached build', pdfBase64: 'cached-pdf', builtAt: '2026-09-17T12:00:00Z', stale: false, engine: 'xelatex', synctex: { boxes: [], sourceHashes: { 'main.tex': 'first' } } }
+  render(<WorkspaceLatexView workspaceId="ws" active initialProject={project} />)
+  await screen.findByText('PDF preview')
+  await waitFor(() => expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeEnabled())
+  expect(execute.mock.calls.some(call => call[1].action === 'compile')).toBe(false)
+  expect(screen.getByText('XeLaTeX')).toBeVisible()
+  compileResult = { success: false, log: 'Syntax error' }
+  fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+  await screen.findByText('latex.compileFailed')
+  expect(screen.getByText('PDF preview')).toBeVisible()
+  expect(document.querySelector('[data-preview]')).toHaveAttribute('data-preview', 'cached-pdf')
+  expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeDisabled()
+})
+
+it('keeps an out-of-date cached PDF visible while disabling source mapping', async () => {
+  cached = { success: true, log: '', pdfBase64: 'old-pdf', stale: true }
+  await open()
+  await screen.findByText('PDF preview')
+  expect(screen.getByText('latex.previewStale')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeDisabled()
+})
+
+it('does not let a delayed cached preview replace a newly compiled PDF', async () => {
+  let resolve!: (value: LatexResponse) => void
+  previewResponse = new Promise(done => { resolve = done })
+  await open()
+  fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+  await screen.findByText('PDF preview')
+  await act(async () => resolve({ compilation: { success: true, log: '', pdfBase64: 'older-cache' } }))
+  expect(document.querySelector('[data-preview]')).toHaveAttribute('data-preview', 'cGRm')
 })

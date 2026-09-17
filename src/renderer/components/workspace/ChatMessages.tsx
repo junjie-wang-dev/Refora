@@ -363,6 +363,7 @@ function formatElapsed(seconds: number): string {
 }
 
 export interface ChatMessagesProps {
+  latexMode?: boolean
   messages: ChatTimelineMessage[]
   traceSteps: AgentTraceStep[]
   streaming: boolean
@@ -385,6 +386,7 @@ export interface ChatMessagesProps {
 }
 
 export default function ChatMessages({
+  latexMode = false,
   messages,
   traceSteps,
   streaming,
@@ -560,14 +562,14 @@ export default function ChatMessages({
             ) : (
               <>
                 <p className="text-xs text-muted">
-                  {t('workspace.chatPlaceholder', 'Ask anything about the papers in this workspace.')}
+                  {latexMode ? t('latex.chatPlaceholder') : t('workspace.chatPlaceholder', 'Ask anything about the papers in this workspace.')}
                 </p>
                 <div className="flex flex-col gap-1.5">
-                  {[
+                  {(latexMode ? ['explain', 'polish', 'compileHelp'].map(key => ({ key, text: t(`latex.chatSuggestion.${key}`) })) : [
                     { key: 'summarize', text: t('workspace.chat.suggestionSummarize', 'Summarize the key contributions of these papers') },
                     { key: 'compare', text: t('workspace.chat.suggestionCompare', 'Compare the methodologies used in these papers') },
                     { key: 'report', text: t('workspace.chat.suggestionReport', 'Generate a research report') }
-                  ].map((s) => (
+                  ]).map((s) => (
                     <button
                       key={s.key}
                       type="button"
@@ -613,7 +615,7 @@ export default function ChatMessages({
                     onContextMenu={handleMessageContextMenu}
                   >
                     <div className="chat-user-message">
-                      {m.content}
+                      {m.latexContext ? <div className="chat-latex-context"><StreamingMarkdown content={m.content} /></div> : m.content}
                     </div>
                     {m.attachments && m.attachments.length > 0 && <MessageAttachments attachments={m.attachments.filter((attachment) => attachment.type !== 'asset' || !m.media?.some((item) => item.source.type === 'asset' && item.source.assetId === attachment.assetId))} />}
                     <ChatMedia media={m.media} context={messageMediaContext(m.runId, m.media, m.activeDocumentId)} />

@@ -98,7 +98,7 @@ def test_tex_import_creates_a_card_and_agent_can_read_it(board):
     deps = {'repos': repos, 'workspace_operation': lambda operation, *args: services[operation](*args)}
     agent = AgentToolExecutor(AgentToolContext(run_id='run', workspace_id=ws), deps)
     context = json.loads(agent.execute('list_workspace_context', {}))
-    assert context['items'][0]['title'] == 'imported.tex'
+    assert context['items'][0]['title'] == 'imported'
     content = json.loads(agent.execute('read_workspace_item', {'itemId': item['id']}))
     assert content['data']['file']['content'] == STARTER
     other = services['createWorkspace']('Other')['id']

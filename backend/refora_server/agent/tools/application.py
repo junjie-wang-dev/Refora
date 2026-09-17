@@ -348,12 +348,12 @@ def list_documents(executor, args):
     return {'documents': rows, 'offset': offset, 'limit': limit, 'hasMore': len(documents) > limit, 'nextOffset': offset + limit if len(documents) > limit else None}
 
 
-@tool('edit_latex_project', 'Read and edit local LaTeX projects. Use operation=active to read the currently open editor file, including its content and hash. Use list for projects, project for files, read with projectId/path, write with content and expectedHash (empty hash creates a new file), root to select the main .tex file, asset with assetId to copy workspace images and obtain an includegraphics path, and compile for local PDF compilation and diagnostics. Read before writing; stale hashes are rejected. Changes appear in the editor automatically. Files remain local.', scoped=True, operation=(Literal['active', 'list', 'project', 'read', 'write', 'root', 'asset', 'compile'], ...), projectId=(Text, None), path=(Text, None), content=(str, None), expectedHash=(str, None), assetId=(Text, None), engine=(Literal['pdflatex', 'xelatex', 'lualatex'], None))
+@tool('edit_latex_project', 'Read and edit local LaTeX projects. Use operation=active to read the currently open editor file, including its content and hash. Use list for projects, project for files, read with projectId/path, write with content and expectedHash to propose changes for user review (empty hash proposes a new file), root to select the main .tex file, asset with assetId to copy workspace images and obtain an includegraphics path, and compile for local PDF compilation and diagnostics. Read before writing; stale hashes are rejected. Writes are staged for review, not saved to source until the user accepts. Pending edits cannot be overwritten; do not retry them. Compilation uses accepted source only. Files remain local.', scoped=True, operation=(Literal['active', 'list', 'project', 'read', 'write', 'root', 'asset', 'compile'], ...), projectId=(Text, None), path=(Text, None), content=(str, None), expectedHash=(str, None), assetId=(Text, None), engine=(Literal['pdflatex', 'xelatex', 'lualatex'], None))
 def edit_latex_project(executor, args):
     request = {key: val for key, val in args.items() if key not in {'workspaceId', 'operation'}}
-    result = service(executor, 'latexOperation', args['workspaceId'], {**request, 'action': args['operation']})
+    result = service(executor, 'latexOperation', args['workspaceId'], {**request, 'action': 'propose' if args['operation'] == 'write' else args['operation']})
     if args['operation'] in {'write', 'root', 'asset'}:
         changed(executor, args['workspaceId'])
     if 'compilation' in result:
-        result = {'compilation': {key: val for key, val in result['compilation'].items() if key != 'pdfBase64'}}
+        result = {'compilation': {key: val for key, val in result['compilation'].items() if key not in {'pdfBase64', 'synctex'}}}
     return result

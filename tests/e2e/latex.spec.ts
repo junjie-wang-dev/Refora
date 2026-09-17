@@ -53,14 +53,14 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await page.getByRole('button', { name: 'Companion Markdown', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'Companion Markdown', exact: true })).toBeVisible()
     await page.getByRole('tab', { name: 'LaTeX E2E', exact: true }).click()
-    await page.getByRole('button', { name: 'Add LaTeX document', exact: true }).click()
+    await page.getByRole('button', { name: 'Add LaTeX project', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'LaTeX', exact: true })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: 'LaTeX E2E', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('tab', { name: 'Companion Markdown', exact: true })).toBeVisible()
     await expect(page.locator('.board-surface')).toBeVisible()
     await page.getByLabel('Project title', { exact: true }).fill('Test paper')
-    await page.getByRole('dialog', { name: 'Add LaTeX document', exact: true }).getByRole('button', { name: 'New project', exact: true }).click()
-    await expect(page.getByRole('dialog', { name: 'Add LaTeX document', exact: true })).toHaveCount(0)
+    await page.getByRole('dialog', { name: 'Add LaTeX project', exact: true }).getByRole('button', { name: 'New project', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: 'Add LaTeX project', exact: true })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: 'LaTeX E2E', exact: true })).toHaveAttribute('aria-selected', 'true')
     const latexCard = page.locator('[data-card-kind="latex"]').filter({ hasText: 'Test paper' })
     await expect(latexCard).toBeVisible()
@@ -69,7 +69,7 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     expect(await actions.getByRole('separator').evaluate(element => Array.from(element.parentElement!.children).filter(child => child.tagName === 'BUTTON').filter(child => Boolean(child.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)).length)).toBe(4)
     const initialCard = await page.evaluate(async id => (await window.api.workspaceItems.list(id)).find(item => item.kind === 'latex'), workspace.id)
     expect(initialCard).toMatchObject({ width: 300, height: 112 })
-    await expect(latexCard.getByText('main.tex', { exact: true })).toBeInViewport({ ratio: 1 })
+    await expect(latexCard.getByText('Template: Unrecognized / generic', { exact: true })).toBeInViewport({ ratio: 1 })
     await page.screenshot({ path: path.join(folder, 'latex-workspace-card.png'), fullPage: true })
     await latexCard.getByRole('button', { name: 'Test paper', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'Test paper', exact: true })).toBeInViewport()
@@ -107,16 +107,19 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await page.getByRole('button', { name: 'figure.png', exact: true }).click()
     await expect(editor).toHaveValue(/includegraphics/)
     await page.getByRole('button', { name: 'Compile ⌘↵', exact: true }).click()
-    await expect(page.locator('.latex-pdf canvas')).toBeVisible({ timeout: 140_000 })
-    await expect(page.locator('.latex-pdf-toolbar')).toContainText('1 / 1')
-    await expect.poll(() => page.locator('.latex-pdf-scroll').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
-    await expect(page.locator('.latex-pdf canvas')).toBeInViewport()
-    await expect.poll(() => page.locator('.latex-pdf canvas').evaluate((element) => {
+    await expect(page.locator('.latex-pdf canvas:visible').first()).toBeVisible({ timeout: 140_000 })
+    await expect(page.getByRole('textbox', { name: 'Page number', exact: true })).toHaveValue('1')
+    await expect(page.locator('.latex-pdf [data-pdf-reader-toolbar]')).toContainText('/ 1')
+    await expect.poll(() => page.locator('.latex-pdf [data-pdf-scroll]').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+    await expect(page.locator('.latex-pdf [data-page-number]').first()).toBeInViewport()
+    await expect.poll(() => page.locator('.latex-pdf canvas:visible').evaluateAll((elements) => {
+      let figurePixels = 0
+      for (const element of elements) {
       const canvas = element as HTMLCanvasElement
       const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
-      let figurePixels = 0
       for (let index = 0; index < pixels.length; index += 4) {
         if (Math.abs(pixels[index] - 239) < 5 && Math.abs(pixels[index + 1] - 118) < 5 && Math.abs(pixels[index + 2] - 95) < 5) figurePixels++
+      }
       }
       return figurePixels
     })).toBeGreaterThan(100)
@@ -136,7 +139,7 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await page.getByRole('button', { name: 'Enter fullscreen', exact: true }).click()
     await page.getByRole('button', { name: 'Source and PDF', exact: true }).click()
     await expect(editor).toBeInViewport()
-    await expect(page.locator('.latex-pdf canvas')).toBeInViewport()
+    await expect(page.locator('.latex-pdf [data-page-number]').first()).toBeInViewport()
     await page.screenshot({ path: path.join(folder, 'latex-wide.png'), fullPage: true })
     await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Close Test paper', exact: true })).toBeInViewport({ ratio: 1 })
@@ -152,7 +155,7 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await expect.poll(async () => (await page.evaluate(id => window.api.latex.execute(id, { action: 'active' }), workspace.id)).file?.content).toContain('Second project source.')
     await page.getByRole('tab', { name: 'Test paper', exact: true }).click()
     await expect(editor).toHaveValue(/AI-edited source/)
-    await expect(activeView.locator('.latex-pdf canvas')).toBeVisible()
+    await expect(activeView.locator('.latex-pdf canvas:visible').first()).toBeVisible()
     await expect.poll(async () => (await page.evaluate(id => window.api.latex.execute(id, { action: 'active' }), workspace.id)).project?.id).toBe(active.project!.id)
     await page.getByRole('button', { name: 'Close Second paper', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'Second paper', exact: true })).toHaveCount(0)
@@ -177,7 +180,7 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await expect.poll(async () => (await page.evaluate(id => window.api.latex.execute(id, { action: 'active' }), workspace.id)).active).toBeNull()
     await page.getByRole('tab', { name: 'Test paper', exact: true }).click()
     await expect(editor).toHaveValue(/AI-edited source/)
-    await expect(activeView.locator('.latex-preview-region canvas').first()).toBeVisible()
+    await expect(activeView.locator('.latex-preview-region canvas:visible').first()).toBeVisible()
     await expect.poll(async () => (await page.evaluate(id => window.api.latex.execute(id, { action: 'active' }), workspace.id)).project?.id).toBe(active.project!.id)
     await page.getByRole('button', { name: 'Close Other workspace', exact: true }).click()
     await page.getByRole('tab', { name: 'LaTeX E2E', exact: true }).click()
@@ -198,8 +201,8 @@ test('LaTeX source, workspace image, AI refresh and PDF preview', async () => {
     await page.reload()
     await page.getByRole('button', { name: 'LaTeX E2E', exact: true }).click()
     await expect(latexCard).toHaveCount(0)
-    await page.getByRole('button', { name: 'Add LaTeX document', exact: true }).click()
-    await page.getByRole('dialog', { name: 'Add LaTeX document', exact: true }).getByRole('button', { name: 'Add card', exact: true }).click()
+    await page.getByRole('button', { name: 'Add LaTeX project', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Add LaTeX project', exact: true }).getByRole('button', { name: 'Add card', exact: true }).click()
     await expect(latexCard).toBeVisible()
     await latexCard.getByRole('button', { name: 'Test paper', exact: true }).click()
     await expect(editor).toHaveValue(/AI-edited source/)

@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from refora_server.services.latex_chat import validate_latex_context, latex_prompt, latex_capabilities
 from refora_server.services.agent_memory import ensure_memory_files, read_memories
 from refora_server.services.agent_capabilities import resolve_agent_capabilities
 from refora_server.services.agent_tools import agent_tool_names
@@ -505,7 +506,8 @@ async def assemble_turn(
             raise ValueError("workspaceId must be a non-empty string or null")
         if not _workspace_exists(repos, workspace_id):
             raise ValueError(f"Workspace not found: {workspace_id}")
-    active_document_id = intent.get("activeDocumentId")
+    latex_context = validate_latex_context(intent.get("latexContext"), workspace_id, services)
+    active_document_id = None if latex_context else intent.get("activeDocumentId")
     active_document_context = None
     if active_document_id is not None:
         if not isinstance(active_document_id, str) or not active_document_id.strip():
@@ -529,6 +531,7 @@ async def assemble_turn(
     ):
         raise ValueError("Cannot replace an exchange without a thread")
     previous_profile = None
+    previous_context = {}
     if isinstance(requested_thread_id, str) and requested_thread_id.strip():
         thread = _value(repos.get("chat"), "getThread")(requested_thread_id)
         if thread is None:
@@ -564,13 +567,16 @@ async def assemble_turn(
         if replaced_run is None or replaced_run.get("threadId") != thread_id:
             raise ValueError("replaceRunId does not belong to this thread")
 
-    ensure_memory_files(repos, workspace_id)
+    if not latex_context:
+        ensure_memory_files(repos, workspace_id)
     history_rows = _value(repos.get("chat"), "listMessages")(thread_id)
     if replace_last:
         history_rows = _without_last_exchange(history_rows)
+    if latex_context:
+        history_rows = [row for row in history_rows if (row.get('latexContext') or {}).get('projectId') == latex_context['projectId']]
     history = historyToMessages(history_rows)
     text = intent["text"]
-    attachments = intent.get("attachments")
+    attachments = [] if latex_context else intent.get("attachments")
     if workspace_id and isinstance(attachments, list) and attachments:
         block = _attachment_context(
             repos,
@@ -594,23 +600,28 @@ async def assemble_turn(
         or checkpoint_profile.get("kind") != "api"
     ):
         checkpoint_before = None
+    if latex_context or previous_context.get('latexContext'):
+        checkpoint_before = None
     messages = _turn_messages(history, text, checkpoint_before)
-    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
+    prompt_parts = latex_prompt(latex_context) if latex_context else _prompt_parts(repos, workspace_id, active_document_context)
     features = intent.get("features")
     if isinstance(features, Mapping) and features.get("deepThinking") is True:
         prompt_parts.append("Prefer careful multi-step reasoning before answering.")
-    capabilities = _agent_capabilities(profile, provider, services)
+    capabilities = latex_capabilities() if latex_context else _agent_capabilities(profile, provider, services)
 
     return {
         "runId": intent["runId"],
         "threadId": thread_id,
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
+        **({"latexContext": latex_context} if latex_context else {}),
         "providerId": provider_id,
         "agentProfileId": profile["id"],
         "agentProfile": profile,
         "cliContinueSession": bool(
-            previous_profile
+            not latex_context
+            and not previous_context.get('latexContext')
+            and previous_profile
             and previous_profile.get("id") == profile["id"]
             and not replace_last
         ),
@@ -625,8 +636,8 @@ async def assemble_turn(
         "messages": messages,
         **capabilities,
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
-        "memories": read_memories(repos, workspace_id),
-        "includeResearchMemory": workspace_id is not None,
+        "memories": {} if latex_context else read_memories(repos, workspace_id),
+        "includeResearchMemory": not latex_context and workspace_id is not None,
         "recursionLimit": MAX_RECURSION_LIMIT,
     }
 
@@ -656,20 +667,23 @@ async def assemble_resume(
         profile, services, connector, model=run.get("modelId")
     )
     workspace_id = thread.get("workspaceId")
-    active_document_id = run.get("activeDocumentId")
+    latex_context = validate_latex_context(run.get("latexContext"), workspace_id, services)
+    active_document_id = None if latex_context else run.get("activeDocumentId")
     active_document_context = (
         _active_document_context(repos, active_document_id)
         if isinstance(active_document_id, str) and active_document_id
         else None
     )
-    ensure_memory_files(repos, workspace_id)
-    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
-    capabilities = _agent_capabilities(profile, provider, services)
+    if not latex_context:
+        ensure_memory_files(repos, workspace_id)
+    prompt_parts = latex_prompt(latex_context) if latex_context else _prompt_parts(repos, workspace_id, active_document_context)
+    capabilities = latex_capabilities() if latex_context else _agent_capabilities(profile, provider, services)
     return {
         **request,
         "threadId": thread["id"],
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
+        **({"latexContext": latex_context} if latex_context else {}),
         "providerId": run["providerId"],
         "agentProfileId": profile["id"],
         "agentProfile": profile,
@@ -678,8 +692,8 @@ async def assemble_resume(
         **capabilities,
         "checkpointPath": _checkpoint_path(db_path),
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
-        "memories": read_memories(repos, workspace_id),
-        "includeResearchMemory": workspace_id is not None,
+        "memories": {} if latex_context else read_memories(repos, workspace_id),
+        "includeResearchMemory": not latex_context and workspace_id is not None,
         "recursionLimit": MAX_RECURSION_LIMIT,
     }
 
@@ -703,14 +717,16 @@ async def assemble_recovery(
         profile, services, connector, model=run.get("modelId")
     )
     workspace_id = thread.get("workspaceId")
-    active_document_id = run.get("activeDocumentId")
+    latex_context = validate_latex_context(run.get("latexContext"), workspace_id, services)
+    active_document_id = None if latex_context else run.get("activeDocumentId")
     active_document_context = (
         _active_document_context(repos, active_document_id)
         if isinstance(active_document_id, str) and active_document_id
         else None
     )
-    ensure_memory_files(repos, workspace_id)
-    prompt_parts = _prompt_parts(repos, workspace_id, active_document_context)
+    if not latex_context:
+        ensure_memory_files(repos, workspace_id)
+    prompt_parts = latex_prompt(latex_context) if latex_context else _prompt_parts(repos, workspace_id, active_document_context)
     user_message_id = run.get("userMessageId")
     messages = [
         {"role": "user", "content": message["content"]}
@@ -720,12 +736,13 @@ async def assemble_recovery(
     recover_latest = run.get("status") == "running"
     if profile.get("kind") == "cli":
         recover_latest = False
-    capabilities = _agent_capabilities(profile, provider, services)
+    capabilities = latex_capabilities() if latex_context else _agent_capabilities(profile, provider, services)
     return {
         "runId": run["id"],
         "threadId": thread["id"],
         "workspaceId": workspace_id,
         "activeDocumentId": active_document_id,
+        **({"latexContext": latex_context} if latex_context else {}),
         "providerId": run["providerId"],
         "agentProfileId": profile["id"],
         "agentProfile": profile,
@@ -737,7 +754,7 @@ async def assemble_recovery(
         "checkpointBefore": run.get("checkpointBefore"),
         "recoverLatestCheckpoint": recover_latest,
         "sandboxRoot": _sandbox_root(library_folder, workspace_id),
-        "memories": read_memories(repos, workspace_id),
-        "includeResearchMemory": workspace_id is not None,
+        "memories": {} if latex_context else read_memories(repos, workspace_id),
+        "includeResearchMemory": not latex_context and workspace_id is not None,
         "recursionLimit": MAX_RECURSION_LIMIT,
     }

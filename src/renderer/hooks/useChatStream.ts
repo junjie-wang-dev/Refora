@@ -1,3 +1,4 @@
+import type { LatexChatContext } from '../../shared/latex-types'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../ipc'
@@ -55,6 +56,7 @@ const LIVE_ACTIVITY_TOOL_NAMES = new Set(['write_file', 'edit_file', 'write_todo
 export function useChatStream({
   activeWorkspaceId,
   activeDocumentId,
+  latexContext,
   activeProviderId,
   activeThreadId,
   requestModel,
@@ -795,10 +797,11 @@ export function useChatStream({
     setLoadingHistory(false)
     const requestedRunId = globalThis.crypto?.randomUUID?.() ??
       `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    const contextLatex = configuration ? configuration.latexContext : Object.hasOwn(replacement, 'latexContext') ? replacement.latexContext : latexContext
     const contextDocumentId = configuration ? configuration.activeDocumentId : Object.hasOwn(replacement, 'activeDocumentId')
       ? replacement.activeDocumentId ?? null
       : activeDocumentId
-    setMessages((prev) => [...prev, localMessage(existingThread ?? '', 'user', text, { runId: requestedRunId, attachments, activeDocumentId: contextDocumentId })])
+    setMessages((prev) => [...prev, localMessage(existingThread ?? '', 'user', text, { runId: requestedRunId, attachments, latexContext: contextLatex, activeDocumentId: contextDocumentId })])
     setStreaming(true)
     isSendingRef.current = true
     activeRunIdRef.current = requestedRunId
@@ -824,6 +827,7 @@ export function useChatStream({
       text,
       attachments: attachments.map((attachment) => ({ ...attachment })),
       activeDocumentId: contextDocumentId,
+      latexContext: contextLatex,
       threadId: existingThread,
       runId: requestedRunId,
       persisted: false
@@ -840,6 +844,7 @@ export function useChatStream({
       }
       const { threadId, runId } = await api.ai.chatSend({
         workspaceId,
+        ...(contextLatex ? { latexContext: contextLatex } : {}),
         ...(contextDocumentId ? { activeDocumentId: contextDocumentId } : {}),
         threadId: existingThread ?? undefined,
         runId: requestedRunId,
@@ -904,6 +909,7 @@ export function useChatStream({
   }, [
     activeWorkspaceId,
     activeDocumentId,
+    latexContext,
     activeProviderId,
     streaming,
     requestModel,
@@ -914,18 +920,18 @@ export function useChatStream({
     t
   ])
 
-  const queueFollowUp = useCallback((text: string, attachments: ChatAttachment[]) => {
+  const queueFollowUp = useCallback((text: string, attachments: ChatAttachment[], context = latexContext) => {
     if (!text.trim() || text.length > MAX_INPUT_LENGTH || !activeProviderId) return
     const threadId = activeRunThreadIdRef.current ?? activeThreadId
     const key = queueKey(activeWorkspaceId, threadId)
     const entry: QueuedChatMessage = {
       id: globalThis.crypto.randomUUID(), text: text.trim(),
       attachments: attachments.map((attachment) => ({ ...attachment })),
-      workspaceId: activeWorkspaceId, threadId, activeDocumentId,
+      workspaceId: activeWorkspaceId, threadId, activeDocumentId, latexContext: context,
       providerId: activeProviderId, model: requestModel, deepThinking, reasoningEffort
     }
     setQueues((current) => ({ ...current, [key]: [...(current[key] ?? []), entry] }))
-  }, [activeThreadId, activeWorkspaceId, activeDocumentId, activeProviderId, requestModel, deepThinking, reasoningEffort])
+  }, [activeThreadId, activeWorkspaceId, activeDocumentId, latexContext, activeProviderId, requestModel, deepThinking, reasoningEffort])
 
   const removeQueuedMessage = useCallback((id: string) => {
     setQueues((current) => ({
@@ -1002,7 +1008,8 @@ export function useChatStream({
     void sendText(last.text, last.attachments, last.threadId, {
       replaceLastExchange: last.persisted,
       replaceRunId: last.persisted ? last.runId : null,
-      activeDocumentId: last.activeDocumentId
+      activeDocumentId: last.activeDocumentId,
+      latexContext: last.latexContext ?? null
     })
   }, [resumeInterrupt, sendText])
 
@@ -1031,12 +1038,14 @@ export function useChatStream({
     if (isSendingRef.current || pendingInterruptRef.current || activeRunIdRef.current || loadingHistory || loadingEarlier) return
     let text = ''
     let attachments: ChatAttachment[] = []
+    let contextLatex: LatexChatContext | null = null
     let contextDocumentId: string | null | undefined
     let threadId = activeThreadId
     const latestSend = latestSendRef.current
     if (latestSend && latestSend.threadId === activeThreadId) {
       text = latestSend.text
       attachments = latestSend.attachments
+      contextLatex = latestSend.latexContext ?? null
       contextDocumentId = latestSend.activeDocumentId
       threadId = latestSend.threadId
     } else {
@@ -1044,6 +1053,7 @@ export function useChatStream({
         if (displayMessages[i].role === 'user') {
           text = displayMessages[i].content
           attachments = displayMessages[i].attachments ?? []
+          contextLatex = displayMessages[i].latexContext ?? null
           contextDocumentId = displayMessages[i].activeDocumentId
           break
         }
@@ -1072,6 +1082,7 @@ export function useChatStream({
     void sendText(text, attachments, threadId, {
       replaceLastExchange: true,
       replaceRunId: lastRunId,
+      latexContext: contextLatex,
       ...(contextDocumentId !== undefined
         ? { activeDocumentId: contextDocumentId }
         : {})

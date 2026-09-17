@@ -12,6 +12,7 @@ from deepagents import (
 )
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.filesystem import FilesystemPermission
+from langchain.agents import create_agent as create_langchain_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
@@ -206,6 +207,8 @@ def create_model(
 
 def create_agent(model: ChatOpenAI, tools: list[Any], request: dict[str, Any]) -> Any:
     permission_engine = PermissionEngine(sandbox_root=request.get("sandboxRoot"))
+    if request.get('latexContext'):
+        return create_langchain_agent(model=model, tools=tools, system_prompt=request['systemPrompt'], middleware=[PermissionMiddleware(permission_engine)])
     filesystem_backend = create_refora_filesystem_backend(request["sandboxRoot"])
     backend = CompositeBackend(
         default=filesystem_backend,

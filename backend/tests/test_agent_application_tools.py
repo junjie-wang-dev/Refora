@@ -429,6 +429,8 @@ def test_agent_reads_and_edits_the_open_latex_file(app):
     active = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'active'})
     assert active['file']['path'] == 'main.tex'
     result = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'write', 'projectId': project['id'], 'path': 'main.tex', 'content': 'AI revision', 'expectedHash': active['file']['hash']})
-    assert result['file']['content'] == 'AI revision'
+    assert result['file']['content'] == active['file']['content']
+    assert result['file']['review']['edits'][0]['after'] == 'AI revision'
+    latex.operate(ws, {'action': 'review', 'projectId': project['id'], 'path': 'main.tex', 'reviewId': result['file']['review']['id'], 'decision': 'accept'})
     stale = execute('edit_latex_project', {'workspaceId': ws, 'operation': 'write', 'projectId': project['id'], 'path': 'main.tex', 'content': 'Stale', 'expectedHash': active['file']['hash']})
     assert 'error' in stale

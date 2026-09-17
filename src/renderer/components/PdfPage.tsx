@@ -61,6 +61,7 @@ import {
 } from '../utils/pdfTextSelection'
 import { applyPdfTextMarkup, isPdfTextMarkupTool } from '../utils/pdfTextMarkup'
 import type { PdfSearchMatch } from '../hooks/usePdfSearch'
+import type { PdfReaderPoint, PdfReaderLocation } from '../utils/pdfNavigation'
 
 interface PdfRuntime {
   TextLayer: typeof import('pdfjs-dist').TextLayer
@@ -311,6 +312,11 @@ function PdfCanvasTileView({
 
 export default function PdfPage({
   active = true,
+  readOnly = false,
+  minimalContextMenu = false,
+  location,
+  onPageClick,
+  onPageDoubleClick,
   pdf,
   pageNumber,
   scale,
@@ -336,6 +342,11 @@ export default function PdfPage({
   searchNavigationRevision = 0
 }: {
   active?: boolean
+  readOnly?: boolean
+  minimalContextMenu?: boolean
+  location?: PdfReaderLocation
+  onPageClick?: (point: PdfReaderPoint) => void
+  onPageDoubleClick?: (point: PdfReaderPoint) => void
   pdf: PDFDocumentProxy
   pageNumber: number
   scale: number
@@ -374,7 +385,7 @@ export default function PdfPage({
   const [inkPoints, setInkPoints] = useState<PdfPoint[] | null>(null)
   const [selectionRect, setSelectionRect] = useState<PdfRect | null>(null)
   const textEditor = usePdfReaderStore((state) => state.textEditor)
-  const editingTextAnnotationId = textEditor?.documentId === documentId ? textEditor.annotationId : null
+  const editingTextAnnotationId = !readOnly && textEditor?.documentId === documentId ? textEditor.annotationId : null
   const [editingNoteAnnotationId, setEditingNoteAnnotationId] = useState<string | null>(null)
   const editingHistoryRef = useRef(false)
   const noteEditorRef = useRef<HTMLTextAreaElement>(null)
@@ -689,6 +700,7 @@ export default function PdfPage({
   }, [color, documentId, onAddAnnotation, scrollRootRef, tool])
 
   const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (minimalContextMenu) { event.preventDefault(); event.stopPropagation() }
     const root = scrollRootRef.current
     if (!root) return
     const selection = textSelectionInReader(root)
@@ -721,7 +733,7 @@ export default function PdfPage({
         key: kind,
         label: t(`pdfReader.tools.${kind}`),
         icon: kind,
-        disabled: usePdfReaderStore.getState().loadStatus[documentId] !== 'loaded',
+        disabled: readOnly || usePdfReaderStore.getState().loadStatus[documentId] !== 'loaded',
         onClick: () => applyPdfTextMarkup(
           documentId,
           selection,
@@ -766,8 +778,8 @@ export default function PdfPage({
         ]
       }
     ]
-    showContextMenu(items)
-  }, [documentId, documentTitle, onAddAnnotation, scrollRootRef, t])
+    showContextMenu(minimalContextMenu ? items.filter((item) => item.key === 'copy') : items)
+  }, [documentId, documentTitle, onAddAnnotation, scrollRootRef, t, readOnly, minimalContextMenu])
 
   const flushInkPreview = () => {
     inkFrameRef.current = null
@@ -821,7 +833,7 @@ export default function PdfPage({
       if (position) {
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
-        if (selectedAnnotationIds.length > 0) selectAnnotations([])
+        if (!readOnly && selectedAnnotationIds.length > 0) selectAnnotations([])
         const previousClick = lastTextClickRef.current
         const doubleClick = previousClick !== null &&
           Date.now() - previousClick.at <= 500 &&
@@ -845,6 +857,7 @@ export default function PdfPage({
     event.preventDefault()
     window.getSelection()?.removeAllRanges()
     if (tool === null) {
+      if (readOnly) return
       if (
         target instanceof Element &&
         target.closest(
@@ -1010,7 +1023,7 @@ export default function PdfPage({
           height: 0.02
         }
       : rect
-    selectAnnotations(annotationIdsInSelection(annotations, selection, effectiveRotation))
+    if (!readOnly) selectAnnotations(annotationIdsInSelection(annotations, selection, effectiveRotation))
     setSelectionRect(null)
   }
 
@@ -1157,6 +1170,18 @@ export default function PdfPage({
     } else if (tool === null) selectAnnotation(annotation.id)
   }
 
+  const clickedPoint = (event: ReactMouseEvent<HTMLDivElement>): PdfReaderPoint | null => {
+    if (!page || !viewport) return null
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return null
+    const [x, y] = viewport.convertToPdfPoint((event.clientX - bounds.left) / bounds.width * viewport.width, (event.clientY - bounds.top) / bounds.height * viewport.height)
+    return { page: pageNumber, x, y: page.view[3] - y }
+  }
+  const locationRect = location && page && viewport ? [
+    ...viewport.convertToViewportPoint(location.x, page.view[3] - location.y),
+    ...viewport.convertToViewportPoint(location.x + location.width, page.view[3] - location.y - location.height)
+  ] : null
+
   return (
     <div
       ref={pageElementRef}
@@ -1169,12 +1194,19 @@ export default function PdfPage({
         '--scale-factor': scale,
         '--total-scale-factor': scale
       } as CSSProperties}
+      onClick={onPageClick ? (event) => { const point = clickedPoint(event); if (point) onPageClick(point) } : undefined}
+      onDoubleClick={(event) => {
+        if (!onPageDoubleClick || (event.target instanceof Element && event.target.closest('.annotationLayer'))) return
+        const point = clickedPoint(event)
+        if (point) { event.preventDefault(); window.getSelection()?.removeAllRanges(); onPageDoubleClick(point) }
+      }}
       onContextMenu={handleContextMenu}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={finishPointer}
       onPointerCancel={cancelPointer}
     >
+      {locationRect && <div data-pdf-location-highlight className="pointer-events-none absolute z-30 rounded-sm border-2 border-accent bg-accent/20" style={{ left: Math.min(locationRect[0], locationRect[2]), top: Math.min(locationRect[1], locationRect[3]), width: Math.max(6, Math.abs(locationRect[2] - locationRect[0])), height: Math.max(6, Math.abs(locationRect[3] - locationRect[1])) }} />}
       {pageLoadError && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-panel text-sm text-error" role="alert">
           <span>{t('pdfReader.pageLoadFailed', { page: pageNumber })}</span>

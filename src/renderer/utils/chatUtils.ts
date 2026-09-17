@@ -1,3 +1,4 @@
+import type { LatexChatContext } from '../../shared/latex-types'
 import { api } from '../ipc'
 import { trackRendererPersistence } from '../persistence'
 import type { Dispatch, SetStateAction, MutableRefObject } from 'react'
@@ -21,6 +22,7 @@ export type RecentModelEntry = { model: string; providerId: string }
 export type ChatSendContext = {
   text: string
   attachments: ChatAttachment[]
+  latexContext?: LatexChatContext | null
   activeDocumentId: string | null
   threadId: string | null
   runId: string | null
@@ -33,6 +35,7 @@ export type QueuedChatMessage = {
   attachments: ChatAttachment[]
   workspaceId: string | null
   threadId: string | null
+  latexContext?: LatexChatContext | null
   activeDocumentId: string | null
   providerId: string
   model: string
@@ -44,6 +47,7 @@ export type ChatReplacementOptions = {
   configuration?: QueuedChatMessage
   replaceLastExchange?: boolean
   replaceRunId?: string | null
+  latexContext?: LatexChatContext | null
   activeDocumentId?: string | null
 }
 
@@ -57,6 +61,7 @@ export const MAX_INPUT_LENGTH = 32000
 
 export interface UseChatStreamParams {
   activeWorkspaceId: string | null
+  latexContext?: LatexChatContext | null
   activeDocumentId: string | null
   activeProviderId: string
   activeThreadId: string | null
@@ -88,7 +93,7 @@ export interface UseChatStreamReturn {
   loadEarlierMessages: () => Promise<void>
   queuedMessages: QueuedChatMessage[]
   queuePaused: boolean
-  queueFollowUp: (text: string, attachments: ChatAttachment[]) => void
+  queueFollowUp: (text: string, attachments: ChatAttachment[], latexContext?: LatexChatContext | null) => void
   removeQueuedMessage: (id: string) => void
   sendQueuedMessages: () => void
   displayMessages: ChatTimelineMessage[]
@@ -144,7 +149,7 @@ export function localMessage(
   threadId: string,
   role: ChatMessage['role'],
   content: string,
-  metadata: Pick<ChatTimelineMessage, 'runId' | 'terminalStatus' | 'attachments' | 'activeDocumentId' | 'media'> = {}
+  metadata: Pick<ChatTimelineMessage, 'runId' | 'terminalStatus' | 'attachments' | 'activeDocumentId' | 'latexContext' | 'media'> = {}
 ): ChatTimelineMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

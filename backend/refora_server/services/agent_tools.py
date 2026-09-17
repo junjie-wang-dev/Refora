@@ -37,6 +37,7 @@ class AgentToolContext:
     run_id: str
     thread_id: str | None = None
     workspace_id: str | None = None
+    latex_context: dict[str, Any] | None = None
 
 
 _TOOL_CALL_ID_CONFIG_KEY = "_refora_tool_call_id"
@@ -144,6 +145,19 @@ class AgentToolExecutor:
         return result
 
     def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
+        if self.context.latex_context:
+            context = self.context.latex_context
+            if name != 'edit_latex_project':
+                raise ValueError('Only LaTeX project operations are available in this editor')
+            if (args.get('workspaceId') or self.context.workspace_id) != self.context.workspace_id or (args.get('projectId') or context['projectId']) != context['projectId']:
+                raise ValueError('The LaTeX editor is scoped to the current project')
+            args = {**args, 'projectId': context['projectId'], 'workspaceId': self.context.workspace_id}
+            if args.get('operation') == 'active':
+                args.update(operation='read', path=context['path'])
+            if args.get('operation') == 'list':
+                args['operation'] = 'project'
+            if args.get('operation') == 'asset':
+                raise ValueError('Workspace assets are not part of the LaTeX chat context')
         if name in APPLICATION_ACTIONS:
             return dispatch_application(self, name, args, _REGISTRY)
         entry = _REGISTRY.get(name)
@@ -166,12 +180,19 @@ def create_agent_tools(context: AgentToolContext, deps: Any, *, legacy_names: tu
     executor = AgentToolExecutor(context, deps)
     tools: list[StructuredTool] = []
     names = dict.fromkeys((*agent_tool_names(), *(name for name in legacy_names if name in APPLICATION_OPERATIONS)))
+    if context.latex_context:
+        names = {'edit_latex_project': None}
     for name in names:
         if name in APPLICATION_ACTIONS:
             schema = action_schema(tuple(APPLICATION_ACTIONS[name]))
             description = tool_description(name)
         else:
             _handler, schema, description = _REGISTRY[name]
+        if context.latex_context:
+            schema = json.loads(json.dumps(schema))
+            schema['properties']['operation']['enum'] = ['active', 'project', 'read', 'write', 'root', 'compile']
+            schema['properties'].pop('assetId', None)
+            description = 'Read, edit, and compile the current LaTeX project. Use operation=active for the current file, project for its file list, read with path, write with path/content/expectedHash to propose edits for review (empty hash proposes a new file), and compile for diagnostics. Read before writing. Only accepted changes are compiled.'
         if name == "propose_workspace_memory_update":
             schema = memory_update_schema(context.workspace_id)
             description = memory_update_description(context.workspace_id)

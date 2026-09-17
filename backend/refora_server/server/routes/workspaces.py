@@ -209,7 +209,18 @@ def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
                     return {}
                 payload["runtimePath"] = data.get("path")
             if payload.get("action") == "import" and not payload.get("assetId"):
-                paths = await _select_workspace_files(connector, "Import LaTeX source", ["tex", "zip", "gz", "tar"], False)
+                if payload.get("source") == "directory":
+                    if connector is None:
+                        raise RequestError("Native directory picker is unavailable")
+                    selection = await connector.dialog_open_directory("Import LaTeX project folder")
+                    if not isinstance(selection, dict) or selection.get("ok") is not True:
+                        raise RequestError("Project directory selection failed")
+                    data = selection.get("data", {})
+                    if data.get("canceled"):
+                        return {}
+                    paths = [data.get("path")]
+                else:
+                    paths = await _select_workspace_files(connector, "Import LaTeX source", ["tex", "zip", "gz", "tar", "tgz"], False)
                 if not paths:
                     return {}
                 if len(paths) != 1:

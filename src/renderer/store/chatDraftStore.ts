@@ -1,9 +1,12 @@
+import type { LatexChatContext } from '../../shared/latex-types'
 import { create } from 'zustand'
 
 export interface ChatDraftRequest {
   id: number
-  mode: 'prefill' | 'append'
+  mode: 'prefill' | 'append' | 'send'
+  workspaceId?: string
   text: string
+  latexContext?: LatexChatContext
 }
 
 interface ChatDraftState {

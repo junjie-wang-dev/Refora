@@ -12,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { showContextMenu } from '../../src/renderer/utils/contextMenu'
 import type { Document as LibraryDocument } from '../../src/shared/ipc-types'
 import { api } from '../../src/renderer/ipc'
-import PdfReader from '../../src/renderer/components/PdfReader'
+import { createRef } from 'react'
+import PdfReader, { type PdfReaderHandle } from '../../src/renderer/components/PdfReader'
 import { usePdfReaderStore, type PdfAnnotation } from '../../src/renderer/store/pdfReaderStore'
 import { DEFAULT_PDF_VIEW, usePdfViewStore } from '../../src/renderer/store/pdfViewStore'
 import { invalidateRendererSettingWrites } from '../../src/renderer/persistence'
@@ -364,6 +365,84 @@ describe('PdfReader rendering visibility', () => {
     invalidateRendererSettingWrites()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps preview controls minimal and offers only copying selected text', async () => {
+    const source = { id: 'latex:preview', title: 'Preview', data: new Uint8Array([1]) }
+    const writeText = vi.spyOn(api.clipboard, 'writeText').mockResolvedValue(undefined)
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+    const view = render(<PdfReader source={source} variant="preview" embedded />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'pdfReader.navigation.title' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.navigationBack' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.navigationForward' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.search' })).not.toBeInTheDocument()
+    const scroll = view.container.querySelector<HTMLElement>('[data-pdf-scroll]')!
+    fireEvent.keyDown(scroll, { key: 'f', metaKey: true })
+    expect(screen.queryByRole('textbox', { name: 'pdfReader.search' })).not.toBeInTheDocument()
+    const page = view.container.querySelector<HTMLElement>('.pdf-reader-page')!
+    expect(fireEvent.contextMenu(page)).toBe(false)
+    expect(fireEvent.contextMenu(scroll)).toBe(false)
+    expect(showContextMenu).not.toHaveBeenCalled()
+    vi.spyOn(page, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 200, top: 0, bottom: 300, width: 200, height: 300, x: 0, y: 0, toJSON: () => ({}) })
+    selection.mockReturnValue({ isCollapsed: false, rangeCount: 1, toString: () => 'Preview text', getRangeAt: () => ({ getClientRects: () => [{ left: 20, right: 180, top: 40, bottom: 60 }] }), removeAllRanges: vi.fn() } as unknown as Selection)
+    fireEvent.contextMenu(page)
+    const items = vi.mocked(showContextMenu).mock.calls[0][0]
+    expect(items.map(item => item.key)).toEqual(['copy'])
+    items[0].onClick?.()
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Preview text'))
+  })
+
+  it('renders an in-memory PDF without reading or modifying the library session', async () => {
+    const getSetting = vi.spyOn(api.settings, 'get')
+    const setSetting = vi.spyOn(api.settings, 'set')
+    usePdfReaderStore.setState({ tool: 'highlight', sidebarOpen: true, selectedAnnotationIds: ['existing-note'] })
+    const before = usePdfReaderStore.getState()
+    const source = { id: 'latex:workspace:project', title: 'Compiled paper', data: new Uint8Array([1, 2, 3]) }
+    const view = render(<PdfReader source={source} embedded />)
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledWith({ data: source.data }))
+    expect(pdfMocks.getDocument.mock.calls[0][0]!.data).not.toBe(source.data)
+    await waitFor(() => expect(view.container.querySelector('[data-page-number="1"]')).toBeInTheDocument())
+    const page = view.container.querySelector<HTMLElement>('[data-page-number="1"]')!
+    fireEvent.pointerDown(page, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.pointerUp(page, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.keyDown(window, { key: 'Delete' })
+    fireEvent.keyDown(window, { key: 'z', metaKey: true })
+    expect(api.documents.readPdfRange).not.toHaveBeenCalled()
+    expect(getSetting).not.toHaveBeenCalled()
+    expect(setSetting).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-pdf-annotation-toolbar]')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pdfReader.openInSystem' })).not.toBeInTheDocument()
+    expect(usePdfReaderStore.getState()).toBe(before)
+  })
+
+  it('exposes PDF coordinates and highlights a requested location using the existing page renderer', async () => {
+    const handle = createRef<PdfReaderHandle>()
+    const onDoubleClick = vi.fn()
+    const source = { id: 'latex:workspace:project', title: 'Compiled paper', data: new Uint8Array([1]) }
+    const view = render(<PdfReader ref={handle} source={source} embedded onPageDoubleClick={onDoubleClick} location={{ request: 1, box: { page: 1, x: 100, y: 200, width: 80, height: 12 } }} />)
+    await waitFor(() => expect(view.container.querySelector('[data-pdf-location-highlight]')).toBeInTheDocument())
+    const page = view.container.querySelector<HTMLElement>('[data-page-number="1"]')!
+    vi.spyOn(page, 'getBoundingClientRect').mockReturnValue({ x: 20, y: 30, left: 20, top: 30, width: 306, height: 396, bottom: 426, right: 326, toJSON: () => ({}) })
+    fireEvent.click(page, { clientX: 70, clientY: 130 })
+    const point = await handle.current!.getPosition()
+    expect(point?.page).toBe(1)
+    expect(point?.x).toBeCloseTo(100)
+    expect(point?.y).toBeCloseTo(200)
+    fireEvent.doubleClick(page, { clientX: 70, clientY: 130 })
+    expect(onDoubleClick).toHaveBeenCalledWith(point)
+  })
+
+  it('reloads changed compilation bytes without registering a library document', async () => {
+    const source = { id: 'latex:workspace:project', title: 'Compiled paper', data: new Uint8Array([1]) }
+    const view = render(<PdfReader source={source} embedded />)
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(1))
+    view.rerender(<PdfReader source={{ ...source, data: new Uint8Array([2]) }} embedded />)
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(2))
+    expect(pdfMocks.destroyDocument).toHaveBeenCalledTimes(1)
+    expect(api.documents.readPdfRange).not.toHaveBeenCalled()
+    expect(usePdfReaderStore.getState().activeDocumentId).toBe('paper')
+    expect(usePdfViewStore.getState().documents).toEqual({})
   })
 
   it('preloads against the PDF scroller and retains the committed tile while offscreen', async () => {

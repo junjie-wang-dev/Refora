@@ -258,6 +258,7 @@ def create_ai_router(deps: Any) -> APIRouter:
                 "threadId",
                 "workspaceId",
                 "activeDocumentId",
+                "latexContext",
                 "text",
                 "providerId",
                 "agentProfileId",

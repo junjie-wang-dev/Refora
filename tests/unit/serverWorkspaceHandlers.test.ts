@@ -363,3 +363,21 @@ describe('LaTeX IPC', () => {
     await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'list' })).resolves.toEqual({ ok: false, error: { code: 'conflict', message: 'Changed' } })
   })
 })
+
+it('preserves source/PDF mappings in the typed LaTeX compilation envelope', async () => {
+  const { client, http } = makeClient()
+  const handlers = createServerWorkspaceHandlers(client, pathDeps)
+  const compilation = { success: true, log: '', pdfBase64: 'pdf', synctex: { sourceHashes: { 'main.tex': 'hash' }, boxes: [{ path: 'main.tex', line: 4, page: 2, x: 20, y: 30, width: 80, height: 12 }] } }
+  http.workspaceLatex.mockResolvedValue({ compilation })
+  await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'compile', projectId: 'project', engine: 'pdflatex' })).resolves.toEqual({ ok: true, data: { compilation } })
+})
+
+
+it('forwards persisted LaTeX preview requests with their cache freshness', async () => {
+  const { client, http } = makeClient()
+  const compilation = { success: true, log: '', pdfBase64: 'pdf', builtAt: '2026-09-17T12:00:00Z', stale: true, engine: 'xelatex' }
+  http.workspaceLatex.mockResolvedValue({ compilation })
+  const handlers = createServerWorkspaceHandlers(client, pathDeps)
+  await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'preview', projectId: 'project' })).resolves.toEqual({ ok: true, data: { compilation } })
+  expect(http.workspaceLatex).toHaveBeenCalledWith('ws', { action: 'preview', projectId: 'project' })
+})

@@ -11,6 +11,7 @@ import type {
 import { composeModelId, parseModelId } from '../../../shared/modelVariant'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { usePdfReaderStore } from '../../store/pdfReaderStore'
+import { useLatexContextStore } from '../../store/latexContextStore'
 import { useChatDraftStore } from '../../store/chatDraftStore'
 import { useDocumentStore } from '../../store/documentStore'
 import { deriveChatCatalog, useAgentCatalogStore } from '../../store/agentCatalogStore'
@@ -90,6 +91,8 @@ interface ChatPanelProps {
 export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
   const { t } = useTranslation()
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const activeLatex = useLatexContextStore(state => state.active)
+  const latexContext = useMemo(() => activeLatex?.workspaceId === activeWorkspaceId ? { projectId: activeLatex.projectId, path: activeLatex.path } : null, [activeLatex, activeWorkspaceId])
   const panelView = useWorkspaceStore((s) => s.panelView)
   const activePdfDocumentId = usePdfReaderStore((s) => s.activeDocumentId)
   const activeThreadId = useWorkspaceStore((s) => s.activeThreadId)
@@ -159,7 +162,8 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
 
   const chat = useChatStream({
     activeWorkspaceId,
-    activeDocumentId: panelView === 'pdf' ? activePdfDocumentId : null,
+    activeDocumentId: !latexContext && panelView === 'pdf' ? activePdfDocumentId : null,
+    latexContext,
     activeProviderId,
     activeThreadId,
     requestModel,
@@ -177,7 +181,16 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
     !chat.loadingHistory
 
   useEffect(() => {
-    if (!pendingChatDraft || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
+    if (!pendingChatDraft || pendingChatDraft.mode !== 'send' || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
+    if (pendingChatDraft.workspaceId !== activeWorkspaceId || !activeProviderId || chat.loadingHistory) return
+    handledChatDraftIdsRef.current.add(pendingChatDraft.id)
+    consumeChatDraft(pendingChatDraft.id)
+    if (chat.streaming || chat.pendingInterrupt || chat.activeRunId) chat.queueFollowUp(pendingChatDraft.text, [], pendingChatDraft.latexContext)
+    else void chat.sendText(pendingChatDraft.text, [], activeThreadId, pendingChatDraft.latexContext ? { latexContext: pendingChatDraft.latexContext } : {})
+  }, [consumeChatDraft, pendingChatDraft, activeWorkspaceId, activeProviderId, activeThreadId, chat])
+
+  useEffect(() => {
+    if (!pendingChatDraft || pendingChatDraft.mode === 'send' || handledChatDraftIdsRef.current.has(pendingChatDraft.id)) return
     handledChatDraftIdsRef.current.add(pendingChatDraft.id)
     if (handledChatDraftIdsRef.current.size > MAX_HANDLED_CHAT_DRAFT_IDS) {
       for (const draftId of handledChatDraftIdsRef.current) {
@@ -447,13 +460,13 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       chat.setError(t('workspace.chat.inputTooLong', 'Message is too long. Please shorten it.'))
       return
     }
-    const atts = [...selectedAttachments]
+    const atts = latexContext ? [] : [...selectedAttachments]
     setInput('')
     setSelectedAttachments([])
     setAttachMenuOpen(false)
     if (chat.streaming || chat.pendingInterrupt || chat.activeRunId) chat.queueFollowUp(text, atts)
     else void chat.sendText(text, atts, activeThreadId)
-  }, [activeProviderId, activeThreadId, chat, input, selectedAttachments, t])
+  }, [activeProviderId, activeThreadId, chat, input, selectedAttachments, latexContext, t])
 
   const exportThread = useCallback(async (threadId: string) => {
     if (!threadId) return
@@ -521,6 +534,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
       />
 
       <ChatMessages
+        latexMode={Boolean(latexContext)}
         messages={chat.messages}
         traceSteps={chat.traceSteps}
         streaming={chat.streaming}
@@ -559,6 +573,8 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
           onCancel={chat.handleCancel}
         />
       )}
+
+      {pendingChatDraft?.mode === 'send' && pendingChatDraft.workspaceId === activeWorkspaceId && !activeProviderId && <div className="flex items-center gap-2 px-3 py-2 text-xs" role="status"><span>{t('latex.aiChooseModel')}</span><button type="button" onClick={() => consumeChatDraft(pendingChatDraft.id)}>{t('common.cancel')}</button></div>}
 
       {chat.error && (
         <div className="shrink-0 px-3 pb-1">
@@ -624,14 +640,16 @@ export default function ChatPanel({ onClose }: ChatPanelProps = {}) {
         </div>
       )}
 
+      {latexContext && <div className="px-3 py-1 text-caption text-muted" title={latexContext.path}>LaTeX · {latexContext.path}</div>}
       <ChatInput
         input={input}
         onInputChange={setInput}
         streaming={chat.streaming}
         queueing={!!chat.activeRunId || !!chat.pendingInterrupt || chat.streaming}
-        selectedAttachments={selectedAttachments}
+        selectedAttachments={latexContext ? [] : selectedAttachments}
+        attachmentsEnabled={!latexContext}
         onSelectedAttachmentsChange={setSelectedAttachments}
-        attachMenuOpen={attachMenuOpen}
+        attachMenuOpen={!latexContext && attachMenuOpen}
         onAttachMenuOpenChange={setAttachMenuOpen}
         activeWorkspaceId={activeWorkspaceId}
         providers={providers}

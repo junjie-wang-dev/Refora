@@ -59,6 +59,8 @@ def _map_message(row: sqlite3.Row) -> dict[str, Any]:
             media = []
         if media:
             message["media"] = media
+    if "latexContext" in keys and row["latexContext"]:
+        message["latexContext"] = json.loads(row["latexContext"])
     if "runId" in keys and row["runId"] is not None:
         message["runId"] = row["runId"]
     if "runStatus" in keys and row["runStatus"] is not None:
@@ -127,7 +129,7 @@ def createChatRepository(db):
 
     def listMessages(threadId: str) -> list[dict[str, Any]]:
         cur = db.execute(
-            "SELECT m.*, r.id AS runId, r.status AS runStatus "
+            "SELECT m.*, r.id AS runId, r.status AS runStatus, COALESCE(r.latexContext, (SELECT latexContext FROM agent_runs WHERE userMessageId = m.id ORDER BY startedAt DESC LIMIT 1)) AS latexContext "
             "FROM chat_messages m "
             "LEFT JOIN agent_runs r ON r.id = ("
             "SELECT candidate.id FROM agent_runs candidate "
@@ -160,7 +162,7 @@ def createChatRepository(db):
             parameters.extend([created_at, created_at, row_id])
         parameters.append(limit + 1)
         rows = db.execute(
-            "SELECT m.*, m.rowid AS timelineRowId, r.id AS runId, r.status AS runStatus "
+            "SELECT m.*, m.rowid AS timelineRowId, r.id AS runId, r.status AS runStatus, r.latexContext AS latexContext "
             "FROM chat_messages m LEFT JOIN agent_runs r ON r.id = ("
             "SELECT candidate.id FROM agent_runs candidate "
             "WHERE candidate.assistantMessageId = m.id OR candidate.userMessageId = m.id "

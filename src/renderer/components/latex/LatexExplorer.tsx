@@ -10,6 +10,7 @@ interface Props {
   tab: LatexExplorerTab
   onTabChange: (tab: LatexExplorerTab) => void
   files: string[]
+  reviewFiles?: string[]
   currentFile: string
   rootFile: string
   source: string
@@ -22,7 +23,7 @@ interface Props {
   onClose: () => void
 }
 
-export default function LatexExplorer({ tab, onTabChange, files, currentFile, rootFile, source, assets, busy, onOpen, onInsert, onNavigate, onCreate, onClose }: Props) {
+export default function LatexExplorer({ tab, onTabChange, files, currentFile, rootFile, source, assets, busy, onOpen, onInsert, onNavigate, onCreate, onClose, reviewFiles = [] }: Props) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   useEffect(() => setQuery(''), [tab])
@@ -35,7 +36,7 @@ export default function LatexExplorer({ tab, onTabChange, files, currentFile, ro
       <summary><CaretRight size={12} /><Folder size={15} /><span>{folder}</span></summary>
       <div>{renderTree(child, `${prefix}${folder}/`)}</div>
     </details>)}
-    {node.files.map((path) => <button key={path} type="button" className="latex-tree-file" aria-current={path === currentFile ? 'page' : undefined} disabled={busy} title={path} onClick={() => onOpen(path)}><FileCode size={15} /><span>{path.slice(prefix.length)}</span>{path === rootFile && <span className="latex-root-mark" title={t('latex.root')}>●</span>}</button>)}
+    {node.files.map((path) => <button key={path} type="button" className="latex-tree-file" aria-current={path === currentFile ? 'page' : undefined} disabled={busy} title={path} onClick={() => onOpen(path)}><FileCode size={15} /><span>{path.slice(prefix.length)}</span>{reviewFiles.includes(path) && <span className="latex-review-file" title={t('latex.aiReview')}>AI</span>}{path === rootFile && <span className="latex-root-mark" title={t('latex.root')}>●</span>}</button>)}
   </>
   return <aside className="latex-explorer" aria-label={t('latex.files')}>
     <div className="latex-explorer-tabs" role="tablist" aria-label={t('latex.navigation')}>

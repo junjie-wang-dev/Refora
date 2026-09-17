@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from refora_server.repositories.errors import RepoError
+from refora_server.services.latex_preview_cache import file_digest, fingerprint, project_fingerprint, save_preview, load_preview, preview_revision
+from refora_server.services.latex_reviews import propose, read_review, resolve, review_files, with_review
 
 TEXT_EXTENSIONS = {'.tex', '.bib', '.bst', '.cls', '.sty', '.cfg', '.def', '.clo', '.txt', '.bbl', '.bbx', '.cbx', '.lbx', '.ist', '.fd'}
 IMPORT_EXTENSIONS = TEXT_EXTENSIONS | {'.pdf', '.png', '.jpg', '.jpeg', '.eps', '.ps', '.otf', '.ttf', '.enc', '.map', '.tfm', '.pfb'}
@@ -106,8 +108,28 @@ def import_sources(source: Path, target: Path) -> None:
             raise RepoError('invalid_archive', 'Invalid archive entry size')
         atomic_write(destination, data)
 
-    if source.is_symlink() or not source.is_file() or source.stat().st_size > MAX_PROJECT:
-        raise RepoError('invalid_path', 'Choose a regular .tex, .zip or .tar.gz source file under 256 MiB')
+    if source.is_symlink():
+        raise RepoError('invalid_path', 'Project symlinks are not allowed')
+    if source.is_dir():
+        if target.resolve().is_relative_to(source.resolve()):
+            raise RepoError('invalid_path', 'Choose a source folder outside workspace project storage')
+        for directory, folders, files in os.walk(source, followlinks=False):
+            folders[:] = sorted(name for name in folders if not name.startswith('.'))
+            for name in folders + sorted(files):
+                if name.startswith('.'):
+                    continue
+                entry = Path(directory) / name
+                if entry.is_symlink():
+                    raise RepoError('invalid_path', 'Project symlinks are not allowed')
+                if name in folders or entry.suffix.lower() not in IMPORT_EXTENSIONS:
+                    continue
+                if not entry.is_file():
+                    raise RepoError('invalid_path', 'Project special files are not allowed')
+                with entry.open('rb') as stream:
+                    put(entry.relative_to(source).as_posix(), entry.stat().st_size, stream.read)
+        return
+    if not source.is_file() or source.stat().st_size > MAX_PROJECT:
+        raise RepoError('invalid_path', 'Choose a project folder or source archive under 256 MiB')
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as archive:
             for entry in archive.infolist():
@@ -178,6 +200,8 @@ def compile_project(source: Path, root_file: str, engine: str, compiler: str = '
     with tempfile.TemporaryDirectory(prefix='refora-latex-') as temporary:
         build = Path(temporary).resolve()
         total = 0
+        source_hashes = {}
+        input_hashes = {}
         for file in source.rglob('*'):
             if file.is_symlink():
                 raise RepoError('invalid_path', 'Project symlinks are not allowed')
@@ -195,6 +219,9 @@ def compile_project(source: Path, root_file: str, engine: str, compiler: str = '
             destination = build / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file, destination)
+            input_hashes[relative] = file_digest(destination)
+            if file.suffix.lower() in TEXT_EXTENSIONS:
+                source_hashes[relative] = input_hashes[relative]
         quoted = lambda path: json.dumps(str(path))
         ghostscript = shutil.which('gs') or next((name for name in ('/usr/local/bin/gs', '/opt/homebrew/bin/gs') if Path(name).is_file()), None)
         readable = ['/System', '/usr', '/bin', '/sbin', '/Library/Fonts', '/Library/Apple', '/private/etc', '/dev', str(build)]
@@ -230,10 +257,10 @@ def compile_project(source: Path, root_file: str, engine: str, compiler: str = '
         env = {'PATH': f'{binary}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin', 'HOME': str(build), 'TMPDIR': str(build), 'TEXMFHOME': str(build / 'texmf'), 'TEXMFVAR': str(build / 'texmf-var'), 'TEXMFCONFIG': str(build / 'texmf-config'), 'openin_any': 'p', 'openout_any': 'p', 'shell_escape': 'f', 'LANG': 'en_US.UTF-8', 'USER': 'refora', 'LOGNAME': 'refora'}
         if compiler == 'tectonic':
             env.update({'TECTONIC_CACHE_DIR': str(tectonic_cache), 'TECTONIC_UNTRUSTED_MODE': '1'})
-            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--print', './' + root.name]
+            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'tectonic'), '-X', 'compile', '--untrusted', '--keep-logs', '--synctex', '--print', './' + root.name]
         else:
             mode = {'pdflatex': '-pdf', 'xelatex': '-xelatex', 'lualatex': '-lualatex'}[engine]
-            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'latexmk'), '-norc', mode, '-no-shell-escape', '-interaction=nonstopmode', '-file-line-error', '-halt-on-error', './' + root.name]
+            command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary / 'latexmk'), '-norc', mode, '-no-shell-escape', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', '-halt-on-error', './' + root.name]
         cwd = build / root.relative_to(source).parent
         log_path = build / 'refora-build.log'
         deadline = time.monotonic() + 120
@@ -272,7 +299,9 @@ def compile_project(source: Path, root_file: str, engine: str, compiler: str = '
             raise RepoError('file_too_large', 'Compiled PDF exceeds 32 MiB')
         if not data.startswith(b'%PDF-'):
             raise RepoError('invalid_pdf', 'Compiler did not produce a PDF document')
-        return {'success': True, 'log': output, 'pdfBase64': base64.b64encode(data).decode('ascii')}
+        from refora_server.services.latex_synctex import read_synctex
+        synctex = read_synctex(pdf.with_suffix('.synctex.gz'), build, cwd, source_hashes)
+        return {'success': True, 'log': output, 'pdfBase64': base64.b64encode(data).decode('ascii'), 'synctex': synctex, '_inputs': fingerprint(input_hashes)}
 
 
 class LatexService:
@@ -308,8 +337,10 @@ class LatexService:
             raise RepoError('invalid_project', 'Invalid project metadata')
         source = safe_path(folder, 'files')
         safe_path(source, data.get('rootFile'))
-        files = sorted(p.relative_to(source).as_posix() for p in source.rglob('*') if p.is_file() and not p.is_symlink())
-        return {**data, 'files': files}, source
+        pending = review_files(source)
+        files = sorted({p.relative_to(source).as_posix() for p in source.rglob('*') if p.is_file() and not p.is_symlink()} | set(pending))
+        from refora_server.services.latex_templates import detect_template
+        return {**data, 'files': files, 'template': detect_template(source, data['rootFile']), 'reviewFiles': pending, 'previewRevision': preview_revision(source)}, source
 
     def save_metadata(self, directory, project):
         metadata = {key: project[key] for key in ('id', 'title', 'rootFile')}
@@ -343,7 +374,7 @@ class LatexService:
             if not active:
                 return {'active': None}
             project, source = self.project(directory, active['projectId'])
-            return {'active': active, 'project': project, 'file': read_source(source, active['path'])}
+            return {'active': active, 'project': project, 'file': with_review(source, active['path'])}
         if action == 'activate' and not request.get('projectId'):
             self.active.pop(workspace_id, None)
             return {'active': None}
@@ -364,7 +395,7 @@ class LatexService:
                     if not isinstance(path, str) or not Path(path).is_absolute():
                         raise RepoError('invalid_path', 'Choose a LaTeX source archive')
                     import_sources(Path(path), source)
-                    title = Path(path).name
+                    title = Path(path).name if Path(path).is_dir() else re.sub(r'\.(?:tar\.gz|tar|tgz|zip|tex)$', '', Path(path).name, flags=re.IGNORECASE)
                 else:
                     if not isinstance(title, str) or not title.strip() or len(title) > 200:
                         raise RepoError('validation', 'Project title must be 1–200 characters')
@@ -372,7 +403,8 @@ class LatexService:
                 tex = sorted(p.relative_to(source).as_posix() for p in source.rglob('*.tex'))
                 if not tex:
                     raise RepoError('invalid_archive', 'No .tex files found in the archive')
-                roots = [name for name in tex if re.search(r'\\documentclass\b', read_source(source, name)['content'])]
+                roots = [name for name in tex if re.search(r'\\documentclass\b', re.sub(r'(?<!\\)%[^\n]*', '', read_source(source, name)['content']))]
+                roots.sort(key=lambda name: (Path(name).name.lower() != 'main.tex', len(Path(name).parts), name))
                 project = {'id': identifier, 'title': title, 'rootFile': (roots or tex)[0]}
                 self.save_metadata(directory, project)
                 if self.on_project:
@@ -385,8 +417,10 @@ class LatexService:
         if action == 'project':
             return {'project': project}
         if action == 'read':
-            return {'file': read_source(source, request.get('path'))}
-        if action == 'write':
+            return {'file': with_review(source, request.get('path'))}
+        if action == 'review':
+            return {'file': resolve(source, request), 'project': self.project(directory, project['id'])[0]}
+        if action in {'write', 'propose'}:
             name = request.get('path')
             path = safe_path(source, name)
             if path.suffix.lower() not in TEXT_EXTENSIONS:
@@ -397,6 +431,12 @@ class LatexService:
             content = request.get('content')
             if not isinstance(content, str) or len(content.encode()) > MAX_FILE:
                 raise RepoError('validation', 'Source must be text under 32 MiB')
+            if action == 'propose':
+                before = read_source(source, name) if path.exists() else {'path': name, 'content': '', 'hash': ''}
+                file = propose(source, name, content, before)
+                return {'file': file, 'project': self.project(directory, project['id'])[0]}
+            if read_review(source, name):
+                raise RepoError('review_pending', 'Review the pending AI changes before editing this file.')
             atomic_write(path, content.encode())
             return {'file': read_source(source, name), 'project': self.project(directory, project['id'])[0]}
         if action in {'activate', 'root'}:
@@ -408,6 +448,7 @@ class LatexService:
                 raise RepoError('invalid_path', 'Root document must be a .tex file')
             project['rootFile'] = file['path']
             self.save_metadata(directory, project)
+            project = self.project(directory, project['id'])[0]
             if self.on_project:
                 self.on_project(workspace_id, project, None)
             return {'project': project}
@@ -423,9 +464,25 @@ class LatexService:
             atomic_write(destination, Path(path).read_bytes())
             relative = os.path.relpath(destination, (source / project['rootFile']).parent)
             return {'assetPath': relative, 'project': self.project(directory, project['id'])[0]}
-        if action == 'compile':
+        if action in {'compile', 'preview'}:
             compiler = self.settings.get('latexCompiler', 'latexmk') if self.settings is not None else 'latexmk'
             path_key = 'tectonicBinPath' if compiler == 'tectonic' else 'latexBinPath'
             configured = self.settings.get(path_key, '') if self.settings is not None else ''
-            return {'compilation': compile_project(source, project['rootFile'], request.get('engine', 'pdflatex'), compiler, configured)}
+            if action == 'preview':
+                cached = load_preview(source, project['rootFile'], compiler, configured)
+                return {'compilation': cached} if cached else {}
+            engine = request.get('engine', 'pdflatex')
+            compilation = compile_project(source, project['rootFile'], engine, compiler, configured)
+            inputs = compilation.pop('_inputs', None)
+            if compilation.get('success') and compilation.get('pdfBase64'):
+                try:
+                    inputs = inputs or project_fingerprint(source, project['rootFile'])
+                    compilation['builtAt'] = save_preview(source, project['rootFile'], compiler, configured, engine, inputs, compilation)
+                except (OSError, ValueError, RepoError):
+                    compilation['cacheSaved'] = False
+                try:
+                    compilation['stale'] = inputs != project_fingerprint(source, project['rootFile'])
+                except (OSError, ValueError, RepoError):
+                    compilation['stale'] = True
+            return {'compilation': compilation}
         raise RepoError('validation', 'Unknown LaTeX operation')

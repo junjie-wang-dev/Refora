@@ -18,6 +18,7 @@ interface OutlineItem {
 }
 
 interface PdfNavigationSidebarProps {
+  bookmarksEnabled?: boolean
   pdf: PDFDocumentProxy
   currentPage: number
   rotation: number
@@ -32,7 +33,6 @@ interface PdfNavigationSidebarProps {
 }
 
 type NavigationSection = 'outline' | 'pages' | 'bookmarks'
-const sections: NavigationSection[] = ['outline', 'pages', 'bookmarks']
 const thumbnailRowHeight = 184
 
 function OutlineBranch({
@@ -314,6 +314,7 @@ function BookmarkRow({ bookmark, onNavigate, onRename, onRemove }: {
 }
 
 export default function PdfNavigationSidebar({
+  bookmarksEnabled = true,
   pdf,
   currentPage,
   rotation,
@@ -326,6 +327,7 @@ export default function PdfNavigationSidebar({
   onClose,
   overlay
 }: PdfNavigationSidebarProps) {
+  const sections: NavigationSection[] = bookmarksEnabled ? ['outline', 'pages', 'bookmarks'] : ['outline', 'pages']
   const { t } = useTranslation()
   const [section, setSection] = useState<NavigationSection>('outline')
   const id = useId()

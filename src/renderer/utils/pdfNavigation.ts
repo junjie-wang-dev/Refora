@@ -1,6 +1,18 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
 import type { PdfReadingPosition } from '../store/pdfViewStore'
 
+
+export interface PdfReaderPoint {
+  page: number
+  x: number
+  y: number
+}
+
+export interface PdfReaderLocation extends PdfReaderPoint {
+  width: number
+  height: number
+}
+
 export interface PdfNavigationTarget extends PdfReadingPosition {
   scale?: number
   zoomMode?: 'custom' | 'width'

@@ -1,8 +1,8 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import hljs from 'highlight.js/lib/core'
 import latex from 'highlight.js/lib/languages/latex'
-import { CaretDown, CaretRight } from '@phosphor-icons/react'
+import { ArrowUp, CaretDown, CaretRight, Eye } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
 
 import MarkdownSearchControls from '../markdown/MarkdownSearchControls'
@@ -12,7 +12,8 @@ hljs.registerLanguage('latex', latex)
 
 export interface LatexSourceHandle {
   focus: () => void
-  revealLine: (line: number) => void
+  getPosition: () => { line: number; column: number }
+  revealLine: (line: number, select?: boolean) => void
   insert: (text: string) => void
   openFind: () => void
   closeFind: () => void
@@ -23,15 +24,44 @@ interface Props {
   disabled?: boolean
   searchContainer?: HTMLDivElement | null
   onSearchFocus?: () => void
+  onAi?: (start: number, end: number, instruction?: string) => void
   onPositionChange?: (line: number, column: number) => void
 }
 
-const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, searchContainer, onSearchFocus, onPositionChange }, ref) {
+const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, searchContainer, onSearchFocus, onPositionChange, onAi }, ref) {
   const { t } = useTranslation()
   const input = useRef<HTMLTextAreaElement>(null)
   const highlights = useRef<HTMLPreElement>(null)
   const gutter = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLInputElement>(null)
+  const [aiMenu, setAiMenu] = useState<{ start: number; end: number; x: number; y: number } | null>(null)
+  const [instruction, setInstruction] = useState('')
+  const aiMenuElement = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!aiMenu) return
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !aiMenuElement.current?.contains(event.target)) setAiMenu(null)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.stopPropagation(); setAiMenu(null); input.current?.focus() }
+    }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape, true)
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape, true) }
+  }, [aiMenu])
+  useEffect(() => setAiMenu(null), [value, disabled])
+  const showAiMenu = (x?: number, y?: number) => {
+    const textarea = input.current
+    if (!onAi || disabled || !textarea || textarea.selectionStart === textarea.selectionEnd) { setAiMenu(null); return }
+    const rect = textarea.getBoundingClientRect()
+    setInstruction('')
+    setAiMenu({ start: textarea.selectionStart, end: textarea.selectionEnd, x: Math.max(8, Math.min(x ?? rect.left + 30, window.innerWidth - 330)), y: Math.max(8, Math.min(y ?? rect.top + 50, window.innerHeight - 140)) })
+  }
+  const requestAi = (custom?: string) => {
+    if (!aiMenu) return
+    onAi?.(aiMenu.start, aiMenu.end, custom)
+    setAiMenu(null)
+  }
   const [query, setQuery] = useState('')
   const [replacement, setReplacement] = useState('')
   const [find, setFind] = useState(false)
@@ -75,7 +105,16 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
   const openFind = () => { setFind(true); onSearchFocus?.(); requestAnimationFrame(() => search.current?.focus()) }
   useImperativeHandle(ref, () => ({
     focus: () => input.current?.focus(),
-    revealLine: (target) => reveal(lines.slice(0, Math.max(0, target - 1)).reduce((sum, text) => sum + text.length + 1, 0)),
+    getPosition: () => {
+      const start = input.current?.selectionStart ?? 0
+      const before = value.slice(0, start)
+      return { line: before.split('\n').length, column: start - before.lastIndexOf('\n') }
+    },
+    revealLine: (target, select = false) => {
+      const index = Math.max(0, Math.min(lines.length - 1, target - 1))
+      const start = lines.slice(0, index).reduce((sum, text) => sum + text.length + 1, 0)
+      reveal(start, select ? start + lines[index].length : start)
+    },
     insert: (text) => {
       let { start, end } = selection.current
       if (start !== end) {
@@ -109,10 +148,14 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
     if (event.key === 'Escape' && find) { event.preventDefault(); event.stopPropagation(); closeFind() }
   }}>
+    {aiMenu && createPortal(<div ref={aiMenuElement} className="latex-ai-selection-menu" role="dialog" aria-label={t('latex.aiSelection')} style={{ left: aiMenu.x, top: aiMenu.y }} onMouseDown={event => event.stopPropagation()}>
+      <button type="button" className="latex-ai-proofread" onClick={() => requestAi()}><Eye size={19} />{t('latex.proofread')}</button>
+      <form onSubmit={event => { event.preventDefault(); if (instruction.trim()) requestAi(instruction.trim()) }}><input aria-label={t('latex.editWithAi')} placeholder={t('latex.editWithAi')} value={instruction} onChange={event => setInstruction(event.target.value)} maxLength={4000} /><button type="submit" aria-label={t('latex.sendAiEdit')} disabled={!instruction.trim()}><ArrowUp size={20} /></button></form>
+    </div>, document.body)}
     {searchContainer ? createPortal(searchControls, searchContainer) : find && searchControls}
     <div className="latex-source-body"><div ref={gutter} className="latex-line-numbers" aria-hidden="true">{lines.map((_, index) => <span key={index} data-active={line === index + 1}>{index + 1}</span>)}</div><div className="latex-source-stack">
       <pre aria-hidden="true" ref={highlights} className="latex-highlight"><code dangerouslySetInnerHTML={{ __html: html + '\n' }} /></pre>
-      <textarea ref={input} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label={t('latex.source')} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onSelect={notifyPosition} onKeyUp={notifyPosition} onClick={notifyPosition} onScroll={syncScroll} onKeyDown={(event) => {
+      <textarea ref={input} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label={t('latex.source')} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onSelect={notifyPosition} onKeyUp={(event) => { notifyPosition(); if (event.shiftKey || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) showAiMenu() }} onMouseUp={(event) => showAiMenu(event.clientX, event.clientY + 12)} onContextMenu={(event) => { if (onAi && event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) { event.preventDefault(); event.stopPropagation(); showAiMenu(event.clientX, event.clientY) } }} onClick={notifyPosition} onScroll={() => { syncScroll(); setAiMenu(null) }} onKeyDown={(event) => {
         if (event.key === 'Tab') {
           event.preventDefault()
           const textarea = event.currentTarget

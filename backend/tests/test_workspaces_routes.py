@@ -132,7 +132,7 @@ def client(services: FakeServices) -> TestClient:
         ) -> dict[str, Any]:
             if not multiple:
                 assert title == "Import LaTeX source"
-                assert extensions == ["tex", "zip", "gz", "tar"]
+                assert extensions == ["tex", "zip", "gz", "tar", "tgz"]
                 return {"ok": True, "data": {"canceled": False, "path": "/tmp/paper.zip"}}
             return {
                 "ok": True,
@@ -470,3 +470,10 @@ async def test_native_picker_errors_keep_actionable_messages(result):
     with pytest.raises(RepoError) as error:
         await _select_workspace_files(Connector(), multiple=False)
     assert error.value.code == ("connector_closed" if not result["ok"] else "file_picker_failed")
+
+
+def test_latex_import_uses_native_directory_selection(client, services):
+    services.workspaces['latexOperation'] = services._workspace('latexOperation', {'project': {'id': 'paper'}})
+    response = client.post('/workspaces/ws/latex', headers=HEADERS, json={'action': 'import', 'source': 'directory'})
+    assert response.json() == {'ok': True, 'data': {'project': {'id': 'paper'}}}
+    assert services.calls[-1] == ('latexOperation', ('ws', {'action': 'import', 'source': 'directory', 'importPath': '/tmp/mineru'}))
