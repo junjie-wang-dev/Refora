@@ -48,6 +48,9 @@
 
 .markdown-code-block pre.markdown-code-content {
   margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   padding: 0.75rem;
   font-size: 0.75rem;
   line-height: 1.5;

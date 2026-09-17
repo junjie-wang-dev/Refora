@@ -57,11 +57,19 @@ test('selected LaTeX sends AI instructions and reviews staged changes individual
   const application = await electron.launch({ executablePath: String(electronExecutable), args: [path.resolve('tests/e2e/electron-main.mjs')], env })
   try {
     const page = await application.firstWindow()
-    const original = '\\documentclass{article}\n\\begin{document}\nThis are incorrect.\n\\section{Results}\nThese is another error.\n\\end{document}\n'
+    const setTheme = async (theme: 'Light' | 'Dark') => {
+      await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click()
+      await page.getByRole('button', { name: 'Theme', exact: true }).click()
+      await page.getByRole('menuitemradio', { name: theme, exact: true }).click()
+      await page.getByRole('button', { name: 'Enter fullscreen', exact: true }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme.toLowerCase())
+    }
+    const original = '\\documentclass{article}\n\\begin{document}\nThis are incorrect. 理解专家（UE）：采用冻结的 Qwen3-VL-4B 模型，保留多模态语义理解能力。\n\\section{Results}\nThese is another error.\n\\end{document}\n'
     proposed = original.replace('This are', 'This is').replace('These is', 'These are')
     const fixture = await page.evaluate(async ({ original, port }) => {
       const provider = await window.api.aiProviders.create({ name: 'Local test AI', baseUrl: `http://127.0.0.1:${port}/v1`, apiProtocol: 'openai-compatible', reasoningControl: 'none', model: 'latex-test' })
       await window.api.settings.set('activeProviderId', provider.id)
+      await window.api.settings.set('theme', 'system')
       const ws = await window.api.workspaces.create('AI editing test')
       const project = (await window.api.latex.execute(ws.id, { action: 'create', title: 'Review paper' })).project!
       const file = (await window.api.latex.execute(ws.id, { action: 'read', projectId: project.id, path: 'main.tex' })).file!
@@ -79,6 +87,11 @@ test('selected LaTeX sends AI instructions and reviews staged changes individual
     await editor.press('Meta+a')
     await expect(page.getByRole('dialog', { name: 'Edit selected LaTeX' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Comment', exact: true })).toHaveCount(0)
+    const instruction = page.getByRole('textbox', { name: 'Edit with AI…' })
+    await instruction.fill('Polish this selection')
+    await expect(instruction).toBeFocused()
+    await expect(page.locator('.latex-selection-layer')).toBeVisible()
+    await expect(page.locator('.latex-selection-layer mark')).toHaveText(original)
     await page.screenshot({ path: path.resolve('.tmp/latex-context-selection.png') })
     await page.getByRole('button', { name: 'Proofread', exact: true }).click()
     await expect(page.getByRole('region', { name: 'Review AI changes' })).toBeVisible({ timeout: 45_000 })
@@ -93,7 +106,19 @@ test('selected LaTeX sends AI instructions and reviews staged changes individual
     await expect(page.getByRole('button', { name: 'Attach workspace files', exact: true })).toHaveCount(0)
     await page.getByRole('button', { name: 'Next change', exact: true }).click()
     await expect(page.locator('.latex-review-change').nth(1)).toBeFocused()
+    const codeBlock = page.locator('.chat-user-message .markdown-code-content').first()
+    await expect(codeBlock).toHaveCSS('border-top-width', '0px')
+    await expect(codeBlock).toHaveCSS('border-radius', '0px')
+    await setTheme('Light')
+    expect(await codeBlock.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
     await page.screenshot({ path: path.resolve('.tmp/latex-context-review.png') })
+    await page.locator('.chat-user-message .markdown-code-block').first().screenshot({ path: path.resolve('.tmp/latex-code-card.png') })
+    await setTheme('Dark')
+    await page.screenshot({ path: path.resolve('.tmp/latex-context-review-dark.png') })
+    await setTheme('Light')
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 760))
+    await expect(page.getByRole('button', { name: 'Accept all', exact: true })).toBeInViewport({ ratio: 1 })
+    await page.screenshot({ path: path.resolve('.tmp/latex-context-review-compact.png') })
     await page.getByRole('button', { name: 'Accept', exact: true }).first().click()
     await expect(page.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(1)
     expect((await read()).content).toBe(original.replace('This are', 'This is'))

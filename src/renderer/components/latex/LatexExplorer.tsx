@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CaretRight, FileCode, FilePdf, Folder, Image, List, MagnifyingGlass, Plus, X } from '@phosphor-icons/react'
+import { CaretRight, File, FileCode, FilePdf, Folder, Image, List, MagnifyingGlass, Plus, X } from '@phosphor-icons/react'
 import type { WorkspaceAsset } from '../../../shared/ipc-types'
-import { latexFileTree, latexOutline, type LatexFileTree } from './latexNavigation'
+import { isEditableLatexFile, latexFileTree, latexOutline, type LatexFileTree } from './latexNavigation'
 
 export type LatexExplorerTab = 'files' | 'outline' | 'images'
 
@@ -36,7 +36,12 @@ export default function LatexExplorer({ tab, onTabChange, files, currentFile, ro
       <summary><CaretRight size={12} /><Folder size={15} /><span>{folder}</span></summary>
       <div>{renderTree(child, `${prefix}${folder}/`)}</div>
     </details>)}
-    {node.files.map((path) => <button key={path} type="button" className="latex-tree-file" aria-current={path === currentFile ? 'page' : undefined} disabled={busy} title={path} onClick={() => onOpen(path)}><FileCode size={15} /><span>{path.slice(prefix.length)}</span>{reviewFiles.includes(path) && <span className="latex-review-file" title={t('latex.aiReview')}>AI</span>}{path === rootFile && <span className="latex-root-mark" title={t('latex.root')}>●</span>}</button>)}
+    {node.files.map((path) => {
+      const editable = isEditableLatexFile(path)
+      const Icon = editable ? FileCode : /\.(png|jpe?g|eps|svg|webp)$/i.test(path) ? Image : /\.pdf$/i.test(path) ? FilePdf : File
+      const content = <><Icon size={15} /><span>{path.slice(prefix.length)}</span>{reviewFiles.includes(path) && <span className="latex-review-file" title={t('latex.aiReview')}>AI</span>}{path === rootFile && <span className="latex-root-mark" title={t('latex.root')}>●</span>}</>
+      return editable ? <button key={path} type="button" className="latex-tree-file" aria-current={path === currentFile ? 'page' : undefined} disabled={busy} title={path} onClick={() => onOpen(path)}>{content}</button> : <div key={path} className="latex-tree-file latex-tree-resource" title={path}>{content}</div>
+    })}
   </>
   return <aside className="latex-explorer" aria-label={t('latex.files')}>
     <div className="latex-explorer-tabs" role="tablist" aria-label={t('latex.navigation')}>

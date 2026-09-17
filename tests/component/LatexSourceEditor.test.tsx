@@ -102,3 +102,28 @@ it('offers proofreading and custom AI editing for a selection, and dismisses on 
   fireEvent.mouseUp(input)
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
+
+
+it('retains a multiline selection while entering an AI instruction and clears stale highlights after editing', () => {
+  const value = 'First line\nSecond line\nThird line'
+  const { container, rerender } = render(<LatexSourceEditor value={value} onChange={vi.fn()} onAi={vi.fn()} />)
+  const input = screen.getByLabelText<HTMLTextAreaElement>('latex.source')
+  act(() => input.focus())
+  input.setSelectionRange(6, 22)
+  fireEvent.select(input)
+  fireEvent.mouseUp(input)
+  const instruction = screen.getByRole('textbox', { name: 'latex.editWithAi' })
+  act(() => instruction.focus())
+  fireEvent.change(instruction, { target: { value: 'Rewrite this' } })
+  const layer = container.querySelector('.latex-selection-layer')!
+  expect(layer).toHaveAttribute('data-visible', 'true')
+  expect(layer.querySelector('mark')?.textContent).toBe(value.slice(6, 22))
+  expect(input.selectionStart).toBe(6)
+  expect(input.selectionEnd).toBe(22)
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(input).toHaveFocus()
+  expect(layer).not.toHaveAttribute('data-visible')
+  fireEvent.blur(input)
+  rerender(<LatexSourceEditor value="Changed source" onChange={vi.fn()} onAi={vi.fn()} />)
+  expect(layer).not.toHaveAttribute('data-visible')
+})

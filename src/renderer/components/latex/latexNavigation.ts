@@ -34,3 +34,7 @@ export function latexDiagnostics(log: string): LatexDiagnostic[] {
     return [{ file: match[1].replace(/^\.\//, ''), line: Number(match[2]), message: match[3] }]
   })
 }
+
+export function isEditableLatexFile(path: string): boolean {
+  return /\.(tex|bib|bst|cls|sty|cfg|def|clo|txt|bbl|bbx|cbx|lbx|ist|fd)$/i.test(path)
+}

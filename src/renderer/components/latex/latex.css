@@ -1,5 +1,5 @@
 .latex-workspace { container-type:inline-size; --latex-chrome:color-mix(in srgb,var(--color-panel) 72%,var(--color-background)); position:relative; display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; overflow:hidden; background:var(--color-background); color:var(--color-foreground); font-size:12px; }
-.latex-workspace button,.latex-dialog button { font:inherit; cursor:pointer; transition:background .14s,color .14s,border-color .14s; }
+.latex-workspace button,.latex-dialog button { font-family:inherit; cursor:pointer; transition:background .14s,color .14s,border-color .14s; }
 .latex-workspace button:disabled,.latex-dialog button:disabled { opacity:.38; cursor:default; }
 .latex-workspace button:focus-visible,.latex-dialog button:focus-visible,.latex-workspace summary:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; }
 .latex-icon-button { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--color-muted); }
@@ -71,8 +71,13 @@
 .latex-line-numbers span { display:block; height:23px; }
 .latex-line-numbers span[data-active=true] { color:var(--color-accent); }
 .latex-source-stack { position:relative; flex:1; min-width:0; min-height:0; }
-.latex-source-stack textarea,.latex-highlight { position:absolute; inset:0; width:100%; height:100%; margin:0; padding:10px 18px 24px 4px; border:0; font:12px/23px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:normal; tab-size:2; white-space:pre; overflow:auto; resize:none; box-sizing:border-box; }
+.latex-source-stack textarea,.latex-highlight,.latex-selection-layer { position:absolute; inset:0; width:100%; height:100%; margin:0; padding:10px 18px 24px 4px; border:0; font:12px/23px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:normal; tab-size:2; white-space:pre; overflow:auto; resize:none; box-sizing:border-box; }
 .latex-highlight { pointer-events:none; }
+.latex-selection-layer { pointer-events:none; color:transparent; visibility:hidden; }
+.latex-selection-layer[data-visible] { visibility:visible; }
+.latex-selection-layer mark { color:transparent; background:color-mix(in srgb,var(--color-accent) 23%,transparent); }
+.latex-tree-resource { cursor:default; }
+.latex-tree-resource:hover { background:transparent; color:var(--color-muted); }
 .latex-source-stack textarea { color:transparent; caret-color:var(--color-foreground); background:transparent; outline:none; }
 .latex-source-stack textarea::selection { background:color-mix(in srgb,var(--color-accent) 23%,transparent); }
 .latex-highlight .hljs-keyword,.latex-highlight .hljs-tag,.latex-highlight .hljs-name { color:var(--color-accent); }
@@ -235,24 +240,20 @@
 .latex-ai-selection-menu input { min-width:0; flex:1; background:transparent; border:0; outline:none; padding:4px; }
 .latex-ai-selection-menu form button { display:grid; place-items:center; width:28px; height:28px; }
 .latex-ai-selection-menu button:disabled { opacity:.4; }
- .latex-review { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+.latex-review { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
 .latex-review-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 12px; border-bottom:1px solid var(--color-border); font-size:12px; }
 .latex-review-title { display:flex; align-items:center; gap:8px; flex:1; min-width:100px; }
 .latex-review-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .latex-review-bulk { display:flex; gap:6px; }
-.latex-review button { display:flex; align-items:center; justify-content:center; gap:4px; padding:4px 8px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-panel); font-size:11px; }
-.latex-review button:disabled { opacity:.4; }
-.latex-review button:hover:not(:disabled),.latex-review button[aria-pressed=true] { background:var(--color-hover); }
-.latex-review button:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-.latex-review .latex-review-accept { color:var(--color-foreground); border-color:color-mix(in srgb,#35a86b 45%,var(--color-border)); background:color-mix(in srgb,#35a86b 12%,var(--color-panel)); }
 .latex-review-navigation { display:flex; align-items:center; gap:5px; padding:7px 12px; color:var(--color-muted); font-size:11px; border-bottom:1px solid var(--color-border); }
 .latex-review-navigation > span { margin-right:5px; }
+.latex-review-navigation button[aria-pressed=true] { color:var(--color-accent); background:var(--color-active); }
 .latex-review-full { margin-left:auto; }
 .latex-review-scroll { flex:1; min-height:0; overflow:auto; padding:8px 0 20px; }
 .latex-review-change { margin:6px 0; border-block:1px solid var(--color-border); outline:none; scroll-margin-block:8px; }
 .latex-review-change[data-active] { border-color:color-mix(in srgb,var(--color-accent) 60%,var(--color-border)); }
 .latex-review-actions { display:flex; align-items:center; gap:6px; padding:5px 10px; position:sticky; top:0; z-index:1; background:var(--color-panel); font-size:11px; }
-.latex-review-actions span { flex:1; color:var(--color-muted); }
+.latex-review-actions > span { flex:1; color:var(--color-muted); }
 .latex-diff-row { display:grid; grid-template-columns:32px 32px 18px minmax(0,1fr); min-height:23px; padding-right:10px; font:12px/23px ui-monospace,SFMono-Regular,Menlo,monospace; }
 .latex-diff-row code { white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; }
 .latex-diff-number { text-align:right; padding-right:6px; color:var(--color-muted); opacity:.65; user-select:none; font-size:10px; }
@@ -261,7 +262,7 @@
 .latex-review-added { background:color-mix(in srgb,#35a86b 15%,transparent); }
 .latex-review-removed .latex-diff-sign,.latex-diff-removed-count { color:#dc6464; }
 .latex-review-added .latex-diff-sign,.latex-diff-added-count { color:#35a86b; }
-.latex-review .latex-diff-expand { width:100%; border-radius:0; border-inline:0; margin:3px 0; color:var(--color-muted); background:color-mix(in srgb,var(--color-accent) 5%,transparent); }
+.latex-review .latex-diff-expand { padding:4px 8px; font-size:11px; width:100%; border-radius:0; border-inline:0; margin:3px 0; color:var(--color-muted); background:color-mix(in srgb,var(--color-accent) 5%,transparent); }
 .latex-review .hljs-keyword,.latex-review .hljs-tag,.latex-review .hljs-name { color:var(--color-accent); }
 .latex-review .hljs-comment { color:var(--color-muted); }
 .latex-review-footer { padding:7px 12px; border-top:1px solid var(--color-border); color:var(--color-muted); font-size:10px; }

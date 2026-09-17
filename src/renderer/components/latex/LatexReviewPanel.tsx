@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { CaretDown, CaretUp, Check, Code, FileCode, X } from '@phosphor-icons/react'
 import hljs from 'highlight.js/lib/core'
 import latex from 'highlight.js/lib/languages/latex'
+import { Button } from '../ui/Button'
 import type { LatexReview } from '../../../shared/latex-types'
 
 hljs.registerLanguage('latex', latex)
@@ -66,15 +67,15 @@ export default function LatexReviewPanel({ review, busy, onResolve }: Props) {
     const firstNew = newLine
     newLine += after.length
     return <div key={edit.id}>{context}{edit.status === 'pending' ? <section ref={element => { if (element) changes.current.set(edit.id, element); else changes.current.delete(edit.id) }} tabIndex={-1} className="latex-review-change" data-active={edit.id === pending[selected]?.id || undefined} aria-label={t('latex.aiChangeLine', { line: edit.startLine + 1 })} onFocusCapture={() => setActiveId(edit.id)}>
-      <div className="latex-review-actions"><span>{t('latex.aiChangeLine', { line: edit.startLine + 1 })}</span><button type="button" className="latex-review-accept" disabled={busy} onClick={() => onResolve('accept', edit.id)}><Check size={14} />{t('latex.acceptChange')}</button><button type="button" disabled={busy} onClick={() => onResolve('reject', edit.id)}><X size={14} />{t('latex.rejectChange')}</button></div>
+      <div className="latex-review-actions"><span>{t('latex.aiChangeLine', { line: edit.startLine + 1 })}</span><Button size="sm" variant="secondary" icon={<Check size={14} />} disabled={busy} onClick={() => onResolve('accept', edit.id)}>{t('latex.acceptChange')}</Button><Button size="sm" icon={<X size={14} />} disabled={busy} onClick={() => onResolve('reject', edit.id)}>{t('latex.rejectChange')}</Button></div>
       {before.map((text, index) => row(text, edit.startLine + index + 1, null, 'removed', `old-${index}`))}
       {after.map((text, index) => row(text, null, firstNew + index, 'added', `new-${index}`))}
     </section> : after.map((text, index) => row(text, edit.status === 'rejected' ? edit.startLine + index + 1 : null, firstNew + index, '', `resolved-${index}`))}</div>
   })
   const tail = unchanged(cursor, original.length)
   return <section className="latex-review" aria-label={t('latex.aiReview')}>
-    <div className="latex-review-toolbar"><div className="latex-review-title"><FileCode size={15} /><strong title={review.path}>{review.path}</strong><span className="latex-diff-added-count">+{added}</span><span className="latex-diff-removed-count">−{removed}</span></div><div className="latex-review-bulk"><button type="button" disabled={busy} className="latex-review-accept" onClick={() => onResolve('accept')}><Check size={14} />{t('latex.acceptAll')}</button><button type="button" disabled={busy} onClick={() => onResolve('reject')}>{t('latex.rejectAll')}</button></div></div>
-    <div className="latex-review-navigation"><span>{t('latex.reviewProgress', { current: selected + 1, count: pending.length })}</span><button type="button" aria-label={t('latex.previousChange')} title={t('latex.previousChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(-1)}><CaretUp size={14} /></button><button type="button" aria-label={t('latex.nextChange')} title={t('latex.nextChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(1)}><CaretDown size={14} /></button><button type="button" className="latex-review-full" aria-pressed={fullFile} title={t('latex.showFullFile')} onClick={() => setFullFile(!fullFile)}><Code size={14} />{t('latex.showFullFile')}</button></div>
+    <div className="latex-review-toolbar"><div className="latex-review-title"><FileCode size={15} /><strong title={review.path}>{review.path}</strong><span className="latex-diff-added-count">+{added}</span><span className="latex-diff-removed-count">−{removed}</span></div><div className="latex-review-bulk"><Button size="sm" variant="primary" icon={<Check size={14} />} disabled={busy} onClick={() => onResolve('accept')}>{t('latex.acceptAll')}</Button><Button size="sm" disabled={busy} onClick={() => onResolve('reject')}>{t('latex.rejectAll')}</Button></div></div>
+    <div className="latex-review-navigation"><span>{t('latex.reviewProgress', { current: selected + 1, count: pending.length })}</span><Button size="sm" iconOnly aria-label={t('latex.previousChange')} title={t('latex.previousChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(-1)}><CaretUp size={14} /></Button><Button size="sm" iconOnly aria-label={t('latex.nextChange')} title={t('latex.nextChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(1)}><CaretDown size={14} /></Button><Button size="sm" icon={<Code size={14} />} className="latex-review-full" aria-pressed={fullFile} title={t('latex.showFullFile')} onClick={() => setFullFile(!fullFile)}>{t('latex.showFullFile')}</Button></div>
     <div className="latex-review-scroll" tabIndex={0}>{blocks}{tail}</div>
     <div className="latex-review-footer">{t('latex.reviewHint')}</div>
   </section>

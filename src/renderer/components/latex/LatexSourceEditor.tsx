@@ -32,6 +32,9 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
   const { t } = useTranslation()
   const input = useRef<HTMLTextAreaElement>(null)
   const highlights = useRef<HTMLPreElement>(null)
+  const selectionLayer = useRef<HTMLPreElement>(null)
+  const [focused, setFocused] = useState(false)
+  const [retainedSelection, setRetainedSelection] = useState({ start: 0, end: 0, value })
   const gutter = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLInputElement>(null)
   const [aiMenu, setAiMenu] = useState<{ start: number; end: number; x: number; y: number } | null>(null)
@@ -81,12 +84,14 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
   const syncScroll = () => {
     if (!input.current) return
     if (highlights.current) { highlights.current.scrollTop = input.current.scrollTop; highlights.current.scrollLeft = input.current.scrollLeft }
+    if (selectionLayer.current) { selectionLayer.current.scrollTop = input.current.scrollTop; selectionLayer.current.scrollLeft = input.current.scrollLeft }
     if (gutter.current) gutter.current.scrollTop = input.current.scrollTop
   }
   const notifyPosition = () => {
     if (!input.current) return
     const { selectionStart: start, selectionEnd: end } = input.current
     selection.current = { start, end }
+    setRetainedSelection({ start, end, value: input.current.value })
     const before = input.current.value.slice(0, start)
     const currentLine = before.split('\n').length
     setLine(currentLine)
@@ -155,7 +160,8 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
     {searchContainer ? createPortal(searchControls, searchContainer) : find && searchControls}
     <div className="latex-source-body"><div ref={gutter} className="latex-line-numbers" aria-hidden="true">{lines.map((_, index) => <span key={index} data-active={line === index + 1}>{index + 1}</span>)}</div><div className="latex-source-stack">
       <pre aria-hidden="true" ref={highlights} className="latex-highlight"><code dangerouslySetInnerHTML={{ __html: html + '\n' }} /></pre>
-      <textarea ref={input} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label={t('latex.source')} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onSelect={notifyPosition} onKeyUp={(event) => { notifyPosition(); if (event.shiftKey || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) showAiMenu() }} onMouseUp={(event) => showAiMenu(event.clientX, event.clientY + 12)} onContextMenu={(event) => { if (onAi && event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) { event.preventDefault(); event.stopPropagation(); showAiMenu(event.clientX, event.clientY) } }} onClick={notifyPosition} onScroll={() => { syncScroll(); setAiMenu(null) }} onKeyDown={(event) => {
+      <pre aria-hidden="true" ref={selectionLayer} className="latex-selection-layer" data-visible={!focused && retainedSelection.value === value && retainedSelection.start !== retainedSelection.end || undefined}>{value.slice(0, retainedSelection.start)}<mark>{value.slice(retainedSelection.start, retainedSelection.end)}</mark>{value.slice(retainedSelection.end) + '\n'}</pre>
+      <textarea onFocus={() => setFocused(true)} onBlur={() => { notifyPosition(); setFocused(false) }} ref={input} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label={t('latex.source')} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onSelect={notifyPosition} onKeyUp={(event) => { notifyPosition(); if (event.shiftKey || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) showAiMenu() }} onMouseUp={(event) => showAiMenu(event.clientX, event.clientY + 12)} onContextMenu={(event) => { if (onAi && event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) { event.preventDefault(); event.stopPropagation(); showAiMenu(event.clientX, event.clientY) } }} onClick={notifyPosition} onScroll={() => { syncScroll(); setAiMenu(null) }} onKeyDown={(event) => {
         if (event.key === 'Tab') {
           event.preventDefault()
           const textarea = event.currentTarget

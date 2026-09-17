@@ -6,7 +6,7 @@ import type { LatexFile, LatexRequest, LatexResponse, LatexSyncBox } from '../..
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('../../src/renderer/components/latex/LatexPdfPreview', () => ({ default: ({ data, target, syncEnabled, onLocateSource }: { data?: string; target?: { box: LatexSyncBox }; syncEnabled?: boolean; onLocateSource?: (page: number, x: number, y: number) => void }) => <div data-preview={data}><span>PDF preview</span>{target && <span>{target.box.path}:{target.box.line}</span>}<button disabled={!syncEnabled} onClick={() => onLocateSource?.(2, 30, 35)}>Locate included source</button></div> }))
-const project = { id: 'p', title: 'Paper', rootFile: 'main.tex', files: ['main.tex', 'refs.bib'] }
+const project = { id: 'p', title: 'Paper', rootFile: 'main.tex', files: ['main.tex', 'refs.bib', 'figures/chart.png', 'figures/supplement/plot.pdf', 'sections/intro.tex'] }
 let cached: LatexResponse['compilation']
 let previewResponse: Promise<LatexResponse> | null = null
 let compileResult: LatexResponse['compilation']
@@ -344,4 +344,18 @@ it('does not let a delayed cached preview replace a newly compiled PDF', async (
   await screen.findByText('PDF preview')
   await act(async () => resolve({ compilation: { success: true, log: '', pdfBase64: 'older-cache' } }))
   expect(document.querySelector('[data-preview]')).toHaveAttribute('data-preview', 'cGRm')
+})
+
+
+it('shows folders containing only resources without trying to open binary files as source', async () => {
+  await open()
+  expect(screen.getByText('figures')).toBeVisible()
+  expect(screen.getByText('supplement')).toBeVisible()
+  expect(screen.getByTitle('figures/chart.png')).toBeVisible()
+  expect(screen.getByTitle('figures/supplement/plot.pdf')).toBeVisible()
+  execute.mockClear()
+  fireEvent.click(screen.getByTitle('figures/chart.png'))
+  expect(execute).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByTitle('sections/intro.tex'))
+  await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', { action: 'read', projectId: 'p', path: 'sections/intro.tex' }))
 })

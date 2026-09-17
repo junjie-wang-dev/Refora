@@ -13,7 +13,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { registerRendererFlushTask } from '../../persistence'
 import LatexSourceEditor, { type LatexSourceHandle } from './LatexSourceEditor'
 import LatexExplorer, { type LatexExplorerTab } from './LatexExplorer'
-import { latexDiagnostics } from './latexNavigation'
+import { isEditableLatexFile, latexDiagnostics } from './latexNavigation'
 import { pdfToSource, sourceToPdf } from './latexSync'
 import { useModalDialog } from '../../hooks/useModalDialog'
 import LatexPdfPreview, { type LatexPdfPreviewHandle } from './LatexPdfPreview'
@@ -384,7 +384,6 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
       } else { setError(t('latex.compileFailed')); setStale(true) }
     } finally { setCompiling(false) }
   })
-  const editable = project?.files.filter((path) => /\.(tex|bib|bst|cls|sty|cfg|def|clo|txt|bbl|bbx|cbx|lbx|ist|fd)$/i.test(path)) ?? []
   const changeView = (next: typeof view) => { setView(next); if (compact) setSidebarOpen(false) }
   const openProject = (next: LatexProject) => run(async () => {
     const result = await execute({ action: 'project', projectId: next.id })
@@ -413,7 +412,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
     if (!project) return
     const rootFolder = project.rootFile.split('/').slice(0, -1).join('/')
     const candidates = [path, rootFolder ? `${rootFolder}/${path}` : path]
-    const target = candidates.find((candidate) => editable.includes(candidate))
+    const target = candidates.find((candidate) => isEditableLatexFile(candidate) && project.files.includes(candidate))
     if (!target) return
     await loadFile(project, target)
     if (session.current.file?.path === target) jumpToLine(line)
@@ -504,7 +503,7 @@ const WorkspaceLatexView = forwardRef<WorkspaceLatexViewHandle, WorkspaceLatexVi
     {error && <div className="latex-alert" role="alert"><WarningCircle size={17} /><span>{error}</span>{conflict && project && file && <button type="button" disabled={busy || saving} onClick={() => void run(() => loadFile(project, file.path, true))}>{t('latex.reload')}</button>}{file && <button type="button" onClick={() => download(file.path.split('/').at(-1) ?? 'draft.tex', draft, 'text/plain;charset=utf-8')}>{t('latex.downloadDraft')}</button>}</div>}
     {!project ? <div className="latex-start-screen"><div className="latex-welcome-icon"><FileCode size={32} weight="duotone" /></div><span className="latex-eyebrow">LATEX STUDIO</span><h1>{t('latex.welcomeTitle')}</h1><p>{t('latex.welcomeDescription')}</p><div className="latex-start-actions"><button type="button" className="latex-primary-action" disabled={busy} onClick={() => setDialog('create')}><Plus size={17} />{t('latex.create')}</button><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void importProject()}><FolderOpen size={17} />{t('latex.import')}</button></div>{projects.length > 0 && <section className="latex-recent-projects"><h2>{t('latex.recentProjects')}</h2>{projects.slice(0, 6).map((entry) => <button type="button" key={entry.id} disabled={busy} onClick={() => void openProject(entry)}><FileCode size={19} /><span><strong>{entry.title}</strong><small>{entry.template || t('latex.unknownTemplate')} · {t('latex.fileCount', { count: entry.files.length })}</small></span><span className="latex-recent-arrow">↗</span></button>)}</section>}<div className="latex-welcome-note"><span className="latex-local-dot" />{t('latex.localOnly')}</div></div> : <>
       <div className="latex-workbench" data-view={effectiveView} data-sidebar={sidebarOpen || undefined}>
-        {sidebarOpen && <>{compact && <button type="button" className="latex-explorer-scrim" aria-label={t('latex.closeSidebar')} onClick={() => setSidebarOpen(false)} />}<LatexExplorer tab={explorerTab} onTabChange={setExplorerTab} files={editable} reviewFiles={project.reviewFiles} currentFile={file?.path ?? ''} rootFile={project.rootFile} source={draft} assets={assets} busy={busy} onClose={() => setSidebarOpen(false)} onCreate={() => setDialog('file')} onOpen={(path) => void run(() => loadFile(project, path))} onInsert={(id) => void insertAsset(id)} onNavigate={jumpToLine} /></>}
+        {sidebarOpen && <>{compact && <button type="button" className="latex-explorer-scrim" aria-label={t('latex.closeSidebar')} onClick={() => setSidebarOpen(false)} />}<LatexExplorer tab={explorerTab} onTabChange={setExplorerTab} files={project.files} reviewFiles={project.reviewFiles} currentFile={file?.path ?? ''} rootFile={project.rootFile} source={draft} assets={assets} busy={busy} onClose={() => setSidebarOpen(false)} onCreate={() => setDialog('file')} onOpen={(path) => void run(() => loadFile(project, path))} onInsert={(id) => void insertAsset(id)} onNavigate={jumpToLine} /></>}
         <div ref={editingSurfaces} className="latex-editing-surfaces"><section className="latex-editor-region" aria-label={t('latex.edit')} style={effectiveView === 'split' ? { flex: `0 0 ${splitPercent}%` } : undefined}>{file?.review ? <LatexReviewPanel review={file.review} busy={busy} onResolve={resolveReview} /> : file && <LatexSourceEditor onAi={requestAi} ref={editor} key={`${project.id}:${file.path}`} value={draft} onChange={changeDraft} disabled={busy} searchContainer={searchContainer} onSearchFocus={() => { if (effectiveView === 'preview') changeView('source'); if (compact) setSidebarOpen(false) }} onPositionChange={(line, column) => setPosition({ line, column })} />}</section>
           {effectiveView === 'split' && <div className="latex-sync-divider">
             <div className="latex-sync-resizer"><ResizeDivider variant="soft" onResize={resizeSplit} onResizeEnd={persistSplit} /></div>
