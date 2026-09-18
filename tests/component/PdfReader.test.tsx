@@ -1816,6 +1816,56 @@ describe('PdfReader rendering visibility', () => {
     })
   })
 
+  it('preserves the selected zoom input before typing when a pending fit calculation resolves', async () => {
+    const resizeObservers: Array<{ callback: ResizeObserverCallback; target: Element }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { resizeObservers.push({ callback: this.callback, target }) }
+      disconnect() {}
+      unobserve() {}
+    })
+    const view = render(<PdfReader />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).not.toBeNull())
+    const page = view.container.querySelector<HTMLElement>('.pdf-reader-page')!
+    const scroller = view.container.querySelector('[data-pdf-page-virtualizer]')!.parentElement!
+    let width = 900
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => width },
+      clientHeight: { configurable: true, value: 700 }
+    })
+    const resize = () => {
+      const observer = resizeObservers.find((item) => item.target === scroller)!
+      observer.callback([], observer as unknown as ResizeObserver)
+    }
+    act(resize)
+    const fit = screen.getByRole('button', { name: 'pdfReader.fitWidth' })
+    const zoom = screen.getByRole('textbox', { name: 'pdfReader.zoomPercentage' })
+    fireEvent.click(fit)
+    await waitFor(() => expect(Number.parseFloat(page.style.width)).toBeCloseTo(852, 0))
+    let resolveFit: ((page: typeof pdfMocks.page) => void) | undefined
+    pdfMocks.document.getPage.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveFit = resolve
+    }))
+    width = 600
+    act(resize)
+    await waitFor(() => expect(resolveFit).toBeDefined())
+    fireEvent.focus(zoom)
+    const selectedValue = (zoom as HTMLInputElement).value
+    ;(zoom as HTMLInputElement).setSelectionRange(0, selectedValue.length)
+    await act(async () => {
+      resolveFit!(pdfMocks.page)
+    })
+    expect(zoom).toHaveValue(selectedValue)
+    expect((zoom as HTMLInputElement).selectionEnd).toBe(selectedValue.length)
+    fireEvent.change(zoom, { target: { value: '140' } })
+    fireEvent.submit(zoom.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(page).toHaveStyle({ width: '856.8px' }))
+    expect(zoom).toHaveValue('140')
+    expect(usePdfViewStore.getState().documents.paper.view).toMatchObject({
+      scale: 1.4, zoomMode: 'custom'
+    })
+  })
+
   it('destroys the superseded loading task when switching documents', async () => {
     render(<PdfReader />)
     await waitFor(() => {

@@ -25,6 +25,7 @@ test('imports a complete LaTeX folder as one workspace project with its template
   const application = await electron.launch({ executablePath: String(electronExecutable), args: [path.resolve('tests/e2e/electron-main.mjs')], env })
   try {
     const page = await application.firstWindow()
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1100, 800))
     const workspace = await page.evaluate(() => window.api.workspaces.create('Project import test'))
     await application.evaluate(({ dialog }, selectedPath) => {
       dialog.showOpenDialog = async (...args: unknown[]) => {
@@ -35,7 +36,16 @@ test('imports a complete LaTeX folder as one workspace project with its template
     }, source)
     await page.reload()
     await page.getByRole('button', { name: 'Project import test', exact: true }).click()
+    const toolbar = page.getByTestId('workspace-floating-actions')
+    await expect.poll(() => toolbar.evaluate(element => {
+      const board = element.closest('.board-surface')!.getBoundingClientRect()
+      return Array.from(element.querySelectorAll('button')).every(button => {
+        const bounds = button.getBoundingClientRect()
+        return bounds.left >= board.left && bounds.right <= board.right && bounds.top >= board.top && bounds.bottom <= board.bottom
+      })
+    })).toBe(true)
     await page.getByRole('button', { name: 'Add LaTeX project', exact: true }).click()
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 800))
     await page.getByRole('dialog').getByRole('button', { name: 'Import folder', exact: true }).click()
     const card = page.locator('[data-card-kind="latex"]')
     await expect(card).toHaveCount(1)
@@ -49,7 +59,8 @@ test('imports a complete LaTeX folder as one workspace project with its template
     await card.getByRole('button', { name: 'IEEE Conference Paper', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'IEEE Conference Paper', exact: true })).toBeVisible()
     await expect(page.getByLabel('LaTeX source', { exact: true })).toContainText('IEEEtran')
-    await page.getByRole('button', { name: 'Current file: main.tex', exact: true }).click()
+    const navigator = page.getByRole('button', { name: 'Current file: main.tex', exact: true })
+    if (await navigator.getAttribute('aria-expanded') !== 'true') await navigator.click()
     await expect(page.getByText('figures', { exact: true })).toBeVisible()
     await expect(page.getByText('plots', { exact: true })).toBeVisible()
     await expect(page.getByTitle('figures/plots/chart.png', { exact: true })).toBeVisible()

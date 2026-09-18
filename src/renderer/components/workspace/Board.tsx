@@ -1268,7 +1268,7 @@ const Board = forwardRef<BoardHandle, BoardProps>(function Board({ onOpenMarkdow
     >
       {panelView === 'workspace' && (
         <div
-          className="absolute bottom-5 right-5 z-[250001] flex items-center gap-1 rounded-xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur"
+          className="absolute bottom-5 right-3 z-[250001] flex max-w-[calc(100%-1.5rem)] flex-wrap items-center justify-end gap-1 rounded-xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur [&>button]:shrink-0"
           data-testid="workspace-floating-actions"
           onPointerDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => { event.preventDefault(); event.stopPropagation() }}

@@ -258,6 +258,7 @@ const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [scale, setScale] = useState(1.15)
   const [zoomInput, setZoomInput] = useState(() => zoomPercent(1.15))
+  const zoomInputFocused = useRef(false)
   const [rotation, setRotation] = useState(0)
   const [zoomMode, setZoomMode] = useState<'custom' | 'width'>('custom')
   const [navigationOpen, setNavigationOpen] = useState(false)
@@ -455,7 +456,7 @@ const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader
     scaleRef.current = nextScale
     flushSync(() => {
       setScale(nextScale)
-      setZoomInput(zoomPercent(nextScale))
+      if (!preserveZoomMode || !zoomInputFocused.current) setZoomInput(zoomPercent(nextScale))
     })
   }, [captureZoomAnchor, holdZoomAnchor, zoomMode])
 
@@ -1297,12 +1298,17 @@ const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader
           inputMode="decimal"
           aria-label={t('pdfReader.zoomPercentage')}
           className="h-7 w-full rounded-md border border-border bg-panel pl-1 pr-4 text-center text-xs text-foreground"
+          onFocus={() => {
+            zoomInputFocused.current = true
+            fitGenerationRef.current += 1
+          }}
           onChange={(event) => {
             fitGenerationRef.current += 1
             setZoomMode('custom')
             setZoomInput(event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1'))
           }}
           onBlur={() => {
+            zoomInputFocused.current = false
             setScaleAnchored((Number(zoomInput) || scaleRef.current * 100) / 100)
             setZoomInput(zoomPercent(scaleRef.current))
           }}
