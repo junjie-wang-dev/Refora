@@ -1476,7 +1476,7 @@ describe('serverClient', () => {
 })
 
 describe('workspace picker requests', () => {
-  it.each(['import', 'configure', 'assets'] as const)('waits for the user during %s', async (operation) => {
+  it.each(['import', 'importFiles', 'configure', 'assets'] as const)('waits for the user during %s', async (operation) => {
     vi.useFakeTimers()
     let complete: ((response: Response) => void) | undefined
     let signal: AbortSignal | null | undefined
@@ -1485,7 +1485,7 @@ describe('workspace picker requests', () => {
       return new Promise<Response>((resolve) => { complete = resolve })
     }) as unknown as typeof fetch
     const client = createServerClient(makeLifecycle(), makeNativeRpc(), { fetchImpl, requestTimeoutMs: 20 })
-    const pending = operation === 'assets' ? client.http.workspaceAssetsAddFiles('ws', { paths: [] }) : client.http.workspaceLatex('ws', { action: operation })
+    const pending = operation === 'assets' ? client.http.workspaceAssetsAddFiles('ws', { paths: [] }) : client.http.workspaceLatex('ws', operation === 'importFiles' ? { action: operation, projectId: 'paper' } : { action: operation })
     await vi.advanceTimersByTimeAsync(200_000)
     expect(signal?.aborted).toBe(false)
     complete!(makeResponse({}))

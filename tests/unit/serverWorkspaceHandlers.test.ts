@@ -381,3 +381,13 @@ it('forwards persisted LaTeX preview requests with their cache freshness', async
   await expect(handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'preview', projectId: 'project' })).resolves.toEqual({ ok: true, data: { compilation } })
   expect(http.workspaceLatex).toHaveBeenCalledWith('ws', { action: 'preview', projectId: 'project' })
 })
+
+
+it('preserves LaTeX cancellation tokens and Unicode paths through IPC', async () => {
+  const { client, http } = makeClient()
+  const handlers = createServerWorkspaceHandlers(client, pathDeps)
+  await handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'cancelCompile', projectId: 'paper', compileId: 'build-1' })
+  expect(http.workspaceLatex).toHaveBeenLastCalledWith('ws', { action: 'cancelCompile', projectId: 'paper', compileId: 'build-1' })
+  await handlers[IpcChannel.WorkspaceLatex]('ws', { action: 'rename', projectId: 'paper', path: 'sections/second.tex', newPath: '章节/第二章.tex', expectedHash: 'saved' })
+  expect(http.workspaceLatex).toHaveBeenLastCalledWith('ws', { action: 'rename', projectId: 'paper', path: 'sections/second.tex', newPath: '章节/第二章.tex', expectedHash: 'saved' })
+})

@@ -732,7 +732,7 @@ export function createServerClient(
     workspacesCreate: (payload) => post<Workspace>('/workspaces', payload),
     workspacesUpdate: (id, payload) => patch<Workspace>(`/workspaces/${pathSegment(id)}`, payload),
     workspacesDelete: (id) => del<{ ack: boolean }>(`/workspaces/${pathSegment(id)}`),
-    workspaceLatex: (id, request) => post<LatexResponse>(`/workspaces/${pathSegment(id)}/latex`, request, request.action === 'import' || request.action === 'configure' ? null : 150_000),
+    workspaceLatex: (id, request) => post<LatexResponse>(`/workspaces/${pathSegment(id)}/latex`, request, request.action === 'import' || request.action === 'importFiles' || request.action === 'configure' ? null : 150_000),
     workspacesOpenSandbox: (id) => post<{ ack: boolean }>(`/workspaces/${pathSegment(id)}/open-sandbox`),
 
     workspaceItemsList: (id) => get<WorkspaceItem[]>(`/workspaces/${pathSegment(id)}/items`),

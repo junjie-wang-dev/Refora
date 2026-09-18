@@ -16,7 +16,7 @@ LaTeX 卡片默认尺寸为 300 × 112，标题单行显示，展示项目摘要
 
 AI 的 `refora_workspace` 工具增加 `action="latex"`，参数 `operation="active"` 返回当前打开的项目、文件内容和哈希。之后使用 `operation="write"`，传入 `projectId`、`path`、修改后的 `content` 和读取时的 `expectedHash`。还支持列出项目、读取其他文件、添加源码、选择主文档、复制工作空间图片及编译。编译返回日志，不向模型发送 PDF 的 base64 内容。
 
-编辑器每两秒检查当前文件的外部变更。没有本地修改时自动加载 AI 的修改；有草稿时显示冲突并保留草稿，必须下载草稿或明确重新加载后才能继续。离开工作空间、关闭应用时接入现有的保存等待机制。浏览器本地存储保留意外退出后的草稿恢复副本。
+编辑器每两秒检查当前文件的外部变更。没有本地修改时自动加载 AI 的修改；有草稿时显示冲突并保留草稿，可打开“对比并合并”查看原始、本地和磁盘版本，编辑合并结果后保存，或另存为项目内的新文件。保存合并时再次校验磁盘哈希；被替换的本地草稿可从版本历史恢复。离开工作空间、关闭应用时接入现有的保存等待机制。浏览器本地存储保留意外退出后的草稿恢复副本。
 
 ## 本地编译器
 
@@ -24,7 +24,7 @@ AI 的 `refora_workspace` 工具增加 `action="latex"`，参数 `operation="act
 
 支持 pdfLaTeX、XeLaTeX、LuaLaTeX。EPS 图片通过已安装的 Ghostscript (`gs`) 转换，推荐与 TeX 发行版一起安装。缺少宏包或字体时，日志会标出名称，使用发行版的包管理器安装后重新编译。Refora 不自动安装宏包，不上传论文。
 
-编译使用项目临时副本及 macOS 沙箱，禁止联网和读取其他用户文件；禁用 TeX shell escape 和 latexmk 配置文件。Ghostscript 使用 `-dSAFER`。编译总限时 120 秒，单个源码/图片及输出 PDF 限 32 MiB，项目导入限 256 MiB、3000 个支持的文件。路径必须是相对路径，当前支持英文、数字、空格、下划线、连字符、点和目录分隔符，禁止路径穿越、链接、隐藏配置文件。原始导入文件不会被修改。
+编译使用项目临时副本及 macOS 沙箱，禁止联网和读取其他用户文件；禁用 TeX shell escape 和 latexmk 配置文件。Ghostscript 使用 `-dSAFER`。编译总限时 120 秒，单个源码/图片及输出 PDF 限 32 MiB，项目导入限 256 MiB、3000 个支持的文件。路径必须是相对路径，支持中文等 Unicode 字母、数字、空格、下划线、连字符、点和目录分隔符，禁止路径穿越、链接、隐藏配置文件。原始导入文件不会被修改。
 
 ## 真实论文与期刊模板验证
 
@@ -120,3 +120,18 @@ The review view shows original and resulting line numbers, explicit addition/del
 ### Persistent compiled preview
 
 Each project keeps its latest successful PDF, SyncTeX map, build log, engine, and build time in `preview-cache.json` beside its source directory. Reopening a project or restarting the app restores this preview without invoking the compiler. Source files, bibliography files, figures, root-file selection, and compiler configuration are checked against the compiled snapshot; a stale preview stays visible with the recompile notice and source/PDF mapping disabled. Failed builds preserve the last successful cache. Successful builds atomically replace it, and AI-triggered builds appear through project refresh. An explicit Compile action still performs compilation. Missing or corrupt cache files do not prevent source editing.
+
+
+## 编辑可靠性与项目管理（2026-09-18）
+
+编译在固定的项目快照中进行，期间可以继续输入、保存及切换文件，其他项目的读写也不会等待编译结束。工具栏提供取消按钮；编译完成后若源码已经变化，PDF 保留但明确提示重新编译。项目输入版本包含源码、书目和资源，外部修改非当前文件也会使预览失效，禁用旧的双向定位映射。
+
+文件夹和压缩包导入统一跳过隐藏文件及 macOS 元数据，支持 CSV、DAT、TSV 数据文件，并显示导入数量与跳过文件清单。向现有项目导入文件或源码包时禁止覆盖重名文件。源码读取支持 UTF-8、带 BOM 的 UTF-8 和 GB18030，保存保留原编码；不能安全解码或不能用原编码表示的修改会明确报错。状态栏显示非普通 UTF-8 的编码。
+
+源码默认软换行，可在编辑区上方关闭。支持括号配对、自动缩进、⌘/ 切换行注释、命令和环境补全，以及项目内引用键和标签补全；Tab 接受补全。文件切换保留光标、滚动位置、搜索设置和撤销/重做历史。高亮延迟更新，超过 20 万字符使用纯文本显示以降低输入阻塞。
+
+查找支持单次与全部替换、大小写、全词、正则及选区范围；搜索选项通过工具栏滑杆按钮展开。导航中的搜索页签跨项目源码查找，结果可跳转到对应文件和行。大纲跟随主文档引用顺序展开多个文件，支持多行与嵌套章节标题；诊断区区分错误和警告，识别模板错误、引用警告与排版溢出。没有可靠源码位置的诊断仅展示内容，不跳转到猜测的位置。
+
+文件树支持重命名/移动、导入和删除，删除移到系统废纸篓，失败时恢复原文件；删除主文档前必须先选择其他主文档。重命名不自动修改源码中的文件引用，操作面板会提示。PNG/JPEG/PDF 资源可直接预览；更多菜单可导出整个项目 ZIP。导出包含已接受的源文件及资源，不包含尚未接受的 AI 修改。
+
+冲突对比界面支持手动合并和另存副本。AI 审阅增加“全部接受并继续编辑”。更多菜单中的版本历史保留覆盖前的源码，包括接受 AI 修改之前的内容；恢复版本也会保留被替换的版本。每个文件最多保存 30 个历史版本、合计 64 MiB，历史保存在本地项目目录中。

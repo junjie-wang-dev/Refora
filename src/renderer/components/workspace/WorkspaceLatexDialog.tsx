@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { ArrowsClockwise, FileCode, FolderOpen, Plus, X } from '@phosphor-icons/react'
-import type { LatexProject, LatexRequest } from '../../../shared/latex-types'
+import type { LatexProject, LatexRequest, LatexResponse } from '../../../shared/latex-types'
 import type { WorkspaceItemPlacement } from '../../../shared/ipc-types'
 import { errorMessage } from '../../../shared/ipc-types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -19,6 +19,7 @@ export default function WorkspaceLatexDialog({ workspaceId, placement, onClose, 
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [importReport, setImportReport] = useState<LatexResponse['importReport'] | null>(null)
   const dialog = useModalDialog<HTMLDivElement>(true, () => { if (!busy) onClose() })
   useEffect(() => { void refresh() }, [refresh])
   const freePlacement = () => availableCardPlacement(useWorkspaceStore.getState().items.map((item) => ({ x: item.x, y: item.y, ...clampCardSize(item) })), placement, 300, 112)
@@ -31,7 +32,8 @@ export default function WorkspaceLatexDialog({ workspaceId, placement, onClose, 
       if (!result.project) return
       await refresh()
       onCreated(result.project)
-      onClose()
+      if (result.importReport?.skipped.length) setImportReport(result.importReport)
+      else onClose()
     } catch (reason) { setError(errorMessage(reason)) } finally { setBusy(false) }
   }
   const pin = async (project: LatexProject) => {
@@ -45,6 +47,7 @@ export default function WorkspaceLatexDialog({ workspaceId, placement, onClose, 
   }
   return createPortal(<div className="latex-modal-backdrop" onClick={() => { if (!busy) onClose() }}><div ref={dialog} className="latex-dialog" role="dialog" aria-modal="true" aria-label={t('latex.createInWorkspace')} tabIndex={-1} onClick={(event) => event.stopPropagation()}><div className="latex-dialog-heading"><span className="latex-dialog-icon"><FileCode size={22} /></span><div><h2>{t('latex.createInWorkspace')}</h2><p>{t('latex.workspaceCreateHint')}</p></div><button type="button" className="latex-icon-button" aria-label={t('common.close')} disabled={busy} onClick={onClose}><X size={18} /></button></div>
     <form onSubmit={(event) => { event.preventDefault(); if (title.trim()) void create('create') }}><label className="latex-dialog-label">{t('latex.projectTitle')}<input data-autofocus value={title} onChange={(event) => setTitle(event.target.value)} aria-label={t('latex.projectTitle')} placeholder={t('latex.titlePlaceholder')} disabled={busy} /></label><div className="latex-dialog-footer flex-wrap"><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void create('import', 'directory')}><FolderOpen size={15} />{t('latex.importFolder')}</button><button type="button" className="latex-secondary-action" disabled={busy} onClick={() => void create('import')}><FolderOpen size={15} />{t('latex.import')}</button><button type="submit" className="latex-primary-action" disabled={busy || !title.trim()}>{busy ? <ArrowsClockwise size={15} className="latex-spin" /> : <Plus size={15} />}{t('latex.create')}</button></div></form>
+    {importReport && <section role="status"><p>{t('latex.importSummary', { imported: importReport.imported.length, skipped: importReport.skipped.length })}</p><details><summary>{t('latex.skippedFiles')}</summary><ul>{importReport.skipped.map((path, index) => <li key={`${index}:${path}`}>{path}</li>)}</ul></details><button type="button" className="latex-primary-action" onClick={onClose}>{t('latex.done')}</button></section>}
     {error && <p className="latex-dialog-error" role="alert">{error}</p>}
     {(projects ?? []).length > 0 && <section className="latex-workspace-existing"><h3>{t('latex.workspaceProjects')}</h3>{projects.map((project) => <div key={project.id}><FileCode size={17} /><span><strong>{project.title}</strong><small>{t('latex.template', { name: project.template || t('latex.unknownTemplate') })}</small></span>{!items.some((item) => item.latexId === project.id) ? <button type="button" className="latex-text-button" disabled={busy} onClick={() => void pin(project)}>{t('latex.addCard')}</button> : <button type="button" className="latex-text-button" disabled={busy} onClick={() => { void onOpen(project).then(onClose).catch((reason) => setError(errorMessage(reason))) }}>{t('latex.openDocument')}</button>}</div>)}</section>}
   </div></div>, document.body)

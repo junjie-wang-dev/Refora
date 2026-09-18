@@ -196,6 +196,8 @@ def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
     async def latex_operation(workspace_id: str, body: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
         async def operation() -> Any:
             payload = dict(_body(body))
+            if payload.get("action") == "_rollbackDelete":
+                raise RequestError("This operation is internal")
             if "importPath" in payload or "runtimePath" in payload:
                 raise RequestError("Use the native source picker to import a project")
             if payload.get("action") == "configure":
@@ -208,7 +210,7 @@ def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
                 if data.get("canceled"):
                     return {}
                 payload["runtimePath"] = data.get("path")
-            if payload.get("action") == "import" and not payload.get("assetId"):
+            if payload.get("action") in {"import", "importFiles"} and not payload.get("assetId"):
                 if payload.get("source") == "directory":
                     if connector is None:
                         raise RequestError("Native directory picker is unavailable")
@@ -220,13 +222,35 @@ def create_workspaces_router(deps: WorkspacesRouteDependencies) -> APIRouter:
                         return {}
                     paths = [data.get("path")]
                 else:
-                    paths = await _select_workspace_files(connector, "Import LaTeX source", ["tex", "zip", "gz", "tar", "tgz"], False)
+                    extensions = ["tex", "zip", "gz", "tar", "tgz"]
+                    if payload.get("action") == "importFiles":
+                        from refora_server.services.latex import IMPORT_EXTENSIONS
+                        extensions = sorted({extension.lstrip(".") for extension in IMPORT_EXTENSIONS} | set(extensions))
+                    paths = await _select_workspace_files(connector, "Import LaTeX source", extensions, False)
                 if not paths:
                     return {}
                 if len(paths) != 1:
                     raise RequestError("Choose one LaTeX project archive or .tex file")
                 payload["importPath"] = paths[0]
-            return await asyncio.to_thread(workspaces["latexOperation"], workspace_id, payload)
+            if payload.get("action") == "delete" and connector is None:
+                raise RequestError("Native Trash is unavailable")
+            result = await asyncio.to_thread(workspaces["latexOperation"], workspace_id, payload)
+            trash_path = result.pop("_trashPath", None)
+            deletion = result.pop("_deletion", None)
+            if trash_path:
+                try:
+                    trashed = await connector.trash_item(trash_path)
+                    if not isinstance(trashed, dict) or trashed.get("ok") is not True:
+                        raise RequestError("Moving to Trash failed")
+                except Exception as exc:
+                    if deletion:
+                        try:
+                            await asyncio.to_thread(workspaces["latexOperation"], workspace_id, {"action": "_rollbackDelete", "projectId": payload.get("projectId"), **deletion})
+                        except Exception:
+                            raise RequestError("Moving to Trash failed. The file remains recoverable in the project's deleted folder.") from exc
+                        raise RequestError("Moving to Trash failed. The file was restored to its original location.") from exc
+                    raise RequestError("Moving to Trash failed. The file remains recoverable in the project's deleted folder.") from exc
+            return result
 
         return await _invoke(operation)
 

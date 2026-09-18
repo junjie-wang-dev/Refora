@@ -123,6 +123,7 @@ describe('preload IPC bridge', () => {
       { channel: IpcChannel.ClipboardWriteText, args: ['Sticky text'], invoke: (value) => value.clipboard.writeText('Sticky text') },
       { channel: IpcChannel.ClipboardCopyMarkdown, args: ['Note', '# Note'], invoke: (value) => value.clipboard.copyMarkdown('Note', '# Note') },
       { channel: IpcChannel.ClipboardCopyWorkspaceAsset, args: ['asset-1'], invoke: (value) => value.clipboard.copyWorkspaceAsset('asset-1') },
+      { channel: IpcChannel.WorkspaceLatex, args: ['workspace-1', { action: 'cancelCompile', projectId: 'paper', compileId: 'build-1' }], invoke: (value) => value.latex.execute('workspace-1', { action: 'cancelCompile', projectId: 'paper', compileId: 'build-1' }) },
       { channel: IpcChannel.WorkspacesList, args: [], invoke: (value) => value.workspaces.list() },
       { channel: IpcChannel.WorkspacesCreate, args: ['Workspace'], invoke: (value) => value.workspaces.create('Workspace') },
       { channel: IpcChannel.WorkspacesRename, args: ['workspace-1', 'Renamed'], invoke: (value) => value.workspaces.rename('workspace-1', 'Renamed') },

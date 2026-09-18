@@ -121,6 +121,12 @@ def services() -> FakeServices:
 @pytest.fixture
 def client(services: FakeServices) -> TestClient:
     class Connector:
+        async def trash_item(self, path: str) -> dict[str, Any]:
+            services.calls.append(("trash_item", (path,)))
+            if getattr(services, 'trash_fails', False):
+                return {"ok": False, "error": {"code": "trash_failed", "message": "Native Trash failed"}}
+            return {"ok": True, "data": {"trashed": True}}
+
         async def dialog_open_directory(self, title: str) -> dict[str, Any]:
             return {"ok": True, "data": {"canceled": False, "path": "/tmp/mineru"}}
 
@@ -132,7 +138,7 @@ def client(services: FakeServices) -> TestClient:
         ) -> dict[str, Any]:
             if not multiple:
                 assert title == "Import LaTeX source"
-                assert extensions == ["tex", "zip", "gz", "tar", "tgz"]
+                assert set(["tex", "zip", "gz", "tar", "tgz"]).issubset(extensions or [])
                 return {"ok": True, "data": {"canceled": False, "path": "/tmp/paper.zip"}}
             return {
                 "ok": True,
@@ -477,3 +483,29 @@ def test_latex_import_uses_native_directory_selection(client, services):
     response = client.post('/workspaces/ws/latex', headers=HEADERS, json={'action': 'import', 'source': 'directory'})
     assert response.json() == {'ok': True, 'data': {'project': {'id': 'paper'}}}
     assert services.calls[-1] == ('latexOperation', ('ws', {'action': 'import', 'source': 'directory', 'importPath': '/tmp/mineru'}))
+
+
+def test_latex_import_files_uses_native_picker(client, services):
+    services.workspaces["latexOperation"] = services._workspace("latexOperation", {"project": {"id": "paper"}})
+    response = client.post("/workspaces/ws/latex", headers=HEADERS, json={"action": "importFiles", "projectId": "paper"})
+    assert response.status_code == 200
+    assert services.calls[-1] == ("latexOperation", ("ws", {"action": "importFiles", "projectId": "paper", "importPath": "/tmp/paper.zip"}))
+
+
+def test_latex_delete_sends_staged_directory_to_system_trash(client, services):
+    services.workspaces["latexOperation"] = services._workspace("latexOperation", {"project": {"id": "paper"}, "_trashPath": "/managed/latex/deleted/version"})
+    response = client.post("/workspaces/ws/latex", headers=HEADERS, json={"action": "delete", "projectId": "paper", "path": "chapter.tex", "expectedHash": "hash"})
+    assert response.status_code == 200
+    assert services.calls[-1] == ("trash_item", ("/managed/latex/deleted/version",))
+    assert "_trashPath" not in response.json()["data"]
+
+
+def test_latex_delete_rolls_back_when_native_trash_fails(client, services):
+    services.trash_fails = True
+    services.workspaces["latexOperation"] = services._workspace("latexOperation", {"project": {"id": "paper"}, "_trashPath": "/managed/latex/deleted/version", "_deletion": {"deletionId": "version", "path": "chapter.tex", "restoreActive": True}})
+    response = client.post("/workspaces/ws/latex", headers=HEADERS, json={"action": "delete", "projectId": "paper", "path": "chapter.tex", "expectedHash": "hash"})
+    assert response.json()["ok"] is False
+    assert "restored" in response.json()["error"]["message"]
+    assert services.calls[-1] == ("latexOperation", ("ws", {"action": "_rollbackDelete", "projectId": "paper", "deletionId": "version", "path": "chapter.tex", "restoreActive": True}))
+    response = client.post("/workspaces/ws/latex", headers=HEADERS, json={"action": "_rollbackDelete", "projectId": "paper"})
+    assert response.json()["ok"] is False

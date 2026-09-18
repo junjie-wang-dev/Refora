@@ -12,10 +12,11 @@ const sourceLines = (text: string) => text.match(/[^\n]*\n|[^\n]+$/g) ?? []
 interface Props {
   review: LatexReview
   busy: boolean
+  onAcceptAndEdit?: () => void
   onResolve: (decision: 'accept' | 'reject', editId?: string) => void
 }
 
-export default function LatexReviewPanel({ review, busy, onResolve }: Props) {
+export default function LatexReviewPanel({ review, busy, onResolve, onAcceptAndEdit }: Props) {
   const { t } = useTranslation()
   const pending = useMemo(() => review.edits.filter(edit => edit.status === 'pending'), [review.edits])
   const [activeId, setActiveId] = useState(pending[0]?.id)
@@ -74,7 +75,7 @@ export default function LatexReviewPanel({ review, busy, onResolve }: Props) {
   })
   const tail = unchanged(cursor, original.length)
   return <section className="latex-review" aria-label={t('latex.aiReview')}>
-    <div className="latex-review-toolbar"><div className="latex-review-title"><FileCode size={15} /><strong title={review.path}>{review.path}</strong><span className="latex-diff-added-count">+{added}</span><span className="latex-diff-removed-count">−{removed}</span></div><div className="latex-review-bulk"><Button size="sm" variant="primary" icon={<Check size={14} />} disabled={busy} onClick={() => onResolve('accept')}>{t('latex.acceptAll')}</Button><Button size="sm" disabled={busy} onClick={() => onResolve('reject')}>{t('latex.rejectAll')}</Button></div></div>
+    <div className="latex-review-toolbar"><div className="latex-review-title"><FileCode size={15} /><strong title={review.path}>{review.path}</strong><span className="latex-diff-added-count">+{added}</span><span className="latex-diff-removed-count">−{removed}</span></div><div className="latex-review-bulk">{onAcceptAndEdit && <Button size="sm" disabled={busy} onClick={onAcceptAndEdit}>{t('latex.acceptAndEdit')}</Button>}<Button size="sm" variant="primary" icon={<Check size={14} />} disabled={busy} onClick={() => onResolve('accept')}>{t('latex.acceptAll')}</Button><Button size="sm" disabled={busy} onClick={() => onResolve('reject')}>{t('latex.rejectAll')}</Button></div></div>
     <div className="latex-review-navigation"><span>{t('latex.reviewProgress', { current: selected + 1, count: pending.length })}</span><Button size="sm" iconOnly aria-label={t('latex.previousChange')} title={t('latex.previousChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(-1)}><CaretUp size={14} /></Button><Button size="sm" iconOnly aria-label={t('latex.nextChange')} title={t('latex.nextChange')} disabled={pending.length < 2 || busy} onClick={() => navigate(1)}><CaretDown size={14} /></Button><Button size="sm" icon={<Code size={14} />} className="latex-review-full" aria-pressed={fullFile} title={t('latex.showFullFile')} onClick={() => setFullFile(!fullFile)}>{t('latex.showFullFile')}</Button></div>
     <div className="latex-review-scroll" tabIndex={0}>{blocks}{tail}</div>
     <div className="latex-review-footer">{t('latex.reviewHint')}</div>

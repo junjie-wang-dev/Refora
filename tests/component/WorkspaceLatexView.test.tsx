@@ -61,7 +61,11 @@ describe('LaTeX workspace editor', () => {
     await screen.findByText('External update conflict')
     expect(source).toHaveValue('My unsaved draft')
     await expect(flushRendererPersistence()).rejects.toThrow()
-    fireEvent.click(screen.getByRole('button', { name: 'latex.reload' }))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.resolveConflict' }))
+    await screen.findByRole('dialog', { name: 'latex.resolveConflict' })
+    expect(source).toHaveValue('My unsaved draft')
+    fireEvent.click(screen.getByRole('button', { name: 'latex.useDiskVersion' }))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.saveMerge' }))
     await waitFor(() => expect(source).toHaveValue('AI revision'))
   })
 
@@ -114,7 +118,7 @@ it('keeps creation and compiler settings out of the writing surface', async () =
   fireEvent.click(screen.getByRole('button', { name: 'latex.done' }))
   fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
   await screen.findByText('PDF preview')
-  expect(execute).toHaveBeenCalledWith('ws', { action: 'compile', projectId: 'p', engine: 'xelatex' })
+  expect(execute).toHaveBeenCalledWith('ws', { action: 'compile', projectId: 'p', engine: 'xelatex', compileId: expect.any(String) })
 })
 
 it('opens project creation as a focused dialog and cancels without modifying a document', async () => {
@@ -355,7 +359,207 @@ it('shows folders containing only resources without trying to open binary files 
   expect(screen.getByTitle('figures/supplement/plot.pdf')).toBeVisible()
   execute.mockClear()
   fireEvent.click(screen.getByTitle('figures/chart.png'))
-  expect(execute).not.toHaveBeenCalled()
+  await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', { action: 'resource', projectId: 'p', path: 'figures/chart.png' }))
+  await waitFor(() => expect(screen.getByTitle('sections/intro.tex')).toBeEnabled())
   fireEvent.click(screen.getByTitle('sections/intro.tex'))
   await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', { action: 'read', projectId: 'p', path: 'sections/intro.tex' }))
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+it('allows typing and file navigation during compilation and marks the delayed PDF stale', async () => {
+  const implementation = execute.getMockImplementation()!
+  const compilation = deferred<LatexResponse>()
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'compile') return compilation.promise
+    if (request.action === 'read' && request.path === 'refs.bib') return { file: { path: 'refs.bib', content: '@article{new}', hash: 'bib' } }
+    return implementation(workspace, request)
+  })
+  try {
+    const source = await open()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', expect.objectContaining({ action: 'compile' })))
+    expect(source).toBeEnabled()
+    fireEvent.change(source, { target: { value: 'Written during compile' } })
+    fireEvent.click(screen.getByRole('button', { name: 'refs.bib' }))
+    await waitFor(() => expect(screen.getByLabelText('latex.source')).toHaveValue('@article{new}'))
+    expect(stored.content).toBe('Written during compile')
+    await act(async () => compilation.resolve({ compilation: { success: true, log: '', pdfBase64: 'old-snapshot' } }))
+    expect(screen.getByText('latex.previewStale')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeDisabled()
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('cancels the original compilation after switching to another project', async () => {
+  const implementation = execute.getMockImplementation()!
+  const compilation = deferred<LatexResponse>()
+  const second = { ...project, id: 'second', title: 'Second paper' }
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'list') return { projects: [project, second] }
+    if (request.action === 'project' && request.projectId === 'second') return { project: second }
+    if (request.action === 'compile') return compilation.promise
+    return implementation(workspace, request)
+  })
+  try {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', expect.objectContaining({ action: 'compile' })))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.moreActions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.openProject' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Second paper/ }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', { action: 'activate', projectId: 'second', path: 'main.tex' }))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.cancelCompile' }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', { action: 'cancelCompile', projectId: 'p', compileId: expect.any(String) }))
+    await act(async () => compilation.resolve({ compilation: { success: true, log: '', pdfBase64: 'first-project-pdf' } }))
+    expect(document.querySelector('[data-preview="first-project-pdf"]')).toBeNull()
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('invalidates the preview when another project input changes while the current source is unchanged', async () => {
+  const implementation = execute.getMockImplementation()!
+  let revision = 'inputs-one'
+  cached = { success: true, log: '', pdfBase64: 'cached', stale: false, synctex: { boxes: [], sourceHashes: { 'main.tex': 'first' } } }
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'project') return { project: { ...project, inputRevision: revision } }
+    return implementation(workspace, request)
+  })
+  try {
+    const source = await open()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeEnabled())
+    revision = 'inputs-two'
+    cached = { ...cached, stale: true }
+    await screen.findByText('latex.previewStale', {}, { timeout: 3000 })
+    expect(source).toHaveValue('Original source')
+    expect(screen.getByRole('button', { name: 'latex.goToPdf' })).toBeDisabled()
+    expect(execute.mock.calls.filter(([, request]) => request.action === 'preview').length).toBeGreaterThanOrEqual(2)
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('keeps a newer recovery draft when an earlier save finishes', async () => {
+  const implementation = execute.getMockImplementation()!
+  const saving = deferred<LatexResponse>()
+  execute.mockImplementation(async (workspace, request) => request.action === 'write' ? saving.promise : implementation(workspace, request))
+  try {
+    const source = await open()
+    fireEvent.change(source, { target: { value: 'First edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'latex.save' }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', expect.objectContaining({ action: 'write', content: 'First edit' })))
+    fireEvent.change(source, { target: { value: 'Newer unsaved edit' } })
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('refora.latex.draft.ws.p.main.tex') || '{}').content).toBe('Newer unsaved edit'))
+    await act(async () => saving.resolve({ file: { path: 'main.tex', content: 'First edit', hash: 'saved-first' } }))
+    expect(source).toHaveValue('Newer unsaved edit')
+    expect(JSON.parse(localStorage.getItem('refora.latex.draft.ws.p.main.tex') || '{}')).toMatchObject({ content: 'Newer unsaved edit', hash: 'saved-first' })
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('keeps the rename form open when the backend rejects the destination', async () => {
+  const implementation = execute.getMockImplementation()!
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'resource') return { resource: { path: request.path, mimeType: 'text/plain', base64: '', hash: 'first' } }
+    if (request.action === 'rename') throw new Error('Destination already exists')
+    return implementation(workspace, request)
+  })
+  try {
+    await open()
+    fireEvent.click(screen.getAllByRole('button', { name: 'latex.renameFile' })[0])
+    fireEvent.change(screen.getByLabelText('latex.filePath'), { target: { value: 'refs.bib' } })
+    fireEvent.click(screen.getByRole('button', { name: 'latex.applyFileChange' }))
+    await screen.findAllByText('Destination already exists')
+    expect(screen.getByLabelText('latex.filePath')).toHaveValue('refs.bib')
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('restores an accepted-edit snapshot using the latest file hash', async () => {
+  const implementation = execute.getMockImplementation()!
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'history') return { history: [{ id: 'before-ai', content: 'Before AI edits', createdAt: '2026-09-18T12:00:00Z' }] }
+    if (request.action === 'restore') return { project, file: { path: 'main.tex', content: 'Before AI edits', hash: 'restored' } }
+    return implementation(workspace, request)
+  })
+  try {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.moreActions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.history' }))
+    await screen.findByRole('dialog', { name: 'latex.history' })
+    expect(screen.getByText('Before AI edits')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'latex.restoreVersion' }))
+    await waitFor(() => expect(screen.getByLabelText('latex.source')).toHaveValue('Before AI edits'))
+    expect(execute).toHaveBeenCalledWith('ws', { action: 'restore', projectId: 'p', path: 'main.tex', historyId: 'before-ai', expectedHash: 'first' })
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('saves a conflicting draft as a separate project file without overwriting the disk version', async () => {
+  const implementation = execute.getMockImplementation()!
+  let copy: LatexFile | null = null
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'write' && request.path === 'main-recovered.tex') {
+      copy = { path: request.path, content: request.content, hash: 'copy' }
+      return { file: copy, project: { ...project, files: [...project.files, copy.path] } }
+    }
+    return implementation(workspace, request)
+  })
+  try {
+    const source = await open()
+    fireEvent.change(source, { target: { value: 'My valuable draft' } })
+    stored = { ...stored, content: 'External version', hash: 'external' }
+    fireEvent.click(screen.getByRole('button', { name: 'latex.save' }))
+    await screen.findByText('External update conflict')
+    fireEvent.click(screen.getByRole('button', { name: 'latex.resolveConflict' }))
+    await screen.findByRole('dialog', { name: 'latex.resolveConflict' })
+    fireEvent.click(screen.getByRole('button', { name: 'latex.saveCopy' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'latex.currentFile' })).toHaveTextContent('main-recovered.tex'))
+    expect(screen.getByLabelText('latex.source')).toHaveValue('My valuable draft')
+    expect(stored.content).toBe('External version')
+    expect(copy).toMatchObject({ content: 'My valuable draft' })
+    expect(execute).toHaveBeenCalledWith('ws', { action: 'write', projectId: 'p', path: 'main-recovered.tex', content: 'My valuable draft', expectedHash: '' })
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('does not dispatch a cancelled compilation after its pending save finishes', async () => {
+  const implementation = execute.getMockImplementation()!
+  const saving = deferred<LatexResponse>()
+  execute.mockImplementation(async (workspace, request) => request.action === 'write' ? saving.promise : implementation(workspace, request))
+  try {
+    const source = await open()
+    fireEvent.change(source, { target: { value: 'Save before build' } })
+    fireEvent.click(screen.getByRole('button', { name: 'latex.compile' }))
+    await waitFor(() => expect(execute).toHaveBeenCalledWith('ws', expect.objectContaining({ action: 'write', content: 'Save before build' })))
+    fireEvent.click(screen.getByRole('button', { name: 'latex.cancelCompile' }))
+    await act(async () => saving.resolve({ file: { path: 'main.tex', content: 'Save before build', hash: 'saved' } }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'latex.cancelCompile' })).not.toBeInTheDocument())
+    expect(execute.mock.calls.some(([, request]) => request.action === 'compile')).toBe(false)
+    expect(screen.getByLabelText('latex.source')).toHaveValue('Save before build')
+  } finally { execute.mockImplementation(implementation) }
+})
+
+it('serializes queued save requests and writes the latest draft only once with the new hash', async () => {
+  const implementation = execute.getMockImplementation()!
+  const first = deferred<LatexResponse>()
+  const second = deferred<LatexResponse>()
+  let writes = 0
+  execute.mockImplementation(async (workspace, request) => {
+    if (request.action === 'write') return ++writes === 1 ? first.promise : second.promise
+    return implementation(workspace, request)
+  })
+  try {
+    const source = await open()
+    fireEvent.change(source, { target: { value: 'First save' } })
+    fireEvent.keyDown(source, { key: 's', metaKey: true })
+    await waitFor(() => expect(writes).toBe(1))
+    fireEvent.change(source, { target: { value: 'Latest save' } })
+    fireEvent.keyDown(source, { key: 's', metaKey: true })
+    fireEvent.keyDown(source, { key: 's', metaKey: true })
+    expect(writes).toBe(1)
+    await act(async () => first.resolve({ file: { path: 'main.tex', content: 'First save', hash: 'first-saved' } }))
+    await waitFor(() => expect(writes).toBe(2))
+    expect(execute).toHaveBeenLastCalledWith('ws', { action: 'write', projectId: 'p', path: 'main.tex', content: 'Latest save', expectedHash: 'first-saved' })
+    await act(async () => second.resolve({ file: { path: 'main.tex', content: 'Latest save', hash: 'latest-saved' } }))
+    expect(writes).toBe(2)
+    expect(screen.getByLabelText('latex.source')).toHaveValue('Latest save')
+    expect(localStorage.getItem('refora.latex.draft.ws.p.main.tex')).toBeNull()
+  } finally { execute.mockImplementation(implementation) }
 })

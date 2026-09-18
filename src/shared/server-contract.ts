@@ -50,7 +50,7 @@ export const AGENT_APPLICATION_ACTIONS = {
 
 export const SERVER_PROTOCOL_VERSION = 1 as const
 
-export const SERVER_PROTOCOL_DIGEST = "519a858b7aed2796f961f49fadbbe984f23b74e17f38a362d9ce72b5359ceccc" as const
+export const SERVER_PROTOCOL_DIGEST = "72b3ec524696acdcf8e488e6884cfbc58440cc74d2e7c5de7dd486485306879b" as const
 
 export const SERVER_HTTP_ROUTES = [
   {
@@ -691,7 +691,7 @@ export const SERVER_HTTP_ROUTES = [
   {
     "method": "POST",
     "path": "/workspaces/{workspace_id}/latex",
-    "schemaDigest": "d5abb4fa78c5b45add81ff3390de543b9b1f96f6d85c150816bb36fbc659b29d"
+    "schemaDigest": "b5aa138f8f621ec1f0787cad1acf0edde9eab43e23b07bab938f61328c955710"
   },
   {
     "method": "POST",

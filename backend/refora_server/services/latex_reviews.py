@@ -78,7 +78,8 @@ def resolve(source, request):
             lines[edit['startLine']:edit['endLine']] = [edit['after']]
     content = ''.join(lines)
     if content != current['content']:
-        atomic_write(safe_path(source, name), content.encode())
+        from refora_server.services.latex_files import save_source
+        save_source(source, name, content)
     file = read_source(source, name) if safe_path(source, name).is_file() else current
     if any(edit['status'] == 'pending' for edit in review['edits']):
         review['expectedHash'] = file['hash']

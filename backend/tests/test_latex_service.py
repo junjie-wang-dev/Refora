@@ -458,10 +458,208 @@ def test_preview_keeps_snapshot_fingerprint_when_source_changes_during_compile(s
     project = create(service)
     def compile_changed(source, root, *_):
         inputs = project_fingerprint(source, root)
-        (source / root).write_text('Changed during compilation')
+        live_source = service.project(service.directory('ws'), project['id'])[1]
+        (live_source / root).write_text('Changed during compilation')
         return {'success': True, 'log': '', 'pdfBase64': base64.b64encode(b'%PDF-1.7\nOld snapshot').decode(), '_inputs': inputs}
     monkeypatch.setattr(latex, 'compile_project', compile_changed)
     built = service.operate('ws', {'action': 'compile', 'projectId': project['id']})['compilation']
     assert built['stale'] is True
     assert '_inputs' not in built
     assert service.operate('ws', {'action': 'preview', 'projectId': project['id']})['compilation']['stale'] is True
+
+
+def test_import_hidden_files_unicode_and_data_are_reported(tmp_path):
+    archive = tmp_path / 'paper.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('.DS_Store', b'metadata')
+        output.writestr('__MACOSX/._main.tex', b'metadata')
+        output.writestr('章节/绪论.tex', STARTER)
+        output.writestr('data/results.csv', 'x,y\n1,2')
+        output.writestr('data/results.dat', '1 2')
+        output.writestr('program.exe', 'ignored')
+    report = import_sources(archive, tmp_path / 'source')
+    assert '章节/绪论.tex' in report['imported']
+    assert 'data/results.csv' in report['imported']
+    assert 'data/results.dat' in report['imported']
+    assert set(report['skipped']) == {'.DS_Store', '__MACOSX/._main.tex', 'program.exe'}
+
+
+def test_legacy_chinese_sources_preserve_encoding(service):
+    project = create(service)
+    _, source = service.project(service.directory('ws'), project['id'])
+    (source / '中文.tex').write_bytes('中文内容'.encode('gb18030'))
+    args = {'projectId': project['id'], 'path': '中文.tex'}
+    file = service.operate('ws', {'action': 'read', **args})['file']
+    assert file['encoding'] == 'gb18030'
+    assert file['content'] == '中文内容'
+    service.operate('ws', {'action': 'write', **args, 'expectedHash': file['hash'], 'content': '中文修改'})
+    assert (source / '中文.tex').read_bytes() == '中文修改'.encode('gb18030')
+
+
+def test_project_revision_changes_for_nonactive_inputs(service):
+    project = create(service)
+    _, source = service.project(service.directory('ws'), project['id'])
+    (source / 'refs.bib').write_text('@article{a}')
+    before = service.operate('ws', {'action': 'project', 'projectId': project['id']})['project']
+    (source / 'refs.bib').write_text('@article{b}')
+    after = service.operate('ws', {'action': 'project', 'projectId': project['id']})['project']
+    assert before['inputRevision'] != after['inputRevision']
+
+
+def test_compile_snapshot_allows_editing_and_cancellation(service, monkeypatch):
+    import threading
+    from refora_server.services import latex
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'main.tex'}
+    started, edited = threading.Event(), threading.Event()
+    def compile_snapshot(source, root, *_):
+        started.set()
+        assert edited.wait(5)
+        assert (source / root).read_text() == STARTER
+        return {'success': False, 'log': 'cancelled'}
+    monkeypatch.setattr(latex, 'compile_project', compile_snapshot)
+    with ThreadPoolExecutor(2) as pool:
+        compilation = pool.submit(service.operate, 'ws', {'action': 'compile', 'projectId': project['id']})
+        assert started.wait(5)
+        file = service.operate('ws', {'action': 'read', **args})['file']
+        service.operate('ws', {'action': 'write', **args, 'expectedHash': file['hash'], 'content': 'Edited while compiling'})
+        service.operate('ws', {'action': 'cancelCompile', 'projectId': project['id']})
+        edited.set()
+        with pytest.raises(RepoError, match='cancelled'):
+            compilation.result(5)
+
+
+def test_history_restores_writes_and_accepted_reviews(service):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'main.tex'}
+    file = service.operate('ws', {'action': 'read', **args})['file']
+    saved = service.operate('ws', {'action': 'write', **args, 'expectedHash': file['hash'], 'content': 'User version'})['file']
+    proposed = service.operate('ws', {'action': 'propose', **args, 'expectedHash': saved['hash'], 'content': 'AI version'})['file']
+    accepted = service.operate('ws', {'action': 'review', **args, 'reviewId': proposed['review']['id'], 'decision': 'accept'})['file']
+    history = service.operate('ws', {'action': 'history', **args})['history']
+    version = next(entry for entry in history if entry['content'] == 'User version')
+    restored = service.operate('ws', {'action': 'restore', **args, 'historyId': version['id'], 'expectedHash': accepted['hash']})['file']
+    assert restored['content'] == 'User version'
+    with pytest.raises(RepoError, match='changed externally'):
+        service.operate('ws', {'action': 'restore', **args, 'historyId': version['id'], 'expectedHash': accepted['hash']})
+
+
+def test_file_management_import_preview_rename_export_delete(service, tmp_path):
+    project = create(service)
+    args = {'projectId': project['id']}
+    image = tmp_path / '图片.png'
+    image.write_bytes(b'image')
+    imported = service.operate('ws', {'action': 'importFiles', **args, 'importPath': str(image)})
+    assert imported['importReport']['imported'] == ['图片.png']
+    resource = service.operate('ws', {'action': 'resource', **args, 'path': image.name})['resource']
+    assert resource['mimeType'] == 'image/png'
+    renamed = service.operate('ws', {'action': 'rename', **args, 'path': image.name, 'newPath': '图片/结果.png', 'expectedHash': resource['hash']})
+    assert '图片/结果.png' in renamed['project']['files']
+    import base64
+    exported = service.operate('ws', {'action': 'exportProject', **args})
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode(exported['archiveBase64']))) as archive:
+        assert archive.read('图片/结果.png') == b'image'
+        assert 'main.tex' in archive.namelist()
+    deleted = service.operate('ws', {'action': 'delete', **args, 'path': '图片/结果.png', 'expectedHash': resource['hash']})
+    assert '图片/结果.png' not in deleted['project']['files']
+    from pathlib import Path
+    assert (Path(deleted['_trashPath']) / '结果.png').read_bytes() == b'image'
+
+
+def test_import_rejects_overwriting_existing_sources(service, tmp_path):
+    project = create(service)
+    archive = tmp_path / 'files.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('new.tex', 'new')
+        output.writestr('main.tex', 'overwritten')
+    with pytest.raises(RepoError, match='overwrite'):
+        service.operate('ws', {'action': 'importFiles', 'projectId': project['id'], 'importPath': str(archive)})
+    _, source = service.project(service.directory('ws'), project['id'])
+    assert not (source / 'new.tex').exists()
+    assert (source / 'main.tex').read_text() == STARTER
+
+
+def test_failed_trash_restores_file_and_active_context(service):
+    project = create(service)
+    args = {'projectId': project['id'], 'path': 'chapter.tex'}
+    file = service.operate('ws', {'action': 'write', **args, 'content': 'chapter', 'expectedHash': ''})['file']
+    service.operate('ws', {'action': 'activate', **args})
+    deleted = service.operate('ws', {'action': 'delete', **args, 'expectedHash': file['hash']})
+    restored = service.operate('ws', {'action': '_rollbackDelete', 'projectId': project['id'], **deleted['_deletion']})
+    assert 'chapter.tex' in restored['project']['files']
+    assert service.operate('ws', {'action': 'active'})['file']['content'] == 'chapter'
+
+
+def test_import_rejects_unicode_alias_and_parent_file_conflicts_before_copying(service, tmp_path):
+    import unicodedata
+    project = create(service)
+    args = {'projectId': project['id']}
+    service.operate('ws', {'action': 'write', **args, 'path': 'café.tex', 'expectedHash': '', 'content': 'original'})
+    archive = tmp_path / 'files.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('new.tex', 'new')
+        output.writestr(unicodedata.normalize('NFD', 'café.tex'), 'replaced')
+    with pytest.raises(RepoError, match='overwrite'):
+        service.operate('ws', {'action': 'importFiles', **args, 'importPath': str(archive)})
+    _, source = service.project(service.directory('ws'), project['id'])
+    assert not (source / 'new.tex').exists()
+    assert (source / 'café.tex').read_text() == 'original'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('new.tex', 'new')
+        output.writestr('main.tex/invalid.tex', 'invalid')
+    with pytest.raises(RepoError, match='conflicts'):
+        service.operate('ws', {'action': 'importFiles', **args, 'importPath': str(archive)})
+    assert not (source / 'new.tex').exists()
+
+
+def test_cancel_before_compile_registration_matches_only_requested_token(service, monkeypatch):
+    from refora_server.services import latex
+    project = create(service)
+    args = {'projectId': project['id']}
+    calls = []
+    monkeypatch.setattr(latex, 'compile_project', lambda *args: calls.append(args) or {'success': False, 'log': 'checked'})
+    service.operate('ws', {'action': 'cancelCompile', **args, 'compileId': 'cancelled-request'})
+    with pytest.raises(RepoError, match='cancelled'):
+        service.operate('ws', {'action': 'compile', **args, 'compileId': 'cancelled-request'})
+    assert not calls
+    service.operate('ws', {'action': 'compile', **args, 'compileId': 'next-request'})
+    assert len(calls) == 1
+
+
+def test_late_cancellation_does_not_cancel_another_active_compile(service, monkeypatch):
+    import threading
+    from refora_server.services import latex
+    project = create(service)
+    args = {'projectId': project['id']}
+    started, finish = threading.Event(), threading.Event()
+    def compile_snapshot(*_):
+        started.set()
+        assert finish.wait(5)
+        return {'success': False, 'log': 'completed'}
+    monkeypatch.setattr(latex, 'compile_project', compile_snapshot)
+    with ThreadPoolExecutor() as pool:
+        compilation = pool.submit(service.operate, 'ws', {'action': 'compile', **args, 'compileId': 'current-request'})
+        assert started.wait(5)
+        service.operate('ws', {'action': 'cancelCompile', **args, 'compileId': 'previous-request'})
+        finish.set()
+        assert compilation.result(5)['compilation']['log'] == 'completed'
+
+
+def test_matching_token_cancels_active_compile(service, monkeypatch):
+    import threading
+    from refora_server.services import latex
+    project = create(service)
+    args = {'projectId': project['id'], 'compileId': 'matching-request'}
+    started, finish = threading.Event(), threading.Event()
+    def compile_snapshot(*_):
+        started.set()
+        assert finish.wait(5)
+        return {'success': False, 'log': 'completed'}
+    monkeypatch.setattr(latex, 'compile_project', compile_snapshot)
+    with ThreadPoolExecutor() as pool:
+        compilation = pool.submit(service.operate, 'ws', {'action': 'compile', **args})
+        assert started.wait(5)
+        service.operate('ws', {'action': 'cancelCompile', **args})
+        finish.set()
+        with pytest.raises(RepoError, match='cancelled'):
+            compilation.result(5)

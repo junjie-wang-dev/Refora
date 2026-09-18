@@ -3,12 +3,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from functools import lru_cache
 from datetime import datetime, timezone
 
 MAX_CACHE_BYTES = 128 * 1024 * 1024
 
 
 def file_digest(path):
+    stat = path.stat()
+    return _cached_digest(path, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+@lru_cache(maxsize=8192)
+def _cached_digest(path, device, inode, size, modified, changed):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
@@ -28,6 +35,8 @@ def project_fingerprint(source, root_file):
         if not path.is_file() or path == root_pdf or path.suffix.lower() not in IMPORT_EXTENSIONS:
             continue
         relative = path.relative_to(source).as_posix()
+        if any(part.startswith('.') or part == '__MACOSX' for part in path.relative_to(source).parts):
+            continue
         safe_path(source, relative)
         size = path.stat().st_size
         total += size
