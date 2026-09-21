@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, X } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
+import { useWorkspaceTabDrag } from './useWorkspaceTabDrag'
 
 export interface WorkspaceReaderTab {
   id: string
@@ -23,7 +24,19 @@ export default function WorkspaceReaderTabs({
   onToggleFullscreen
 }: WorkspaceReaderTabsProps) {
   const { t } = useTranslation()
-  const tabsElement = useRef<HTMLDivElement>(null)
+  const [order, setOrder] = useState<string[]>([])
+  const orderedTabs = [
+    ...order.flatMap((id) => tabs.find((tab) => tab.id === id) ?? []),
+    ...tabs.filter((tab) => !order.includes(tab.id))
+  ]
+  useEffect(() => {
+    setOrder((current) => [
+      ...current.filter((id) => tabs.some((tab) => tab.id === id)),
+      ...tabs.filter((tab) => !current.includes(tab.id)).map((tab) => tab.id)
+    ])
+  }, [tabs])
+  const drag = useWorkspaceTabDrag(orderedTabs.map((tab) => tab.id), setOrder)
+  const tabsElement = drag.stripRef
   const activeId = tabs.find((tab) => tab.active)?.id
   useEffect(() => {
     const element = tabsElement.current
@@ -33,7 +46,7 @@ export default function WorkspaceReaderTabs({
     const observer = new ResizeObserver(revealActive)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [activeId, tabs.length])
+  }, [activeId, tabs.length, tabsElement])
 
   return (
     <div
@@ -46,7 +59,7 @@ export default function WorkspaceReaderTabs({
         role="tablist"
         aria-label={t('workspace.readerTabs')}
       >
-        {tabs.map((tab) => (
+        {orderedTabs.map((tab) => (
           <div
             key={tab.id}
             className={`group relative flex h-full min-w-40 max-w-72 shrink-0 items-center rounded-tr-xl border-r border-border/70 pl-4 pr-1 transition-colors duration-150 ${
@@ -57,14 +70,27 @@ export default function WorkspaceReaderTabs({
             data-testid="workspace-reader-tab"
             data-reader-tab-kind={tab.kind}
             data-active={tab.active}
+            data-reader-tab-id={tab.id}
+            data-dragging={drag.draggedId === tab.id || undefined}
+            style={{
+              zIndex: drag.draggedId === tab.id ? 20 : undefined,
+              boxShadow: drag.draggedId === tab.id ? '0 2px 10px rgb(0 0 0 / 20%)' : undefined,
+              willChange: drag.draggedId ? 'transform' : undefined
+            }}
           >
             <button
               type="button"
               role="tab"
               aria-selected={tab.active}
-              className="h-full min-w-0 flex-1 truncate text-left text-sm font-medium"
               title={tab.title}
-              onClick={tab.onSelect}
+              className="h-full min-w-0 flex-1 touch-none select-none truncate text-left text-sm font-medium"
+              style={{ cursor: drag.draggedId ? 'grabbing' : undefined }}
+              onPointerDown={(event) => drag.onPointerDown(event, tab.id)}
+              onPointerMove={drag.onPointerMove}
+              onPointerUp={drag.onPointerUp}
+              onPointerCancel={drag.onPointerCancel}
+              onLostPointerCapture={drag.onPointerCancel}
+              onClick={() => drag.onClick(tab.onSelect)}
             >
               {tab.title}
             </button>

@@ -97,7 +97,10 @@
 .latex-save-indicator > svg { color:#65a185; }
 .latex-build-status { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .latex-build-status[data-error=true] { color:var(--color-error); }
-.latex-cursor-position { margin-left:auto; flex-shrink:0; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.latex-editor-status-slot { display:flex; align-items:center; margin-left:auto; flex-shrink:0; }
+.latex-editor-status-slot:empty { display:none; }
+.latex-editor-status-slot:empty + .latex-cursor-position { margin-left:auto; }
+.latex-cursor-position { flex-shrink:0; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .latex-engine-label { border-left:1px solid var(--color-border); padding-left:10px; }
 .latex-workspace[data-compact] .latex-engine-label { display:none; }
 .latex-workspace[data-compact] .latex-statusbar { gap:8px; font-size:9px; }
@@ -203,24 +206,25 @@
 .latex-search-slot { position:relative; flex:1; min-width:90px; max-width:234px; margin-left:auto; }
 .latex-search-slot:has([data-query]) { max-width:360px; }
 .latex-search-slot .latex-find { padding:0; border:0; background:transparent; }
-.latex-search-slot .latex-find-row { flex-direction:row-reverse; }
+
 .latex-search-slot .markdown-search-controls { flex:1; }
 .latex-search-slot .markdown-search-input input { border:1px solid var(--color-border); background:var(--color-panel); font-size:12px; }
 .latex-search-slot .markdown-search-input input:focus { border-color:var(--color-accent); }
 .latex-search-slot .latex-find:not([data-query]) .markdown-search-controls > span,
 .latex-search-slot .latex-find:not([data-query]) .markdown-search-controls > button { display:none; }
-.latex-search-slot .latex-replace-row { position:absolute; z-index:30; top:34px; right:0; width:280px; padding:8px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-background); box-shadow:0 6px 20px #0002; }
+.latex-search-slot .latex-search-panel { position:absolute; z-index:40; top:calc(100% + 8px); right:0; width:310px; max-width:calc(100vw - 100px); box-sizing:border-box; }
 .latex-topbar .latex-current-file { flex:0 1 auto; max-width:180px; margin-right:0; }
 .latex-workspace[data-compact] .latex-current-file { max-width:76px; }
 
 @container (max-width:520px) {
-  .latex-search-slot:not(:focus-within) .latex-find-row > .latex-icon-button,
-  .latex-search-slot:not(:focus-within) .markdown-search-controls > span,
-  .latex-search-slot:not(:focus-within) .markdown-search-controls > button { display:none; }
-  .latex-search-slot:focus-within { position:absolute; z-index:2; left:40px; right:70px; min-width:0; max-width:none; background:var(--color-background); }
-  .latex-topbar:has(.latex-search-slot:focus-within) .latex-current-file,
-  .latex-topbar:has(.latex-search-slot:focus-within) .latex-view-switch { visibility:hidden; }
-  .latex-search-slot .latex-replace-row { width:100%; min-width:200px; }
+  .latex-search-slot:not(:focus-within):not(:has([data-panel])) .latex-find-row > .latex-icon-button,
+  .latex-search-slot:not(:focus-within):not(:has([data-panel])) .markdown-search-controls > span,
+  .latex-search-slot:not(:focus-within):not(:has([data-panel])) .markdown-search-controls > button { display:none; }
+  .latex-search-slot:is(:focus-within,:has([data-panel])) { position:absolute; z-index:2; left:40px; right:70px; min-width:0; max-width:none; background:var(--color-background); }
+  .latex-topbar:has(.latex-search-slot:is(:focus-within,:has([data-panel]))) .latex-current-file,
+  .latex-topbar:has(.latex-search-slot:is(:focus-within,:has([data-panel]))) .latex-view-switch { visibility:hidden; }
+  .latex-search-slot .latex-search-panel { width:100%; max-width:none; }
+
 }
 
 .latex-search-slot .latex-find:not([data-query]) .markdown-search-input input { padding-right:8px; }
@@ -283,3 +287,19 @@
 .latex-project-results small { color:var(--color-accent); overflow-wrap:anywhere; }
 .latex-project-results span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .latex-outline small { max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.latex-editor-region { position:relative; container-type:inline-size; }
+.latex-source-workbench { position:relative; display:flex; flex:1; min-height:0; min-width:0; overflow:hidden; }
+.latex-source-workbench > .latex-source { min-width:0; }
+.latex-preview-toolbar { display:flex; align-items:center; flex-shrink:0; gap:6px; height:44px; padding:0 8px; border-bottom:1px solid var(--color-border); background:var(--color-background); }
+.latex-compile-actions { display:flex; align-items:center; flex-shrink:0; gap:4px; }
+.latex-pdf-toolbar-slot { flex:1; min-width:0; overflow-x:auto; scrollbar-width:thin; }
+.latex-pdf-toolbar-slot > [data-pdf-reader-toolbar] { min-width:max-content; }
+.latex-preview-title { color:var(--color-muted); font-size:11px; }
+.latex-preview-region { container-type:inline-size; }
+@container (max-width:520px) {
+  .latex-preview-toolbar .latex-compile-button > span { display:none; }
+  .latex-topbar .latex-current-file { max-width:90px; }
+  .latex-topbar .latex-file-directory { display:none; }
+  .latex-topbar .latex-view-switch { gap:0; }
+}

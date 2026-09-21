@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { ReaderToolbarButton as ReaderButton } from './ui'
 import {
   forwardRef,
@@ -195,13 +196,14 @@ interface PdfReaderProps {
   location?: { box: PdfReaderLocation; request: number } | null
   onPageDoubleClick?: (point: PdfReaderPoint) => void
   onDownload?: () => void
+  toolbarContainer?: HTMLDivElement | null
 
   onBack?: () => void
   embedded?: boolean
   active?: boolean
 }
 
-const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader({ onBack, embedded = false, active = true, variant = 'reader', source, location, onPageDoubleClick, onDownload }, ref) {
+const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader({ onBack, embedded = false, active = true, variant = 'reader', source, location, onPageDoubleClick, onDownload, toolbarContainer }, ref) {
   const { t } = useTranslation()
   const tabs = usePdfReaderStore((state) => state.tabs)
   const libraryDocumentId = usePdfReaderStore((state) => state.activeDocumentId)
@@ -1674,6 +1676,7 @@ const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader
           ))}
         </div>
       </div>}
+      {toolbarContainer ? createPortal(<div data-pdf-reader-toolbar className="flex items-center gap-1">{pageControls}{utilityControls}</div>, toolbarContainer) : toolbarContainer === undefined && (
       <div
         data-pdf-reader-toolbar
         data-compact={compactLayout || undefined}
@@ -1712,6 +1715,7 @@ const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function PdfReader
           </div>
         )}
       </div>
+      )}
       {persistenceErrors.length > 0 && (
         <div role="alert" data-pdf-persistence-error className="flex shrink-0 items-center gap-3 border-b border-error/25 bg-error/10 px-3 py-2 text-xs text-error">
           <WarningCircle className="h-4 w-4 shrink-0" />

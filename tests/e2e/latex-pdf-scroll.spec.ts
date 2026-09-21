@@ -35,7 +35,7 @@ test('reads a continuous PDF and keeps its location after sync, zoom, resize, an
     await expect(forward).toBeEnabled({ timeout: 30_000 })
     const counter = page.getByRole('textbox', { name: 'Page number', exact: true })
     await expect(counter).toHaveValue('1')
-    const toolbar = page.locator('.latex-pdf [data-pdf-reader-toolbar]')
+    const toolbar = page.locator('.latex-preview-toolbar [data-pdf-reader-toolbar]')
     await expect(toolbar.getByRole('button', { name: 'Document navigation', exact: true })).toHaveCount(0)
     await expect(toolbar.getByRole('button', { name: 'Search in PDF', exact: true })).toHaveCount(0)
     await expect(toolbar.getByRole('button', { name: 'Back to previous position', exact: true })).toHaveCount(0)

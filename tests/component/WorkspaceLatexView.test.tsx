@@ -42,6 +42,22 @@ async function open() {
 }
 
 describe('LaTeX workspace editor', () => {
+  it('places the working wrap toggle alongside save and cursor status in one footer', async () => {
+    const source = await open()
+    const toggle = screen.getByRole('button', { name: 'latex.softWrap' })
+    const footer = toggle.closest('footer')
+    expect(footer).not.toBeNull()
+    expect(footer).toContainElement(screen.getByRole('button', { name: 'latex.save' }))
+    expect(footer).toHaveTextContent('latex.position')
+    expect(source.closest('.latex-source')).not.toContainElement(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(toggle)
+    expect(source).toHaveAttribute('wrap', 'off')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(source).toHaveAttribute('wrap', 'soft')
+  })
+
   it('saves the edited file before compilation and exposes the active file to AI', async () => {
     const source = await open()
     fireEvent.change(source, { target: { value: 'Edited source' } })
@@ -165,11 +181,14 @@ it('loads a fixed project and lets its parent own the active AI context', async 
   await waitFor(() => expect(onOpenProject).toHaveBeenCalledWith(project))
 })
 
-it('combines file navigation and all primary actions in one toolbar', async () => {
+it('separates source actions and compilation into their own pane headers', async () => {
   await open()
-  const toolbar = document.querySelector('.latex-topbar')!
+  const toolbar = document.querySelector<HTMLElement>('.latex-topbar')!
   expect(toolbar.contains(screen.getByRole('button', { name: 'latex.currentFile' }))).toBe(true)
-  expect(toolbar.contains(screen.getByRole('button', { name: 'latex.compile' }))).toBe(true)
+  expect(toolbar.contains(screen.getByRole('button', { name: 'latex.compile' }))).toBe(false)
+  expect(document.querySelector('.latex-preview-toolbar')).toContainElement(screen.getByRole('button', { name: 'latex.compile' }))
+  expect(document.querySelector('.latex-editor-region')).toContainElement(toolbar)
+  expect(document.querySelector('.latex-workspace > .latex-topbar')).toBeNull()
   expect(toolbar.contains(screen.getByRole('button', { name: 'latex.preview' }))).toBe(true)
   expect(document.querySelector('.latex-document-toolbar')).toBeNull()
   fireEvent.click(screen.getByRole('tab', { name: 'latex.images' }))

@@ -10,13 +10,14 @@ interface Props {
   active?: boolean
   stale?: boolean
   onDownload?: () => void
+  toolbarContainer?: HTMLDivElement | null
   target?: { box: LatexSyncBox; request: number } | null
   syncEnabled?: boolean
   syncHint?: string
   onLocateSource?: (page: number, x: number, y: number) => void
 }
 
-const LatexPdfPreview = forwardRef<LatexPdfPreviewHandle, Props>(function LatexPdfPreview({ data, documentId, active = true, stale = false, onDownload, target, syncEnabled = false, syncHint, onLocateSource }, ref) {
+const LatexPdfPreview = forwardRef<LatexPdfPreviewHandle, Props>(function LatexPdfPreview({ data, documentId, active = true, stale = false, onDownload, toolbarContainer, target, syncEnabled = false, syncHint, onLocateSource }, ref) {
   const { t } = useTranslation()
   const reader = useRef<PdfReaderHandle>(null)
   const source = useMemo(() => ({ id: documentId, title: 'LaTeX PDF', data: Uint8Array.from(atob(data), (character) => character.charCodeAt(0)) }), [data, documentId])
@@ -26,7 +27,7 @@ const LatexPdfPreview = forwardRef<LatexPdfPreviewHandle, Props>(function LatexP
   } }))
   return <section className="latex-pdf" aria-label={t('latex.preview')} title={syncHint}>
     {stale && <div className="latex-preview-notice"><span />{t('latex.previewStale')}</div>}
-    <PdfReader ref={reader} variant="preview" source={source} embedded active={active} onDownload={onDownload} location={syncEnabled ? target : null} onPageDoubleClick={syncEnabled ? (point) => onLocateSource?.(point.page, point.x, point.y) : undefined} />
+    <PdfReader toolbarContainer={toolbarContainer} ref={reader} variant="preview" source={source} embedded active={active} onDownload={onDownload} location={syncEnabled ? target : null} onPageDoubleClick={syncEnabled ? (point) => onLocateSource?.(point.page, point.x, point.y) : undefined} />
   </section>
 })
 export default LatexPdfPreview

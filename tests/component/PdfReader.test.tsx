@@ -367,6 +367,21 @@ describe('PdfReader rendering visibility', () => {
     vi.unstubAllGlobals()
   })
 
+  it('places preview controls in the supplied header without a second toolbar', async () => {
+    const host = window.document.createElement('div')
+    window.document.body.append(host)
+    const download = vi.fn()
+    const view = render(<PdfReader source={{ id: 'latex:header', title: 'Preview', data: new Uint8Array([1]) }} variant="preview" embedded toolbarContainer={host} onDownload={download} />)
+    await waitFor(() => expect(view.container.querySelector('.pdf-reader-page')).toBeInTheDocument())
+    expect(view.container.querySelector('[data-pdf-reader-toolbar]')).toBeNull()
+    expect(host.querySelectorAll('[data-pdf-reader-toolbar]')).toHaveLength(1)
+    fireEvent.click(within(host).getByRole('button', { name: 'pdfReader.download' }))
+    expect(download).toHaveBeenCalledOnce()
+    view.unmount()
+    expect(host).toBeEmptyDOMElement()
+    host.remove()
+  })
+
   it('keeps preview controls minimal and offers only copying selected text', async () => {
     const source = { id: 'latex:preview', title: 'Preview', data: new Uint8Array([1]) }
     const writeText = vi.spyOn(api.clipboard, 'writeText').mockResolvedValue(undefined)

@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useLayoutEffect, useImperativeHandle, useMemo, u
 import { createPortal } from 'react-dom'
 import hljs from 'highlight.js/lib/core'
 import latex from 'highlight.js/lib/languages/latex'
-import { ArrowUp, CaretDown, CaretRight, Eye, SlidersHorizontal } from '@phosphor-icons/react'
+import { ArrowUp, CaretDown, CaretRight, Check, Eye, SlidersHorizontal, TextAlignLeft } from '@phosphor-icons/react'
 import { useTranslation } from 'react-i18next'
 
 import MarkdownSearchControls from '../markdown/MarkdownSearchControls'
@@ -30,12 +30,13 @@ interface Props {
   onChange: (value: string) => void
   disabled?: boolean
   searchContainer?: HTMLDivElement | null
+  statusContainer?: HTMLDivElement | null
   onSearchFocus?: () => void
   onAi?: (start: number, end: number, instruction?: string) => void
   onPositionChange?: (line: number, column: number) => void
 }
 
-const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, searchContainer, onSearchFocus, onPositionChange, onAi, sessionKey, projectSources = [] }, ref) {
+const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSourceEditor({ value, onChange, disabled = false, searchContainer, statusContainer, onSearchFocus, onPositionChange, onAi, sessionKey, projectSources = [] }, ref) {
   const { t } = useTranslation()
   const input = useRef<HTMLTextAreaElement>(null)
   const highlights = useRef<HTMLPreElement>(null)
@@ -46,6 +47,7 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
   const measure = useRef<HTMLDivElement>(null)
   const [lineHeights, setLineHeights] = useState<number[]>([])
   const search = useRef<HTMLInputElement>(null)
+  const replacementInput = useRef<HTMLInputElement>(null)
   const [aiMenu, setAiMenu] = useState<{ start: number; end: number; x: number; y: number } | null>(null)
   const [instruction, setInstruction] = useState('')
   const aiMenuElement = useRef<HTMLDivElement>(null)
@@ -97,23 +99,23 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
     onChange(next)
     requestAnimationFrame(() => { input.current?.setSelectionRange(start, end); notifyPosition() })
   }
+  const [replaceOpen, setReplaceOpen] = useState(saved?.replaceOpen ?? false)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const optionsPanel = useRef<HTMLDivElement>(null)
   const optionsButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!optionsOpen) return
+    if (!optionsOpen && !replaceOpen) return
     const dismiss = (event: PointerEvent) => {
-      if (event.target instanceof Node && !optionsPanel.current?.contains(event.target) && !optionsButton.current?.contains(event.target)) setOptionsOpen(false)
+      if (event.target instanceof Node && !optionsPanel.current?.contains(event.target) && !optionsButton.current?.contains(event.target)) { setOptionsOpen(false); setReplaceOpen(false) }
     }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setOptionsOpen(false); optionsButton.current?.focus() } }
     document.addEventListener('pointerdown', dismiss)
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape) }
-  }, [optionsOpen])
+  }, [optionsOpen, replaceOpen])
   const [query, setQuery] = useState(saved?.query ?? '')
   const [replacement, setReplacement] = useState(saved?.replacement ?? '')
   const [find, setFind] = useState(saved?.find ?? false)
-  const [replaceOpen, setReplaceOpen] = useState(saved?.replaceOpen ?? false)
   const [line, setLine] = useState(1)
   const [matchIndex, setMatchIndex] = useState(-1)
   const [highlightValue, setHighlightValue] = useState(value)
@@ -282,10 +284,14 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
     setCompletion(null)
     input.current?.focus()
   }
-  const searchControls = <div className="latex-find" data-query={Boolean(query) || undefined} onFocusCapture={onSearchFocus}>
-      <div className="latex-find-row"><button type="button" className="latex-icon-button" aria-label={t('latex.toggleReplace')} aria-expanded={replaceOpen} onClick={() => { setReplaceOpen(!replaceOpen); setOptionsOpen(false) }}>{replaceOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}</button><MarkdownSearchControls inputRef={search} inputPlaceholder={t('latex.find')} query={query} total={matches.length} index={Math.min(matchIndex, Math.max(0, matches.length - 1))} label={t('latex.find')} previousLabel={t('latex.previousMatch')} nextLabel={t('latex.next')} closeLabel={t('common.close')} onQueryChange={(next) => { setQuery(next); setMatchIndex(-1) }} onNavigate={selectMatch} onClose={closeFind} closable={!searchContainer} /><button ref={optionsButton} type="button" className="latex-icon-button latex-search-options-toggle" aria-label={t('latex.searchOptions')} title={t('latex.searchOptions')} aria-expanded={optionsOpen} onClick={() => { setOptionsOpen(!optionsOpen); setReplaceOpen(false) }}><SlidersHorizontal size={15} /></button></div>
-      {optionsOpen && <div ref={optionsPanel} className="latex-search-options" role="group" aria-label={t('latex.searchOptions')}>{([['matchCase', matchCase, () => setMatchCase(!matchCase)], ['wholeWord', wholeWord, () => setWholeWord(!wholeWord)], ['regexSearch', regex, () => setRegex(!regex)], ['selectionOnly', Boolean(scope), () => setScope(scope ? null : { ...selection.current })]] as const).map(([key, active, toggle]) => <button type="button" key={key} aria-pressed={active} disabled={key === 'selectionOnly' && !scope && selection.current.start === selection.current.end} onClick={() => { toggle(); setMatchIndex(-1) }}>{t('latex.' + key)}</button>)}{query && !pattern && <span role="alert">{t('latex.invalidRegex')}</span>}</div>}
-      {replaceOpen && <div className="latex-replace-row"><input aria-label={t('latex.replacement')} placeholder={t('latex.replacement')} value={replacement} onChange={(event) => setReplacement(event.target.value)} /><button type="button" className="latex-text-button" disabled={!matches.length || disabled} onClick={() => replaceMatches(false)}>{t('latex.replaceOne')}</button><button type="button" className="latex-text-button" disabled={!matches.length || disabled} onClick={() => replaceMatches(true)}>{t('latex.replaceAll')}</button></div>}
+  const editorOptions = <div className="latex-editor-options"><button type="button" aria-label={t('latex.softWrap')} aria-pressed={wrap} title={t('latex.softWrap')} onClick={() => setWrap(!wrap)}><TextAlignLeft size={14} aria-hidden="true" />{t('latex.softWrap')}<span className="latex-wrap-switch" aria-hidden="true"><span /></span></button></div>
+  const searchControls = <div ref={optionsPanel} className="latex-find" data-panel={optionsOpen || replaceOpen || undefined} data-query={Boolean(query) || undefined} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() } }} onFocusCapture={onSearchFocus}>
+      <div className="latex-find-row"><button type="button" className="latex-icon-button" aria-label={t('latex.toggleReplace')} title={t('latex.toggleReplace')} aria-expanded={replaceOpen} onClick={() => { setReplaceOpen(!replaceOpen); if (!replaceOpen) requestAnimationFrame(() => replacementInput.current?.focus()) }}>{replaceOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}</button><MarkdownSearchControls inputRef={search} inputPlaceholder={t('latex.find')} query={query} total={matches.length} index={Math.min(matchIndex, Math.max(0, matches.length - 1))} label={t('latex.find')} previousLabel={t('latex.previousMatch')} nextLabel={t('latex.next')} closeLabel={t('common.close')} onQueryChange={(next) => { setQuery(next); setMatchIndex(-1) }} onNavigate={selectMatch} onClose={closeFind} closable={!searchContainer} /><button ref={optionsButton} type="button" className="latex-icon-button latex-search-options-toggle" aria-label={t('latex.searchOptions')} title={t('latex.searchOptions')} data-active={matchCase || wholeWord || regex || Boolean(scope) || undefined} aria-expanded={optionsOpen} onClick={() => { setOptionsOpen(!optionsOpen) }}><SlidersHorizontal size={15} /></button></div>
+      {(optionsOpen || replaceOpen || Boolean(query && !pattern)) && <div className="latex-search-panel">
+      {optionsOpen && <div className="latex-search-options" role="group" aria-label={t('latex.searchOptions')}>{([['matchCase', matchCase, () => setMatchCase(!matchCase)], ['wholeWord', wholeWord, () => setWholeWord(!wholeWord)], ['regexSearch', regex, () => setRegex(!regex)], ['selectionOnly', Boolean(scope), () => setScope(scope ? null : { ...selection.current })]] as const).map(([key, active, toggle]) => <button type="button" key={key} aria-pressed={active} disabled={key === 'selectionOnly' && !scope && selection.current.start === selection.current.end} onClick={() => { toggle(); setMatchIndex(-1) }}><span className="latex-option-check" aria-hidden="true">{active && <Check size={13} weight="bold" />}</span>{t('latex.' + key)}</button>)}</div>}
+      {query && !pattern && <span className="latex-search-error" role="alert">{t('latex.invalidRegex')}</span>}
+      {replaceOpen && <div className="latex-replace-row"><input ref={replacementInput} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); replaceMatches(event.metaKey || event.ctrlKey) } }} aria-label={t('latex.replacement')} placeholder={t('latex.replacement')} value={replacement} onChange={(event) => setReplacement(event.target.value)} /><div className="latex-replace-actions"><button type="button" className="latex-text-button" disabled={!matches.length || disabled} onClick={() => replaceMatches(false)}>{t('latex.replaceOne')}</button><button type="button" className="latex-text-button" disabled={!matches.length || disabled} onClick={() => replaceMatches(true)}>{t('latex.replaceAll')}</button></div></div>}
+      </div>}
     </div>
   return <div className="latex-source" data-wrap={wrap} data-plain={highlightValue !== value || !html} onKeyDown={(event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); openFind() }
@@ -296,7 +302,6 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
       <form onSubmit={event => { event.preventDefault(); if (instruction.trim()) requestAi(instruction.trim()) }}><input aria-label={t('latex.editWithAi')} placeholder={t('latex.editWithAi')} value={instruction} onChange={event => setInstruction(event.target.value)} maxLength={4000} /><button type="submit" aria-label={t('latex.sendAiEdit')} disabled={!instruction.trim()}><ArrowUp size={20} /></button></form>
     </div>, document.body)}
     {searchContainer ? createPortal(searchControls, searchContainer) : find && searchControls}
-    <div className="latex-editor-options"><button type="button" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>{t('latex.softWrap')}</button></div>
     {completion && <div className="latex-completions" role="listbox" aria-label={t('latex.completions')}>{completion.options.map(option => <button type="button" role="option" aria-selected={false} key={option} onMouseDown={event => event.preventDefault()} onClick={() => acceptCompletion(option)}>{option.split('\n')[0]}</button>)}</div>}
     <div className="latex-source-body"><div ref={gutter} className="latex-line-numbers" aria-hidden="true">{lines.map((_, index) => <span key={index} style={wrap ? { height: lineHeights[index] ?? 23 } : undefined} data-active={line === index + 1}>{index + 1}</span>)}</div><div className="latex-source-stack">
       {wrap && <div aria-hidden="true" ref={measure} className="latex-line-measure">{lines.map((text, index) => <div key={index}>{text || '\u200b'}</div>)}</div>}
@@ -362,6 +367,7 @@ const LatexSourceEditor = forwardRef<LatexSourceHandle, Props>(function LatexSou
         }
       }} />
     </div></div>
+    {statusContainer ? createPortal(editorOptions, statusContainer) : statusContainer === undefined && editorOptions}
   </div>
 })
 export default LatexSourceEditor
