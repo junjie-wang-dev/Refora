@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  outputDir: 'test-results/playwright',
   timeout: 60000,
   retries: 0,
   forbidOnly: Boolean(process.env.CI),

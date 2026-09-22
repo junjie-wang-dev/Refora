@@ -94,6 +94,12 @@ available evidence with `if: always()` and names artifacts by run attempt, so a
 retry does not replace the first failure. Do not dump environment variables or
 credentials into diagnostics.
 
+During local execution, CI evidence is first written inside the temporary checkout
+using the same default directory as GitHub, then copied back after execution.
+Playwright owns only `test-results/playwright/`; its automatic cleanup must never
+remove the sibling `test-results/ci/` reports. The runner regression suite executes
+real Playwright cleanup and checks that CI results and command logs survive.
+
 CI's `CI Ready` job runs even when dependencies fail and requires both the complete
 quality workflow and packaging to succeed. The main-branch ruleset should require
 pull requests, up-to-date branches, no force pushes/deletions, and the required

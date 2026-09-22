@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { availableParallelism, release } from 'node:os'
 
 export const fullStages = ['prepare', 'verify', 'audit', 'stability', 'database', 'e2e', 'package']
+export function defaultArtifactsDirectory(root, stages) {
+  return join(root, 'test-results', 'ci', stages.join('-'))
+}
+
 export function readToolchain(root) {
   const read = name => readFileSync(join(root, name), 'utf8').trim()
   return {
@@ -123,7 +127,7 @@ export async function main(args = process.argv.slice(2)) {
   const cwd = process.cwd()
   const stages = args.length ? args : fullStages
   const versions = readToolchain(cwd)
-  const directory = resolve(process.env.REFORA_CI_ARTIFACTS || join('test-results', 'ci', stages.join('-')))
+  const directory = resolve(process.env.REFORA_CI_ARTIFACTS || defaultArtifactsDirectory(cwd, stages))
   const env = ciEnvironment(process.env, versions)
   env.REFORA_CI_ARTIFACTS = directory
   env.PYTEST_ADDOPTS = `--junitxml=${JSON.stringify(join(directory, 'backend.xml'))}`

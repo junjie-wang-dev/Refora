@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, cpSync, read
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { copyWorkingTree, snapshotHash } from './ci-snapshot.mjs'
+import { defaultArtifactsDirectory, fullStages } from './ci.mjs'
 
 const source = process.cwd()
 const args = process.argv.slice(2)
@@ -13,6 +14,7 @@ const status = git('status', '--porcelain')
 if (status.trim() && !workingTree) throw new Error('Commit checkout is dirty. Use --working-tree to validate an explicitly labelled snapshot of current non-ignored files.')
 const root = mkdtempSync(join(tmpdir(), 'refora-ci-'))
 const checkout = join(root, 'checkout')
+const runDirectory = defaultArtifactsDirectory(checkout, fullStages)
 const directory = join(source, 'test-results', 'ci', `local-${new Date().toISOString().replaceAll(':', '-')}`)
 mkdirSync(directory, { recursive: true })
 console.log(`Isolated checkout: ${checkout}\nEvidence: ${directory}`)
@@ -22,9 +24,12 @@ try {
   execFileSync('git', ['checkout', '--detach', git('rev-parse', 'HEAD').trim()], { cwd: checkout, stdio: 'inherit' })
   if (workingTree) copyWorkingTree(source, checkout)
   const sha256 = await snapshotHash(checkout)
-  writeFileSync(join(directory, 'snapshot.json'), JSON.stringify({ commit: git('rev-parse', 'HEAD').trim(), kind: workingTree ? 'working-tree' : 'commit', sha256, checkout }, null, 2) + '\n')
+  mkdirSync(runDirectory, { recursive: true })
+  writeFileSync(join(runDirectory, 'snapshot.json'), JSON.stringify({ commit: git('rev-parse', 'HEAD').trim(), kind: workingTree ? 'working-tree' : 'commit', sha256, checkout }, null, 2) + '\n')
+  const env = { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+  delete env.REFORA_CI_ARTIFACTS
   const code = await new Promise((accept, reject) => {
-    const child = spawn(process.execPath, ['scripts/ci.mjs'], { cwd: checkout, stdio: 'inherit', env: { ...process.env, REFORA_CI_ARTIFACTS: directory, CSC_IDENTITY_AUTO_DISCOVERY: 'false' } })
+    const child = spawn(process.execPath, ['scripts/ci.mjs'], { cwd: checkout, stdio: 'inherit', env })
     const stop = signal => child.kill(signal)
     const sigint = () => stop('SIGINT')
     const sigterm = () => stop('SIGTERM')
@@ -45,6 +50,7 @@ try {
   passed = code === 0
   process.exitCode = code
 } finally {
+  if (existsSync(runDirectory)) cpSync(runDirectory, directory, { recursive: true })
   if (passed) rmSync(root, { recursive: true, force: true })
   else console.error(`Failed checkout preserved at ${checkout}`)
   console.log(`CI evidence: ${directory}`)
