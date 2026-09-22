@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { File, FilePdf, Image, X } from '@phosphor-icons/react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { LatexFile, LatexResponse } from '../../../shared/latex-types'
@@ -59,5 +60,19 @@ export function LatexHistoryDialog({ entries, busy, onRestore, onClose }: Histor
 export function LatexResourceDialog({ resource, onClose }: { resource: NonNullable<LatexResponse['resource']>; onClose: () => void }) {
   const { t } = useTranslation()
   const dialog = useModalDialog<HTMLDivElement>(true, onClose)
-  return createPortal(<div className="latex-modal-backdrop"><div ref={dialog} className="latex-dialog latex-resource-dialog" role="dialog" aria-modal="true" aria-label={resource.path} tabIndex={-1}><div className="latex-dialog-heading"><h2>{resource.path}</h2><button type="button" onClick={onClose}>{t('common.close')}</button></div><div className="latex-resource-content">{resource.mimeType === 'application/pdf' ? <LatexPdfPreview data={resource.base64} documentId={`latex-resource:${resource.path}`} /> : resource.mimeType.startsWith('image/') ? <img src={`data:${resource.mimeType};base64,${resource.base64}`} alt={resource.path} /> : <p>{t('latex.resourceNoPreview')}</p>}</div></div></div>, document.body)
+  const isPdf = resource.mimeType === 'application/pdf'
+  const isImage = resource.mimeType.startsWith('image/')
+  const name = resource.path.split('/').at(-1) || resource.path
+  const directory = resource.path.includes('/') ? resource.path.slice(0, resource.path.lastIndexOf('/')) : ''
+  const Icon = isPdf ? FilePdf : isImage ? Image : File
+  return createPortal(<div className="latex-modal-backdrop"><div ref={dialog} className="latex-resource-dialog" role="dialog" aria-modal="true" aria-label={resource.path} tabIndex={-1}>
+    <header className="latex-resource-header">
+      <span className="latex-resource-icon" aria-hidden="true"><Icon size={22} weight="duotone" /></span>
+      <div className="latex-resource-title" title={resource.path}><h2>{name}</h2><span>{directory ? `${directory} · ` : ''}{isPdf ? 'PDF' : resource.mimeType}</span></div>
+      <button type="button" className="latex-resource-close" onClick={onClose} aria-label={t('common.close')} title={`${t('common.close')} (Esc)`}><X size={18} /></button>
+    </header>
+    <div className="latex-resource-content" data-kind={isPdf ? 'pdf' : isImage ? 'image' : 'file'}>
+      {isPdf ? <LatexPdfPreview data={resource.base64} documentId={`latex-resource:${resource.path}`} /> : isImage ? <img src={`data:${resource.mimeType};base64,${resource.base64}`} alt={resource.path} /> : <div className="latex-resource-empty" role="status"><File size={40} weight="thin" aria-hidden="true" /><p>{t('latex.resourceNoPreview')}</p></div>}
+    </div>
+  </div></div>, document.body)
 }

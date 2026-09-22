@@ -9,10 +9,21 @@
 .latex-save-copy label { flex:1; }
 .latex-recovery-dialog input,.latex-recovery-dialog select { padding:7px; border:1px solid var(--color-border); border-radius:5px; color:var(--color-foreground); background:var(--color-background); }
 .latex-history-content { max-height:55vh; overflow:auto; white-space:pre-wrap; margin-top:12px; padding:12px; background:var(--color-background); font:12px/1.6 ui-monospace,monospace; }
-.latex-resource-dialog { display:flex; flex-direction:column; width:min(1000px,94vw); height:85vh; }
-.latex-resource-content { display:flex; flex:1; min-height:0; overflow:auto; align-items:center; justify-content:center; }
-.latex-resource-content > img { max-width:100%; max-height:100%; object-fit:contain; }
+.latex-resource-dialog { display:flex; flex-direction:column; width:min(1120px,100%); height:85vh; max-height:calc(100dvh - 48px); padding:0; overflow:hidden; background:var(--color-background); color:var(--color-foreground); border:1px solid var(--color-border); border-radius:14px; box-shadow:0 18px 70px #0004; font-size:12px; }
+.latex-resource-header { display:flex; align-items:center; gap:12px; flex-shrink:0; min-height:68px; padding:12px 16px; border-bottom:1px solid var(--color-border); }
+.latex-resource-icon { display:grid; place-items:center; flex-shrink:0; width:36px; height:36px; border:1px solid var(--color-border); border-radius:9px; color:var(--color-muted); background:var(--color-panel); }
+.latex-resource-title { flex:1; min-width:0; }
+.latex-resource-title h2 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:0 0 3px; font-size:13px; font-weight:600; line-height:1.5; }
+.latex-resource-title > span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-muted); font-size:11px; }
+.latex-resource-close { cursor:pointer; transition:background .14s,color .14s; display:grid; place-items:center; flex-shrink:0; width:32px; height:32px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--color-muted); }
+.latex-resource-close:hover { color:var(--color-foreground); background:var(--color-hover); }
+.latex-resource-close:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; }
+.latex-resource-content { display:flex; flex:1; min-height:0; overflow:auto; align-items:center; justify-content:center; background:var(--color-panel); }
+.latex-resource-content[data-kind=image] { padding:24px; background-image:conic-gradient(color-mix(in srgb,var(--color-border) 28%,transparent) 25%,transparent 0 50%,color-mix(in srgb,var(--color-border) 28%,transparent) 0 75%,transparent 0); background-size:20px 20px; }
+.latex-resource-content > img { display:block; max-width:100%; max-height:100%; object-fit:contain; border-radius:2px; box-shadow:0 2px 14px #0002; }
 .latex-resource-content > .latex-pdf { width:100%; height:100%; }
+.latex-resource-empty { display:flex; flex-direction:column; align-items:center; gap:12px; padding:24px; color:var(--color-muted); text-align:center; }
+.latex-resource-empty p { margin:0; font-size:12px; line-height:1.6; }
 .latex-import-report { padding:8px 12px; color:var(--color-muted); border-bottom:1px solid var(--color-border); }
 .latex-import-report ul { max-height:100px; overflow:auto; }
 @media (max-width:700px) { .latex-conflict-versions { grid-template-columns:1fr; } .latex-conflict-versions textarea { min-height:90px; } }
