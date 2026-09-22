@@ -537,46 +537,164 @@ def test_event_driven_await_write_finish(tmp_path):
         db.close()
 
 
+class _ScheduledWatcherCall:
+    def __init__(self, clock, delay, callback):
+        self.clock = clock
+        self.delay_ms = round(delay * 1000)
+        self.callback = callback
+        self.cancelled = False
+
+    def start(self):
+        self.clock.pending.append((self.clock.now_ms + self.delay_ms, self))
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class _WatcherClock:
+    def __init__(self):
+        self.now_ms = 0
+        self.pending = []
+
+    def timer(self, delay, callback):
+        return _ScheduledWatcherCall(self, delay, callback)
+
+    def is_closed(self):
+        return False
+
+    def call_later(self, delay, callback):
+        timer = self.timer(delay, callback)
+        timer.start()
+        return timer
+
+    def call_soon_threadsafe(self, callback):
+        return self.call_later(0, callback)
+
+    def advance(self, milliseconds):
+        target = self.now_ms + milliseconds
+        while self.pending:
+            deadline, timer = min(self.pending, key=lambda item: item[0])
+            if deadline > target:
+                break
+            self.pending.remove((deadline, timer))
+            self.now_ms = deadline
+            if not timer.cancelled:
+                timer.callback()
+        self.now_ms = target
+
+
+@pytest.fixture
+def controlled_watcher(monkeypatch):
+    clock = _WatcherClock()
+    monkeypatch.setattr(watcher_module.threading, "Timer", clock.timer)
+    captured = []
+    svc = watcher_module.createWatcherService(
+        {},
+        {
+            "onNewPdf": lambda paths: captured.append(list(paths)),
+            "stabilityThresholdMs": 60,
+            "debounceMs": 120,
+        },
+    )
+    svc["_state"]["running"] = True
+    svc["_state"]["loop"] = clock
+    try:
+        yield svc, clock, captured
+    finally:
+        svc["stopScanning"]()
+
+
+def test_debounce_waits_for_quiet_period_after_last_stable_file(
+    tmp_path, controlled_watcher
+):
+    svc, clock, captured = controlled_watcher
+    paths = []
+    for index in range(5):
+        pdf = tmp_path / f"doc-{index}.pdf"
+        pdf.write_bytes(b"%PDF")
+        paths.append(str(pdf))
+        svc["_markStabilizing"](str(pdf))
+        clock.advance(20)
+    clock.advance(159)
+    assert captured == []
+    clock.advance(1)
+    assert captured == [paths]
+    clock.advance(1000)
+    assert captured == [paths]
+
+
+def test_debounce_allows_separate_batches_outside_quiet_period(
+    tmp_path, controlled_watcher
+):
+    svc, clock, captured = controlled_watcher
+    expected = []
+    for index in range(5):
+        pdf = tmp_path / f"doc-{index}.pdf"
+        pdf.write_bytes(b"%PDF")
+        svc["_markStabilizing"](str(pdf))
+        clock.advance(179)
+        assert captured == expected
+        clock.advance(1)
+        expected.append([str(pdf)])
+        assert captured == expected
+        clock.advance(70)
+
+
+@pytest.mark.parametrize("stop_at_ms", [20, 100])
+def test_stopping_cancels_stability_and_debounce_timers(
+    tmp_path, controlled_watcher, stop_at_ms
+):
+    svc, clock, captured = controlled_watcher
+    pdf = tmp_path / "pending.pdf"
+    pdf.write_bytes(b"%PDF")
+    svc["_markStabilizing"](str(pdf))
+    clock.advance(stop_at_ms)
+    svc["stopScanning"]()
+    clock.advance(1000)
+    assert captured == []
+
+
 @pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
-def test_event_driven_debounces_burst(tmp_path):
+@pytest.mark.parametrize("write_interval", [0.02, 0.25])
+def test_event_driven_imports_each_file_once(tmp_path, write_interval):
     db = open_migrated_db()
     try:
-        wf_repo = make_watch_folders_repo(db)
-        repos = {"watchFolders": wf_repo}
         captured: list[list[str]] = []
-        from refora_server.services.watcher import createWatcherService
-
-        def on_new_pdf(paths):
-            captured.append(list(paths))
-            return None
-
-        svc = createWatcherService(
-            repos,
-            {
-                "onNewPdf": on_new_pdf,
-                "getLibraryFolder": lambda: "",
-                "observerPollInterval": 0.05,
-                "stabilityThresholdMs": 60,
-                "debounceMs": 120,
-            },
-        )
-        svc["add"](str(tmp_path))
+        expected = [str(tmp_path / f"doc-{i}.pdf") for i in range(5)]
 
         async def run():
+            completed = asyncio.Event()
+
+            def on_new_pdf(paths):
+                captured.append(list(paths))
+                if set(expected).issubset(path for batch in captured for path in batch):
+                    completed.set()
+
+            svc = watcher_module.createWatcherService(
+                {"watchFolders": make_watch_folders_repo(db)},
+                {
+                    "onNewPdf": on_new_pdf,
+                    "getLibraryFolder": lambda: "",
+                    "observerPollInterval": 0.05,
+                    "stabilityThresholdMs": 60,
+                    "debounceMs": 120,
+                },
+            )
+            svc["add"](str(tmp_path))
             svc["startScanning"]()
             try:
-                await asyncio.sleep(0.15)
-                for i in range(5):
-                    (tmp_path / f"doc-{i}.pdf").write_bytes(b"%PDF")
-                    await asyncio.sleep(0.02)
-                await asyncio.sleep(0.8)
+                await asyncio.wait_for(svc["_state"]["startupTask"], timeout=5)
+                for path in expected:
+                    with open(path, "wb") as output:
+                        output.write(b"%PDF")
+                    await asyncio.sleep(write_interval)
+                await asyncio.wait_for(completed.wait(), timeout=5)
+                await asyncio.sleep(0.3)
             finally:
                 svc["stopScanning"]()
 
         asyncio.run(run())
-        total = sum(len(b) for b in captured)
-        assert total == 5, f"expected 5 imports, got {total}: {captured}"
-        assert len(captured) <= 2, f"expected debounce aggregation, got {len(captured)} batches"
+        assert sorted(path for batch in captured for path in batch) == expected
     finally:
         db.close()
 

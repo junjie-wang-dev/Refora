@@ -53,6 +53,9 @@ npm run verify
 - When dependencies, native modules, packaging, or release automation changes, run the package command even if application code is unchanged.
 - For documentation-only changes, check the diff with `git diff --check` and verify referenced paths and commands; application tests are not required unless the task explicitly requires them.
 - After required checks pass, repeat or broaden verification only for new changes, failures, or unresolved risks.
+- For timing-sensitive behavior, assert timing boundaries with controlled clocks and await observable completion in live integration tests. Do not assume requested sleep durations equal elapsed time.
+- Investigate intermittent failures before treating a retry as validation. Preserve strict behavior coverage; do not hide failures with skips, weaker assertions, or automatic retries.
+- Distinguish `npm run verify` from full CI parity. Report which gates ran; see `docs/architecture.md` for `npm run ci:local` and the separate PostgreSQL suite.
 
 A task's own Verification assertions must also pass. Do not mark a task done until all applicable checks and the task's assertions pass. Report checks that could not run as unverified, never as passed.
 

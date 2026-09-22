@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { availableParallelism } from 'node:os'
 
 export default defineConfig({
   plugins: [react()],
@@ -11,6 +12,7 @@ export default defineConfig({
     }
   },
   test: {
+    maxWorkers: Math.min(4, availableParallelism()),
     environment: 'jsdom',
     include: [
       'tests/unit/**/*.test.ts',
