@@ -23,10 +23,9 @@ def test_ci_and_release_gate_on_shared_quality_workflow() -> None:
         encoding="utf-8"
     )
     assert "image: postgres:17.6-bookworm" in quality_workflow
-    assert (
-        "uv run --project backend --locked python scripts/test-supabase-local.py"
-        in quality_workflow
-    )
+    assert "npm run ci:stage -- database" in quality_workflow
+    database_gate = (ROOT / "scripts" / "ci-database.mjs").read_text(encoding="utf-8")
+    assert "'--locked', 'python', 'scripts/test-supabase-local.py'" in database_gate
     assert "REFORA_SUPABASE_TEST_SSL: 'false'" in quality_workflow
 
     for name in ("ci.yml", "release.yml"):

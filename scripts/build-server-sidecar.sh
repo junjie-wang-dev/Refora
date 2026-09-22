@@ -6,7 +6,7 @@ PROJECT_DIR="$ROOT_DIR/backend"
 OUTPUT_DIR="$ROOT_DIR/build/python-server"
 WORK_DIR="$ROOT_DIR/build/python-server-work"
 ENTRYPOINT="$PROJECT_DIR/sidecar_entry.py"
-PYTHON_VERSION=3.12.13
+PYTHON_VERSION=$(tr -d '[:space:]' < "$PROJECT_DIR/.python-version")
 
 case "$(uname -m)" in
   arm64) HOST_ARCH=arm64 ;;

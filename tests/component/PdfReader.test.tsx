@@ -222,6 +222,16 @@ interface ObservedElement {
 
 let observers: ObservedElement[] = []
 
+async function waitForPageObserver(pageNumber: string): Promise<ObservedElement> {
+  return waitFor(() => {
+    const observer = observers.find(candidate =>
+      (candidate.target as HTMLElement | undefined)?.dataset.pageNumber === pageNumber
+    )
+    expect(observer).toBeDefined()
+    return observer!
+  })
+}
+
 class IntersectionObserverMock {
   readonly root: Element | Document | null
   readonly rootMargin: string
@@ -754,9 +764,9 @@ describe('PdfReader rendering visibility', () => {
 
     await waitFor(() => expect(view.container.querySelectorAll('.pdf-reader-page')).toHaveLength(3))
     await waitFor(() => expect(pdfMocks.document.getPage).toHaveBeenCalledTimes(3))
-    expect(observers.filter(
+    await waitFor(() => expect(observers.filter(
       (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber
-    )).toHaveLength(3)
+    )).toHaveLength(3))
   })
 
   it('jumps to an unmounted page through the virtualizer', async () => {
@@ -784,9 +794,7 @@ describe('PdfReader rendering visibility', () => {
     pdfMocks.document.numPages = 4
     const view = render(<PdfReader />)
     await waitFor(() => expect(view.container.querySelectorAll('.pdf-reader-page')).toHaveLength(3))
-    const pageOne = observers.find(
-      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '1'
-    )!
+    const pageOne = await waitForPageObserver('1')
     act(() => {
       pageOne.callback(
         [pageVisibilityEntry(0, 0, 800)],
@@ -799,9 +807,7 @@ describe('PdfReader rendering visibility', () => {
     await waitFor(() => expect(
       view.container.querySelector('[data-page-number="1"]')
     ).not.toBeInTheDocument())
-    const pageFour = observers.find(
-      (observer) => (observer.target as HTMLElement | undefined)?.dataset.pageNumber === '4'
-    )!
+    const pageFour = await waitForPageObserver('4')
     act(() => {
       pageFour.callback(
         [pageVisibilityEntry(2400, 700, 100)],

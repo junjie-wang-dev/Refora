@@ -55,7 +55,8 @@ npm run verify
 - After required checks pass, repeat or broaden verification only for new changes, failures, or unresolved risks.
 - For timing-sensitive behavior, assert timing boundaries with controlled clocks and await observable completion in live integration tests. Do not assume requested sleep durations equal elapsed time.
 - Investigate intermittent failures before treating a retry as validation. Preserve strict behavior coverage; do not hide failures with skips, weaker assertions, or automatic retries.
-- Distinguish `npm run verify` from full CI parity. Report which gates ran; see `docs/architecture.md` for `npm run ci:local` and the separate PostgreSQL suite.
+- Distinguish `npm run verify` from the full pipeline. For CI/toolchain/workflow changes, run `npm run ci:local -- --working-tree`; it includes audits, stability tests, PostgreSQL, E2E, and packaging in a fresh snapshot. Missing prerequisites are failures, never skipped gates.
+- Keep local and GitHub gate commands in `scripts/ci.mjs`; workflows invoke shared stages. Preserve per-attempt diagnostics and never report GitHub success from local results. See `docs/architecture.md` for setup and evidence paths.
 
 A task's own Verification assertions must also pass. Do not mark a task done until all applicable checks and the task's assertions pass. Report checks that could not run as unverified, never as passed.
 

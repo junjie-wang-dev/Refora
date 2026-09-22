@@ -12,6 +12,9 @@ export default defineConfig({
     }
   },
   test: {
+    forbidOnly: Boolean(process.env.CI),
+    reporters: ['default', 'junit'],
+    outputFile: { junit: 'test-results/vitest.xml' },
     maxWorkers: Math.min(4, availableParallelism()),
     environment: 'jsdom',
     include: [

@@ -18,7 +18,7 @@
     "build": "npm run check:server-contract && npm run build:electron",
     "build:electron": "node --max-old-space-size=4096 node_modules/electron-vite/bin/electron-vite.js build",
     "ci:local": "sh scripts/ci-local.sh",
-    "verify": "npm run typecheck && npm run typecheck:tests && npm run lint && npm run test:coverage && npm run test:backend && npm run test:backend-source && npm run test:server-integration",
+    "verify": "npm run test:ci && npm run typecheck && npm run typecheck:tests && npm run lint && npm run test:coverage && npm run test:backend && npm run test:backend-source && npm run test:server-integration",
     "typecheck": "npm run check:server-contract && tsc -b",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "eslint .",
@@ -37,7 +37,9 @@
     "supabase:push": "node scripts/supabase-remote.mjs db push",
     "supabase:test": "node scripts/supabase-remote.mjs test rpc",
     "supabase:test:local": "uv run --project backend --locked python scripts/test-supabase-local.py",
-    "package": "sh scripts/package-macos.sh"
+    "package": "sh scripts/package-macos.sh",
+    "ci:stage": "node scripts/ci.mjs",
+    "test:ci": "node --test tests/ci/*.test.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.2",

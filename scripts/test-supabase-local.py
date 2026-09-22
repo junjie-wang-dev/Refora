@@ -57,6 +57,16 @@ def load_rpc_suite() -> ModuleType:
 def main() -> None:
     connection = connect()
     try:
+        expected = os.environ.get("REFORA_SUPABASE_TEST_POSTGRES_VERSION")
+        if expected:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SHOW server_version")
+                actual = cursor.fetchone()[0].split()[0]
+                if actual != expected:
+                    raise RuntimeError(f"Expected PostgreSQL {expected}, found {actual}")
+            finally:
+                cursor.close()
         apply_sql(connection, ROOT / "scripts" / "supabase-test-bootstrap.sql")
         for migration in sorted((ROOT / "supabase" / "migrations").glob("*.sql")):
             apply_sql(connection, migration)

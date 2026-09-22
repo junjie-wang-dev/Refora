@@ -1,0 +1,22 @@
+name: Refora toolchain
+description: Install the same pinned Node and Python toolchain used by local gates.
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version-file: '.nvmrc'
+        cache: npm
+    - name: Read toolchain pins
+      id: versions
+      shell: bash
+      run: |
+        echo "uv=$(cat .uv-version)" >> "$GITHUB_OUTPUT"
+        echo "python=$(cat backend/.python-version)" >> "$GITHUB_OUTPUT"
+    - name: Set up uv and Python
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      with:
+        version: ${{ steps.versions.outputs.uv }}
+        python-version: ${{ steps.versions.outputs.python }}
+        enable-cache: true
