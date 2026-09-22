@@ -67,6 +67,15 @@ locally and in CI. This bounds simultaneous jsdom, component-library, and covera
 work instead of scaling memory and CPU contention with every core on the host.
 Test timeouts and coverage thresholds remain unchanged.
 
+A worker cap alone does not make expensive component tests reliable. In
+`LobeControls.test.tsx`, the package entry is resolved to the real Button, Modal,
+and Select subpath exports. This retains the actual third-party components and
+all interaction assertions while avoiding unrelated components' eager static
+style registration. Profiling the previous full-package import traced most of
+the test execution time to jsdom `HTMLCollection` scans during dynamic CSS
+registration. Keep tests focused on the dependencies they exercise; do not replace
+those components with stand-ins merely to make integration tests faster.
+
 Test debounce, retry, and timeout boundaries with controlled clocks. A real
 filesystem observer, background thread, or `asyncio.sleep()` does not guarantee
 when a callback will run. Live integration tests should wait for observable

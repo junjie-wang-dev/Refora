@@ -3,6 +3,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { NativeSelect } from '../../src/renderer/components/ui/NativeSelect'
 import { Button, Modal, Select } from '../../src/renderer/components/ui/LobeControls'
 
+vi.mock('@lobehub/ui', async () => {
+  const [{ default: Button }, { default: Modal }, { default: Select }] = await Promise.all([
+    import('@lobehub/ui/es/Button/index'),
+    import('@lobehub/ui/es/Modal/index'),
+    import('@lobehub/ui/es/Select/index')
+  ])
+  return { Button, Modal, Select }
+})
+
 function expectPhosphorIcons(root: ParentNode) {
   const icons = root.querySelectorAll('svg')
   expect(icons.length).toBeGreaterThan(0)
